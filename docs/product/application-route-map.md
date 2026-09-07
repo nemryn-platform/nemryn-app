@@ -75,6 +75,8 @@ No Stitch reference covered any of these — built directly against the design s
 | `/join/[token]` | **P1-E3-S9** — Driver invite landing/redemption. The token itself is the credential (a 122-bit random UUID) — the page works for an unauthenticated visitor via the narrow, anon-callable `get_driver_invite_preview` RPC, then requires real sign-up/sign-in to redeem | Public (preview only; redemption requires auth) |
 | `/complete-signup` | **P1-E4-S0A1** — a Route Handler (not a rendered page), the authoritative continuation for a zero-Membership authenticated visitor: tries pending Driver-invite redemption, then pending operator-signup completion, then falls through to `/complete-signup/form` or `/access-unavailable`. See `docs/product/operator-onboarding-model.md` §4A. | Protected (auth required) |
 | `/complete-signup/form` | **P1-E4-S0A1** — the explicit, user-initiated "Complete your organization setup" recovery form, reached only when `/complete-signup` found nothing to auto-complete | Protected (auth required) |
+| `/auth/confirm` | **P1-E4-S0A2** — a Route Handler, the SSR email-confirmation callback the Confirm Signup email template links to (`token_hash`/`type` → `verifyOtp()` → real session cookie → `/complete-signup`). See `docs/product/operator-onboarding-model.md` §4B. | Public (the token IS the authority — same "no existence oracle" framing as `/join/[token]`) |
+| `/auth/auth-code-error` | **P1-E4-S0A2** — the calm retry state `/auth/confirm` redirects to on any failure (missing/expired/already-used token) | Public |
 
 ## Route access matrix (work item §70)
 

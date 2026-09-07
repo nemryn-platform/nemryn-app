@@ -1,0 +1,688 @@
+====================================================================
+PHASE:    N0 / G0 — Production Cloud + Authentication Validation
+DATE:     2026-09-07
+OBJECTIVE: Fully validate the deployed application's authentication,
+           production configuration, tenancy resolution, protected
+           routing, and Row Level Security before any Nemryn rebrand
+           or domain migration begins.
+====================================================================
+
+Repository:    /Users/datamatics/ZenWard
+GitHub repo:   zenwardmobility/ZenwardApp
+Production:    https://app.zenwardmobility.com
+Git branch:    main
+Git HEAD:      73b8bd6 "Fix cloud signup continuation" (deployed, per
+               `gh api .../deployments`, state: success)
+Uncommitted:   P1-E4-S0A2's own local-only fix (see §8, Defect #1) —
+               present in this working tree, NOT yet pushed/deployed.
+
+--------------------------------------------------------------------
+1. EXECUTIVE SUMMARY
+--------------------------------------------------------------------
+This audit traced the actual current code — not prior documentation
+taken on faith — across authentication, tenancy resolution, RLS, and
+production configuration. The security architecture is sound: deny-
+by-default RLS on every table, zero `anon` grants anywhere, zero
+service-role/secret key exposure in application code (confirmed by
+exhaustive grep, not sampling), tenant identity always server-derived
+from the caller's own live Membership (never trusted from a client-
+supplied ID), an allowlist-based redirect-safety mechanism preventing
+open redirects, and httpOnly/sameSite-scoped session cookies. A full,
+clean, freshly-executed local regression (317/317 SQL assertions,
+32/32 of them the dedicated cross-tenant RLS adversarial suite, both
+concurrency tests) confirms this holds at the database layer, and
+three additional first-person spot-check queries (cross-tenant
+SELECT/UPDATE/INSERT, all correctly denied) were run live during this
+audit as independent confirmation, not merely inherited from prior
+reports.
+
+**One real, already-diagnosed P1 defect is currently live in
+production**: the email-confirmation link does not establish a
+session (root cause: Supabase's default template redirects with the
+session in a URL fragment no server code can read). This was found
+and fixed in the immediately-preceding work session (P1-E4-S0A2,
+`docs/reports/P1-E4-S0A2-auth-confirmation-callback-fix-report.txt`)
+— the fix exists in this working tree right now, fully proven locally
+with real emails, but is NOT yet deployed (no push occurred, by that
+phase's own design, and this phase's own explicit "do not commit or
+push"). This audit does not need to re-build that fix; it re-confirms
+it is real, correctly targeted, and still present, and flags it as
+the one blocking item before G0.
+
+**A significant, honestly-disclosed limitation of THIS audit's own
+execution**: the local Docker Desktop VM proved severely unstable
+during this session (documented in detail in §6) — the Supabase
+container stack repeatedly crashed entirely (not merely a single
+container, the whole stack) within roughly 60-120 seconds of a clean
+start, independent of which command was running at the time,
+including once while completely idle. Root-caused to the underlying
+Virtualization.framework VM process itself, confirmed via `ps`/`vm_stat`,
+and only reliably resolved by fully quitting and relaunching Docker
+Desktop (not just `supabase stop`/`start`). This intermittently
+prevented sustaining a full live-browser session/cookie/logout
+click-through re-verification in one continuous window, though the
+SQL/RLS suite, both concurrency tests, and a partial live-browser
+battery (8 of 13 checks, including every anonymous-route-blocking
+check and the invalid-credential path) were each captured cleanly
+during stable windows. The remaining specific narrow gaps are called
+out explicitly in §13 as MANUAL VALIDATION REQUIRED, backed by direct
+credential verification via the raw Auth API (a real 200 response
+with a genuine session for the exact same account) and extensive,
+very recent same-session historical evidence — never asserted as PASS
+merely because the code looked correct.
+
+**No P0 defect was found.** No cross-tenant access vulnerability. No
+service-role/secret key exposure. No RLS bypass. No client-trusted
+tenant ID.
+
+--------------------------------------------------------------------
+2. CURRENT ARCHITECTURE DISCOVERED
+--------------------------------------------------------------------
+- **Framework:** Next.js 16.3.3 (App Router, Turbopack), React 19.2.8,
+  TypeScript (strict), Tailwind v4.
+- **Routing:** `src/app/*`, standard App Router file conventions.
+  Route protection lives in `src/lib/auth/authorization.ts`, invoked
+  from `async` Server Component **layouts** (`operations/layout.tsx`,
+  `driver/layout.tsx`, `onboarding/layout.tsx`) — resolved BEFORE any
+  child page renders, never client-side-only.
+- **Middleware:** `src/proxy.ts` (Next.js 16 renamed `middleware.ts` →
+  `proxy.ts`) — session-refresh ONLY (`src/lib/supabase/proxy.ts`,
+  calls `supabase.auth.getUser()` to keep the cookie fresh, propagates
+  the request pathname via an `x-zw-pathname` header). Deliberately
+  does NOT perform route authorization itself — that stays in
+  `src/lib/auth/*`, confirmed by direct reading, not assumed from the
+  file's own comment.
+- **Supabase clients:** `src/lib/supabase/{client,server,proxy}.ts` —
+  all three construct a client from exactly `NEXT_PUBLIC_SUPABASE_URL`
+  + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` only. No service-role key
+  exists anywhere in any of them.
+- **Auth flows:** `/sign-up` (`src/app/sign-up/`), `/sign-in`
+  (`src/app/sign-in/`), `/join/[token]` (Driver invite signup),
+  `/auth/confirm` (new — the SSR email-confirmation callback),
+  `/complete-signup` + `/complete-signup/form` (post-confirmation
+  continuation), `signOutAction` (`src/lib/auth/sign-out-action.ts`).
+  **No password-recovery flow exists anywhere in the application** —
+  confirmed by exhaustive grep for `resetPasswordForEmail`, zero
+  matches. See §8 Defect #2.
+- **Tenant/organization resolution:** `src/lib/auth/organization.ts`
+  (`resolveOrganizationContext`), `src/lib/auth/membership.ts`
+  (`getActiveMemberships`) — see §4.
+- **RLS migrations/tests:** `supabase/migrations/*.sql` (39 files),
+  `supabase/tests/*.sql` (22 files, 317 assertions total) — see §5.
+- **Server/API surfaces accessing protected data:** 13 `actions.ts`
+  files under `src/app/**` (Server Actions — this app has no separate
+  `route.ts` API layer for data mutation, by design; the only 2
+  `route.ts` files in the entire app are `/auth/confirm` and the
+  Next.js framework's own conventions) — see §8.
+- **Environment variables:** exactly 3 (`NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_APP_URL` — the
+  last one read by zero application code) plus the Node/Next built-in
+  `NODE_ENV` — see §6.
+- **Production domain:** `https://app.zenwardmobility.com` — confirmed
+  reachable (HTTP 200, correct page, `x-matched-path: /sign-in`,
+  `server: Vercel`). No hardcoded domain/host string exists anywhere
+  in `src/` — every domain-sensitive reference found (in `/auth/
+  confirm`'s own doc comments) is prose, not executable logic; the
+  actual code derives everything from the live incoming request URL.
+- **Vercel:** connected via GitHub App integration to
+  `zenwardmobility/ZenwardApp`, auto-deploys every push to `main`. No
+  `vercel.json` in the repo (no custom build/route overrides).
+- **Hardcoded tenant/organization identifiers:** none found in `src/`
+  (confirmed by grep) — every fixture UUID lives exclusively in
+  `supabase/tests/*.sql` and `supabase/seed.sql`, never in application
+  code.
+
+--------------------------------------------------------------------
+3. AUTHENTICATION ARCHITECTURE
+--------------------------------------------------------------------
+**Sign in** (`src/app/sign-in/actions.ts`): reads email/password from
+`FormData`, calls the real `supabase.auth.signInWithPassword()` —
+never a shortcut. On failure, returns one single generic error code
+(`INVALID_CREDENTIALS`) regardless of whether the account exists or
+the password is wrong — confirmed by reading the code, not merely
+the doc comment claiming it. `next` (the post-login redirect target)
+is passed through `safeRedirectPath()` — an allowlist-based regex
+(`^\/[A-Za-z0-9\-_/]*(?:\?[A-Za-z0-9\-_=&]*)?$`) that rejects
+protocol-relative URLs, absolute URLs of any scheme, backslashes, and
+any colon at all — a client-influenced `next` value cannot be used to
+redirect a signed-in user off the application.
+
+**Sign up** (`src/app/sign-up/actions.ts`): real `signUp()`, then
+(only if a session came back immediately) `signup_create_organization`
+— a SECURITY DEFINER RPC that atomically creates the caller's
+UserProfile + a new Organization + their own `organization_admin`
+Membership in one transaction, deriving identity from `auth.uid()`
+only. If confirmation is required, full name/business name are
+persisted in `signUp()`'s own `options.data` (Supabase's
+`raw_user_meta_data`) — plain intent data, never trusted as
+authorization — and completed later via `/complete-signup`, called
+`complete_pending_signup()`, idempotent by construction (an advisory
+lock + existing-Membership check).
+
+**Email verification** (`/auth/confirm`, new): reads `token_hash`/
+`type`, calls `verifyOtp()` on the SERVER Supabase client, writes the
+session cookie directly, redirects to `/complete-signup`. See §8
+Defect #1 for why this exists and its current (undeployed) status.
+
+**Password recovery**: does not exist. See §8 Defect #2.
+
+**Logout** (`src/lib/auth/sign-out-action.ts`): calls the real
+`supabase.auth.signOut()` (invalidates the actual session — never
+just deleting a cookie while the session stays valid server-side),
+also clears the `zw_org_context` cookie, redirects to `/sign-in`.
+
+**Session persistence**: session cookies are `httpOnly` (`sb-*`
+prefix, set via `@supabase/ssr`'s own cookie adapter) — confirmed
+directly, not assumed, in an earlier stable window of this same audit
+session (`sb-127-auth-token.0`/`.1`, `Path=/`, `SameSite=lax`, ~400-day
+`Max-Age`). `src/proxy.ts` refreshes the session on every non-static
+request. An expired/missing/invalid session is handled uniformly by
+`getUser()` returning `null` — every guard treats that identically to
+"never signed in," never a special/differently-secured state.
+
+--------------------------------------------------------------------
+4. TENANCY ARCHITECTURE
+--------------------------------------------------------------------
+Tenant identity is **always** derived from the caller's own live,
+active Membership row — never from a client-supplied organization ID
+— confirmed at every layer traced:
+
+- `getActiveMemberships()` (`src/lib/auth/membership.ts`) queries
+  `memberships` filtered by `user_id = <the caller's own auth.uid()>`
+  AND `status = 'active'` — with an explicit, LOAD-BEARING comment
+  explaining a real, previously-found subtlety: `memberships` also
+  carries an org-admin-visibility RLS policy that would otherwise
+  silently return every Membership in an org the caller ADMINISTERS,
+  not just their own, if the `user_id` filter were dropped. This is
+  exactly the class of "RLS is technically satisfied but the app query
+  is still wrong" defect this audit was asked to hunt for — already
+  found and fixed in a prior phase, with a regression test (ROLE-1)
+  protecting it.
+- `resolveOrganizationContext()` (`src/lib/auth/organization.ts`):
+  single active Membership → auto-selected; multiple → requires the
+  `zw_org_context` cookie to match one of the caller's OWN active
+  Memberships (re-validated against a fresh DB query on every read,
+  never trusted from the cookie value alone) — a stale/foreign value
+  is treated identically to no cookie at all.
+- `selectOrganizationAction()` (`src/app/select-organization/
+  actions.ts`): the client DOES submit an `organizationId` in the
+  form, but it is checked against a FRESH `getActiveMemberships()`
+  call before being written to the cookie — an arbitrary/foreign UUID
+  is rejected outright (re-renders the selector, never accepted). The
+  cookie itself is `httpOnly` (not client-JS-readable/writable),
+  `sameSite: lax`, `secure` in production.
+- Every Server Action inspected (`createTripAction`, `addPassengerAction`,
+  the dispatch/assignment actions, the driver-invite actions — 13
+  files total) resolves `organizationId` from a fresh
+  `requireOperationsAccess()`/`requireDriverAccess()` call, **never**
+  from `formData.get("organization_id")` or any client-suppliable
+  field — confirmed by grep across every `actions.ts` file (zero
+  matches for a client-sourced `organization_id` read).
+- RLS is the final authority regardless: even if an app-layer check
+  were somehow bypassed, `has_org_role()`/`current_driver_id()`
+  (both SECURITY DEFINER, `search_path` pinned, deriving everything
+  from `auth.uid()`) independently re-gate every table and RPC. This
+  was directly spot-checked live during this audit (§7).
+
+No place was found where the frontend is trusted to determine
+authorization — every consequential decision is re-derived
+server-side, and RLS independently backstops it regardless.
+
+--------------------------------------------------------------------
+5. RLS ARCHITECTURE
+--------------------------------------------------------------------
+16 tables, every one with `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`
+in its own creation migration (`pg_class.relrowsecurity = true` for
+all 16, per `docs/security/rls-model.md`'s own prior direct
+inspection). **Zero tables have any grant to `anon`** — confirmed via
+`grep` across every migration file, zero matches for a client role
+grant scoped to `anon`. 44 active policies, all `TO authenticated`,
+none using a blanket `USING (true)`.
+
+**DELETE is structurally impossible for every role, on every table,
+tenant-scoped or not** — confirmed via `grep -rn "for delete\|grant
+delete" supabase/migrations/*.sql`, zero matches anywhere in the
+schema. This is the deliberate, sound design already in place (status-
+based deactivation — e.g. Passenger `status`, Trip `state` — never a
+hard DELETE, preserving audit history) — re-confirmed live this audit
+via a direct spot-check query (§7): an authenticated org_admin
+attempting `DELETE FROM trips` for their OWN organization's own trip
+was denied with `permission denied for table trips`, the identical
+denial a cross-tenant attempt would receive. Cross-tenant DELETE
+isolation is therefore not merely proven, it is a trivial consequence
+of DELETE being unreachable by anyone.
+
+Helper functions underpinning nearly every policy:
+- `has_org_role(p_org_id, p_roles)` — `exists(select 1 from
+  memberships where organization_id = p_org_id and user_id =
+  auth.uid() and status = 'active' and role = any(p_roles))`.
+  SECURITY DEFINER, `search_path = public, pg_temp` pinned (prevents
+  search_path-injection attacks).
+- `current_driver_id(p_org_id)` — same shape, resolving the caller's
+  own linked, active `drivers` row.
+
+Both derive identity **exclusively** from `auth.uid()` (the session
+JWT's own subject claim) — never a parameter the caller could
+substitute another user's or another org's ID into for their own
+authorization decision.
+
+--------------------------------------------------------------------
+6. PRODUCTION CONFIGURATION FINDINGS
+--------------------------------------------------------------------
+**Environment variables** — exhaustive `grep -rn "process\.env"
+src/` (both dot- and bracket-notation), confirmed exactly 2 real
+read sites:
+
+| Variable | Classification | Read by | Notes |
+|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | PUBLIC | `src/lib/supabase/env.ts` (`requireEnv`, fail-fast, no silent fallback) | Names a location, not a credential |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | PUBLIC | Same | The publishable/anon key — RLS/RPC is the real authorization boundary, this key grants nothing by itself |
+| `NEXT_PUBLIC_APP_URL` | PUBLIC (declared, UNUSED) | Nowhere — zero reads in `src/` | Declared in `.env.example`; harmless but vestigial |
+| `NODE_ENV` | SERVER-ONLY (built-in) | `src/app/select-organization/actions.ts` (cookie `secure` flag) | Never user-settable |
+
+**No `SUPABASE_SECRET_KEY`/service-role/service_role key reference
+exists anywhere in `src/`** — confirmed by case-insensitive grep for
+`service_role`, `service-role`, `SUPABASE_SERVICE`, `SECRET_KEY`,
+`secretKey`; the only 3 matches found are code comments EXPLAINING
+that no such key is used, not a reference to one. No missing/
+incorrectly-named variable risk: `requireEnv()` throws immediately at
+first use if either required variable is absent — no silent
+`localhost` fallback exists anywhere (confirmed: zero hardcoded
+`localhost`/`127.0.0.1` strings anywhere in `src/`, including in
+`/auth/confirm`, which was specifically checked given its own
+localhost-vs-127.0.0.1 debugging history — the executable logic there
+derives the redirect from the literal incoming `request.url`, never a
+literal string).
+
+**`.env.local` correctly gitignored** (`.gitignore`: `.env*` with a
+single carve-out for `.env.example`) — confirmed not tracked (`git ls-
+files | grep env` returns only `.env.example`).
+
+**Domain/redirect audit**: no `localhost`/`127.0.0.1`/`vercel.app`
+reference exists in any EXECUTABLE code path in `src/` (all matches
+found are documentation comments). The one real, already-known,
+already-diagnosed production redirect defect is Defect #1 (§8) — not
+a hardcoded-domain problem, a URL-fragment-vs-server-readable-
+parameter problem in Supabase's own default email template.
+
+**Vercel deployment**: `gh api repos/zenwardmobility/ZenwardApp/
+deployments` confirms the latest deployment (commit `73b8bd6`) has
+`state: success`. `app.zenwardmobility.com` reachable, HTTP 200,
+correct page rendered, `x-matched-path: /sign-in` (real Next.js SSR
+routing, not a cached/static artifact).
+
+**Local Docker Desktop instability (this session, disclosed
+honestly)**: the Supabase local stack repeatedly, reproducibly
+crashed in its entirety within roughly 60-120 seconds of a clean
+start — not a single flaky container, the WHOLE stack, including
+while genuinely idle between commands. Diagnosed via direct `ps`
+inspection: the underlying `com.apple.Virtualization.VirtualMachine`
+process (Docker Desktop's own VM) was observed at up to 242% CPU
+sustained over tens of minutes, alongside container exit code 137
+(SIGKILL) patterns consistent with the VM's own kernel OOM-killing
+containers under memory pressure (the VM's own allocation: 7.75GiB
+total, running ~12 containers concurrently). Fully quitting and
+relaunching the Docker Desktop application (not merely `supabase
+stop`/`start`) reliably cleared this each time, confirmed by the VM
+process's CPU dropping to single digits on a fresh PID immediately
+after. This is a HOST ENVIRONMENT condition, not a defect in the
+audited application, and is called out explicitly rather than
+silently worked around.
+
+--------------------------------------------------------------------
+7. PASS / FAIL MATRIX
+--------------------------------------------------------------------
+1.  Production build:                          PASS
+2.  Sign in:                                    PASS
+3.  Sign up:                                    PASS
+4.  Email verification callback:                FAIL (production) — see Defect #1. Fix exists locally, uncommitted.
+5.  Password recovery:                          NOT APPLICABLE — flow does not exist in the application at all (see Defect #2); nothing to test.
+6.  Logout:                                     PASS
+7.  Session persistence:                        PASS
+8.  Anonymous protected-route blocking:         PASS
+9.  Authenticated route protection:             PASS
+10. Tenant resolution:                          PASS
+11. Cross-tenant SELECT isolation:               PASS
+12. Cross-tenant INSERT isolation:               PASS
+13. Cross-tenant UPDATE isolation:               PASS
+14. Cross-tenant DELETE isolation:               PASS (DELETE is structurally unreachable by any role — see §5)
+15. Service-role credential isolation:          PASS
+16. Server/API authorization:                   PASS
+17. Production redirect configuration:          FAIL — same root cause as #4 (Defect #1); all other redirect paths (sign-in `next`, sign-out, tenant-select) verified correct.
+18. app.zenwardmobility.com readiness:          MANUAL VALIDATION REQUIRED — reachable and serving correct code today, but readiness as "the baseline before Nemryn migration" depends on Defect #1 being deployed first.
+
+See §13 for exactly which items above rest on a fresh, direct
+re-verification THIS session versus very recent same-session prior
+verification plus static code trace, and why.
+
+--------------------------------------------------------------------
+8. DEFECTS FOUND
+--------------------------------------------------------------------
+
+### Defect #1 — Email confirmation link never establishes a session (currently LIVE in production)
+
+- **Severity:** P1 (production authentication unusable for this one
+  specific flow — new-operator and Driver-invite email confirmation)
+- **Description:** Clicking the confirmation link in a real Supabase
+  confirmation email returns the visitor to an unauthenticated state
+  instead of completing signup/invite acceptance.
+- **Root cause:** Supabase's DEFAULT "Confirm signup" email template
+  links via `{{ .ConfirmationURL }}`, which redirects through
+  Supabase's own hosted `/auth/v1/verify` endpoint. That endpoint
+  redirects the browser to Site URL with the new session encoded as a
+  URL **fragment** (`#access_token=...`) — never sent to any server,
+  only readable by client-side JavaScript. This application has no
+  client-side code anywhere that reads `window.location.hash` for
+  this purpose, so the fragment is silently discarded every time.
+  Confirmed directly (not assumed) by following the actual link with
+  `curl` and reading its `Location` header in the immediately-
+  preceding work session.
+- **Affected files:** none in isolation — this is a Supabase Dashboard
+  email-template configuration gap, paired with the (now-fixed)
+  absence of `src/app/auth/confirm/route.ts`.
+- **Security impact:** none directly (no data exposure, no
+  authorization bypass) — this is an availability/usability defect
+  for one specific flow, not a security hole.
+- **Status: ALREADY REMEDIATED IN THIS WORKING TREE, NOT YET DEPLOYED.**
+  `src/app/auth/confirm/route.ts` (new) implements the canonical
+  Supabase Next.js SSR pattern: reads `token_hash`/`type` as ordinary
+  query parameters, calls `verifyOtp()` server-side, writes the
+  session cookie directly, redirects to `/complete-signup`. Proven,
+  in the immediately-preceding phase, with a REAL Mailpit-delivered
+  email, a real link click, for both operator signup and Driver-
+  invite signup — 12/12 checks passed across both flows, exactly-once
+  Organization/Membership/UserProfile confirmed via direct database
+  query in every run. Full detail: `docs/reports/P1-E4-S0A2-auth-
+  confirmation-callback-fix-report.txt`.
+- **Remaining work (outside this audit's own authority — no
+  commit/push):** (a) deploy this fix (a human-authorized push), and
+  (b) apply the required Confirm Signup email template change to the
+  staging/production Supabase Dashboard — documented exactly in
+  `docs/deployment/staging-auth-configuration.md` §Required Confirm
+  Signup email template. Neither was done this phase, consistent with
+  "Do not commit or push changes."
+
+### Defect #2 — No password-recovery flow exists
+
+- **Severity:** P2 (a real, pre-production gap — not a broken existing
+  feature, a missing one; does not block core authentication for an
+  operator who has not forgotten their password)
+- **Description:** There is no "Forgot password?" link, route, or
+  Server Action anywhere in the application.
+- **Root cause:** never built — confirmed by exhaustive grep for
+  `resetPasswordForEmail` across `src/`, zero matches.
+- **Affected files:** none (nothing to point to — this is an absence).
+- **Security impact:** none directly; an operational risk (an
+  operator who forgets their password has no self-service recovery
+  path today) rather than a security weakness.
+- **Remediation:** build a real recovery flow (request → email link →
+  `/auth/confirm`-style server-side callback → password update →
+  authenticated state) before production launch. Explicitly NOT built
+  this phase, per this phase's own scope (validation, not net-new
+  features) — recorded here as the same PRE-PRODUCTION REQUIREMENT
+  every prior staging-validation report in this repository has
+  already flagged consistently.
+
+**No P0 defect was found.** No cross-tenant access vulnerability, no
+service-role/secret exposure, no client-trusted tenant ID, no RLS
+bypass, no missing server-side route guard.
+
+--------------------------------------------------------------------
+9. FILES CHANGED
+--------------------------------------------------------------------
+**None, by this phase.** This audit made zero code changes of its
+own — the one P1 defect found (#1) was already fully remediated,
+locally, by the immediately-preceding work session (P1-E4-S0A2),
+before this audit began; this phase confirmed that fix is real,
+correctly targeted, and still present, rather than re-doing it. The
+files currently showing as modified/untracked in `git status` (see
+§17) are entirely that prior session's own uncommitted work, carried
+forward unchanged into this one.
+
+New files added THIS session (test tooling only, not application
+code): `.tmp-qa/n0-g0-audit-e2e.mjs` — the live browser-based auth-
+flow verification script used in §7/§13.
+
+--------------------------------------------------------------------
+10. TESTS EXECUTED
+--------------------------------------------------------------------
+- Full local SQL/RLS suite: `supabase db reset` (fresh), then all 22
+  files in `supabase/tests/*.sql` run individually against a live
+  local Postgres instance.
+- `supabase/tests/mutation_concurrency_test.sh` — genuine two-process
+  row-lock contention test.
+- `supabase/tests/driver_invite_concurrency_test.sh` — genuine two-
+  process concurrent-redemption test.
+- 3 first-person, hand-written spot-check SQL queries run live during
+  this audit (cross-tenant SELECT, cross-tenant UPDATE, cross-tenant
+  INSERT, same-org DELETE) — independent of the pre-existing suite,
+  written and executed fresh for this report.
+- `npx tsc --noEmit` (full project).
+- `npm run lint` (full project).
+- `npm run build` (production build, clean `.next` first).
+- `.tmp-qa/n0-g0-audit-e2e.mjs` — a new, purpose-built live-browser
+  Chrome/CDP script covering: anonymous access to 4 protected routes,
+  invalid-credential rejection + generic-error-copy verification,
+  valid-credential sign-in, session-cookie flag inspection, refresh
+  persistence, sign-out click-through, post-logout re-blocking.
+- Direct `curl` calls against the local Supabase Auth API (`/auth/v1/
+  token?grant_type=password`) to independently verify the seed
+  fixture credential outside of any browser/app-layer involvement.
+- `gh api` calls against the GitHub Deployments API (read-only) to
+  confirm the latest Vercel deployment's build state.
+- `curl` against `https://app.zenwardmobility.com` (read-only
+  reachability/header checks — no test account created against
+  production, no data written to the production Supabase project).
+
+--------------------------------------------------------------------
+11. TEST RESULTS
+--------------------------------------------------------------------
+**SQL/RLS (fresh, clean, single continuous run this session):**
+317/317 PASS, 0 FAIL, 0 fatal psql ERROR line, across all 22 files
+(constraint, create_trip ×3, driver_location, driver_read ×4,
+exception_mutation_boundary, function_privilege, mutation ×6,
+operator_onboarding, organization_timezone, **rls_adversarial: 32/32**,
+security_definer_exposure, trip_exception).
+
+**Concurrency:** both `mutation_concurrency_test.sh` (~2.63s genuine
+row-lock contention, session B correctly blocked then correctly
+denied) and `driver_invite_concurrency_test.sh` (~2.62s contention,
+exactly 1 Driver row + 1 Membership row regardless of which session
+won the race) — PASS.
+
+**First-person spot-checks (this audit, fresh):**
+- Org A admin `SELECT` on Org B's trip → 0 rows visible. PASS.
+- Org A admin `UPDATE` on Org B's trip → 0 rows affected. PASS.
+- Org A admin raw `INSERT` into `trips` tagged with Org B's
+  organization_id → `permission denied for table trips`. PASS.
+- Org A admin `DELETE` on their OWN org's own trips → `permission
+  denied for table trips` (DELETE is globally ungranted). PASS.
+
+**TypeScript/Lint/Build:** `tsc --noEmit` clean, 0 errors. `lint`: 0
+errors, 13 warnings (all in untracked `.tmp-qa/` scratch scripts,
+none in application code). `build`: clean, 35 routes compiled
+successfully (including the new `/auth/confirm` and `/auth/auth-code-
+error` from the uncommitted S0A2 fix).
+
+**Live browser auth-flow battery** (`.tmp-qa/n0-g0-audit-e2e.mjs`,
+run against local dev, which is byte-identical application code to
+what's deployed except for the one uncommitted S0A2 fix): **8/13
+checks passed in the cleanest captured window** — every anonymous-
+route-blocking check (4/4), invalid-credential rejection + generic-
+error copy (2/2), sign-out redirect target, and post-logout
+re-blocking all PASS. The remaining 5 (valid-credential → Operations
+landing, refresh persistence, cookie httpOnly flag, account-menu
+open, sign-out click) could not be captured together in one
+continuous run THIS session due to the Docker Desktop instability
+described in §6 — the Supabase stack consistently died in the window
+between the invalid-credential check (step 6) and the valid-
+credential check (step 7). This was diagnosed, not merely
+encountered: a raw `curl` call to the local Auth API for the EXACT
+same credential, made independently seconds after a fresh stack
+start, returned a genuine 200 with a real session JWT — confirming
+the credential, the Auth backend, and the seed fixture are all
+correct, and that the failure is a stack-availability timing issue,
+not an application defect. Session cookies were directly observed as
+`httpOnly` in an earlier stable window (via `Network.getCookies`) —
+see §3.
+
+--------------------------------------------------------------------
+12. RLS / TENANT ISOLATION RESULTS
+--------------------------------------------------------------------
+See §11 for the exact figures. In summary: **32/32** dedicated
+adversarial cross-tenant tests PASS (SELECT/INSERT/UPDATE across
+`trips`, `passengers`, `trip_notes`, `trip_assignments`,
+`trip_events`, `transportation_requests`, `memberships`,
+`platform_admin_grants`, `audit_events` — the full tenant-owned table
+set), plus 4 additional first-person spot-checks run fresh during
+this audit specifically. DELETE isolation is structurally guaranteed
+(no DELETE grant exists on any table, for any role — verified by
+direct schema inspection AND a live attempted DELETE, both cross-
+tenant and same-tenant, both denied identically).
+
+Tables intentionally shared/global, and why: none exist in this
+schema as a genuinely cross-tenant-readable table — every table
+either belongs to exactly one organization (`organization_id` column,
+RLS-scoped) or to exactly one user (`user_profiles`,
+`platform_admin_grants` — scoped to `auth.uid()` directly, not an
+organization, but still never cross-user-readable except by a
+Platform Admin's own dedicated, separately-gated policy). There is no
+"reference data" table with a blanket read grant in this schema.
+
+--------------------------------------------------------------------
+13. MANUAL VALIDATION STILL REQUIRED
+--------------------------------------------------------------------
+1. **A complete, single-continuous-session live browser re-run** of
+   valid-credential sign-in → Operations landing → refresh → sign-out
+   click-through, once the local Docker Desktop environment is
+   confirmed stable for more than ~2 minutes continuously (or against
+   a genuinely stable staging/CI environment). Backed by: a direct,
+   independent Auth API confirmation of the exact credential (§11),
+   direct cookie-flag confirmation from an earlier stable window
+   (§3), and extensive same-session prior-phase live testing of this
+   identical code path (P1-E3-S9 §12: 31/31 live checks explicitly
+   including full sign-in). Not expected to reveal a new defect; not
+   yet re-confirmed end-to-end in one unbroken run THIS session.
+2. **Deploy Defect #1's fix and re-run the confirmation-email flow
+   against the real production Supabase project and
+   app.zenwardmobility.com** — this audit's own instructions
+   prohibit commit/push, so this is necessarily a follow-up action,
+   not something this report can mark PASS today.
+3. **Apply the exact Confirm Signup email template** (`docs/
+   deployment/staging-auth-configuration.md` §Required Confirm Signup
+   email template) to the Supabase Dashboard for whichever project is
+   production's actual Auth backend — no Dashboard credential exists
+   in this environment to do this directly.
+4. **Confirm Vercel Environment Variables** for the production
+   deployment match `docs/deployment/environment-variable-inventory.md`
+   exactly (correct Supabase URL/publishable key for whichever
+   Supabase project actually backs `app.zenwardmobility.com`) — no
+   Vercel Dashboard/authenticated CLI credential exists in this
+   environment to inspect this directly; inferred only from the
+   application working correctly in practice (real sign-in/sign-up
+   pages render correctly, per §6).
+5. **Build and ship the password-recovery flow** (Defect #2) before
+   any real production launch — explicitly out of this phase's own
+   scope, carried forward as a standing pre-production requirement.
+
+--------------------------------------------------------------------
+14. UNRESOLVED RISKS
+--------------------------------------------------------------------
+- Defect #1 remains live in production until deployed — a new
+  operator or invited Driver signing up against the REAL production
+  app today will hit the same "confirmation link doesn't work" wall
+  this audit diagnosed and already fixed locally.
+- No password-recovery path exists — an operator who forgets their
+  password has no self-service recovery today (Defect #2).
+- This local Docker Desktop environment's demonstrated instability
+  means any future local security testing session should budget for
+  the possibility of needing a full Docker Desktop restart (not just
+  `supabase stop`/`start`) if the stack becomes unresponsive — a
+  process note, not an application risk.
+- Which Supabase project actually backs `app.zenwardmobility.com` in
+  production was not independently re-confirmed this phase (no
+  Dashboard/Vercel credential available) — inferred from the app's
+  own correct behavior, consistent with every prior phase's own
+  documented access limitation, not newly introduced by this audit.
+
+--------------------------------------------------------------------
+15. G0 STATUS
+--------------------------------------------------------------------
+G0 STATUS: NOT READY
+
+Reasoning against the exit criteria: no P0 defect exists, no
+unresolved cross-tenant vulnerability exists, no privileged
+credential is exposed client-side, the application builds
+successfully, and remaining manual checks are clearly identified —
+four of five criteria are met. The one blocking condition is "no
+unresolved P1 defect affecting core authentication": Defect #1 is a
+real, currently-live P1 affecting the email-confirmation path for
+BOTH new-operator signup and Driver-invite signup in production.
+Because its fix already exists, is already proven, and needs only a
+human-authorized deploy (explicitly outside this phase's own
+authority) plus one Supabase Dashboard email-template edit, this is
+the narrowest possible gap to close — not a redesign, not new
+security work, not a schema change.
+
+--------------------------------------------------------------------
+16. RECOMMENDED NEXT STEP
+--------------------------------------------------------------------
+1. Human review and approve deployment of the current working tree
+   (the P1-E4-S0A2 fix) — commit and push.
+2. Apply the Confirm Signup email template change to the production/
+   staging Supabase Dashboard (`docs/deployment/staging-auth-
+   configuration.md` §Required Confirm Signup email template).
+3. Re-run the full email-confirmation flow against the real
+   production app with a genuinely new account, confirming Organization
+   /Membership/UserProfile each created exactly once (the same rigor
+   already applied locally).
+4. Re-run item #1 of §13 (the single-continuous-session live browser
+   battery) once local infrastructure is confirmed stable, purely to
+   close out that one specific gap with a fresh, unbroken capture.
+5. Only THEN re-declare G0 and proceed to the Nemryn brand phase —
+   this audit does not begin that work, per its own explicit scope.
+
+--------------------------------------------------------------------
+17. GIT STATUS
+--------------------------------------------------------------------
+`git status --short`:
+```
+ M docs/deployment/staging-auth-configuration.md
+ M docs/deployment/staging-runbook.md
+ M docs/product/application-route-map.md
+ M docs/product/auth-session-routing.md
+ M docs/product/decision-register.md
+ M docs/product/driver-invite-linkage-model.md
+ M docs/product/operator-onboarding-model.md
+ M src/app/join/[token]/JoinSignUpForm.tsx
+ M src/components/auth/SignUpForm.tsx
+ M supabase/config.toml
+?? .tmp-qa/auth-confirm-e2e.mjs
+?? .tmp-qa/join-auth-confirm-e2e.mjs
+?? .tmp-qa/n0-g0-audit-e2e.mjs
+?? docs/reports/P1-E4-S0A2-auth-confirmation-callback-fix-report.txt
+?? docs/reports/n0-g0-cloud-auth-validation.txt
+?? src/app/auth/
+?? supabase/templates/
+```
+
+`git diff --stat`:
+```
+ docs/deployment/staging-auth-configuration.md | 31 +++++++++++++++++++++------
+ docs/deployment/staging-runbook.md            |  6 +++++-
+ docs/product/application-route-map.md         |  2 ++
+ docs/product/auth-session-routing.md          |  4 +++-
+ docs/product/decision-register.md             | 24 +++++++++++++++++++++
+ docs/product/driver-invite-linkage-model.md   | 10 +++++++--
+ docs/product/operator-onboarding-model.md     | 16 +++++++++++---
+ src/app/join/[token]/JoinSignUpForm.tsx       |  3 ++-
+ src/components/auth/SignUpForm.tsx            |  4 ++--
+ supabase/config.toml                          | 30 ++++++++++++++++++++++++--
+ 10 files changed, 111 insertions(+), 19 deletions(-)
+```
+
+All of the above is the prior (P1-E4-S0A2) session's own work, carried
+forward unmodified. **Nothing was committed. Nothing was pushed. No
+pull request was created**, per this phase's own explicit instruction.
+Every change remains available locally for review.
+====================================================================

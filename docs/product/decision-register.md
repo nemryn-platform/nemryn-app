@@ -2453,6 +2453,30 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Engineering
 - **Review Trigger:** None anticipated — this is a general pattern worth keeping in mind for any future "first-time-only" UX decision reached via a potentially-racing entry point.
 
+### ZD-202 — Email confirmation uses a dedicated SSR callback (`/auth/confirm`), not Supabase's own hosted redirect
+
+- **Date:** 2026-09-03
+- **Category:** Architecture / Security
+- **Decision:** The Confirm Signup email template links directly to this application's own `/auth/confirm?token_hash={{ .TokenHash }}&type=signup` (a Route Handler that calls `verifyOtp()` server-side) rather than Supabase's default `{{ .ConfirmationURL }}`, which redirects through Supabase's own hosted `/auth/v1/verify` endpoint.
+- **Status:** CONFIRMED — implemented (`src/app/auth/confirm/route.ts`, `src/app/auth/auth-code-error/page.tsx`), verified live and locally with a real Mailpit-delivered email for both operator signup and Driver-invite signup — session established directly, no manual sign-in, exactly-once Organization/Membership/UserProfile in every run, a repeated click of the same link fails safely (Supabase's OTP tokens are single-use).
+- **Reason:** Directly root-caused, not assumed: Supabase's hosted `/auth/v1/verify` redirect encodes the new session as a URL fragment (`#access_token=...`), which is never sent to any server and is only readable by client-side JavaScript — this application has none that reads it, so no session was ever established via that path, regardless of how correctly Site URL/Redirect URLs were configured. The canonical Supabase Next.js SSR pattern (`token_hash`/`type` as plain query parameters, verified server-side) is the documented fix for exactly this class of app.
+- **Affected Product Areas:** `/sign-up`, `/join/[token]` (both share the same "Confirm signup" email category), the Supabase Dashboard's own email template configuration for the staging/production project.
+- **Dependencies:** ZD-200/ZD-201 (`/complete-signup`, which this callback hands off to on success).
+- **Owner:** Engineering / Security
+- **Review Trigger:** If Supabase ever changes its own hosted verify-endpoint behavior to support a session-establishing redirect natively, revisit whether the dedicated callback is still needed.
+
+### ZD-203 — Local Supabase `site_url` set to `localhost`, not `127.0.0.1`
+
+- **Date:** 2026-09-03
+- **Category:** Local Development Environment
+- **Decision:** `supabase/config.toml`'s `site_url` changed from `http://127.0.0.1:3000` to `http://localhost:3000` (with `127.0.0.1` variants kept in `additional_redirect_urls` for flexibility).
+- **Status:** CONFIRMED — implemented, verified: the confirmation-link E2E proof only succeeded once this change was made.
+- **Reason:** A genuine Next.js dev-server (Turbopack) behavior, found while debugging why `/auth/confirm` established a session but the browser never appeared authenticated afterward: an incoming request's own `request.url`/`nextUrl.origin` was silently normalized to `"localhost"` regardless of whether the literal request used `127.0.0.1` or `localhost` as the host. A redirect built from that value therefore targeted a different host than the one the session cookie had just been written for, and the browser correctly refused to forward it. Matching `site_url` to what the dev server actually canonicalizes to (already `.env.local`'s own `NEXT_PUBLIC_APP_URL` value) fixes this at the root, rather than working around it per-route. Confirmed as a local-only artifact — the real deployed app has exactly one canonical host at all times, so this cannot occur in staging/production.
+- **Affected Product Areas:** Local development environment only — no application code, no staging/production configuration.
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

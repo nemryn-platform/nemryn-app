@@ -1,8 +1,10 @@
 # Zenward Platform — Auth, Session & Routing
 
-**Work item:** P1-E3-S1 — Authentication, Session & Role Routing Foundation (the `none` → `/complete-signup` routing below updated by P1-E4-S0A1 — Cloud Signup Continuation Fix, §6)
+**Work item:** P1-E3-S1 — Authentication, Session & Role Routing Foundation (the `none` → `/complete-signup` routing below updated by P1-E4-S0A1 — Cloud Signup Continuation Fix, §6; a new `/auth/confirm` SSR route added by P1-E4-S0A2 — Auth Confirmation Callback Fix)
 **Status:** Implemented and verified against the actual local Supabase Auth service and the actual running Next.js app — 41 real integration checks pass, plus 204 pre-existing database security assertions unaffected. Not a syntax-only claim.
 **Last updated:** 2026-09-03
+
+**New this phase — `/auth/confirm`** (`src/app/auth/confirm/route.ts`): the SSR email-confirmation callback the Confirm Signup email template now links to directly. Reads `token_hash`/`type`, calls `supabase.auth.verifyOtp()` on the server client (establishing the real session cookie in the response), then redirects to `/complete-signup` on success or `/auth/auth-code-error` (a new, calm retry page) on failure. See `docs/product/operator-onboarding-model.md` §4B for the full architecture and root-cause analysis.
 
 This document describes the identity/routing layer built in this phase. It complements [application-auth-boundary.md](../security/application-auth-boundary.md) (the security reasoning) and [application-auth-test-matrix.md](../security/application-auth-test-matrix.md) (the full test record).
 

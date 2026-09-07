@@ -1,0 +1,418 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E4-S0A2 — Auth Confirmation Callback Fix
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT (fix built + fully proven,
+                       operator AND Driver-invite paths); VERCEL
+                       STAGING (reachability confirmed; fix NOT yet
+                       deployed — see §9/§14)
+Git branch:           main
+Git HEAD at start:    73b8bd6 "Fix cloud signup continuation" (P1-E4-S0A1,
+                       already committed and pushed by the user between
+                       phases — confirmed live and deployed, see §1)
+Date/time:            2026-09-03
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK / GIT STATE
+--------------------------------------------------------------------
+`git status --short` was CLEAN at phase start. `git log --oneline`
+showed a new commit, `73b8bd6 "Fix cloud signup continuation"`, on
+top of `77c5566` — the P1-E4-S0A1 work committed and pushed (`origin/
+main` matched local HEAD) since that phase's own turn ended, matching
+this session's established pattern of the user committing between
+turns. Confirmed via `gh api .../commits/73b8bd6/status`: Vercel
+build `state: success`. Confirmed live: `https://app.zenwardmobility.
+com/complete-signup` returns a 307 (correct unauthenticated-redirect
+behavior) — the S0A1 code is genuinely deployed. This context matters:
+it is WHY the work item's own problem statement is now specifically
+about the confirmation CALLBACK, not the continuation logic itself —
+S0A1's fix is live, a real email is now being delivered, and the ONE
+remaining gap is exactly what this phase addresses.
+
+--------------------------------------------------------------------
+2. INSPECTION — WHERE THE ACTUAL GAP WAS
+--------------------------------------------------------------------
+Read the current source directly (not assumed): `/sign-up`'s Server
+Action, the Supabase SSR client (`src/lib/supabase/server.ts`,
+`client.ts`, `proxy.ts`), `/complete-signup` (S0A1's Route Handler),
+and the Supabase Auth Site URL/Redirect URL configuration already
+documented in `docs/deployment/staging-auth-configuration.md`.
+
+Root cause, confirmed directly by following the actual confirmation
+link with `curl` and reading its `Location` header (not assumed from
+documentation): Supabase's DEFAULT "Confirm signup" email template
+uses `{{ .ConfirmationURL }}`, which points at Supabase's own hosted
+`https://<project>.supabase.co/auth/v1/verify?token=...&type=signup&
+redirect_to=<Site URL>`. That endpoint verifies the token server-side,
+then redirects the browser to Site URL with the new session encoded
+as a URL **fragment** — `#access_token=...&refresh_token=...` — never
+a query parameter. A fragment is never transmitted to any server by
+the browser; only client-side JavaScript can read
+`window.location.hash`. This application has NO client-side code
+anywhere that reads it (confirmed: `grep -rn "location.hash" src/`
+returns nothing). The fragment was therefore silently discarded every
+time — no session was ever established, regardless of how correctly
+Site URL/Redirect URLs were configured, and regardless of `/complete-
+signup`'s own correctness (S0A1's fix was never even reached). This
+exactly explains the reported symptom: the person lands back on an
+unauthenticated state, which (depending on exactly which unauth path
+the browser hit) can read as "returned to the sign-up screen."
+
+--------------------------------------------------------------------
+3. THE FIX — `/auth/confirm`
+--------------------------------------------------------------------
+`src/app/auth/confirm/route.ts` — the canonical Supabase Next.js SSR
+confirmation pattern, adapted to this codebase's conventions:
+
+  export async function GET(request: NextRequest) {
+    const { searchParams } = new URL(request.url);
+    const tokenHash = searchParams.get("token_hash");
+    const type = searchParams.get("type") as EmailOtpType | null;
+    if (tokenHash && type) {
+      const supabase = await createServerSupabaseClient();
+      const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
+      if (!error) return NextResponse.redirect(new URL("/complete-signup", requestUrl));
+    }
+    return NextResponse.redirect(new URL("/auth/auth-code-error", requestUrl));
+  }
+
+Reads `token_hash`+`type` as plain, server-readable query parameters
+(never a fragment). Calls `verifyOtp()` on the SERVER Supabase client
+(`createServerSupabaseClient()` — the same helper every Server Action
+already uses), which writes the real session cookie directly into
+this response via its cookie adapter. On success, redirects to
+`/complete-signup` — S0A1's own continuation, unchanged, picks up
+from there. On any failure (missing params, an expired or
+already-used token), redirects to a new calm retry page,
+`/auth/auth-code-error` (`src/app/auth/auth-code-error/page.tsx`) —
+same visual shell as every other auth surface in this app, never a
+raw Supabase error. `token_hash` (a genuine, short-lived credential)
+is never logged anywhere in this route — confirmed by reading the
+final file: the one debug `console.log` added during development
+(logging only the request HOST, never the token) was removed before
+this report.
+
+A Route Handler, not a Server Component page — consistent with S0A1's
+own ZD-200 finding (a Server Component's `redirect()` after a
+mutating `await`, reached via a chained navigation, was not reliably
+followed by the browser). This endpoint mutates (establishes a
+session) and then redirects, exactly the pattern that motivated
+ZD-200 in the first place.
+
+--------------------------------------------------------------------
+4. THE OPERATOR FLOW, END TO END — PROVEN, NOT ASSUMED
+--------------------------------------------------------------------
+`/sign-up` → Supabase `signUp()` (unchanged — still persists
+`pending_full_name`/`pending_business_name` in `user_metadata`, per
+S0A1) → confirmation email → `/auth/confirm` → `verifyOtp()` →
+session cookie → `/complete-signup` → `complete_pending_signup()` →
+`/onboarding`. **No manual Sign In required** — verified live,
+locally, with a REAL Mailpit-delivered email, a fresh browser (no
+prior cookies), in one continuous chain: sign-up shows "Check your
+email" → real confirmation email received → link (shape confirmed:
+`http://localhost:3000/auth/confirm?token_hash=pkce_...&type=signup`)
+clicked → lands on `/onboarding` directly. 6/6 automated checks PASS.
+Database confirmed: exactly 1 Organization (name matching what was
+typed at signup), exactly 1 Membership (`organization_admin`,
+`active`), exactly 1 UserProfile (display name matching what was
+typed at signup) — verified via direct query, not inferred from UI
+state.
+
+--------------------------------------------------------------------
+5. DRIVER INVITES — THE SAME ENDPOINT, SAFELY SHARED
+--------------------------------------------------------------------
+No changes needed to `/join/[token]`'s own `signUp()` call — S0A1
+already persists `pending_driver_invite_token` there, and Supabase
+sends the identical "Confirm signup" email template (`type=signup`)
+regardless of which page initiated the signup, since it's the same
+email category either way. `/complete-signup` already checks for
+`pending_driver_invite_token` FIRST, before ever looking at operator
+metadata (S0A1, unchanged) — so Driver invitees structurally cannot
+reach the operator organization-creation path through this new
+callback either.
+
+Verified live, locally, with a real Mailpit-delivered email: Driver
+invite created as Org Admin → invitee signs up at `/join/[token]` →
+real confirmation email received, `/auth/confirm` link shape
+confirmed → link clicked in a fresh browser → lands directly on
+`/driver`, zero manual steps → `/operations` attempt correctly
+denied (redirected back to `/driver`). 6/6 automated checks PASS.
+Database confirmed: `role: driver`, `status: active`, `drivers.
+display_name` = the admin's own invite-specified name (unchanged,
+correct), `user_profiles.display_name` = the invitee's own entered
+name (the S0A1 parity fix, still correct), and **zero**
+`organization_admin` Memberships for this account — Driver invitees
+never accidentally create an operator Organization, confirmed
+structurally and via direct query.
+
+--------------------------------------------------------------------
+6. DUPLICATE-CLICK / REFRESH / INVALID-TOKEN — TESTED DIRECTLY
+--------------------------------------------------------------------
+- **Clicked twice:** the SAME confirmation link, followed a second
+  time (`curl`, direct HTTP request to `/auth/confirm`) — first
+  request: `307 → /complete-signup`. Second request, same
+  `token_hash`: `307 → /auth/auth-code-error`. Supabase's own OTP
+  tokens are single-use; `verifyOtp()` correctly rejects a repeat.
+  This means `/complete-signup` (and therefore
+  `complete_pending_signup()`) is structurally never even reached a
+  second time from a stale link — not merely idempotent by
+  convention, but unreachable a second time by construction.
+- **Refreshed:** `/onboarding`, reloaded after a successful
+  confirmation, stays on `/onboarding` — no bounce, no error, no
+  re-triggered creation (verified as part of the 6/6 operator run,
+  §4).
+- **Invalid/garbage token:** `GET /auth/confirm?token_hash=totally-
+  invalid-garbage&type=signup` → `307 → /auth/auth-code-error`.
+- **Missing params entirely:** `GET /auth/confirm` (no query string
+  at all) → `307 → /auth/auth-code-error`.
+- **The error page itself:** `/auth/auth-code-error` renders
+  correctly, HTTP 200, calm copy ("This link has expired"), links to
+  both `/sign-in` and `/sign-up` — never a raw Supabase error or a
+  stack trace.
+
+No path produced a duplicate Organization/Membership/UserProfile in
+any of these tests, verified via direct database query where
+applicable.
+
+--------------------------------------------------------------------
+7. THE EMAIL TEMPLATE — REQUIRED, DOCUMENTED, NOT YET APPLIED TO STAGING
+--------------------------------------------------------------------
+The exact "Confirm signup" template needed (`docs/deployment/
+staging-auth-configuration.md` §Required Confirm Signup email
+template, the authoritative copy):
+
+  <h2>Confirm your account</h2>
+  <p>Follow this link to confirm your Zenward Mobility account:</p>
+  <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup">Confirm your email</a></p>
+
+`type=signup` matches Supabase's own official Next.js SSR guide's
+example for this specific template field. No `RedirectTo`/`next`
+parameter is used — `/auth/confirm` always redirects to the fixed
+`/complete-signup` destination on success, so there is no caller-
+suppliable redirect target anywhere in this flow and therefore no
+allowlist needed (work item §6's own note addressed by NOT adding
+one, deliberately, rather than adding an unnecessary one).
+
+**Applied to LOCAL dev** (`supabase/config.toml`'s new `[auth.email.
+template.confirmation]` section, `supabase/templates/
+confirmation.html` — the identical text above) — this is what every
+test in §4/§5/§6 actually exercised, end to end, with a real email.
+
+**NOT independently applied to the staging Supabase Dashboard** —
+same access limitation as every prior phase's Auth URL Configuration
+work: no Dashboard credential exists in this environment. This is the
+ONE remaining manual step before the fix can work on
+`app.zenwardmobility.com` at all, even once the code itself is
+deployed (§9/§14).
+
+--------------------------------------------------------------------
+8. A GENUINE LOCAL-DEV-ONLY BUG FOUND AND FIXED WHILE BUILDING THIS
+--------------------------------------------------------------------
+`/auth/confirm` initially appeared not to work even once implemented
+correctly — same symptom, session never established. Root-caused via
+direct `curl` inspection of the actual `Set-Cookie`/`Location`
+headers (not guessed): the session cookie WAS being written correctly
+by `verifyOtp()` (confirmed: real `sb-*-auth-token` cookies present
+in the response, correct `Path`/`Expires`/`SameSite`), but the
+redirect's `Location` header used `localhost` even when the actual
+incoming request was to `127.0.0.1` — a genuine Next.js dev-server
+(Turbopack) behavior that silently normalizes `request.url`/`nextUrl.
+origin`'s reported host, regardless of the literal Host header the
+client used. The browser correctly refused to send `127.0.0.1`-scoped
+cookies to a `localhost` redirect target — two different origins from
+a cookie's perspective, even on the same machine.
+
+Fixed at the root, not worked around: local Supabase's own `site_url`
+(`supabase/config.toml`) changed from `http://127.0.0.1:3000` to
+`http://localhost:3000` — matching what Next's dev server actually
+canonicalizes to, and matching `.env.local`'s own pre-existing
+`NEXT_PUBLIC_APP_URL` value (which was ALREADY `localhost:3000` —
+this fix aligns Site URL with an existing convention, not introducing
+a new inconsistency). Recorded as ZD-203. Confirmed as local-only: the
+real deployed app has exactly one canonical host at all times
+(`app.zenwardmobility.com`), so this specific mismatch structurally
+cannot occur there.
+
+--------------------------------------------------------------------
+9. WHAT THIS PHASE DELIBERATELY DID NOT DO
+--------------------------------------------------------------------
+- Did not push or commit anything — the fix exists only in this local
+  working tree (per this phase's own explicit "Do NOT commit/push
+  automatically").
+- Did not apply the required email template change to the staging
+  Supabase Dashboard (§7) — no Dashboard credential available.
+- Did not re-verify the fix against the real deployed
+  `app.zenwardmobility.com` with a real cloud email — both blocked by
+  the above (code not deployed, template not applied there).
+- Did not separately re-verify this exact flow under a production
+  build (`next build && next start`) this specific phase — S0A1
+  already established that pattern for the PRIOR fix (§ that report),
+  specifically because that fix's failure mode was a Next.js
+  dev-mode-only navigation quirk (ZD-200/ZD-201). This phase's own fix
+  is architecturally a Route Handler calling `verifyOtp()` and
+  returning a plain `NextResponse.redirect()` — the same well-
+  understood, mode-independent primitive `/complete-signup` (S0A1)
+  already uses successfully in both dev and production mode. Given
+  repeated local Docker/Supabase stack instability consumed
+  significant time this phase (§ below), and given no dev-mode-
+  specific mechanism is involved in THIS fix the way it was in S0A1's,
+  this was judged an acceptable, disclosed scope reduction rather than
+  re-running the full production-build cycle — flagged here explicitly
+  rather than silently assumed equivalent.
+- Did not build password recovery (unchanged, still missing, still a
+  pre-production requirement — outside this phase's scope entirely).
+- Did not begin S10.
+
+--------------------------------------------------------------------
+10. LOCAL INFRASTRUCTURE INSTABILITY THIS PHASE (HONEST NOTE)
+--------------------------------------------------------------------
+The local `supabase stop`/`start` cycle (needed repeatedly to toggle
+`enable_confirmations` for controlled testing, per this project's own
+established discipline of never leaving it enabled in the committed
+baseline) failed outright twice mid-phase (`error running container:
+exit 1`, and once with `supabase status` reporting `No such
+container: supabase_db_ZenWard` despite `docker ps` showing it
+starting) — resolved each time by a clean, patient stop/start retry;
+no data loss, no test result was affected (each failure was caught
+before any test ran against a broken stack, never after). Recorded
+here for honesty, not because it affected any finding above.
+
+--------------------------------------------------------------------
+11. UPDATED SIGNUP UX COPY (WORK ITEM §7)
+--------------------------------------------------------------------
+`SignUpForm`'s "Check your email" state: "We sent a confirmation link
+... Once you click it, you'll be signed in automatically and we'll
+set up your business — no need to sign in separately." (previously
+said "sign in and we'll set up your business," which described the
+OLD, now-incorrect expectation). `JoinSignUpForm`'s equivalent: "Once
+you click the confirmation link, you'll be signed in automatically
+and this invite will be accepted for you." (previously said "come
+back to this link," also now incorrect). Both now accurately describe
+the real mechanism this phase implements.
+
+--------------------------------------------------------------------
+12. DOCUMENTATION UPDATED
+--------------------------------------------------------------------
+`docs/product/operator-onboarding-model.md` (new §4B — the SSR
+callback architecture and root-cause analysis; §4A's original,
+now-corrected assumption about the confirmation redirect struck
+through/corrected in place), `docs/product/driver-invite-linkage-
+model.md` (new §1B), `docs/product/auth-session-routing.md` (new
+`/auth/confirm` route documented), `docs/deployment/staging-auth-
+configuration.md` (new §Required Confirm Signup email template — the
+actual root cause and fix; email-confirmation-reality section updated
+to reflect delivery now working), `docs/deployment/staging-runbook.md`
+(new note flagging the required Dashboard template change),
+`docs/product/decision-register.md` (ZD-202, ZD-203). Also lightly
+touched (not in the work item's own required list, kept for internal
+consistency): `docs/product/application-route-map.md` (2 new routes).
+
+--------------------------------------------------------------------
+13. LOCAL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 22-file suite: **317/317 PASS, 0
+FAIL, 0 fatal psql ERROR lines** — unchanged from the current
+baseline (this phase touched no schema/RPC, application-layer only).
+**RLS: 32/32 PASS** (same suite, unchanged). Both concurrency scripts
+re-run and PASS: `mutation_concurrency_test.sh` (~1.83s genuine
+row-lock contention) and `driver_invite_concurrency_test.sh` (~1.84s
+contention, exactly 1 Driver row + 1 Membership row). `npx tsc
+--noEmit`: clean, 0 errors. `npm run lint`: 0 errors, 13 warnings —
+every warning in untracked `.tmp-qa/` scratch scripts, none in
+application code. `npm run build`: clean production build, 35 routes
+compiled successfully (33 prior + `/auth/confirm` + `/auth/auth-code-
+error`).
+
+--------------------------------------------------------------------
+14. BLOCKERS
+--------------------------------------------------------------------
+1. **The fix is not yet deployed** — exists only in this local
+   working tree, per explicit "Do NOT commit/push automatically."
+2. **The required email template change has not been applied to the
+   staging Supabase Dashboard** — no Dashboard credential in this
+   environment. Even once deployed, confirmation links on staging
+   will continue using the OLD, broken `{{ .ConfirmationURL }}` shape
+   until this specific Dashboard edit is made (§7's exact template
+   text).
+3. Given (1) and (2), the work item's own cloud hard gate (§8: a
+   completely new account, confirmed against the real deployed
+   `app.zenwardmobility.com`) could not be executed this phase — not
+   a defect in the fix, a direct consequence of these two structural
+   blockers.
+4. Password recovery remains genuinely missing (unchanged,
+   pre-production requirement, out of this phase's scope).
+
+--------------------------------------------------------------------
+15. RECOMMENDED NEXT STEP
+--------------------------------------------------------------------
+Per the work item's own explicit instruction: return to final Cloud
+Staging Validation, once (a) this fix is reviewed and deployed (a
+human-authorized push), and (b) the Confirm Signup email template
+(§7's exact text) is applied to the staging Supabase Dashboard. Only
+then can the cloud hard gate (§8) actually be executed. Then P1-E3-S10.
+====================================================================
+AUTH CONFIRM ENDPOINT:
+PASS
+
+SSR SESSION ESTABLISHMENT:
+PASS
+
+OPERATOR EMAIL LINK → ONBOARDING:
+PASS (LOCAL — real Mailpit email, real link click, 6/6 checks,
+fresh-browser/no-prior-cookies. CLOUD NOT RUN — fix not yet deployed
+and staging Dashboard template not yet updated, §9/§14, independent
+of this fix's own correctness)
+
+MANUAL SIGN-IN AFTER CONFIRMATION:
+NOT REQUIRED
+
+ORGANIZATION EXACTLY ONCE:
+PASS
+
+MEMBERSHIP EXACTLY ONCE:
+PASS
+
+USERPROFILE EXACTLY ONCE:
+PASS
+
+DRIVER INVITE CONFIRMATION:
+PASS (LOCAL — real Mailpit email, real link click, 6/6 checks; zero
+organization_admin Memberships confirmed for the invitee)
+
+INVALID/EXPIRED LINK:
+HANDLED
+
+APP.ZENWARDMOBILITY.COM:
+PASS (reachable, HTTP 200, correct page — currently serving the
+PRE-fix code from P1-E4-S0A1; THIS fix has not been deployed there —
+see §9/§14)
+
+SQL:
+317/317
+
+RLS:
+32/32
+
+AUTH CONFIRMATION GATE:
+NOT READY — the fix itself is complete and rigorously proven locally
+(operator signup AND Driver invite, including double-click/refresh/
+invalid-token edge cases, exactly-once verified via direct database
+query in every case), but the work item's own cloud hard gate (§8)
+could not be executed: the fix is not yet deployed (no auto-push, by
+design) and the required Confirm Signup email template change has not
+been applied to the staging Supabase Dashboard (no Dashboard
+credential available in this environment). Nothing here reflects a
+defect found in the fix — see §9/§14 for the exact, honest reasoning.
+
+NEXT:
+Return to final Cloud Staging Validation, once this fix is deployed
+and the staging Confirm Signup email template is updated per §7.
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: S10 was not begun, no real customer data
+was deployed, nothing was committed or pushed. This phase stops here.
+====================================================================

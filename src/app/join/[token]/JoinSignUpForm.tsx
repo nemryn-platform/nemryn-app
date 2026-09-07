@@ -16,7 +16,8 @@ export function JoinSignUpForm({ token, email }: { token: string; email: string 
   if (state.needsEmailConfirmation) {
     return (
       <p className={cn(typography.body, "text-text-primary")}>
-        Check your email to confirm your account, then come back to this link to finish joining.
+        Check your email to confirm your account. Once you click the confirmation link, you&apos;ll be signed in
+        automatically and this invite will be accepted for you.
       </p>
     );
   }

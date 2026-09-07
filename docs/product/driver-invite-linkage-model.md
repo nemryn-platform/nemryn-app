@@ -1,7 +1,7 @@
 # Zenward Platform — Driver Invite & Linkage Model
 
-**Work item:** P1-E3-S9 — Operator Signup & Business Setup, §10 (closes GAP-15); confirmation-boundary continuation added by P1-E4-S0A1 — Cloud Signup Continuation Fix, §7
-**Status:** Implemented — `driver_invites` table, `create_driver_invite`/`revoke_driver_invite`/`get_driver_invite_preview`/`redeem_driver_invite`, `/join/[token]`, `/complete-signup` (§1A).
+**Work item:** P1-E3-S9 — Operator Signup & Business Setup, §10 (closes GAP-15); confirmation-boundary continuation added by P1-E4-S0A1 — Cloud Signup Continuation Fix, §7; the actual SSR confirmation callback added by P1-E4-S0A2 — Auth Confirmation Callback Fix, §5.
+**Status:** Implemented — `driver_invites` table, `create_driver_invite`/`revoke_driver_invite`/`get_driver_invite_preview`/`redeem_driver_invite`, `/join/[token]`, `/complete-signup` (§1A), `/auth/confirm` (§1B) — a Driver invitee's confirmation email now lands them straight on `/driver`, no manual sign-in.
 **Last updated:** 2026-09-03
 
 **The highest-risk part of this phase**, per the work item's own framing. Closes `docs/product/ui-backend-gap-register.md` GAP-15: "Driver is not AuthUser/Membership, and no safe, coherent contract exists yet for inviting a new authenticated user, creating their Membership, AND linking a `drivers` row together."
@@ -24,6 +24,12 @@ The organization admin **never** creates the invitee's account or handles their 
 - Failure (revoked, stale, wrong-email, or any other denial `redeem_driver_invite` itself already enforces — §3 below, unchanged) → `/access-unavailable`. **Deliberately never** the operator organization-creation form (`/complete-signup/form`) — a Driver invitee whose invite failed must never be offered a path to create their own operator organization instead; that would silently paper over a real invite problem with an unrelated, unintended capability.
 
 Since `redeem_driver_invite` was already idempotent for a repeat call by the same already-accepted person (§3 below), no additional idempotency guard was needed for this path — unlike the operator-signup continuation (`complete_pending_signup`), which needed a new advisory-lock guard because `signup_create_organization` is deliberately non-idempotent.
+
+## 1B. The SSR confirmation callback (P1-E4-S0A2)
+
+§1A's `pending_driver_invite_token` reaches `/complete-signup` the same way operator signup's `pending_full_name`/`pending_business_name` do — through a real session, which (per `docs/product/operator-onboarding-model.md` §4B) required a dedicated SSR endpoint, `/auth/confirm`, to actually establish. Before that endpoint existed, a Driver invitee's confirmation email link had exactly the same failure as an operator's: Supabase's default template redirects with the session in a URL fragment no server-side code can read, so nothing was ever established and the invitee landed unauthenticated. `joinSignUpAction`'s `signUp()` call needs no changes for this fix — the SAME "Confirm signup" email template (§ operator-onboarding-model.md §4B) is used for every email-confirmation signup regardless of which page initiated it, since Supabase categorizes them identically (`type=signup`).
+
+Verified live and locally, with a real Mailpit-delivered email: Driver invite created as Org Admin → invitee signs up at `/join/[token]` → real confirmation email received, using the `/auth/confirm?token_hash=...&type=signup` link shape → link clicked in a fresh browser (no prior cookies) → lands directly on `/driver`, zero manual steps → `/operations` correctly denied. `drivers.display_name` (from the invite, admin-specified) and `user_profiles.display_name` (from the invitee's own entered name, via the §1A parity fix) both confirmed correct via direct database query.
 
 ## 2. Why this design, specifically
 

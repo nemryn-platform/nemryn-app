@@ -1,7 +1,7 @@
 # Zenward Platform — Staging Auth Configuration
 
-**Work item:** P1-E4-S0A1 — Cloud Signup Continuation Fix, §8 (supersedes P1-E4-S0A §7)
-**Status:** The staging URL is now confirmed reachable end to end at a real custom domain. See §Confirmed staging URL.
+**Work item:** P1-E4-S0A2 — Auth Confirmation Callback Fix, §6 (supersedes P1-E4-S0A1 §8)
+**Status:** The staging URL is confirmed reachable end to end at a real custom domain. A real confirmation email is now being delivered (the earlier rate limit resolved). This phase's own required action — see §Required Confirm Signup email template — is the ONE remaining Dashboard change needed for confirmation links to actually establish a session.
 **Last updated:** 2026-09-03
 
 ## Confirmed staging URL
@@ -29,13 +29,30 @@ Authentication → URL Configuration:
 
 **Applied via the Supabase Dashboard directly** (Authentication → URL Configuration), never via `supabase config push` — that command pushes the ENTIRE local `supabase/config.toml`, including settings (SMS providers, storage, edge-function config, local Docker ports) that were never reviewed for staging-safety and have no business being pushed to a hosted project at all. A two-field Dashboard edit is the correct, minimum-blast-radius mechanism for this specific change (ZD-198).
 
-## Email confirmation reality on staging (directly tested, not assumed)
+## Required Confirm Signup email template (P1-E4-S0A2 — the actual root cause)
 
-Local dev has `enable_confirmations = false` (`supabase/config.toml`) — no verification gate. The staging Supabase project (ref `wyocbivzgrbekuyqdfts`) has confirmations **ON**, confirmed directly:
+**Why the confirmation link doesn't establish a session today:** Supabase's DEFAULT "Confirm signup" template links via `{{ .ConfirmationURL }}`, which points at Supabase's own hosted `https://<project>.supabase.co/auth/v1/verify?token=...&type=signup&redirect_to=<Site URL>`. That endpoint verifies the token, then redirects the browser to Site URL with the new session encoded as a URL **fragment** (`#access_token=...&refresh_token=...`) — confirmed directly, by following this exact link with `curl` and reading its `Location` header. A fragment is **never sent to any server** (browsers don't transmit it in the request) — only client-side JavaScript can read `window.location.hash`. A plain Server Component landing page (this app's root `/`, or anywhere else) can never see it, so no session is ever established server-side — the person lands back on an unauthenticated `/`, and (before this phase) that read as "click didn't work."
 
-- A raw `POST /auth/v1/signup` against the staging project's own Auth API (using its publishable key, no app code involved) returned `{"code":429,"error_code":"over_email_send_rate_limit","msg":"email rate limit exceeded"}`. This is Supabase's own built-in email sender actively ATTEMPTING to send a confirmation email — which is itself proof confirmations are genuinely enabled (an already-confirmed-by-default project wouldn't try to send anything) — and that its default test-appropriate sending quota (a handful of emails per hour, not production volume — flagged as a known risk in the P1-E4-S0 report) had already been exhausted by the time of this test.
-- **EMAIL CONFIRMATION status: LIMITED**, not PASS or FAIL: the application's own code-level handling of the confirmation-required branch is proven correct (`docs/product/operator-onboarding-model.md` §4/§4A — this phase's own local proof used a REAL confirmation email via Mailpit, a REAL link click, and confirmed the continuation completes Organization/Membership/UserProfile exactly once), but a REAL confirmation email could not be sent from the staging PROJECT itself during this phase due to the rate limit above. This is a Supabase-project-configuration limitation (no custom SMTP provider attached), not an application defect.
-- **Recommended before any further staging signup testing, and required before production:** configure a real SMTP provider (Supabase Dashboard → Authentication → Emails → SMTP Settings) — e.g. Postmark, Resend, SendGrid — so staging (and eventually production) email sending isn't limited to Supabase's own low-volume test sender. Not done this phase (no such provider account/credential was available).
+**The fix — apply this exact template in the Supabase Dashboard (Authentication → Email Templates → Confirm signup, staging project ref `wyocbivzgrbekuyqdfts`):**
+
+```html
+<h2>Confirm your account</h2>
+<p>Follow this link to confirm your Zenward Mobility account:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup">Confirm your email</a></p>
+```
+
+This links directly to `/auth/confirm` (`src/app/auth/confirm/route.ts`, new this phase) with `token_hash`/`type` as ordinary, server-readable query parameters — no Supabase-hosted redirect involved at all. That Route Handler calls `supabase.auth.verifyOtp({ type, token_hash })` on the SERVER Supabase client, which writes the real session cookie directly, then redirects to `/complete-signup`. `type=signup` matches Supabase's own official Next.js SSR guide's example for this exact template (`{{ .TokenHash }}` is only populated for this specific field name); do not substitute a different `type` value without checking Supabase's own current docs for the template being edited.
+
+**Not independently applied this phase** — same access limitation as the URL Configuration fields above (no Supabase Dashboard credential in this environment). Local dev's own equivalent (`supabase/config.toml`'s new `[auth.email.template.confirmation]` section, pointing at `supabase/templates/confirmation.html` — the identical template text) WAS applied and is what this phase's own local proof (§ the phase report) actually exercised end to end with a real Mailpit-delivered email.
+
+**RedirectTo / environment flexibility (work item §6's own note):** deliberately NOT added to the template above. `/auth/confirm` itself takes no `next`/`redirect_to` parameter and always redirects to the fixed `/complete-signup` destination on success — there is no caller-suppliable redirect target anywhere in this flow, so there is no allowlist needed. If a genuine multi-environment need ever arises (the same Supabase project serving both a preview and a stable staging URL, say), add an explicit, allowlisted `next` parameter to `/auth/confirm` at that point — not before it's actually needed.
+
+## Email confirmation reality on staging
+
+Local dev has `enable_confirmations = false` (`supabase/config.toml`) — no verification gate. The staging Supabase project (ref `wyocbivzgrbekuyqdfts`) has confirmations **ON**. P1-E4-S0A1 directly confirmed the project's built-in email sender was rate-limited (`over_email_send_rate_limit`) at that time; per this phase's own work item, **a real confirmation email is now being delivered successfully** — the rate-limit window has evidently passed (this specific claim was not independently re-verified this phase via a fresh raw API call, since doing so would consume more of that same limited quota for no additional information; the work item's own problem statement — a real email arrived, but clicking it failed to establish a session — is itself consistent with delivery now working).
+
+- **What was actually broken, given delivery works:** the DEFAULT template's link shape (§Required Confirm Signup email template above) — not sending, not the rate limit. This phase's fix requires the Dashboard template change above to take effect; without it, `/auth/confirm` is unreachable from a real confirmation email regardless of how reliably Supabase delivers it.
+- **Recommended before high-volume staging use, and required before production:** still worth configuring a real SMTP provider (Supabase Dashboard → Authentication → Emails → SMTP Settings) — e.g. Postmark, Resend, SendGrid — so sending isn't limited to Supabase's own low-volume built-in sender. Not done this phase (no such provider account/credential was available) — unchanged from P1-E4-S0A1.
 
 ## What this phase did NOT do
 

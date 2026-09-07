@@ -1,0 +1,923 @@
+====================================================================
+Project:       Zenward Platform
+Phase:         N0 / G0-R1 — Production Auth Closure / Pre-Deployment Review
+Repository:    /Users/datamatics/ZenWard   (zenwardmobility/ZenwardApp)
+Production:    https://app.zenwardmobility.com
+Git branch:    main   (up to date with origin/main; HEAD 73b8bd6)
+Date:          2026-09-07
+Mode:          REVIEW ONLY — no commit, no push, no PR, no DNS change,
+               no hosted-Supabase change.
+====================================================================
+
+OBJECTIVE
+---------
+Determine whether the CURRENT uncommitted authentication fix (a
+server-side /auth/confirm SSR email-confirmation callback plus the
+supporting doc/config/copy changes already in the working tree) is
+technically correct, security-neutral, and sufficiently isolated to be
+authorized for a production deployment — and specify the exact hosted
+Supabase Dashboard change that must accompany it.
+
+====================================================================
+1. EXECUTIVE SUMMARY
+====================================================================
+
+AUTH FIX DEPLOYMENT: READY FOR HUMAN AUTHORIZATION
+
+The uncommitted fix is small, self-contained, and correct:
+
+  * Two new source files (a Route Handler + a static error page),
+    seven documentation files, two one-line UI copy changes, and a
+    local-only Supabase config block. Nothing else.
+  * ZERO database surface: no migration, no RLS policy, no SECURITY
+    DEFINER function, no grant, no seed, no test file is touched.
+  * No service-role key, no new privileged env var, no client-trusted
+    organization ID, no open-redirect surface, no secret logged.
+  * npx tsc --noEmit — PASS (0 errors).
+  * npm run lint — PASS (0 errors; 14 warnings, all inside untracked
+    .tmp-qa/ scratch scripts that must NOT be deployed).
+  * npm run build — PASS; /auth/confirm, /auth/auth-code-error,
+    /complete-signup, /complete-signup/form, /join/[token] all present
+    in the production route manifest.
+  * Operator email-confirmation flow — VERIFIED live end to end against
+    a real local Supabase Auth service: /auth/confirm establishes a
+    real session cookie, redirects to /complete-signup -> /onboarding,
+    Organization + Membership(organization_admin) + UserProfile each
+    created EXACTLY ONCE even under 4 concurrent continuation calls,
+    and a replayed (already-used) token fails safely to
+    /auth/auth-code-error.
+  * Driver-invite email-confirmation flow — VERIFIED live the same
+    way: /auth/confirm -> /complete-signup -> /driver, invite marked
+    accepted, Membership(driver) + drivers row + UserProfile each
+    created EXACTLY ONCE across 3 continuation calls, display names
+    correct, /operations correctly denied.
+  * RLS unchanged and still enforced: adversarial suite 32/32,
+    security-definer-exposure 22/22, function-privilege 7/7,
+    operator-onboarding 40/40 — all PASS on a clean database.
+
+The ONE thing that is not code and cannot be done from this
+environment: the hosted Supabase project that backs
+app.zenwardmobility.com must have its "Confirm signup" email template
+changed to link to /auth/confirm (exact text in §8). Until that is
+done, confirmation links cannot establish a session in production —
+this is the entire remaining G0 P1 blocker, and it is a Dashboard
+edit, not a code change.
+
+DO NOT DEPLOY on the strength of this report alone. It authorizes a
+human to review and deploy; the human still runs the post-deployment
+validation in §15 before G0 is reconsidered.
+
+====================================================================
+2. CURRENT GIT STATE
+====================================================================
+
+git status (verbatim at review time):
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   docs/deployment/staging-auth-configuration.md
+    modified:   docs/deployment/staging-runbook.md
+    modified:   docs/product/application-route-map.md
+    modified:   docs/product/auth-session-routing.md
+    modified:   docs/product/decision-register.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   docs/product/operator-onboarding-model.md
+    modified:   src/app/join/[token]/JoinSignUpForm.tsx
+    modified:   src/components/auth/SignUpForm.tsx
+    modified:   supabase/config.toml
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/reports/P1-E4-S0A2-auth-confirmation-callback-fix-report.txt
+    docs/reports/n0-g0-cloud-auth-validation.txt
+    src/app/auth/                     (confirm/route.ts, auth-code-error/page.tsx)
+    supabase/templates/               (confirmation.html)
+
+git diff --stat:
+
+  docs/deployment/staging-auth-configuration.md | 31 ++++++++++++++------
+  docs/deployment/staging-runbook.md            |  6 +++-
+  docs/product/application-route-map.md         |  2 +
+  docs/product/auth-session-routing.md          |  4 +-
+  docs/product/decision-register.md             | 24 +++++++++++++++
+  docs/product/driver-invite-linkage-model.md   | 10 ++++--
+  docs/product/operator-onboarding-model.md     | 16 +++++++++--
+  src/app/join/[token]/JoinSignUpForm.tsx       |  3 +-
+  src/components/auth/SignUpForm.tsx            |  4 +-
+  supabase/config.toml                          | 30 +++++++++++++++++--
+  10 files changed, 111 insertions(+), 19 deletions(-)
+
+The list matches the audit's prior expectation exactly. The working
+tree is byte-for-byte unchanged by this review (config was NOT toggled;
+local `supabase db reset` touches no tracked file; all review test
+scripts were written to the session scratchpad, not the repo).
+
+New (untracked) since the audit's list: none of consequence — the
+.tmp-qa list simply also contains older scratch scripts from prior
+phases that were already present.
+
+====================================================================
+3. COMPLETE CHANGE CLASSIFICATION
+====================================================================
+
+Legend:
+  A = required for the production auth fix (code)
+  B = required documentation for the production auth fix
+  C = local testing / development only
+  D = unrelated change — must NOT be in the auth deployment
+  E = uncertain — requires review
+
+There are NO class D and NO class E items. Every change is A, B, or C.
+
+--------------------------------------------------------------------------------------------------
+FILE
+  CLASS | WHY IT CHANGED | REQ. FOR DEPLOY? | RISK IF INCLUDED | RISK IF EXCLUDED
+--------------------------------------------------------------------------------------------------
+src/app/auth/confirm/route.ts                                    (NEW, untracked)
+  A | The fix itself: SSR callback that reads token_hash/type, calls verifyOtp()
+    server-side, writes the session cookie, redirects to /complete-signup (or
+    /auth/auth-code-error on failure).
+    REQ: YES — this is the fix.
+    RISK IF INCLUDED: none identified — see §4.
+    RISK IF EXCLUDED: fix does nothing; confirmation links remain dead in production.
+
+src/app/auth/auth-code-error/page.tsx                            (NEW, untracked)
+  A | The calm failure state /auth/confirm redirects to on a missing/expired/used
+    token. Pure presentational Server Component, no data access, no params read.
+    REQ: YES — /auth/confirm references it as its failure target.
+    RISK IF INCLUDED: none — static page, brand-consistent, no inputs.
+    RISK IF EXCLUDED: /auth/confirm failure path 404s instead of showing a retry screen.
+
+src/components/auth/SignUpForm.tsx                               (modified)
+  B | Two-sentence copy change only: "Once you confirm it, sign in and we'll set up
+    your business" -> "Once you click it, you'll be signed in automatically ...
+    no need to sign in separately." Becomes TRUE only once the fix is live.
+    REQ: YES (for truthful UX) — no behavioural code change.
+    RISK IF INCLUDED: none — string literal only; diff is 2 lines inside one <p>.
+    RISK IF EXCLUDED: post-fix UI tells the user to do a manual step that no longer exists.
+
+src/app/join/[token]/JoinSignUpForm.tsx                          (modified)
+  B | Same as above, Driver-invite variant. One sentence: now states the invite is
+    accepted automatically after the confirmation click.
+    REQ: YES (truthful UX). No behavioural change; joinSignUpAction untouched.
+    RISK IF INCLUDED: none — string literal only (3-line diff).
+    RISK IF EXCLUDED: invitee is told to "come back to this link", which the fix removes.
+
+supabase/config.toml                                            (modified)
+  C | LOCAL DEV ONLY. Three edits, none of which reach the hosted project:
+      1. site_url  127.0.0.1 -> localhost  (ZD-203: Turbopack host-normalisation
+         artifact — cannot occur on the single-host production deployment).
+      2. additional_redirect_urls gains the http://127.0.0.1:3000 form.
+      3. NEW [auth.email.template.confirmation] pointing at the local template file,
+         so Mailpit-delivered local email matches what production must use.
+    REQ FOR DEPLOY: NO — this file is never pushed to the hosted project (ZD-198;
+    `supabase config push` is explicitly forbidden as it would ship local ports).
+    RISK IF INCLUDED (i.e. if committed): low — it only affects a developer's local
+    stack. It should be committed WITH the code for local-dev parity, but it changes
+    nothing in production.
+    RISK IF EXCLUDED: local dev of the confirmation flow diverges from production.
+
+supabase/templates/confirmation.html                            (NEW, untracked)
+  C | LOCAL DEV ONLY — the template body the local [auth.email.template.confirmation]
+    block loads. Its TEXT is the source of truth mirrored into §8 for the Dashboard.
+    REQ FOR DEPLOY: NO (local Mailpit only) — but its content IS the spec for the
+    production Dashboard template.
+    RISK IF INCLUDED: none.
+    RISK IF EXCLUDED: local email link shape diverges from production.
+
+docs/deployment/staging-auth-configuration.md                   (modified)
+  B | Adds "Required Confirm Signup email template" — the exact Dashboard template
+    text, root-cause analysis, and the explicit "not applied this phase — needs
+    Dashboard access" note.
+    REQ: YES — this is the authoritative record of the manual production step.
+
+docs/deployment/staging-runbook.md                              (modified)
+  B | Adds a "confirmation emails now require a Dashboard template change" pointer.
+    REQ: YES (operational record). Doc only.
+
+docs/product/application-route-map.md                           (modified)
+  B | Registers /auth/confirm and /auth/auth-code-error in the route map + access
+    matrix. Doc only.
+    REQ: YES (keeps the route map honest).
+
+docs/product/auth-session-routing.md                            (modified)
+  B | Describes the new SSR callback in the auth/session/routing model. Doc only.
+
+docs/product/decision-register.md                               (modified)
+  B | Adds ZD-202 (dedicated SSR callback vs Supabase hosted redirect) and ZD-203
+    (local site_url = localhost). Doc only — no REJECTED/SUPERSEDED churn beyond
+    these two additions.
+
+docs/product/driver-invite-linkage-model.md                     (modified)
+  B | Adds §1B — the Driver-invite path through /auth/confirm. Doc only; explicitly
+    notes joinSignUpAction needs no change.
+
+docs/product/operator-onboarding-model.md                       (modified)
+  B | Adds §4B — the full /auth/confirm architecture + root cause, and corrects §4A's
+    earlier (wrong) assumption that Supabase's hosted redirect established a session.
+    Doc only.
+
+docs/reports/P1-E4-S0A2-auth-confirmation-callback-fix-report.txt   (NEW, untracked)
+  B | The build/verification report for the fix (prior phase). Per project convention
+    (docs/reports/ is tracked) this SHOULD be committed, but it is a report, not
+    executable production code — it can land in the same commit or a follow-up.
+
+docs/reports/n0-g0-cloud-auth-validation.txt                       (NEW, untracked)
+  B | The N0/G0 cloud+auth audit output that opened this phase. Same treatment as
+    above — commit per reporting convention; not code.
+
+docs/reports/n0-g0-r1-auth-fix-predeploy-review.txt                (NEW, this file)
+  B | This review. Commit per convention; not code.
+
+.tmp-qa/auth-confirm-e2e.mjs                                       (NEW, untracked)
+.tmp-qa/join-auth-confirm-e2e.mjs                                  (NEW, untracked)
+.tmp-qa/n0-g0-audit-e2e.mjs                                        (NEW, untracked)
+  C | Local Chrome-DevTools-Protocol E2E scripts. Hardcode localhost:3000 and the
+    local Mailpit port (54334). No secrets. .tmp-qa is not in .gitignore but has
+    never been committed and every file in it is scratch.
+    REQ FOR DEPLOY: NO. MUST remain untracked — see §13.
+--------------------------------------------------------------------------------------------------
+
+====================================================================
+4. AUTH CALLBACK REVIEW  (src/app/auth/confirm/route.ts)
+====================================================================
+
+Full implementation (32 executable lines): a single GET Route Handler.
+
+  const { searchParams } = new URL(request.url);
+  const tokenHash = searchParams.get("token_hash");
+  const type = searchParams.get("type") as EmailOtpType | null;
+  const requestUrl = request.url;
+
+  if (tokenHash && type) {
+    const supabase = await createServerSupabaseClient();
+    const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
+    if (!error) {
+      return NextResponse.redirect(new URL("/complete-signup", requestUrl));
+    }
+  }
+  return NextResponse.redirect(new URL("/auth/auth-code-error", requestUrl));
+
+Checklist (§3 of the phase brief):
+
+ 1. token_hash validated before use — YES. Falsy token_hash short-circuits to the
+    error redirect; a non-empty-but-bogus value is rejected by verifyOtp() itself
+    server-side (verified live: token_hash=bogus123 -> /auth/auth-code-error).
+
+ 2. type validated appropriately — PARTIAL BY DESIGN, ACCEPTABLE. `type` is cast to
+    EmailOtpType and passed straight to verifyOtp(); an invalid value is rejected by
+    Supabase server-side (verified live: type=../../etc -> /auth/auth-code-error). This
+    matches Supabase's own canonical Next.js SSR example. `type` is never used to build
+    a path, a redirect, a log line, or a query — so an unvalidated value has no blast
+    radius beyond "verifyOtp returns an error". No open surface.
+
+ 3. verifyOtp() executes server-side — YES. Called on createServerSupabaseClient()
+    (a @supabase/ssr server client, publishable key, cookie-store bound). Verified
+    live: after one /auth/confirm hit the user's auth.users.email_confirmed_at was
+    populated in the database.
+
+ 4. Successful verification establishes the session correctly — YES. Verified live:
+    the 307 success response carried Set-Cookie: sb-<ref>-auth-token=... (the real
+    Supabase session cookie), and a follow-up request bearing that cookie was treated
+    as fully authenticated by /complete-signup.
+
+ 5. Session cookies written through the established SSR adapter — YES. verifyOtp()'s
+    cookie writes go through createServerSupabaseClient()'s setAll() -> Next.js
+    cookies() store — the exact same adapter every Server Action in this codebase
+    already uses. A Route Handler is a write-permitted cookie context, so the
+    adapter's Server-Component no-op guard does not apply here.
+
+ 6. Failure cannot expose secrets — YES. On any failure the response is an
+    unconditional redirect to a fixed internal path. No Supabase error object, message,
+    status, stack, token_hash, or type value is ever placed in the response body,
+    headers, or redirect URL. Verified live: the failure Location is exactly
+    "<origin>/auth/auth-code-error" with no query string.
+
+ 7. Failure redirects to a safe application route — YES: /auth/auth-code-error, a
+    static in-app page (HTTP 200, brand-consistent, "sign in" / "create account again"
+    links only).
+
+ 8. No open redirect possible — YES. There is no code path in which any request-
+    supplied value reaches a redirect target. Both destinations are string literals
+    ("/complete-signup", "/auth/auth-code-error"). Verified live: appending
+    &next=https://evil.example.com and &redirect_to=https://evil.example.com is
+    silently ignored — the response still redirects to the fixed internal route.
+
+ 9. No arbitrary external URL trusted — YES. `new URL(path, requestUrl)` resolves a
+    relative literal path against the app's own incoming request origin only. No
+    external host is ever constructed or trusted.
+
+10. Continuation route is valid — YES. /complete-signup is a built route (confirmed in
+    the production build manifest) and is idempotent (ZD-201).
+
+11. Operator signup flows correctly into /complete-signup -> /onboarding — YES,
+    verified live (§5).
+
+12. Driver-invite signup keeps its invite context — YES, verified live (§6). The
+    context lives in auth.users.raw_user_meta_data (pending_driver_invite_token),
+    written by joinSignUpAction at signUp() time and read by /complete-signup — it
+    survives the confirmation boundary untouched. /auth/confirm neither reads nor needs
+    it.
+
+13. Duplicate callback invocation is safe — YES, verified live. Supabase OTP tokens are
+    single-use: a second /auth/confirm with the same token_hash returns a verifyOtp
+    error and redirects to /auth/auth-code-error. No second session is minted, and
+    /complete-signup is never reached a second time from a stale link.
+
+14. Refresh/retry does not create duplicate Organizations / Memberships / UserProfiles
+    — YES, verified live. Idempotency is enforced downstream in /complete-signup +
+    complete_pending_signup() / redeem_driver_invite() (pg_advisory_xact_lock keyed on
+    auth.uid(), plus existing-Membership no-op). Operator path: 4 concurrent
+    /complete-signup calls -> exactly 1 org / 1 membership / 1 user_profile. Driver
+    path: 3 calls -> exactly 1 membership / 1 driver / 1 user_profile.
+
+15. No service-role credential introduced — YES. The route uses only
+    createServerSupabaseClient() (publishable key + the caller's own cookie session).
+    grep confirms no SUPABASE_SERVICE_ROLE / service_role / SECRET_KEY reference in
+    the new files.
+
+Design notes worth carrying into the deploy review:
+
+  * The route builds its redirect from request.url, whereas the sibling
+    /complete-signup route uses request.nextUrl.origin. The difference is
+    deliberate and documented (ZD-203): request.nextUrl.origin can be
+    normalised by the Turbopack dev server to a different host than the
+    one that received the request, which locally discards the just-set
+    cookie. On the single-canonical-host production deployment both
+    expressions resolve to https://app.zenwardmobility.com, so this is a
+    local-only concern with no production effect.
+
+  * A Route Handler (not a Server Component page) is used because a
+    Server Component redirect issued after an internal await was
+    observed to be silently dropped by the browser under chained
+    navigation (ZD-200). NextResponse.redirect returns a real HTTP 307
+    with a Location header — verified live.
+
+====================================================================
+5. OPERATOR SIGNUP REVIEW
+====================================================================
+
+Files: src/components/auth/SignUpForm.tsx (copy only),
+       src/app/sign-up/actions.ts (UNCHANGED this phase — reviewed for context).
+
+signUpAction (unchanged) already does the right thing:
+  * Creates the user via Supabase Auth signUp() — never a service-role shortcut.
+  * Persists pending_full_name / pending_business_name in options.data
+    (raw_user_meta_data) — intent/display data, never authorization.
+  * If signUp() returns NO session (confirmation required), returns
+    { needsEmailConfirmation: true } and stops — it does NOT call
+    signup_create_organization until a real session exists.
+  * No emailRedirectTo is set, and none is needed: the redirect target is baked
+    into the "Confirm signup" email TEMPLATE (§8), not passed from code.
+
+SignUpForm.tsx change — the ONLY modification:
+  BEFORE: "... Once you confirm it, sign in and we'll set up your business."
+  AFTER : "... Once you click it, you'll be signed in automatically and we'll set
+           up your business - no need to sign in separately."
+  This is a string literal inside the existing needsEmailConfirmation branch.
+  No new field, no validation change, no branding change, no data-model change,
+  no onboarding-flow change. It only becomes accurate once /auth/confirm is live,
+  which is exactly when it will ship.
+
+Live verification (local Supabase Auth, real token_hash minted via the admin
+generate_link API so no config toggle was required):
+  PASS  unconfirmed operator user created
+  PASS  /auth/confirm?token_hash=...&type=signup -> 307 /complete-signup
+  PASS  real Supabase session cookie present on the success response
+  PASS  /complete-signup (with that cookie) -> 307 /onboarding
+  PASS  organizations = 1, memberships = 1 (organization_admin), user_profiles = 1
+        after 4 concurrent /complete-signup calls
+  PASS  organization.business_stage = null -> routes to /onboarding
+  PASS  user_profiles.display_name = the name entered before confirmation
+  PASS  replayed (used) token -> 307 /auth/auth-code-error, no new session
+
+No unrelated operator-signup change found.
+
+====================================================================
+6. DRIVER INVITE REVIEW
+====================================================================
+
+Files: src/app/join/[token]/JoinSignUpForm.tsx (copy only),
+       src/app/join/[token]/actions.ts (UNCHANGED this phase — reviewed for context).
+
+joinSignUpAction (unchanged) already does the right thing:
+  * Normal Supabase Auth signUp(); email fixed to the invite's email (hidden field,
+    re-validated server-side; redeem_driver_invite re-checks the caller's real
+    account email regardless of the form value).
+  * Persists pending_driver_invite_token + pending_full_name in options.data.
+  * Best-effort user_profiles upsert (pre-session, RLS-guarded); retried by
+    /complete-signup once a real session exists.
+  * Returns { needsEmailConfirmation: true } and stops when no session — does NOT
+    call redeem_driver_invite until a real session exists.
+
+JoinSignUpForm.tsx change — the ONLY modification:
+  BEFORE: "Check your email to confirm your account, then come back to this link to
+           finish joining."
+  AFTER : "Check your email to confirm your account. Once you click the confirmation
+           link, you'll be signed in automatically and this invite will be accepted
+           for you."
+  String literal only. No validation, data-model, branding, or onboarding change.
+
+Live verification (real driver invite created by a real organization_admin via
+create_driver_invite; real token_hash via admin generate_link):
+  PASS  create_driver_invite -> pending invite, token returned
+  PASS  invitee unconfirmed user created carrying pending_driver_invite_token
+  PASS  /auth/confirm?token_hash=...&type=signup -> 307 /complete-signup
+  PASS  session cookie present on the success response
+  PASS  /complete-signup (with that cookie) -> 307 /driver
+  PASS  memberships = 1 (role=driver), drivers = 1, user_profiles = 1
+        after 3 /complete-signup calls
+  PASS  driver_invites.status = accepted
+  PASS  drivers.display_name = admin-specified name;
+        user_profiles.display_name = invitee's own entered name (both correct)
+
+The Driver-invite confirmation path shares the exact same new code
+(/auth/confirm) as the operator path — there is no invite-specific
+branch inside the callback. The invite-specific continuation logic
+(/complete-signup checking pending_driver_invite_token first) is
+pre-existing P1-E4-S0A1 code, unchanged this phase, and re-verified
+above.
+
+No unrelated Driver-invite change found.
+
+====================================================================
+7. SUPABASE CONFIG REVIEW  (supabase/config.toml, supabase/templates/)
+====================================================================
+
+Every change in supabase/config.toml affects LOCAL SUPABASE ONLY. None
+of it reaches the hosted project unless someone runs `supabase config
+push` — which is explicitly forbidden for this project (ZD-198): that
+command ships the ENTIRE local file, including local Docker ports and
+127.0.0.1 URLs, to the hosted project.
+
+  [auth] site_url:  "http://127.0.0.1:3000" -> "http://localhost:3000"
+     LOCAL ONLY. ZD-203: matches what the Turbopack dev server
+     canonicalises the request host to, so the confirmation redirect
+     targets the same host the session cookie was written for. The
+     production deployment has one canonical host and is unaffected.
+
+  [auth] additional_redirect_urls: adds "http://127.0.0.1:3000"
+     LOCAL ONLY. Local redirect allow-list convenience.
+
+  [auth.email.template.confirmation] (NEW):
+     subject = "Confirm your Zenward account"
+     content_path = "./supabase/templates/confirmation.html"
+     LOCAL ONLY. Tells the local Auth container to render Mailpit email
+     from the local template file, so local dev exercises the same link
+     shape production must use.
+
+  supabase/templates/confirmation.html (NEW) — LOCAL ONLY template body:
+
+     <h2>Confirm your account</h2>
+     <p>Follow this link to confirm your Zenward Mobility account:</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup">Confirm your email</a></p>
+
+Local template vs production template — do they match?
+  YES. The local confirmation.html link shape
+    {{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup
+  is character-for-character identical to the value documented for the
+  hosted Dashboard in docs/deployment/staging-auth-configuration.md
+  §"Required Confirm Signup email template" and reproduced in §8 below.
+  The local proof therefore exercises exactly the production link shape.
+
+PRODUCTION CONFIGURATION THAT STILL HAS TO BE DONE MANUALLY:
+  The hosted Supabase project's "Confirm signup" email template must be
+  changed in the Dashboard (Authentication -> Email Templates). This is
+  the ONLY production-side change and is fully specified in §8. It
+  cannot be done from this environment (no Dashboard credential) and
+  must NOT be attempted via `supabase config push`.
+
+====================================================================
+8. SUPABASE DASHBOARD CHANGE REQUIRED
+====================================================================
+
+Dashboard area:
+  Authentication -> Email Templates -> "Confirm signup"
+  (on the hosted Supabase project that backs https://app.zenwardmobility.com;
+   documented in-repo as project ref `wyocbivzgrbekuyqdfts`, "ZenwardApp
+   Staging". The person applying this MUST first confirm that this is the
+   same project the production deployment's NEXT_PUBLIC_SUPABASE_URL points
+   at — if production uses a different Supabase project, apply the change
+   there instead / as well.)
+
+Also confirm, in the same project:
+  Authentication -> URL Configuration -> Site URL = https://app.zenwardmobility.com
+  (Redirect URLs must include https://app.zenwardmobility.com/**). This is
+  the value {{ .SiteURL }} expands to in the template below. Per
+  docs/deployment/staging-auth-configuration.md this was already specified
+  but "not independently re-confirmed" — verify it is live before testing.
+
+Template name:
+  Confirm signup   (Supabase's internal key: "confirmation";
+                    email category type = "signup")
+
+Current problematic behaviour:
+  The default template links via {{ .ConfirmationURL }}, which points at
+  Supabase's own hosted endpoint
+    https://<project>.supabase.co/auth/v1/verify?token=...&type=signup&redirect_to=<Site URL>
+  That endpoint verifies the token and then redirects the browser to
+  Site URL with the new session in a URL FRAGMENT
+  (#access_token=...&refresh_token=...). A fragment is never transmitted
+  to any server; this app has no client-side JavaScript that reads
+  window.location.hash, so the session is silently discarded and the
+  person lands unauthenticated. (Root cause confirmed by the prior phase
+  by following the real link with curl and reading its Location header;
+  independently re-confirmed in this review — the admin generate_link
+  API's own action_link for a signup is the /auth/v1/verify?...redirect_to=
+  shape.)
+
+Exact required template body (replace the entire template HTML with this):
+
+  <h2>Confirm your account</h2>
+  <p>Follow this link to confirm your Zenward Mobility account:</p>
+  <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup">Confirm your email</a></p>
+
+  Subject line: Confirm your Zenward account
+
+  Notes:
+   * Use {{ .TokenHash }} (this is the only field for which Supabase
+     populates that value) and the literal type=signup — this matches
+     Supabase's own official Next.js SSR guide for this template.
+   * Do NOT add a RedirectTo / next / redirect_to parameter. /auth/confirm
+     takes no caller-supplied redirect target and always lands on the
+     fixed /complete-signup on success. Adding one would introduce a
+     redirect surface that does not exist today.
+   * This is the tested value already recorded in
+     docs/deployment/staging-auth-configuration.md and mirrored by the
+     local supabase/templates/confirmation.html — it is not newly
+     invented here.
+
+Expected redirect chain after the change:
+  email link click
+   -> https://app.zenwardmobility.com/auth/confirm?token_hash=<hash>&type=signup
+   -> (verifyOtp succeeds, session cookie set) 307 -> /complete-signup
+   -> operator:  307 -> /onboarding
+      driver:    307 -> /driver
+  On a bad/expired/used token:
+   -> 307 -> /auth/auth-code-error   (HTTP 200 retry page)
+
+How to test it (production, real email):
+  1. In a fresh browser with no Zenward cookies, go to
+     https://app.zenwardmobility.com/sign-up and create a brand-new
+     operator account with a mailbox you control.
+  2. Confirm the "Check your email" screen appears.
+  3. Open the received email. Verify the link is
+     https://app.zenwardmobility.com/auth/confirm?token_hash=...&type=signup
+     (NOT a *.supabase.co/auth/v1/verify link).
+  4. Click it. You must land authenticated on /onboarding with no
+     manual sign-in.
+  5. Repeat step 1-4 using a Driver invite ( /join/<token> ); the click
+     must land on /driver.
+  6. Negative check: click the same link a second time -> must land on
+     /auth/auth-code-error, and you must NOT get a second organization
+     or membership.
+
+Rollback guidance:
+  The change is a single template edit and is instantly reversible.
+   * To roll back: in the same Dashboard screen, click "Reset to default"
+     on the Confirm signup template (or paste back the previous body if
+     it was captured). This restores {{ .ConfirmationURL }}.
+   * Rolling back the template WITHOUT rolling back the deployed code is
+     safe but returns confirmation to the broken state (links won't
+     establish a session). Rolling back the code (removing /auth/confirm)
+     WITHOUT rolling back the template makes confirmation links 404 —
+     so if the code is reverted, reset the template in the same change.
+   * No data migration, no destructive action, nothing to clean up.
+     Accounts created while the fixed template was live are ordinary
+     confirmed accounts.
+  No Supabase credentials or secrets are included in this report.
+
+====================================================================
+9. SECURITY IMPACT
+====================================================================
+
+Checklist (§8 of the phase brief), evaluated against the full proposed
+deployment diff:
+
+  * No RLS policy changed .................................. CONFIRMED (no policy file touched)
+  * No RLS migration changed ............................... CONFIRMED (git: supabase/migrations/ clean)
+  * No tenant-isolation rule changed ...................... CONFIRMED (adversarial suite 32/32 PASS)
+  * No service-role key added ............................. CONFIRMED (grep: none in new files)
+  * No privileged env var becomes public ................. CONFIRMED (no env var added or re-scoped)
+  * No organization ID accepted from the browser ......... CONFIRMED (/auth/confirm reads only
+                                                            token_hash + type; org/role derived
+                                                            server-side in SECURITY DEFINER RPCs)
+  * No auth route becomes client-only ................... CONFIRMED (the new route is a SERVER
+                                                            Route Handler; verifyOtp runs server-side)
+  * No callback permits an external redirect ............. CONFIRMED (redirect targets are string
+                                                            literals; live open-redirect probe ignored)
+  * No secrets logged .................................... CONFIRMED (route has no logging at all;
+                                                            token_hash never touched by console)
+
+Positive security properties added by the fix:
+  * Token verification moves from Supabase's hosted implicit-flow
+    fragment redirect to a server-side verifyOtp() — the session is
+    established as an HttpOnly cookie, never exposed in a URL the way the
+    fragment tokens were.
+  * The failure path is a fixed internal redirect with no error detail —
+    no token-state oracle beyond "valid / not valid", same framing as
+    /join/[token].
+
+Additional suites run (clean database):
+  * security_definer_exposure_tests.sql .................. 22/22 PASS
+  * function_privilege_tests.sql ......................... 7/7 PASS
+  * rls_adversarial_tests.sql ............................ 32/32 PASS
+  * operator_onboarding_tests.sql ....................... 40/40 PASS
+
+No STOP condition from §8 was triggered. Deployment is SECURITY-NEUTRAL
+(net positive).
+
+====================================================================
+10. TESTS RUN
+====================================================================
+
+Static / build (repo root):
+  npx tsc --noEmit
+  npm run lint
+  npm run build
+
+Live behavioural (production build served locally on :3100, pointed at a
+real local Supabase stack on :54331; Docker Desktop had to be started
+manually first — see §11):
+  * curl matrix against /auth/confirm failure + open-redirect paths
+  * scratchpad/confirm-happy.mjs   — operator: mint real signup token_hash
+    via admin generate_link, drive /auth/confirm, assert session cookie +
+    redirect + DB confirmation + single-use replay
+  * scratchpad/confirm-driver2.mjs — driver invite: real create_driver_invite
+    by a real org admin, drive /auth/confirm -> /complete-signup -> /driver
+  * scratchpad/confirm-op.mjs      — operator full chain to /onboarding +
+    4x concurrent continuation
+  * direct psql (docker exec) row-count assertions for exactly-once
+
+SQL suites (docker exec psql, after `supabase db reset` to a clean fixture set):
+  supabase/tests/rls_adversarial_tests.sql
+  supabase/tests/security_definer_exposure_tests.sql
+  supabase/tests/function_privilege_tests.sql
+  supabase/tests/operator_onboarding_tests.sql
+
+The pre-existing .tmp-qa/*.mjs browser E2E scripts (auth-confirm-e2e.mjs,
+join-auth-confirm-e2e.mjs) were NOT run: they hardcode localhost:3000
+(occupied by the separate Zenward-Web dev server) and require
+enable_confirmations=true locally (which is deliberately false — ZD).
+Their scenarios were reproduced instead by the scratchpad scripts above,
+which drive the identical /auth/confirm link shape.
+
+====================================================================
+11. TEST RESULTS
+====================================================================
+
+  npx tsc --noEmit ................................. PASS (0 errors)
+  npm run lint .................................... PASS (0 errors; 14 warnings,
+                                                    ALL in untracked .tmp-qa/*.mjs)
+  npm run build .................................. PASS
+     route manifest includes:
+       /auth/confirm ............ present (dynamic)
+       /auth/auth-code-error .... present (static)
+       /complete-signup ......... present
+       /complete-signup/form .... present
+       /join/[token] ............ present
+
+  /auth/confirm — failure & redirect safety (live):
+     no params ................................... 307 -> /auth/auth-code-error   PASS
+     bogus token_hash + type=signup ............. 307 -> /auth/auth-code-error   PASS
+     &next=<external> &redirect_to=<external> ... 307 -> /auth/auth-code-error   PASS (ignored)
+     type=../../etc ............................. 307 -> /auth/auth-code-error   PASS
+     /auth/auth-code-error renders ............... HTTP 200                       PASS
+     /complete-signup (unauth) .................. 307 -> /sign-in                PASS
+     /complete-signup/form (unauth) ............ 307 -> /sign-in                PASS
+
+  OPERATOR email-confirmation flow (live, real local Supabase Auth):
+     unconfirmed user created ................................. PASS
+     default Supabase action_link IS the /auth/v1/verify shape  PASS (confirms the bug)
+     /auth/confirm -> 307 /complete-signup .................... PASS
+     Supabase session cookie on success response .............. PASS
+     token_hash NOT echoed in redirect Location ............... PASS
+     user confirmed in DB after /auth/confirm ................. PASS (verifyOtp ran server-side)
+     /complete-signup -> 307 /onboarding ..................... PASS
+     org=1 / membership=1 (organization_admin) / profile=1
+        after 4 concurrent continuation calls ................ PASS  (exactly once)
+     display_name matches pre-confirmation value ............. PASS
+     replayed used token -> 307 /auth/auth-code-error ........ PASS  (single-use)
+
+  DRIVER-INVITE email-confirmation flow (live):
+     create_driver_invite by real org admin -> pending ....... PASS
+     invitee unconfirmed user carries pending_driver_invite_token PASS
+     /auth/confirm -> 307 /complete-signup ................... PASS
+     session cookie on success response ..................... PASS
+     /complete-signup -> 307 /driver (invite redeemed) ...... PASS
+     membership=1 (driver) / drivers=1 / profile=1
+        after 3 continuation calls .......................... PASS  (exactly once)
+     driver_invites.status = accepted ...................... PASS
+     drivers.display_name = admin value;
+        user_profiles.display_name = invitee value ......... PASS
+
+  SQL suites (clean DB — single run each):
+     rls_adversarial_tests.sql ............ 32/32  PASS  (A..AF)
+     security_definer_exposure_tests.sql .. 22/22  PASS
+     function_privilege_tests.sql ......... 7/7    PASS
+     operator_onboarding_tests.sql ....... 40/40  PASS
+
+  NOTES ON APPARENT FAILURES (none are application defects):
+   * operator_onboarding_tests.sql and the driver-invite suites contain
+     "exactly one row exists" assertions that are only valid on a fresh
+     `supabase db reset`. A first pass produced false FAILs because (a)
+     the review's own live tests had already inserted rows, and (b) the
+     suite is single-shot and not re-runnable. After `supabase db reset`
+     and a single clean run, ALL 40 operator-onboarding assertions pass.
+     This is a test-harness property, not a regression.
+
+====================================================================
+12. EXACT DEPLOYMENT FILE SET
+====================================================================
+
+INCLUDE in the auth-fix commit/deployment (code + local parity + docs):
+
+  Code (the fix):
+    src/app/auth/confirm/route.ts                       (new)
+    src/app/auth/auth-code-error/page.tsx               (new)
+    src/components/auth/SignUpForm.tsx                  (2-line copy)
+    src/app/join/[token]/JoinSignUpForm.tsx             (3-line copy)
+
+  Local-dev parity (no production effect, keep dev == prod):
+    supabase/config.toml                               (local-only edits)
+    supabase/templates/confirmation.html               (new, local Mailpit)
+
+  Documentation (required record of the fix + the manual prod step):
+    docs/deployment/staging-auth-configuration.md
+    docs/deployment/staging-runbook.md
+    docs/product/application-route-map.md
+    docs/product/auth-session-routing.md
+    docs/product/decision-register.md
+    docs/product/driver-invite-linkage-model.md
+    docs/product/operator-onboarding-model.md
+
+  Reports (commit per project reporting convention — may be the same
+  commit or a follow-up; they are records, not shipped code):
+    docs/reports/P1-E4-S0A2-auth-confirmation-callback-fix-report.txt
+    docs/reports/n0-g0-cloud-auth-validation.txt
+    docs/reports/n0-g0-r1-auth-fix-predeploy-review.txt   (this file)
+
+====================================================================
+13. FILES TO EXCLUDE
+====================================================================
+
+MUST NOT be committed or deployed:
+
+  .tmp-qa/auth-confirm-e2e.mjs
+  .tmp-qa/join-auth-confirm-e2e.mjs
+  .tmp-qa/n0-g0-audit-e2e.mjs
+  (and every other pre-existing .tmp-qa/*.mjs)
+
+  Reason: local Chrome-DevTools-Protocol E2E scratch scripts. They
+  hardcode localhost:3000 and the local Mailpit port, carry lint
+  warnings, and have never been part of source control. .tmp-qa/ is
+  scratch by convention. If desired, add `.tmp-qa/` to .gitignore in a
+  SEPARATE housekeeping change — not in the auth-fix commit.
+
+  The session scratchpad scripts used for this review
+  (confirm-happy.mjs, confirm-driver2.mjs, confirm-op.mjs) live outside
+  the repo entirely and are not a concern.
+
+Nothing in the working tree is an unrelated production change. There is
+nothing else to exclude.
+
+====================================================================
+14. MANUAL PRODUCTION STEPS
+====================================================================
+
+In order, by a human with Supabase Dashboard + deploy access:
+
+  1. Review and merge the auth-fix commit (§12 file set). Do NOT rely on
+     this report as the merge approval — a human reviews the diff.
+  2. Deploy that commit to https://app.zenwardmobility.com (normal
+     Vercel deploy). Verify the build succeeds and
+     https://app.zenwardmobility.com/auth/confirm returns a redirect
+     (307 to /auth/auth-code-error) for a no-parameter request.
+  3. In the Supabase Dashboard for the project backing production
+     (confirm the ref matches NEXT_PUBLIC_SUPABASE_URL first):
+       a. Authentication -> URL Configuration: confirm
+          Site URL = https://app.zenwardmobility.com and Redirect URLs
+          include https://app.zenwardmobility.com/**.
+       b. Authentication -> Email Templates -> Confirm signup: replace
+          the body with the exact template in §8. Save.
+  4. Run the post-deployment validation in §15.
+  5. (Recommended, not blocking) Authentication -> Emails -> SMTP
+     Settings: attach a real SMTP provider so confirmation email is not
+     limited to Supabase's low-volume built-in sender.
+
+Do NOT run `supabase config push`. Do NOT change DNS or the domain. Do
+NOT modify any migration or RLS policy.
+
+====================================================================
+15. POST-DEPLOYMENT VALIDATION PLAN  (G0 closure sequence)
+====================================================================
+
+Run only after §14 steps 1-3 are complete. All in fresh browsers with
+no prior Zenward cookies.
+
+   1. Deploy the approved commit (§14.2).
+   2. Apply the production Supabase "Confirm signup" template (§14.3b).
+   3. Create a brand-new operator account at
+      https://app.zenwardmobility.com/sign-up (mailbox you control).
+   4. Receive the real production confirmation email.
+   5. Verify the link host+path is
+      app.zenwardmobility.com/auth/confirm?token_hash=...&type=signup
+      (NOT *.supabase.co/auth/v1/verify), then click it.
+   6. Confirm you land authenticated — no manual sign-in prompt.
+   7. Confirm the continuation: /auth/confirm -> /complete-signup ->
+      /onboarding.
+   8. In Supabase (SQL editor / table view) confirm for that user:
+      organizations rows created by this signup = 1.
+   9. memberships for that user = 1, role = organization_admin, active.
+  10. user_profiles for that user = 1, display_name = the name entered.
+  11. Sign out.
+  12. Sign back in at /sign-in with the same credentials — succeeds,
+      lands on /onboarding (or /operations if onboarding was completed).
+  13. Refresh the page — session persists, no bounce to /sign-in.
+  14. Repeat 3-13 using a Driver invite: create an invite as an org
+      admin, sign up at /join/<token>, confirm via the email link, land
+      directly on /driver. Confirm memberships = 1 (role=driver),
+      drivers = 1, user_profiles = 1, invite status = accepted.
+  15. Confirm tenant context: the new operator sees only their own
+      organization's data; the new driver sees only their own assigned
+      work and is denied /operations.
+  16. Cross-tenant check: from the new operator account, attempt to
+      view another organization's trip/passenger by direct URL — must
+      be denied / not found.
+  17. Negative: click a confirmation link twice — second click lands on
+      /auth/auth-code-error and creates NO second org/membership.
+
+Only after 3-17 pass against real production should G0 be reconsidered.
+
+====================================================================
+16. AUTH FIX DEPLOYMENT DECISION
+====================================================================
+
+AUTH FIX DEPLOYMENT: READY FOR HUMAN AUTHORIZATION
+
+READY criteria (all met):
+  [x] confirmation fix is technically correct (§4)
+  [x] operator confirmation flow passes locally (§5, §11)
+  [x] Driver invite confirmation flow passes locally (§6, §11)
+  [x] production build succeeds (§11)
+  [x] no security regression exists (§9)
+  [x] production Supabase Dashboard change is explicitly documented (§8)
+  [x] deployment diff contains no unexplained unrelated production
+      changes (§3 — zero class D, zero class E)
+
+Do NOT deploy on this report alone. A human authorizes and performs the
+deployment and the §15 validation.
+
+====================================================================
+17. GIT STATUS  (end of review — unchanged from start)
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   docs/deployment/staging-auth-configuration.md
+    modified:   docs/deployment/staging-runbook.md
+    modified:   docs/product/application-route-map.md
+    modified:   docs/product/auth-session-routing.md
+    modified:   docs/product/decision-register.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   docs/product/operator-onboarding-model.md
+    modified:   src/app/join/[token]/JoinSignUpForm.tsx
+    modified:   src/components/auth/SignUpForm.tsx
+    modified:   supabase/config.toml
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/reports/P1-E4-S0A2-auth-confirmation-callback-fix-report.txt
+    docs/reports/n0-g0-cloud-auth-validation.txt
+    docs/reports/n0-g0-r1-auth-fix-predeploy-review.txt
+    src/app/auth/
+    supabase/templates/
+
+  git diff --stat:
+    docs/deployment/staging-auth-configuration.md | 31 +++++++++++++++++++++------
+    docs/deployment/staging-runbook.md            |  6 +++++-
+    docs/product/application-route-map.md         |  2 ++
+    docs/product/auth-session-routing.md          |  4 +++-
+    docs/product/decision-register.md             | 24 +++++++++++++++++++++
+    docs/product/driver-invite-linkage-model.md   | 10 +++++++--
+    docs/product/operator-onboarding-model.md     | 16 +++++++++++---
+    src/app/join/[token]/JoinSignUpForm.tsx       |  3 ++-
+    src/components/auth/SignUpForm.tsx            |  4 ++--
+    supabase/config.toml                          | 30 ++++++++++++++++++++++++--
+    10 files changed, 111 insertions(+), 19 deletions(-)
+
+  (src/app/auth/ and supabase/templates/ are untracked new directories,
+   not shown in git diff --stat.)
+
+====================================================================
+END OF REPORT — REVIEW ONLY. NO COMMIT / PUSH / PR / DNS / HOSTED-SUPABASE
+CHANGE WAS MADE.
+====================================================================

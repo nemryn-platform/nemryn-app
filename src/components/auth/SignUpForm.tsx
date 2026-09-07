@@ -23,8 +23,8 @@ export function SignUpForm() {
       <div className="flex flex-col gap-zw-md">
         <p className={cn(typography.body, "text-text-primary")}>Check your email to confirm your account.</p>
         <p className={cn(typography.bodySmall, "text-text-secondary")}>
-          We sent a confirmation link to the email address you entered. Once you confirm it, sign in and we&apos;ll
-          set up your business.
+          We sent a confirmation link to the email address you entered. Once you click it, you&apos;ll be signed in
+          automatically and we&apos;ll set up your business — no need to sign in separately.
         </p>
       </div>
     );

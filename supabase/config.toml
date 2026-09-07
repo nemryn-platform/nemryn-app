@@ -156,11 +156,24 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://127.0.0.1:3000"
+# P1-E4-S0A2: "localhost", not "127.0.0.1" — local testing of the new
+# /auth/confirm SSR callback found Next.js's dev server (Turbopack)
+# silently normalizes an incoming request's own `request.url`/`nextUrl`
+# host to "localhost" regardless of which literal host (127.0.0.1 or
+# localhost) the browser actually requested. A confirmation-link
+# redirect built from that request would then target a DIFFERENT host
+# than the one whose cookies the session was just written to — the
+# browser correctly refuses to send 127.0.0.1-scoped cookies to a
+# localhost request, so the session was silently discarded. This is a
+# genuine local-dev-only artifact (the real deployed app has exactly one
+# canonical host, app.zenwardmobility.com, so this specific mismatch
+# cannot occur there) — matching Site URL to what Next's dev server
+# actually canonicalizes to is the correct fix, not a workaround.
+site_url = "http://localhost:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+additional_redirect_urls = ["http://127.0.0.1:3000", "https://127.0.0.1:3000"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -242,6 +255,19 @@ otp_expiry = 3600
 # pass = "env(SENDGRID_API_KEY)"
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
+
+# P1-E4-S0A2: the "Confirm signup" template links to this app's own SSR
+# confirmation endpoint (/auth/confirm — a Route Handler that calls
+# verifyOtp() server-side and establishes the real session cookie
+# directly) rather than Supabase's own hosted /auth/v1/verify redirect,
+# which returns the session as a URL FRAGMENT no Server Component can
+# read. See docs/deployment/staging-auth-configuration.md §Required
+# Confirm Signup email template for why, and for the exact value the
+# staging/production Supabase Dashboard's own template must carry (this
+# file only configures local dev's Mailpit-delivered email).
+[auth.email.template.confirmation]
+subject = "Confirm your Zenward account"
+content_path = "./supabase/templates/confirmation.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]

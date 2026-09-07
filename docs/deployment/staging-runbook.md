@@ -1,8 +1,12 @@
 # Zenward Platform — Staging Runbook
 
-**Work item:** P1-E4-S0A1 — Cloud Signup Continuation Fix (supersedes P1-E4-S0A's own working-URL section)
+**Work item:** P1-E4-S0A2 — Auth Confirmation Callback Fix (supersedes P1-E4-S0A1's own working-URL section)
 **Audience:** whoever next needs to deploy, reset, or re-verify staging.
 **Last updated:** 2026-09-03
+
+## Confirmation emails now require a Dashboard template change
+
+Before this fix works on staging, the Supabase Dashboard's own "Confirm signup" email template (Authentication → Email Templates, project ref `wyocbivzgrbekuyqdfts`) must be updated to link to `/auth/confirm` directly — the default template's link shape cannot establish a session at all (a genuine root cause found this phase, not a hypothetical). See `docs/deployment/staging-auth-configuration.md` §Required Confirm Signup email template for the exact template text to paste in.
 
 ## Working staging URL
 
