@@ -18,6 +18,12 @@ export const AUTH_ERROR = {
   SIGNUP_EMAIL_TAKEN: "SIGNUP_EMAIL_TAKEN",
   SIGNUP_FAILED: "SIGNUP_FAILED",
   INVITE_INVALID: "INVITE_INVALID",
+  // P0-S2B — password-recovery-specific codes.
+  FORGOT_PASSWORD_INVALID_EMAIL: "FORGOT_PASSWORD_INVALID_EMAIL",
+  FORGOT_PASSWORD_FAILED: "FORGOT_PASSWORD_FAILED",
+  RESET_PASSWORD_WEAK: "RESET_PASSWORD_WEAK",
+  RESET_PASSWORD_MISMATCH: "RESET_PASSWORD_MISMATCH",
+  RESET_PASSWORD_FAILED: "RESET_PASSWORD_FAILED",
 } as const;
 
 export type AuthErrorCode = (typeof AUTH_ERROR)[keyof typeof AUTH_ERROR];
@@ -35,4 +41,9 @@ export const AUTH_ERROR_MESSAGE: Record<AuthErrorCode, string> = {
   SIGNUP_EMAIL_TAKEN: "An account with that email already exists — try signing in instead.",
   SIGNUP_FAILED: "We couldn't complete sign-up. Please try again.",
   INVITE_INVALID: "This invite link is no longer valid — it may have been used already or revoked. Ask your dispatcher for a new one.",
+  FORGOT_PASSWORD_INVALID_EMAIL: "Enter a valid email address.",
+  FORGOT_PASSWORD_FAILED: "We couldn't process that request. Please try again shortly.",
+  RESET_PASSWORD_WEAK: "Please choose a password with at least 8 characters.",
+  RESET_PASSWORD_MISMATCH: "Those passwords don't match.",
+  RESET_PASSWORD_FAILED: "We couldn't update your password. Please request a new reset link and try again.",
 };

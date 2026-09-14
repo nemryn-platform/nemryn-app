@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { signInAction, type SignInState } from "@/app/sign-in/actions";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -49,6 +50,12 @@ export function SignInForm({ next }: SignInFormProps) {
           disabled={pending}
           size="lg"
         />
+        <Link
+          href="/forgot-password"
+          className={cn(typography.bodySmall, "self-end font-medium text-brand-interactive-teal")}
+        >
+          Forgot password?
+        </Link>
       </div>
 
       {state.error ? (

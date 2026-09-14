@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { RECOVERY_COOKIE_NAME, RECOVERY_COOKIE_MAX_AGE_SECONDS, RECOVERY_COOKIE_OPTIONS } from "@/lib/auth/recovery";
 
 /**
  * P1-E4-S0A2 — the canonical Supabase Next.js SSR email-confirmation
@@ -26,13 +27,25 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
  * chains. A Route Handler's real HTTP redirect response is the
  * well-trodden path.
  *
- * Deliberately redirects to a FIXED destination (`/complete-signup`) on
- * success, never a caller-supplied `next` — there is no query parameter
- * here whose value ever reaches a redirect target, so there is no
- * open-redirect surface to validate in the first place. `/complete-
- * signup` itself (already idempotent — see ZD-201) is what actually
- * completes the pending operator-signup or Driver-invite continuation;
- * this endpoint's only job is turning a valid token into a real session.
+ * Deliberately redirects to a FIXED destination on success, never a
+ * caller-supplied `next` — there is no query parameter here whose value
+ * ever reaches a redirect target, so there is no open-redirect surface to
+ * validate in the first place. The destination is chosen from the
+ * verified `type` alone (both fixed, both hard-coded below):
+ *   - `type=signup` → `/complete-signup` (already idempotent — see
+ *     ZD-201) — completes the pending operator-signup or Driver-invite
+ *     continuation.
+ *   - `type=recovery` (P0-S2B) → `/auth/reset-password`, with a short-
+ *     lived, non-credential marker cookie set on the SAME response (see
+ *     `src/lib/auth/recovery.ts` for exactly why this cookie exists —
+ *     this server-side exchange never lets the browser observe
+ *     Supabase's own client-side `PASSWORD_RECOVERY` event, so this
+ *     cookie is this application's substitute signal that a real
+ *     recovery verification just happened for the session this response
+ *     is about to establish).
+ * This endpoint's only job is turning a valid token into a real session
+ * and sending the browser to the one fixed place that type of token is
+ * for.
  *
  * Never logs `token_hash` (a genuine, if short-lived, credential) — the
  * one console signal on failure names the REASON, never the value.
@@ -60,6 +73,14 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
 
     if (!error) {
+      if (type === "recovery") {
+        const response = NextResponse.redirect(new URL("/auth/reset-password", requestUrl));
+        response.cookies.set(RECOVERY_COOKIE_NAME, "1", {
+          ...RECOVERY_COOKIE_OPTIONS,
+          maxAge: RECOVERY_COOKIE_MAX_AGE_SECONDS,
+        });
+        return response;
+      }
       return NextResponse.redirect(new URL("/complete-signup", requestUrl));
     }
   }

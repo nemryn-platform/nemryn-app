@@ -265,9 +265,37 @@ otp_expiry = 3600
 # Confirm Signup email template for why, and for the exact value the
 # staging/production Supabase Dashboard's own template must carry (this
 # file only configures local dev's Mailpit-delivered email).
+# P0-S2B-C1: visible copy corrected from "Zenward"/"Zenward Mobility" to
+# "Nemryn" — Nemryn owns platform authentication; an organization like
+# Zenward Mobility is a tenant inside Nemryn, never the account-level
+# identity a Supabase Auth email speaks with. Link/token structure
+# (SiteURL, TokenHash, type=signup) is unchanged — see
+# docs/reports/p0-s2b-c1-auth-email-identity-alignment.txt.
 [auth.email.template.confirmation]
-subject = "Confirm your Zenward account"
+subject = "Confirm your Nemryn account"
 content_path = "./supabase/templates/confirmation.html"
+
+# P0-S2B: the "Reset password" template links to the SAME /auth/confirm
+# SSR endpoint above, with type=recovery — one shared Route Handler for
+# every "exchange a Supabase email token for a real session server-side"
+# case in this app (see src/app/auth/confirm/route.ts). Uses
+# {{ .RedirectTo }} rather than {{ .SiteURL }} deliberately: RedirectTo is
+# the value src/app/forgot-password/actions.ts explicitly passes via
+# resetPasswordForEmail()'s redirectTo option, built from this app's own
+# trusted NEXT_PUBLIC_APP_URL-derived origin (src/lib/app-url.ts) rather
+# than Supabase's own separately-configured Site URL setting — so this
+# link automatically follows a future app.nemryn.com migration with no
+# further Dashboard/template edit (see docs/product/
+# password-recovery-model.md §Domain migration impact). The staging/
+# production Supabase Dashboard's own "Reset Password" template must
+# carry the identical link shape — see
+# docs/deployment/staging-auth-configuration.md.
+# P0-S2B-C1: visible copy corrected from "Zenward"/"Zenward Mobility" to
+# "Nemryn", same rationale as the confirmation template's own note
+# above. {{ .RedirectTo }}/{{ .TokenHash }}/type=recovery unchanged.
+[auth.email.template.recovery]
+subject = "Reset your Nemryn password"
+content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]

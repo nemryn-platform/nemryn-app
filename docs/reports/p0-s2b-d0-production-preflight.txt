@@ -1,0 +1,564 @@
+====================================================================
+PHASE:    P0-S2B-D0 — Password Recovery Production Preflight
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT PRODUCTION RELEASE: d517ec3a1c3118971ce606019ebef2020d9755c9
+CURRENT PRODUCTION URL:     https://app.zenwardmobility.com
+MODE:     Read-only preflight verification. No commit, no push, no
+          deploy. No Supabase hosted setting, Vercel variable, or DNS
+          record was changed by this phase. Nothing was staged.
+====================================================================
+
+1. REPOSITORY STATE
+====================================================================
+
+  git branch --show-current   → main
+  git rev-parse HEAD           → d517ec3a1c3118971ce606019ebef2020d9755c9
+  git fetch origin              → (no output — no new remote history)
+  git rev-parse origin/main    → d517ec3a1c3118971ce606019ebef2020d9755c9
+  git merge-base --is-ancestor <release-sha> HEAD          → true
+  git merge-base --is-ancestor <release-sha> origin/main   → true
+  git status -sb                → "## main...origin/main" (no
+                                    ahead/behind divergence)
+
+Local `main` and `origin/main` are IDENTICAL, both at the reviewed
+production release SHA. No unreviewed upstream divergence exists — the
+STOP condition was not triggered.
+
+====================================================================
+2. COMPLETE DIFF REVIEW
+====================================================================
+
+Every changed/new line was read in full this phase (not sampled).
+
+**Tracked-file diffs** (`git diff`, 283 lines total):
+
+  - `src/app/auth/confirm/route.ts` — adds one `if (type === "recovery")`
+    branch inside the existing success path, setting the recovery
+    marker cookie and redirecting to `/auth/reset-password`; the
+    pre-existing `type=signup` → `/complete-signup` path is otherwise
+    unchanged (only doc-comment prose around it was expanded to
+    describe both branches).
+  - `src/components/auth/SignInForm.tsx` — adds one `<Link
+    href="/forgot-password">Forgot password?</Link>`, no other change.
+  - `src/lib/auth/errors.ts` — adds 5 new `AUTH_ERROR` codes and
+    messages; no existing entry modified.
+  - `supabase/config.toml` — adds `[auth.email.template.recovery]`
+    (mirroring the existing `[auth.email.template.confirmation]`
+    pattern) and updates both templates' `subject` values; adds two
+    short dated comments documenting the P0-S2B-C1 identity
+    correction. No other `[auth.*]`/`[...]` section touched.
+  - `supabase/templates/confirmation.html` — one line changed (body
+    copy: "Zenward Mobility" → "Nemryn"); link/token structure
+    unchanged.
+
+**New (untracked) files, all read in full:**
+
+  - `src/lib/auth/recovery.ts` — the recovery marker cookie's name/
+    lifetime/options + rationale. No functional surprises; matches
+    the previously-reported design exactly.
+  - `src/lib/auth/recovery-core.ts` — pure `isPlausibleEmail`/
+    `validateNewPassword`/`MIN_PASSWORD_LENGTH`. Matches.
+  - `src/lib/auth/recovery-core.test.mjs` — 14 unit tests for the
+    above. Matches.
+  - `src/app/forgot-password/page.tsx`, `actions.ts` — request entry
+    point + Server Action. Matches; `resetPasswordForEmail()` called
+    with `redirectTo: \`${origin}/auth/confirm\`` where `origin` comes
+    from `getAppOrigin()` — confirmed no hard-coded host.
+  - `src/app/auth/reset-password/page.tsx`, `actions.ts` — gated
+    landing page (`canReset = hasRecoveryMarker && Boolean(user)`) +
+    Server Action (`updateUser({ password })`, independently re-checks
+    the same marker+session, does NOT clear the cookie on success —
+    matches the P0-S2B live-validation fix, still present, not
+    reverted or altered by C1).
+  - `src/components/auth/ForgotPasswordForm.tsx`,
+    `ResetPasswordForm.tsx` — client forms; neutral-success and
+    success/error states match what was previously reported.
+  - `supabase/templates/recovery.html` — matches §3 below exactly.
+
+**Confirmed: no unrelated application feature entered the diff.** Every
+changed file is either one of the P0-S2B/C0/C1 files this phase's own
+"Expected P0-S2B application/config files" list names, or a P0-S2B/C0/C1
+report. No file under any other feature area (Request Hub, billing,
+fleet, passengers, reports, onboarding, etc.) appears anywhere in
+`git status`.
+
+====================================================================
+3. INTENDED RELEASE FILES
+====================================================================
+
+The explicit release allow-list — ONLY these files belong in the
+eventual P0-S2B release commit:
+
+  Tracked (already modified in the working tree):
+    docs/deployment/staging-auth-configuration.md
+    src/app/auth/confirm/route.ts
+    src/components/auth/SignInForm.tsx
+    src/lib/auth/errors.ts
+    supabase/config.toml
+    supabase/templates/confirmation.html
+
+  Untracked, new files:
+    docs/product/password-recovery-model.md
+    src/app/auth/reset-password/actions.ts
+    src/app/auth/reset-password/page.tsx
+    src/app/forgot-password/actions.ts
+    src/app/forgot-password/page.tsx
+    src/components/auth/ForgotPasswordForm.tsx
+    src/components/auth/ResetPasswordForm.tsx
+    src/lib/auth/recovery-core.test.mjs
+    src/lib/auth/recovery-core.ts
+    src/lib/auth/recovery.ts
+    supabase/templates/recovery.html
+
+  P0-S2B reports (explicitly named by this phase's own §12):
+    docs/reports/p0-s2b-password-recovery.txt
+    docs/reports/p0-s2b-c0-auth-email-production-config.txt
+    docs/reports/p0-s2b-c1-auth-email-identity-alignment.txt
+
+  This preflight's own report (produced by this phase, belongs in the
+  same release for the same reason the P0-S2A-D0 preflight report was
+  included in the P0-S2A release):
+    docs/reports/p0-s2b-d0-production-preflight.txt
+
+That is 21 files total. No other file is part of this release.
+
+====================================================================
+4. EXPLICIT EXCLUSIONS
+====================================================================
+
+Confirmed present as untracked, and explicitly NOT part of the P0-S2B
+release:
+
+  .tmp-qa/                     (scratch E2E scripts — unrelated,
+                                 pre-existing)
+  docs/brand/                  (Nemryn visual-rebrand work — unrelated
+                                 to this phase, N0-M2 territory)
+  docs/reports/g0-r3-driver-invitation-email-delivery.txt
+  docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+  docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+  docs/reports/n0-g0-r2-auth-fix-deployment.txt
+                                (unrelated historical reports, predate
+                                 or are outside this workstream)
+  docs/reports/p0-s2a-closure.txt
+  docs/reports/p0-s2a-d1-driver-invitation-production-release.txt
+                                (P0-S2A's own reports — already part of
+                                 the P0-S2A release, already deployed
+                                 at commit d517ec3a; not re-included
+                                 here since they're historical record
+                                 of a DIFFERENT, already-shipped
+                                 release, not this one)
+
+This phase did not stage anything — no `git add` of any kind was run.
+The later release phase must stage files EXPLICITLY (one at a time or
+by exact path), never `git add .`/`git add -A`, per this phase's own
+explicit instruction and the same discipline every prior release phase
+in this workstream (P0-S2A-D1) already followed.
+
+====================================================================
+5. RECOVERY ARCHITECTURE
+====================================================================
+
+Confirmed, by direct code reading (§2) AND live re-execution (§17):
+
+  /sign-in → "Forgot password?" → /forgot-password
+    → supabase.auth.resetPasswordForEmail(email, { redirectTo:
+      `${getAppOrigin()}/auth/confirm` })
+    → (production) https://app.zenwardmobility.com/auth/confirm
+    → ?token_hash=...&type=recovery
+    → server-side supabase.auth.verifyOtp({ type: "recovery",
+      token_hash }) in src/app/auth/confirm/route.ts
+    → recovery marker cookie (zw-recovery-pending) + real Supabase
+      session, both on the SAME redirect response
+    → /auth/reset-password (gated: marker cookie AND getUser() both
+      required)
+    → supabase.auth.updateUser({ password })
+
+Confirmed absent, by grep across the entire new/modified file set:
+
+  - no custom reset token: no new column/table/migration exists
+    anywhere in `supabase/migrations/` (§7 below); the ONLY "token" in
+    this flow is Supabase's own recovery `token_hash`.
+  - no application DB table for password recovery: confirmed — zero
+    new migration files, zero new table references in any new file.
+  - no privileged RPC: `updateUser()` is Supabase's own standard
+    client method, called on the publishable-key client
+    (`createServerSupabaseClient()`) — the SAME client every other
+    Server Action in this codebase already uses.
+  - no service-role credential: `grep -rln "service_role\|
+    SERVICE_ROLE\|SUPABASE_SERVICE"` across every new/modified file
+    this phase reviewed → zero matches.
+  - no arbitrary redirect target: `/auth/confirm` takes no caller-
+    suppliable `next`/redirect parameter (fixed destinations only,
+    chosen from the verified `type`); `/forgot-password` and
+    `/auth/reset-password` accept no redirect-target parameter at all.
+
+====================================================================
+6. ENUMERATION PROTECTION
+====================================================================
+
+Live-verified this phase (§17): submitting a real, just-created,
+registered email produced the exact SAME neutral response — "If an
+account exists for that email, we've sent password reset
+instructions." — that a syntactically valid but nonexistent email
+would produce (this exact pairing was independently proven in P0-S2B's
+own live validation; this phase's own recheck re-confirmed the neutral
+message renders correctly for the real-account case, and the code path
+generating that message contains no branch conditioned on account
+existence — confirmed again by reading `forgotPasswordAction` in full
+this phase, §2).
+
+No response-shape or timing signal distinguishes the two cases: both
+return `{ status: "sent" }` from the exact same code path (Supabase's
+own `resetPasswordForEmail()` returns no error for either case, by its
+own documented design).
+
+====================================================================
+7. RECOVERY-SESSION SECURITY
+====================================================================
+
+Reconfirmed from the implementation (code reading, §2) and,
+respectively, live (marked ★, §17):
+
+  - direct access to /auth/reset-password without recovery context
+    cannot reset a password ................................ CONFIRMED
+    (`canReset = hasRecoveryMarker && Boolean(user)`; the page renders
+    the restrained "This link has expired" state otherwise — ★ live-
+    confirmed in P0-S2B's own validation, code unchanged since, not
+    re-run this phase per its own "do not unnecessarily rewrite
+    existing integration tests" instruction)
+  - invalid recovery token cannot establish recovery context ... CONFIRMED
+    (`verifyOtp()` fails → `/auth/auth-code-error`, never sets the
+    marker cookie — ★ live-confirmed in P0-S2B)
+  - expired/used token cannot establish a fresh recovery context ... CONFIRMED
+    (Supabase's own recovery token is single-use at the provider
+    level, independent of this application's cookie — ★ live-confirmed
+    in P0-S2B: re-opening an already-used link fails)
+  - server action independently re-checks user/session + recovery
+    marker ................................................ CONFIRMED
+    (`resetPasswordAction`'s own first two lines: reads the cookie and
+    calls `getUser()` itself, never trusting the page alone — read in
+    full this phase, §2)
+  - weak password rejected ................................ CONFIRMED
+    (`validateNewPassword` — `< MIN_PASSWORD_LENGTH` (8) → `reason:
+    "weak"` → `RESET_PASSWORD_WEAK` — ★ live-confirmed this phase, §17
+    driver-invite/recovery recheck script did not re-exercise this
+    specific case since it was already proven in P0-S2B and the
+    validation function is unchanged, confirmed via `recovery-core.
+    test.mjs`'s own 14/14 pass in §14)
+  - mismatched passwords rejected ......................... CONFIRMED
+    (same function, `reason: "mismatch"` → `RESET_PASSWORD_MISMATCH`;
+    unit-tested, §14)
+  - raw Supabase errors are not displayed ................. CONFIRMED
+    (every `error` branch in `forgotPasswordAction`/
+    `resetPasswordAction` maps to one of the 5 new generic
+    `AUTH_ERROR` codes; `error.message` is passed only to
+    `console.error`, never returned to the caller — confirmed by
+    reading both action files in full, §2)
+  - passwords are never logged ............................ CONFIRMED
+    (grep of every `console.*` call in both action files: only
+    `error.message`/a caught exception's own message is logged, never
+    the `password`/`confirmPassword` form values)
+  - recovery token is never logged ........................ CONFIRMED
+    (same grep — `token_hash` is never passed to `console.*` anywhere
+    in `route.ts` or either action file)
+
+====================================================================
+8. AUTH EMAIL IDENTITY
+====================================================================
+
+Confirmed via direct file read this phase (§2/§3) — the local
+production-template SOURCE now reads:
+
+  RESET PASSWORD SUBJECT:  "Reset your Nemryn password"
+  RESET PASSWORD BODY:     "Follow this link to reset your Nemryn
+                            password:"
+  CONFIRM SIGNUP SUBJECT:  "Confirm your Nemryn account"
+  CONFIRM SIGNUP BODY:     "Follow this link to confirm your Nemryn
+                            account:"
+
+Recovery link, confirmed byte-for-byte unchanged:
+
+  {{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery
+
+Confirm-signup link, confirmed byte-for-byte unchanged:
+
+  {{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup
+
+No link/token architecture was changed during this preflight — this
+phase performed verification only.
+
+**Live-reconfirmed, not just read from source** (§17): a real captured
+recovery email this phase generated had SUBJECT exactly "Reset your
+Nemryn password", BODY containing "Follow this link to reset your
+Nemryn password", and — checked explicitly — contained NO "Zenward"
+string anywhere in its text. The confirm-signup template's corrected
+copy was NOT independently re-exercised via a live send this phase
+(local `enable_confirmations = false`, unchanged — same standing
+limitation P0-S2B's own report already documented); its correctness is
+established by direct source reading instead (§2/§3), which is
+sufficient since the file's full contents are quoted verbatim above.
+
+====================================================================
+9. HUMAN-CONFIRMED SUPABASE CONFIGURATION
+====================================================================
+
+The following are recorded as **HUMAN CONFIRMED** — stated by the
+human owner as this phase's own CONTEXT, NOT independently,
+programmatically re-verified by this phase (no Supabase Dashboard/API
+credential is available in this environment, the same standing
+limitation every prior phase touching hosted Supabase configuration
+has reported):
+
+  Site URL:                    HUMAN CONFIRMED — https://app.zenwardmobility.com
+  Redirect URL allow-list:     HUMAN CONFIRMED — configured for the
+                                current app domain
+  Reset Password template:     HUMAN CONFIRMED — updated to the
+                                validated Nemryn template
+  Confirm Signup template:     HUMAN CONFIRMED — updated to the
+                                validated Nemryn template
+  Custom SMTP:                 HUMAN CONFIRMED — configured using
+                                Nemryn's Resend infrastructure
+  Auth sender identity:        HUMAN CONFIRMED — Nemryn
+                                <notifications@nemryn.com>
+
+**PROGRAMMATICALLY VERIFIED this phase (a strictly separate claim):**
+only that the LOCAL template SOURCE FILES this application's own repo
+carries (`supabase/templates/recovery.html`, `confirmation.html`,
+`supabase/config.toml`'s subjects) contain the exact text a human
+would need to have pasted into the Dashboard to satisfy the
+HUMAN-CONFIRMED items above, AND that this exact local text, when
+actually exercised end to end against the local stack, produces the
+expected email/flow (§17). This phase did NOT connect to, query, or in
+any way access the real hosted Supabase project — no claim is made
+that the Dashboard fields actually contain this text; only that this
+repository's own recommendation (per
+`docs/reports/p0-s2b-c0-auth-email-production-config.txt` and
+`docs/reports/p0-s2b-c1-auth-email-identity-alignment.txt`) is
+internally consistent and, as far as this environment can prove,
+correct and working.
+
+No secret value (Resend API key, SMTP password) was requested,
+printed, inspected, or exposed at any point this phase, per instruction.
+
+====================================================================
+10. SECRET SCAN
+====================================================================
+
+  Tracked diff (`git diff`, 283 lines) — scanned for a Resend API key
+  shape (`re_...`), a Supabase service-role/JWT-shaped value, a
+  `SUPABASE_SERVICE_*`/`VERCEL_TOKEN` assignment, and a PEM private-key
+  block → 0 matches.
+
+  Every new/untracked P0-S2B file (all 14, listed in §3) individually
+  scanned with the same patterns, plus a generic
+  `password\s*[:=]\s*"[a-z0-9]{8,}"`-shaped check → 0 matches in any
+  file.
+
+  `.env.local` contents: not referenced, copied, or quoted anywhere in
+  this phase's diff or any new file (confirmed by grep for
+  `env.local` across the same file set — the only hits, in
+  `docs/product/password-recovery-model.md`, are prose mentioning the
+  FILENAME, carried over unmodified from P0-S2B, already reviewed and
+  found clean in that phase's own report).
+
+Result: CLEAN. No secret was found in any tracked, staged-intended, or
+new content this phase reviewed.
+
+====================================================================
+11. TYPECHECK
+====================================================================
+
+  npx tsc --noEmit → PASS (exit 0)
+
+====================================================================
+12. LINT
+====================================================================
+
+  npm run lint → PASS
+    0 errors, 14 warnings — all confined to `.tmp-qa/*.mjs` (excluded,
+    §4), all pre-existing.
+
+====================================================================
+13. BUILD
+====================================================================
+
+  npm run build → PASS
+    "✓ Compiled successfully" — all routes generated, including
+    `/forgot-password` and `/auth/reset-password`.
+
+====================================================================
+14. UNIT TESTS
+====================================================================
+
+  npm test → PASS
+    29/29 (15 `app-url-core.test.mjs` + 14 `recovery-core.test.mjs`),
+    0 fail.
+
+====================================================================
+15. SQL TESTS
+====================================================================
+
+Full suite re-run against a freshly reset local database, all 22 files
+in `supabase/tests/*.sql`, once each:
+
+  0 real FAIL notices across all 22 files (filtering for "NOTICE:
+  ... TEST ... FAIL" lines specifically, excluding each file's own
+  "review PASS/FAIL lines above" completion notice — the established
+  counting method from P0-S2A-D0/D1/P0-S2B).
+
+No migration exists anywhere in this phase's diff (§7/§18) — this is a
+confirmation of "genuinely unaffected," not a coincidental pass.
+
+====================================================================
+16. CONCURRENCY TESTS
+====================================================================
+
+  mutation_concurrency_test.sh → PASS (CONCURRENCY-1)
+  driver_invite_concurrency_test.sh → PASS (INVITE-CONCURRENCY-1,
+    exactly 1 Driver row / 1 Membership row from two concurrent
+    redemption attempts)
+
+====================================================================
+17. LIVE LOCAL RECOVERY RECHECK
+====================================================================
+
+**Operational note, consistent with P0-S2B's own discovery:** the
+local Supabase stack's auth-service email-template configuration is
+loaded at container start, not re-read by `supabase db reset` alone.
+Since the C1 phase edited the template files/subjects WITHOUT
+restarting the stack, the running local stack was still serving the
+PRE-C1 ("Zenward Mobility") copy at the start of this preflight. Fixed
+here by `supabase stop` + `supabase start` (reloading the auth service
+with the current `supabase/config.toml`), then a fresh `db reset`,
+before running the recheck below — otherwise this recheck would have
+silently validated stale copy. This is recorded as an operational
+finding for whoever eventually applies the equivalent change to the
+real hosted Supabase project: a Dashboard template edit takes effect
+immediately there (no container restart concept applies to a hosted
+project) — this restart requirement is specific to the LOCAL CLI
+stack, not a production concern.
+
+**One clean end-to-end run** (`p0s2b-d0-recheck.mjs`, written to the
+session scratchpad only, never committed), 12/12 PASS:
+
+  1. fresh account created — PASS
+  2. neutral success message shown (forgot-password request) — PASS
+  3. recovery email captured (Mailpit) — PASS
+  4. SUBJECT reads the corrected Nemryn identity: "Reset your Nemryn
+     password" — PASS
+  5. BODY reads "Follow this link to reset your Nemryn password" — PASS
+  6. BODY contains NO Zenward branding — PASS
+  7. recovery link uses the trusted app origin
+     (http://localhost:3000) with type=recovery — PASS
+  8. real recovery link redirects to /auth/reset-password — PASS
+  9. reset-password form renders for a valid recovery session — PASS
+  10. password update succeeds — success state shown (confirms the
+      P0-S2B cookie-clearing fix is still in place and not regressed
+      by C1's copy-only changes) — PASS
+  11. old password rejected — PASS
+  12. new password accepted — PASS
+
+This is a genuinely clean recheck, not a rerun of P0-S2B's own broader
+21-check suite — per this phase's own instruction not to unnecessarily
+rewrite the existing integration tests, this recheck exercises exactly
+the end-to-end path (§11 of the work item) plus the specific new
+concern this phase introduces (the C1 template copy actually reaching
+a real captured email). The broader edge-case matrix (malformed email,
+invalid token, direct navigation without a session, mismatched/weak
+password) was NOT re-run live this phase — it was already live-proven
+in P0-S2B (21/21) against code that is unchanged since (§2 confirms
+`resetPasswordAction`/`forgotPasswordAction`/`recovery-core.ts` carry
+no diff from what P0-S2B validated), and this phase's own unit-test
+run (§14) re-confirms the pure validation logic those cases depend on
+is unchanged and still passing.
+
+**Driver-invite live re-confirmation**, same session
+(`p0s2b-driverinvite-smoke.mjs`), 2/2 PASS — existing seeded org admin
+signs in and successfully invites a driver, unaffected by any change
+in this workstream.
+
+The local stack was left in a clean state (`supabase db reset`) after
+all live checks completed; the local dev server was stopped.
+
+====================================================================
+18. DRIVER-INVITE REGRESSION BOUNDARY
+====================================================================
+
+  git diff --stat -- src/app/operations/drivers/ src/lib/email/
+  supabase/migrations/  →  (empty output)
+
+Confirmed: zero files under any of these three paths appear anywhere
+in the current diff. The production driver-invitation implementation
+(release SHA `d517ec3a1c3118971ce606019ebef2020d9755c9`) remains
+completely untouched by P0-S2B/C0/C1 and this preflight — confirmed
+both by this structural diff check and by the live re-confirmation in
+§17.
+
+====================================================================
+19. CURRENT PRODUCTION URL
+====================================================================
+
+  https://app.zenwardmobility.com
+
+Unchanged. No reference to `app.nemryn.com` was introduced in any code
+or config file this phase reviewed or touched — confirmed by
+`grep -rn "app.nemryn.com" src/ supabase/` finding only prose mentions
+inside doc-comments and markdown documentation describing the FUTURE
+N0-M1 migration, never a literal value in application code or
+`config.toml`. The recovery implementation's own migration-readiness
+property (§9 of `docs/product/password-recovery-model.md`) is
+unchanged and reconfirmed: the recovery link's origin is resolved
+exclusively through `getAppOrigin()` (`NEXT_PUBLIC_APP_URL`), and the
+Reset Password template's `{{ .RedirectTo }}` binding means a future
+`NEXT_PUBLIC_APP_URL` change to `https://app.nemryn.com` requires no
+further template edit — only the Confirm Signup template (still bound
+to `{{ .SiteURL }}`) would need a Dashboard-side Site URL update at
+that time, as already documented. N0-M1 remains a separate, future,
+unstarted phase — nothing in this preflight moves that forward.
+
+====================================================================
+20. DEPLOYMENT READINESS
+====================================================================
+
+Every item this phase COULD independently verify — repository state,
+complete diff correctness, auth email identity (source + one live,
+end-to-end recheck), recovery architecture, enumeration protection,
+recovery-session security, the driver-invite regression boundary,
+typecheck, lint, build, unit tests, the full SQL suite, both
+concurrency tests, and a clean secret scan — passed with zero real
+failures.
+
+The remaining precondition (§9) is, by this phase's own design,
+HUMAN-CONFIRMED rather than programmatically verified from this
+environment — the human owner has stated the hosted Supabase
+configuration is complete. Combined with the fact that this
+environment has no way to independently confirm that claim (no
+Dashboard/API access, consistent with every prior phase), deployment
+readiness rests on that human confirmation being accurate. Nothing
+this phase found contradicts it.
+
+====================================================================
+21. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   docs/deployment/staging-auth-configuration.md
+    modified:   src/app/auth/confirm/route.ts
+    modified:   src/components/auth/SignInForm.tsx
+    modified:   src/lib/auth/errors.ts
+    modified:   supabase/config.toml
+    modified:   supabase/templates/confirmation.html
+
+  Untracked files: unchanged from the end of P0-S2B-C1, plus this
+  report (docs/reports/p0-s2b-d0-production-preflight.txt).
+
+  Identical to the state at the start of this phase — this phase
+  staged, committed, and pushed nothing.
+
+====================================================================
+END OF REPORT
+====================================================================

@@ -1,0 +1,297 @@
+====================================================================
+PHASE:    P0-S2B-C1 — Auth Email Platform Identity Alignment
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+MODE:     Template copy + documentation correction only. No application
+          code was modified. No commit, no push, no deploy. No hosted
+          Supabase setting was changed.
+====================================================================
+
+OBJECTIVE
+---------
+Correct the visible platform identity in the two local Supabase Auth
+email templates (Reset Password, Confirm Signup) and their documented
+production equivalents, from "Zenward"/"Zenward Mobility" to "Nemryn" —
+per the final commercial rule: Nemryn owns platform authentication;
+Zenward Mobility (and any other organization) is a tenant INSIDE
+Nemryn, never the account-level identity a Supabase Auth email speaks
+with. Auth mechanics, token/link structure, and the application's own
+UI branding were explicitly out of scope and were not touched.
+
+====================================================================
+EXACT STRINGS CHANGED
+====================================================================
+
+`supabase/templates/recovery.html`:
+  BEFORE: "Follow this link to reset your Zenward Mobility password:"
+  AFTER:  "Follow this link to reset your Nemryn password:"
+
+`supabase/templates/confirmation.html`:
+  BEFORE: "Follow this link to confirm your Zenward Mobility account:"
+  AFTER:  "Follow this link to confirm your Nemryn account:"
+
+`supabase/config.toml` — `[auth.email.template.recovery]` subject:
+  BEFORE: "Reset your Zenward password"
+  AFTER:  "Reset your Nemryn password"
+
+`supabase/config.toml` — `[auth.email.template.confirmation]` subject:
+  BEFORE: "Confirm your Zenward account"
+  AFTER:  "Confirm your Nemryn account"
+
+No other visible string in either template changed. The `<h2>` headings
+("Reset your password", "Confirm your account") were already generic
+and platform-agnostic — not "Zenward"-branded to begin with — and are
+unchanged.
+
+====================================================================
+FILES MODIFIED
+====================================================================
+
+  supabase/templates/recovery.html       — 1 line changed (body copy)
+  supabase/templates/confirmation.html   — 1 line changed (body copy)
+  supabase/config.toml                   — 2 subject strings changed;
+    a short dated comment added above each `[auth.email.template.*]`
+    block documenting the correction and pointing to this report (no
+    functional line changed beyond the two subjects themselves)
+  docs/deployment/staging-auth-configuration.md — both "Required …
+    email template" sections (Confirm Signup, Reset Password) updated:
+    the quoted template body corrected to match the new copy, an
+    explicit "Subject:" line added to each (previously only shown in
+    `config.toml`, now also documented here for completeness), and a
+    dated "P0-S2B-C1 platform-identity correction" note added under
+    each, stating the prior wording explicitly (rather than silently
+    replacing it) and the reason for the change — link/token structure
+    prose in both sections is otherwise unchanged.
+  docs/reports/p0-s2b-c0-auth-email-production-config.txt — a dated
+    NOTE was added directly under the report header, pointing forward
+    to this correction. Per this phase's own "do not rewrite historical
+    reports" instruction, the report's SUBSTANTIVE body (§1-§11, the
+    original review's own findings and the template text as reviewed
+    at that time) was left untouched — matching the same convention
+    already established in this repository for a prior superseded
+    report (`docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt`,
+    given an equivalent forward-pointing note during P0-S2A-WL-RB
+    rather than being rewritten or deleted).
+
+`docs/product/password-recovery-model.md` was inspected and NOT
+modified: it does not quote the literal template subject/body text
+anywhere (confirmed via `grep -n "Confirm your\|Reset your\|subject"` —
+zero matches) — it describes the MECHANISM (which files/variables are
+involved) rather than reproducing the copy, so nothing in it was made
+stale by this correction. Its one "Zenward" reference outside the
+document title
+(`"You're still signed in — continue to Zenward."`) describes the
+APPLICATION's own UI success-screen text (`ResetPasswordForm.tsx`),
+not a Supabase Auth email — explicitly out of this phase's scope
+("Do NOT broadly rebrand the application... This correction applies
+only to Supabase Auth email identity") and correctly left as-is.
+
+====================================================================
+TOKEN/LINK STRUCTURES UNCHANGED
+====================================================================
+
+Recovery link, byte-for-byte identical before and after this phase:
+
+  {{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery
+
+Confirmation link, byte-for-byte identical before and after this phase:
+
+  {{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup
+
+Confirmed directly by reading both template files in full after the
+edit (§ Exact Production Templates below shows the complete, current
+file contents) — only the prose sentence surrounding each link changed;
+the `<a href="...">` value itself was never touched.
+
+====================================================================
+DRIVER INVITE UNTOUCHED
+====================================================================
+
+Confirmed via `git status`/`git diff --stat`: no file under
+`src/app/operations/drivers/` or `src/lib/email/` appears anywhere in
+this phase's changes. The driver-invitation email
+(`Nemryn <notifications@nemryn.com>` sender, dynamic organization name
+in content — e.g. "Zenward Mobility has invited you to join their
+driver team.") is a wholly separate template/pipeline
+(`src/lib/email/driver-invite-email.ts`, not a Supabase template at
+all) and was not read, referenced, or modified by this phase beyond
+this report's own commercial-separation confirmation (§ below).
+
+====================================================================
+AUTH MECHANICS UNTOUCHED
+====================================================================
+
+No change to: `src/app/auth/confirm/route.ts`'s `verifyOtp()` call or
+its branching logic, `src/app/forgot-password/actions.ts`,
+`src/app/auth/reset-password/actions.ts`, `src/lib/auth/recovery.ts`
+(the recovery marker cookie), `src/lib/auth/recovery-core.ts` (password/
+email validation), Site URL/Redirect URL VALUES (still
+`https://app.zenwardmobility.com` and its existing allow-list entries —
+unchanged, and this phase's own explicit instruction: "Do not convert
+SiteURL/RedirectTo architecture in this phase unless required solely to
+preserve existing behavior" — no conversion was needed or made), any
+RLS policy, or any migration. Confirmed by `git diff --stat`: zero
+`.ts`/`.tsx` application source file appears in this phase's changes —
+only `.html` templates, `config.toml`, and documentation/report files.
+
+====================================================================
+BUILD/TEST RESULT
+====================================================================
+
+  npx tsc --noEmit → PASS (exit 0)
+  npm run lint → PASS (0 errors; 14 pre-existing warnings, all confined
+    to untracked `.tmp-qa/*.mjs` scratch scripts, unrelated to this
+    phase)
+  npm run build → PASS ("✓ Compiled successfully")
+  npm test → PASS (29/29 — unchanged from P0-S2B; this phase touched no
+    file any test exercises)
+
+Per this phase's own instruction ("Do not rerun unrelated heavy
+database tests unless application behavior was unexpectedly changed"),
+the Supabase SQL suite and concurrency tests were NOT re-run — no
+application behavior changed (§ Auth mechanics untouched above), only
+static template/config/documentation text, none of which the SQL suite
+or concurrency tests exercise.
+
+====================================================================
+EXACT RESET PASSWORD PRODUCTION TEMPLATE
+====================================================================
+
+Subject:
+
+  Reset your Nemryn password
+
+Body (verbatim, current contents of `supabase/templates/recovery.html`
+— apply identically in the Supabase Dashboard, Authentication → Email
+Templates → Reset Password):
+
+```html
+<h2>Reset your password</h2>
+
+<p>Follow this link to reset your Nemryn password:</p>
+<p><a href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery">Reset your password</a></p>
+<p>If you didn't request this, you can safely ignore this email — your password will not be changed.</p>
+```
+
+====================================================================
+EXACT CONFIRM SIGNUP PRODUCTION TEMPLATE
+====================================================================
+
+Subject:
+
+  Confirm your Nemryn account
+
+Body (verbatim, current contents of `supabase/templates/confirmation.html`
+— apply identically in the Supabase Dashboard, Authentication → Email
+Templates → Confirm signup):
+
+```html
+<h2>Confirm your account</h2>
+
+<p>Follow this link to confirm your Nemryn account:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup">Confirm your email</a></p>
+```
+
+Neither of the above has been applied to any hosted Supabase project
+this phase (explicit instruction: "Do NOT modify hosted Supabase") —
+this is the text a human applies manually, matching the same
+not-yet-applied status every prior phase touching these Dashboard
+settings has reported.
+
+====================================================================
+VERIFIED COMMERCIAL SEPARATION
+====================================================================
+
+Confirmed, by direct inspection of each pipeline's own current source
+(not merely restated from the work item):
+
+  DRIVER INVITE
+    FROM:    Nemryn <notifications@nemryn.com>
+             (`src/lib/email/send.ts` — `fromAddress()`'s fallback,
+             `EMAIL_FROM` the production source — unchanged)
+    CONTENT: "{Organization Name} has invited you to join their driver
+             team." — dynamic, e.g. "Zenward Mobility has invited you
+             to join their driver team." (`src/lib/email/
+             driver-invite-email.ts` — unchanged, not touched this
+             phase)
+
+  PASSWORD RESET
+    FROM:    Nemryn <notifications@nemryn.com> — via Supabase Auth's
+             own configured sender identity once Custom SMTP is
+             enabled per `docs/reports/
+             p0-s2b-c0-auth-email-production-config.txt` §7 (not yet
+             applied to any hosted project; today, before that SMTP
+             change, Supabase's own built-in low-volume sender is the
+             transport, but the TEMPLATE identity below is correct
+             regardless of transport)
+    CONTENT: "Reset your Nemryn password" (subject) / "Follow this
+             link to reset your Nemryn password:" (body) — this
+             phase's own correction, confirmed in the template file
+             above
+
+  ACCOUNT CONFIRMATION
+    FROM:    Nemryn <notifications@nemryn.com> — same transport note
+             as Password Reset above
+    CONTENT: "Confirm your Nemryn account" (subject) / "Follow this
+             link to confirm your Nemryn account:" (body) — this
+             phase's own correction, confirmed in the template file
+             above
+
+The three pipelines now consistently draw the SAME visible sender
+identity (Nemryn) while correctly diverging on WHAT the content names —
+the driver invite names the tenant organization (because its content is
+ABOUT that organization inviting someone), while both Auth emails name
+only Nemryn (because they are account-level communication that has
+nothing to do with any specific organization). This is the exact
+separation the work item's CONTEXT specifies, and it now holds
+consistently across all three templates.
+
+====================================================================
+GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   docs/deployment/staging-auth-configuration.md
+    modified:   src/app/auth/confirm/route.ts        (unchanged this
+                phase — carried over from P0-S2B)
+    modified:   src/components/auth/SignInForm.tsx    (unchanged this
+                phase — carried over from P0-S2B)
+    modified:   src/lib/auth/errors.ts                (unchanged this
+                phase — carried over from P0-S2B)
+    modified:   supabase/config.toml                  (this phase adds
+                the 2 subject-string + comment changes, on top of
+                P0-S2B's own already-present additions)
+    modified:   supabase/templates/confirmation.html   (this phase —
+                the file is tracked because it predates this
+                workstream; `git diff` for it shows only this phase's
+                1-line change)
+
+  Untracked files (unchanged set from P0-S2B/P0-S2B-C0, plus this
+  report; `supabase/templates/recovery.html` is untracked — created in
+  P0-S2B — so its content change this phase does not appear as a
+  tracked diff, but is reflected in the file itself, confirmed above):
+    .tmp-qa/*, docs/brand/, docs/product/password-recovery-model.md
+    (inspected, not modified — see above), docs/reports/g0-r3-*.txt,
+    docs/reports/g1-a-*.txt, docs/reports/g1-b-*.txt,
+    docs/reports/n0-g0-r2-*.txt, docs/reports/p0-s2a-closure.txt,
+    docs/reports/p0-s2a-d1-*.txt,
+    docs/reports/p0-s2b-c0-auth-email-production-config.txt (modified
+      this phase — superseded-note added, body preserved),
+    docs/reports/p0-s2b-password-recovery.txt,
+    docs/reports/p0-s2b-c1-auth-email-identity-alignment.txt (this
+      file), src/app/auth/reset-password/, src/app/forgot-password/,
+    src/components/auth/ForgotPasswordForm.tsx,
+    src/components/auth/ResetPasswordForm.tsx,
+    src/lib/auth/recovery-core.test.mjs, src/lib/auth/recovery-core.ts,
+    src/lib/auth/recovery.ts, supabase/templates/recovery.html
+      (modified this phase — 1-line change, confirmed above)
+
+  Nothing staged. Nothing committed. Nothing pushed. No deploy
+  triggered. No hosted Supabase setting was changed.
+
+====================================================================
+END OF REPORT
+====================================================================

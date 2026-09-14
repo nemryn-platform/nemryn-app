@@ -1,0 +1,581 @@
+====================================================================
+PHASE:    P0-S2B-C0 — Production Auth Email Configuration Review
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+MODE:     Read-only configuration review. No application code was
+          modified. No commit, no push, no deploy. No Supabase hosted
+          setting, Vercel variable, or DNS record was changed.
+====================================================================
+
+NOTE (added at P0-S2B-C1 — Auth Email Platform Identity Alignment):
+The exact Reset Password and Confirm Signup template TEXT quoted below
+(§2/§3) has since been corrected — "Zenward"/"Zenward Mobility" in the
+visible subject/body replaced with "Nemryn" (Nemryn owns platform
+authentication; an organization such as Zenward Mobility is a tenant
+INSIDE Nemryn, never the account-level identity a Supabase Auth email
+speaks with). The link/token structure, Site URL, and Redirect URL
+guidance below are UNCHANGED and still current. This report's body is
+preserved as historical record of the review that produced it; for the
+corrected, current template text and the human checklist to apply it,
+see docs/reports/p0-s2b-c1-auth-email-identity-alignment.txt and the
+now-updated docs/deployment/staging-auth-configuration.md.
+====================================================================
+
+OBJECTIVE
+---------
+Produce the precise, human-executable production configuration
+checklist for the Supabase Auth side of the already-implemented,
+locally-validated P0-S2B password-recovery flow: the Reset Password
+email template, Redirect URLs, Site URL, and (new this phase) an
+evaluation of routing Supabase Auth email through Nemryn's existing
+Resend account/domain instead of Supabase's own built-in low-volume
+sender.
+
+====================================================================
+1. CURRENT STATE
+====================================================================
+
+Read fresh this phase, not from memory:
+
+  - `docs/deployment/staging-auth-configuration.md` — the existing
+    Dashboard-configuration record (P1-E4-S0A2, extended by P0-S2B).
+  - `docs/product/password-recovery-model.md` — the P0-S2B architecture
+    doc, in particular §3 (why a custom template), §7 (error states),
+    §9 (domain-migration checklist).
+  - `supabase/config.toml` — the local stack's own configuration
+    (`[auth]`, `[auth.email]`, `[auth.email.template.confirmation]`,
+    `[auth.email.template.recovery]`).
+  - `supabase/templates/recovery.html` and `supabase/templates/
+    confirmation.html` — the two custom local email templates.
+
+**What is CONFIRMED already true, not assumed:**
+
+  - The password-recovery application code (`src/app/forgot-password/`,
+    `src/app/auth/reset-password/`, the `type=recovery` branch of
+    `src/app/auth/confirm/route.ts`) is complete and was validated
+    end-to-end against the LOCAL Supabase stack
+    (`docs/reports/p0-s2b-password-recovery.txt` §16 — 21/21 live
+    checks passing).
+  - NONE of the four items this phase is about (Reset Password
+    template, Redirect URLs, Site URL, Auth SMTP) have been applied to
+    any HOSTED Supabase project (staging or production) — every prior
+    phase touching this subject was explicit that Dashboard access was
+    unavailable in this environment, and that remains true this phase.
+    This is a genuine, standing gap between "works locally" and "will
+    work in production," not a formality.
+  - The staging project's own ref is `wyocbivzgrbekuyqdfts` (from
+    `docs/deployment/staging-auth-configuration.md`) — whether
+    production uses this SAME Supabase project or a distinct one was
+    not re-established this phase (out of scope; a fact only the human
+    owner can state authoritatively).
+  - **New this phase, from the work item's own CONTEXT:** Nemryn now
+    has its own dedicated Resend account and a VERIFIED `nemryn.com`
+    sending domain. This changes what's recommended for Auth SMTP
+    (§7 below) — previously (`docs/deployment/staging-auth-
+    configuration.md` §Email confirmation reality) this was blocked on
+    "no such provider account/credential was available." That blocker
+    is gone; only the Dashboard step of actually wiring it up remains,
+    and remains a human action, not something this phase performs.
+
+====================================================================
+2. EXACT RESET PASSWORD TEMPLATE
+====================================================================
+
+**Subject** (verbatim, from `supabase/config.toml` line 288):
+
+  Reset your Zenward password
+
+**Template body** (verbatim, from `supabase/templates/recovery.html`,
+the exact file `[auth.email.template.recovery]`'s `content_path`
+points at):
+
+```html
+<h2>Reset your password</h2>
+
+<p>Follow this link to reset your Zenward Mobility password:</p>
+<p><a href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery">Reset your password</a></p>
+<p>If you didn't request this, you can safely ignore this email — your password will not be changed.</p>
+```
+
+**Variables used:**
+
+  - `{{ .RedirectTo }}` — the origin, resolved from whatever
+    `redirectTo` value the application passed to
+    `resetPasswordForEmail()`. In this application that is always
+    `` `${origin}/auth/confirm` ``, where `origin` comes from
+    `getAppOrigin()` (`src/lib/app-url.ts`) —
+    i.e. `NEXT_PUBLIC_APP_URL`, normalized. **Not** Supabase's own
+    separately-configured "Site URL" setting — that is the one
+    deliberate difference from the Confirm Signup template (§3 below).
+  - `{{ .TokenHash }}` — the hashed one-time recovery token, populated
+    by Supabase specifically for this template field.
+  - The literal, hard-coded `type=recovery` query parameter — this
+    tells `/auth/confirm/route.ts` which branch to take (the confirm
+    route also handles `type=signup`, for the Confirm Signup template);
+    it is not a Supabase template variable, it is fixed text this
+    application's own route requires.
+
+**Expected resulting URL structure**, once deployed with `EMAIL_FROM`/
+`NEXT_PUBLIC_APP_URL` correctly configured and the template above
+applied:
+
+  https://app.zenwardmobility.com/auth/confirm?token_hash=<hashed-token>&type=recovery
+
+That URL is a GET request to this application's own Route Handler
+(`src/app/auth/confirm/route.ts`), NOT to any Supabase-hosted endpoint.
+The handler calls `supabase.auth.verifyOtp({ type: "recovery",
+token_hash })` server-side, and on success:
+
+  1. sets a short-lived, non-credential marker cookie
+     (`zw-recovery-pending`, 10-minute lifetime — see
+     `src/lib/auth/recovery.ts`), and
+  2. issues a 307 redirect to `https://app.zenwardmobility.com/auth/reset-password`,
+
+where the person sets a new password (`docs/product/
+password-recovery-model.md` §2 has the complete step-by-step).
+
+**Why the standard/default Supabase template is insufficient for this
+application (the exact, verified mechanism, not a general claim):**
+
+Supabase's DEFAULT "Reset Password" template links via
+`{{ .ConfirmationURL }}`. That variable resolves to Supabase's own
+HOSTED verification endpoint:
+
+  https://<project-ref>.supabase.co/auth/v1/verify?token=<token>&type=recovery&redirect_to=<Site URL or provided redirectTo>
+
+Following that link, Supabase's own server verifies the token and then
+redirects the browser to the target URL with the new session encoded
+as a URL **fragment** — `#access_token=...&refresh_token=...&
+type=recovery`. A URL fragment is **never transmitted to any server**
+by design (it's a browser-only addressing mechanism) — only
+client-side JavaScript running in that exact page can read
+`window.location.hash`. This application's landing pages
+(`/auth/reset-password` included) are React Server Components; a
+Server Component has no access to the browser's URL fragment at
+render time, so it would see no session at all — the person would
+land on an unauthenticated page and the click would silently appear to
+do nothing.
+
+This is EXACTLY the same root cause `docs/deployment/
+staging-auth-configuration.md` already documented and fixed for
+`type=signup` in P1-E4-S0A2 (proven at the time by following the
+default confirmation link with `curl` and reading its `Location`
+header) — P0-S2B's Reset Password template applies the identical fix
+for `type=recovery`: link directly to this application's own
+`/auth/confirm` with `token_hash`/`type` as ordinary, server-readable
+QUERY parameters (never a fragment), so the server-side `verifyOtp()`
+call can actually see the token and establish the session by writing a
+real cookie before ever redirecting anywhere.
+
+**Not to be changed in production by this phase.** The human applies
+this exact template manually via the Dashboard, after review — see the
+checklist in §9.
+
+====================================================================
+3. CURRENT CONFIRMATION TEMPLATE RELATIONSHIP
+====================================================================
+
+The existing Confirm Signup template (`supabase/templates/
+confirmation.html`, applied in P1-E4-S0A2) reads, verbatim:
+
+```html
+<h2>Confirm your account</h2>
+
+<p>Follow this link to confirm your Zenward Mobility account:</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup">Confirm your email</a></p>
+```
+
+**Subject** (from `supabase/config.toml` line 269): "Confirm your
+Zenward account"
+
+Both templates route through the SAME `/auth/confirm` Route Handler —
+one Route Handler, two `type` values, chosen by a hard-coded query
+parameter in each template's own link, not by any Supabase-side
+routing. This was a deliberate reuse decision in P0-S2B (documented in
+`docs/product/password-recovery-model.md` §3): rather than building a
+second token-exchange mechanism, the recovery flow extends the exact
+mechanism P1-E4-S0A2 already built and proved for signup confirmation.
+
+**The one deliberate difference:** the Confirm Signup template uses
+`{{ .SiteURL }}` (Supabase's own separately-configured Site URL
+setting) as its link origin; the Reset Password template uses
+`{{ .RedirectTo }}` (the value THIS APPLICATION explicitly passes at
+request time) instead. This was a conscious choice, not an oversight —
+see `docs/product/password-recovery-model.md` §3/§9 for the full
+reasoning: it is what lets the recovery link automatically follow a
+future `NEXT_PUBLIC_APP_URL` change (the coming `app.nemryn.com`
+migration) with NO template re-edit required, whereas the Confirm
+Signup template would still need a manual Dashboard edit (of its Site
+URL dependency) at that time, UNLESS it is separately migrated to the
+same `{{ .RedirectTo }}` pattern — noted there as an unapplied
+candidate follow-up, not performed by this phase or any phase to date.
+
+Applying the Reset Password template (§2) does not require or imply
+any change to the already-applied Confirm Signup template — they are
+independent Dashboard fields.
+
+====================================================================
+4. SITE URL
+====================================================================
+
+**Required value, unchanged from the existing staging record and this
+phase's own explicit instruction not to introduce `app.nemryn.com`
+yet:**
+
+  https://app.zenwardmobility.com
+
+This is what `{{ .SiteURL }}` resolves to for the Confirm Signup
+template (§3) and for any other Supabase-default template not yet
+customized in this application (e.g. Magic Link, Change Email — this
+application does not currently use either, per the existing "complete
+inventory" audits, but Supabase still evaluates the setting globally).
+It does NOT affect the Reset Password template, which reads
+`{{ .RedirectTo }}` instead (§2/§3).
+
+**Not independently re-confirmed this phase** whether this value is
+currently LIVE on the Dashboard — same access limitation as every
+prior phase; this section states what it MUST be.
+
+====================================================================
+5. REDIRECT URL ALLOW-LIST
+====================================================================
+
+**Required entries** (Authentication → URL Configuration → Redirect
+URLs), unchanged from the existing staging record:
+
+  https://app.zenwardmobility.com
+  https://app.zenwardmobility.com/**
+  http://localhost:3000
+  http://127.0.0.1:3000
+
+**Why this specifically matters for P0-S2B, beyond what P1-E4-S0A2
+already established:** `resetPasswordForEmail()` is called with an
+explicit `redirectTo` value
+(`` `${origin}/auth/confirm` ``, i.e.
+`https://app.zenwardmobility.com/auth/confirm` in production).
+Supabase validates any caller-supplied `redirectTo` against this SAME
+allow-list before honoring it in `{{ .RedirectTo }}` — if the
+production origin is not covered by an allow-list entry, Supabase
+silently ignores/rejects the passed value, and the Reset Password
+template's link would resolve incorrectly. The wildcard entry
+`https://app.zenwardmobility.com/**` already covers
+`/auth/confirm` (and every other current or future path on this
+domain), so **no new Redirect URL entry is required specifically for
+password recovery** if the existing wildcard entry from P1-E4-S0A2 is
+genuinely live — this is worth a human double-checking precisely
+because it was never independently re-confirmed against the real
+Dashboard (§1).
+
+**What changes later, during N0-M1 (the `app.nemryn.com` domain
+migration) — explicitly NOT performed by this phase:**
+
+  - ADD: `https://app.nemryn.com`, `https://app.nemryn.com/**`
+  - The `app.zenwardmobility.com` entries can remain during a
+    transition window (both can coexist in the allow-list
+    simultaneously) or be removed once the migration is confirmed
+    complete and no traffic depends on the old domain — an explicit
+    decision for that later phase, not decided here.
+  - Site URL (§4) itself must also be repointed to
+    `https://app.nemryn.com` at that time — this DOES require a
+    template re-edit for the Confirm Signup template (still bound to
+    `{{ .SiteURL }}`), but requires NO edit for the Reset Password
+    template (already bound to `{{ .RedirectTo }}`, which will follow
+    the application's own `NEXT_PUBLIC_APP_URL` automatically once that
+    Vercel variable is updated and redeployed).
+  - `NEXT_PUBLIC_APP_URL` (Vercel Production environment variable)
+    itself must change from `https://app.zenwardmobility.com` to
+    `https://app.nemryn.com` — the actual source `getAppOrigin()`
+    reads.
+
+====================================================================
+6. CURRENT SUPABASE AUTH MAIL TRANSPORT
+====================================================================
+
+**Local dev:** Supabase's built-in local mail-capture server
+(`[local_smtp]` in `supabase/config.toml`, a Mailpit-compatible
+capture server on `http://127.0.0.1:54334`) — confirmed directly in
+P0-S2B's own live validation, by capturing a real recovery email
+through it.
+
+**Staging/production (per the existing, not-re-verified-this-phase
+record in `docs/deployment/staging-auth-configuration.md`):**
+Supabase Auth currently uses **Supabase's own low-volume built-in
+email sender** — `[auth.email.smtp]` is present in `supabase/
+config.toml` only as a commented-out EXAMPLE block (lines ~250-257),
+never uncommented or configured in this repository at any point in
+this workstream's history. No custom SMTP provider has ever been wired
+for Auth email, for either signup confirmation or (now) password
+recovery — this applies identically to both, since SMTP transport is a
+project-wide Auth setting, not a per-template one.
+
+**This has a known, previously-documented consequence:** P1-E4-S0A1
+directly observed the built-in sender's rate limit
+(`over_email_send_rate_limit`) on the staging project at that time.
+`supabase/config.toml`'s own local `auth.rate_limit.email_sent = 2`
+(comment: "Requires auth.email.smtp to be enabled") suggests this
+limit specifically applies once a CUSTOM SMTP is configured, at a
+value the human would set there — Supabase's own DEFAULT built-in
+sender (used today in production, per the above) has its own separate,
+undocumented-in-this-repo low-volume ceiling, which is what P1-E4-S0A1
+actually hit. This is the concrete, already-experienced reason a
+custom SMTP transport is "recommended before high-volume staging use,
+and required before production" (that document's own words) —
+unchanged and now directly actionable per §7 below.
+
+====================================================================
+7. RECOMMENDED NEMRYN/RESEND SMTP CONFIGURATION
+====================================================================
+
+**Goal:** every Supabase Auth-managed email (signup confirmation,
+password recovery — the only two this application currently triggers)
+sends through Nemryn's own verified `nemryn.com` domain via Resend,
+presenting the identical commercial identity the driver-invitation
+email already uses: `Nemryn <notifications@nemryn.com>`.
+
+**Mechanism: Resend's SMTP relay**, configured in the Supabase
+Dashboard (Authentication → Emails → SMTP Settings), NOT a code
+change — Supabase Auth's SMTP integration is a pure Dashboard
+credential/host configuration; this application's own code has no
+hook into it and needs none:
+
+  | Field | Value |
+  |---|---|
+  | Enable Custom SMTP | ON |
+  | Sender email | `notifications@nemryn.com` |
+  | Sender name | `Nemryn` |
+  | Host | `smtp.resend.com` |
+  | Port | `587` (STARTTLS) or `465` (implicit TLS) — either is a standard Resend-documented option; port 587 is the more commonly recommended default |
+  | Username | `resend` (Resend's own fixed SMTP username — not a secret, this literal value is correct for every Resend account) |
+  | Password | a Resend API key, generated for this exact purpose (see below) — the SECRET value; never printed in this report or any document |
+  | Minimum interval between emails | Supabase's own separate "SMTP rate limit" field, distinct from `auth.rate_limit.email_sent` — set per the human's own judgment/Resend account limits, not prescribed here |
+
+**On the API key specifically — a security recommendation, not a hard
+technical requirement:** generate a SEPARATE Resend API key for this
+SMTP integration, distinct from the application's own `RESEND_API_KEY`
+(the one `src/lib/email/send.ts` uses for driver-invitation email,
+configured as a Vercel environment variable). Reasons:
+
+  - Independent revocation/rotation — a compromise or needed rotation
+    of one credential never requires touching the other.
+  - Independent scoping/monitoring in the Resend dashboard — Resend's
+    own per-key sending logs and permissions become meaningful
+    boundaries between "application-triggered transactional email" and
+    "Supabase-Auth-triggered account-security email" if they are
+    already separate credentials, not just separate code paths.
+  - This mirrors the work item's own explicit instruction not to reuse
+    the application's `RESEND_API_KEY` in browser code — extended here
+    to "don't reuse it across trust boundaries at all," which is the
+    stricter and safer reading, though the work item's literal text
+    only prohibits the browser-code case (which was already
+    structurally impossible — `RESEND_API_KEY` has never been
+    `NEXT_PUBLIC_`-prefixed and is read only in a `server-only`
+    module).
+
+Neither the existing application `RESEND_API_KEY` nor this new
+Supabase-SMTP-specific key is printed anywhere in this report, per
+instruction.
+
+**What does NOT change:** Supabase continues to OWN token generation
+(the recovery `token_hash`, the signup confirmation token),
+verification (`verifyOtp()`, called only from this application's own
+server-side `/auth/confirm` Route Handler, using the publishable-key
+client — unchanged), and session issuance. Configuring SMTP only
+changes WHO relays the already-Supabase-generated email — it is purely
+a transport-layer change. No auth-email token logic moves into the
+Nemryn/Zenward application at any point; this phase does not propose
+that and it would be a significant, unrequested architecture change if
+it did.
+
+====================================================================
+8. SECURITY IMPLICATIONS
+====================================================================
+
+**Two separate transactional-email security boundaries, and they stay
+separate even though both may soon present the identical Nemryn
+sender identity:**
+
+  APPLICATION TRANSACTIONAL EMAIL (driver invitation):
+    - Trigger: `src/app/operations/drivers/actions.ts`
+      (`createDriverInviteAction`/`resendDriverInviteAction`)
+    - Sender module: `src/lib/email/send.ts` — `server-only`, reads
+      `RESEND_API_KEY`/`EMAIL_FROM` from non-`NEXT_PUBLIC_` server-only
+      Vercel environment variables.
+    - Content/token: the driver-invite token (a 122-bit random UUID)
+      is generated and verified entirely by THIS application's own
+      `create_driver_invite`/`redeem_driver_invite` RPCs — Supabase
+      Auth is not involved in this token's lifecycle at all.
+    - Credential: the application's own `RESEND_API_KEY` (Resend's
+      HTTPS API, called directly — no SMTP involved here).
+
+  AUTH TRANSACTIONAL EMAIL (signup confirmation, password recovery):
+    - Trigger: Supabase Auth itself, internally, in response to
+      `supabase.auth.signUp()` (confirmation) or
+      `supabase.auth.resetPasswordForEmail()` (recovery) — both called
+      from this application, but the EMAIL ITSELF is composed, sent,
+      and its token generated ENTIRELY inside Supabase Auth's own
+      service, using the Dashboard-configured template + SMTP
+      transport. This application never sees the token before the
+      recipient does; it only exchanges it later, server-side, when
+      the recipient clicks the link (`verifyOtp()` in `/auth/confirm`).
+    - Credential: a SEPARATE Resend API key (§7), held only inside the
+      Supabase Dashboard's own SMTP settings — never present in this
+      application's own environment variables, codebase, or Vercel
+      configuration at all.
+
+**Why the boundary matters even with a shared sender identity:** a
+shared "From" address is a BRANDING choice (what the recipient sees),
+not a shared CREDENTIAL or shared CODE PATH. Compromise of the
+application's own `RESEND_API_KEY` (e.g. a Vercel misconfiguration
+exposing it) would let an attacker send email "from" Nemryn's identity
+via the application's own Resend integration, but would grant NO
+ability to generate a valid Supabase recovery/confirmation token, sign
+in as any user, or touch any session — because that credential has no
+relationship to Supabase Auth's own token/session machinery at all,
+regardless of SMTP configuration. Symmetrically, the Supabase-SMTP
+Resend key (even if it were somehow exposed) grants only the ability
+to send email as Nemryn via THAT specific integration — it carries no
+Supabase project credential, no JWT signing capability, no session
+access. Neither credential is ever placed in browser-reachable code in
+either design (confirmed for the existing key by `grep -rn
+"RESEND_API_KEY" src/` → only `src/lib/email/send.ts`, a `server-only`
+module; the new key, once created, will never touch this
+application's own source tree at all — it lives exclusively in the
+Supabase Dashboard).
+
+**No change to RLS, schema, or the driver-invitation token model** is
+implied or required by anything in this section — confirmed by this
+phase's own read-only nature (§ GIT below).
+
+====================================================================
+9. HUMAN STEPS
+====================================================================
+
+An ordered, operational checklist — apply in this order, verify after
+each step before moving to the next:
+
+  1. **Confirm Site URL** (Authentication → URL Configuration → Site
+     URL) reads exactly `https://app.zenwardmobility.com`.
+     VERIFY: the field shows this value with no trailing slash, no
+     `www.`, no `http://`.
+
+  2. **Confirm the Redirect URLs allow-list** (same page) contains at
+     least `https://app.zenwardmobility.com`,
+     `https://app.zenwardmobility.com/**`, `http://localhost:3000`,
+     `http://127.0.0.1:3000` (§5).
+     VERIFY: all four present; add any missing entry, save.
+
+  3. **Apply the Reset Password email template** (Authentication →
+     Email Templates → Reset Password) — paste the exact subject and
+     body from §2 of this report.
+     VERIFY: save succeeds; the Dashboard's own template preview shows
+     the `{{ .RedirectTo }}`/`{{ .TokenHash }}` link, not
+     `{{ .ConfirmationURL }}`.
+
+  4. **Generate a new, dedicated Resend API key** in the Nemryn Resend
+     account, scoped/named for Supabase Auth SMTP use specifically
+     (not the application's existing driver-invitation key) — §7.
+     VERIFY: the key is visible exactly once at creation time (Resend,
+     like most providers, will not show it again) — store it in
+     whatever secrets manager the team uses for Dashboard-only
+     credentials; do not place it in this repository, `.env.example`,
+     or any document.
+
+  5. **Enable Custom SMTP** (Authentication → Emails → SMTP Settings)
+     using the exact field values in §7's table, with the key from
+     step 4 as the password.
+     VERIFY: Supabase's own "Send test email" feature (if available in
+     the Dashboard) succeeds and arrives with FROM exactly
+     `Nemryn <notifications@nemryn.com>`.
+
+  6. **Send one real, human-initiated password-recovery request**
+     against the actual production/staging URL (an account the human
+     controls) and follow it through:
+     VERIFY, in order: (a) the email arrives promptly and is not in
+     spam, (b) FROM reads `Nemryn <notifications@nemryn.com>`, (c) the
+     link is `https://app.zenwardmobility.com/auth/confirm?
+     token_hash=...&type=recovery` (not a `*.supabase.co` link, not a
+     `localhost`/`*.vercel.app` link), (d) clicking it lands on
+     `/auth/reset-password` with the new-password form rendered (not
+     the "link has expired" state), (e) setting a new password
+     succeeds and the old password no longer works.
+
+  7. **Repeat step 6 once for signup confirmation** (a fresh test
+     sign-up) to confirm the shared SMTP transport change did not
+     regress the ALREADY-working Confirm Signup flow — same FROM
+     identity now expected there too, link still
+     `.../auth/confirm?token_hash=...&type=signup`, still lands on
+     `/complete-signup`.
+
+Steps 1-3 can be applied independently of steps 4-5 (the Reset
+Password template change is useful, and safe, even before Custom SMTP
+is enabled — Supabase's own built-in sender would deliver it in the
+interim, just with the built-in sender's own lower volume ceiling).
+Steps 4-5 are the ones this phase's CONTEXT specifically motivated
+(Nemryn's Resend account/domain now being ready) and were not
+possible to recommend concretely before this phase.
+
+====================================================================
+10. WHAT REMAINS BEFORE P0-S2B PRODUCTION DEPLOYMENT
+====================================================================
+
+  - All of §9's steps — none were applied this phase (no Dashboard
+    access in this environment, and this phase's own explicit
+    instruction: "Do NOT modify hosted Supabase settings").
+  - Separately, the application CODE side of P0-S2B is already
+    complete and was fully locally validated
+    (`docs/reports/p0-s2b-password-recovery.txt`) — it has not yet
+    been committed, pushed, or deployed (that report's own explicit
+    stop condition). Whether this phase's Dashboard checklist (§9)
+    must complete BEFORE or can complete AFTER the code deploy is a
+    human sequencing decision — functionally, the code can deploy
+    first (an un-configured Reset Password template would simply mean
+    the recovery link temporarily uses Supabase's default,
+    fragment-based template, which the deployed code CANNOT complete
+    — recovery would silently fail at `/auth/reset-password`'s
+    "link has expired" state until §9 step 3 is applied) — so applying
+    §9 BEFORE the code deploy, or immediately alongside it, is
+    recommended to avoid a live but non-functional recovery flow in
+    production.
+  - The still-open Confirm Signup `{{ .SiteURL }}` → `{{ .RedirectTo }}`
+    migration noted in §3/§5 as a candidate follow-up — not required
+    for P0-S2B itself (Confirm Signup already works today), relevant
+    only to make the FUTURE `app.nemryn.com` migration (N0-M1) simpler
+    for that one template.
+
+====================================================================
+11. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  No file was modified by this phase. `git status --short` is
+  identical to its state at the end of P0-S2B (the prior phase):
+
+  Changes not staged for commit:
+    modified:   docs/deployment/staging-auth-configuration.md
+    modified:   src/app/auth/confirm/route.ts
+    modified:   src/components/auth/SignInForm.tsx
+    modified:   src/lib/auth/errors.ts
+    modified:   supabase/config.toml
+
+  Untracked files (unchanged set from P0-S2B, plus this report):
+    .tmp-qa/*, docs/brand/, docs/product/password-recovery-model.md,
+    docs/reports/g0-r3-*.txt, docs/reports/g1-a-*.txt,
+    docs/reports/g1-b-*.txt, docs/reports/n0-g0-r2-*.txt,
+    docs/reports/p0-s2a-closure.txt, docs/reports/p0-s2a-d1-*.txt,
+    docs/reports/p0-s2b-password-recovery.txt,
+    docs/reports/p0-s2b-c0-auth-email-production-config.txt (this
+      file), src/app/auth/reset-password/, src/app/forgot-password/,
+    src/components/auth/ForgotPasswordForm.tsx,
+    src/components/auth/ResetPasswordForm.tsx,
+    src/lib/auth/recovery-core.test.mjs, src/lib/auth/recovery-core.ts,
+    src/lib/auth/recovery.ts, supabase/templates/recovery.html
+
+  Nothing staged. Nothing committed. Nothing pushed. No deploy
+  triggered. No Vercel variable, Supabase hosted setting, or DNS
+  record was changed by this phase.
+
+====================================================================
+END OF REPORT
+====================================================================
