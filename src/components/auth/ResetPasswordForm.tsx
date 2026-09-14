@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import { resetPasswordAction, type ResetPasswordState } from "@/app/auth/reset-password/actions";
-import { Input } from "@/components/ui/Input";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
 import { AUTH_ERROR_MESSAGE } from "@/lib/auth/errors";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/recovery-core";
@@ -52,10 +52,9 @@ export function ResetPasswordForm() {
   return (
     <form action={formAction} className="flex w-full flex-col gap-zw-lg" noValidate>
       <div className="flex w-full flex-col gap-zw-md">
-        <Input
+        <PasswordInput
           label="New password"
           name="password"
-          type="password"
           autoComplete="new-password"
           required
           minLength={MIN_PASSWORD_LENGTH}
@@ -63,10 +62,9 @@ export function ResetPasswordForm() {
           size="lg"
           helpText={`At least ${MIN_PASSWORD_LENGTH} characters.`}
         />
-        <Input
+        <PasswordInput
           label="Confirm new password"
           name="confirmPassword"
-          type="password"
           autoComplete="new-password"
           required
           minLength={MIN_PASSWORD_LENGTH}

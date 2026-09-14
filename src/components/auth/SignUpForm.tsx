@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { signUpAction, type SignUpState } from "@/app/sign-up/actions";
 import { Input } from "@/components/ui/Input";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
 import { AUTH_ERROR_MESSAGE } from "@/lib/auth/errors";
 import { cn } from "@/lib/cn";
@@ -35,10 +36,9 @@ export function SignUpForm() {
       <div className="flex w-full flex-col gap-zw-md">
         <Input label="Full name" name="fullName" type="text" autoComplete="name" required disabled={pending} size="lg" />
         <Input label="Email" name="email" type="email" autoComplete="email" required disabled={pending} size="lg" />
-        <Input
+        <PasswordInput
           label="Password"
           name="password"
-          type="password"
           autoComplete="new-password"
           required
           disabled={pending}

@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import Link from "next/link";
 import { signInAction, type SignInState } from "@/app/sign-in/actions";
 import { Input } from "@/components/ui/Input";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
 import { AUTH_ERROR_MESSAGE } from "@/lib/auth/errors";
 import { cn } from "@/lib/cn";
@@ -41,10 +42,9 @@ export function SignInForm({ next }: SignInFormProps) {
           disabled={pending}
           size="lg"
         />
-        <Input
+        <PasswordInput
           label="Password"
           name="password"
-          type="password"
           autoComplete="current-password"
           required
           disabled={pending}

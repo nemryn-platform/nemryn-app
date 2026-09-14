@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { joinSignUpAction, type JoinActionState } from "./actions";
 import { Input } from "@/components/ui/Input";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
 import { AUTH_ERROR_MESSAGE } from "@/lib/auth/errors";
 import { typography } from "@/design/typography";
@@ -28,10 +29,9 @@ export function JoinSignUpForm({ token, email }: { token: string; email: string 
       <input type="hidden" name="email" value={email} />
       <Input label="Email" name="emailDisplay" type="email" value={email} disabled readOnly size="lg" />
       <Input label="Full name" name="fullName" type="text" autoComplete="name" required disabled={pending} size="lg" />
-      <Input
+      <PasswordInput
         label="Password"
         name="password"
-        type="password"
         autoComplete="new-password"
         required
         disabled={pending}
