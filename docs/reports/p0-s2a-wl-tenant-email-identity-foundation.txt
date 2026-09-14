@@ -1,0 +1,711 @@
+====================================================================
+PHASE:    P0-S2A-WL — Tenant-Branded Transactional Email Foundation
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT COMMIT: 95cb329f7eb163da735808e445387b6c951a3645
+                "Fix production auth email confirmation flow"
+                (unchanged — nothing this phase touches has been
+                committed; production still runs this commit)
+WORKING TREE STATUS: NOT clean, as expected — carries this phase's
+                own changes on top of the P0-S2A driver-invite-email
+                implementation (already reviewed/validated, itself
+                still uncommitted) and earlier uncommitted Nemryn
+                brand documentation from prior sessions.
+MODE:     Architecture + implementation + validation. No commit, no
+          push, no deploy, no live Vercel variable change, no DNS
+          change, no hosted Supabase mutation, no Nemryn-Web change,
+          no password-reset work, no Nemryn visual application
+          rebrand.
+
+NOTE (added at restoration, P0-S2A-WL-RB): the commercial direction
+described in this report was SUPERSEDED by phase P0-S2A-WL-RB, which
+rolled back everything this report describes and returned the
+driver-invitation email to a single Nemryn platform sender with
+dynamic tenant content only. This file is preserved, UNMODIFIED, as a
+historical record of the work that was performed and later reversed —
+see docs/reports/p0-s2a-wl-rollback-platform-sender.txt for the
+rollback itself. Nothing below should be treated as describing current
+behavior.
+====================================================================
+
+1. ARCHITECTURE
+====================================================================
+
+Locked rule (work item §1): **transactional communications initiated
+by an organization are tenant-branded by default.** Nemryn provides
+infrastructure — delivery (Resend), authorization, tenancy, auditing.
+The organization provides its own visible identity — sender name,
+verified sender email, reply-to email, and the organization name used
+in content.
+
+Before this phase, the driver-invitation email (the only transactional
+email this application sends today, per the P0-S2A phase immediately
+prior) used a single GLOBAL `EMAIL_FROM` environment variable,
+defaulting to a hardcoded `"Zenward Mobility <no-reply@zenwardmobility.com>"`
+string, plus a footer reading "Sent by Zenward Mobility on behalf of
+{Organization Name}." Both were correct only by the coincidence that
+the one existing tenant happens to be named "Zenward Mobility" — wrong
+in principle, and an active liability the moment a second organization
+exists (it would impersonate Zenward Mobility's own unverified domain
+in every OTHER organization's outbound mail, and its footer would be
+factually wrong for any tenant but Zenward Mobility).
+
+This phase replaces both with a genuinely per-tenant model:
+
+  Organization proposes         → upsert_organization_email_sender
+  identity (name/email/domain/     (Organization Admin, own org only;
+  reply-to)                        ALWAYS lands at verification_status
+                                    = 'pending' — no client write can
+                                    ever set 'verified')
+         ↓
+  Human verifies the domain      → the operator adds Resend's DNS
+  through Resend (unchanged,       records to their own domain's zone
+  manual, per work item §12/§13)   (SPF/DKIM)
+         ↓
+  Platform certifies it          → set_organization_email_verification_status
+                                    (Platform Admin ONLY — has_org_role
+                                    plays no part in this function's
+                                    authorization at all)
+         ↓
+  resolveOrganizationEmailIdentity() → the ONE place any email-sending
+  code asks "whose identity is       code in this application decides
+  this?" — resolved FRESH on           a sender identity. Verified live:
+  every send, never cached from        disabling a sender changes the
+  invite-creation time                 very next send immediately;
+                                        re-verifying restores it
+                                        immediately.
+         ↓
+  Verified → tenant's own name + domain + reply-to used.
+  Anything else (pending / disabled / no row at all) → the tenant's
+  real NAME is still shown (trustworthy, sourced from `organizations`
+  itself), but the technical address is a NEUTRAL, platform-controlled
+  fallback — never the tenant's own unverified domain.
+
+`EMAIL_FROM` still exists, but its role is now narrow and documented:
+the platform's OWN infra fallback only (§5/§8 below) — never the
+source of any tenant's visible identity again.
+
+====================================================================
+2. SCHEMA / CONFIG MODEL
+====================================================================
+
+New migration:
+`supabase/migrations/20260914100000_organization_email_senders.sql`
+
+Table `organization_email_senders` — one row per organization (the
+smallest production-suitable model; a future multi-sender-per-org need
+is a deliberate, separate extension, not built here):
+
+  id                    uuid, PK
+  organization_id       uuid, FK -> organizations, UNIQUE
+  sender_name           text, not null
+  sender_email          text, not null (its own domain must equal
+                          sender_domain — enforced in the RPC, see §3)
+  reply_to_email        text, nullable
+  sender_domain         text, not null
+  verification_status   text, not null, default 'pending'
+                          CHECK IN ('pending','verified','disabled')
+  created_at, updated_at  timestamptz, trigger-maintained
+
+Required concepts from the work item — all present:
+`organization_id`, `sender_name`, `sender_email`, `reply_to_email`,
+`sender_domain`, `verification_status` (3-state, as specified),
+`created_at`, `updated_at`.
+
+A tenant cannot mark its own domain verified by manipulating a browser
+request: `verification_status` has no path to `'verified'` reachable by
+an organization's own admin at all — see §4.
+
+====================================================================
+3. RLS POLICIES
+====================================================================
+
+RLS enabled immediately on table creation (deny-by-default, same
+invariant as every other table in this codebase).
+
+  SELECT — `organization_email_senders_select_org_admin`:
+    Organization Admin, own org only (`has_org_role`). No other role
+    (not even Dispatcher) can read it.
+
+  INSERT / UPDATE / DELETE — **no grant to `authenticated` exists at
+  all.** Every mutation goes through one of two SECURITY DEFINER
+  functions:
+
+  `upsert_organization_email_sender(p_organization_id, p_sender_name,
+  p_sender_email, p_sender_domain, p_reply_to_email)`:
+    - Organization Admin only, own org only (`has_org_role`, re-checked
+      live).
+    - Validates: non-blank fields within length limits; plausible email
+      shape for `sender_email`/`reply_to_email`; plausible hostname
+      shape for `sender_domain`; **`sender_email`'s own domain must
+      equal the claimed `sender_domain`** (a tenant cannot propose
+      verification of a domain their own address doesn't belong to).
+    - **ALWAYS resets `verification_status` to `'pending'`** on every
+      successful call — including a byte-for-byte resubmission of
+      already-verified values (tested explicitly — §11 test H). This is
+      the actual mechanism that makes "no client write may allow
+      `pending -> verified`" true: the function has no branch that can
+      ever write `'verified'`.
+    - One row per org (`ON CONFLICT (organization_id) DO UPDATE`).
+    - Writes an `audit_events` row.
+
+  `set_organization_email_verification_status(p_organization_id,
+  p_status)`:
+    - **Platform Admin ONLY** (`is_platform_admin()`) — `has_org_role`
+      is never consulted. An organization's own admin cannot call this
+      successfully for their OWN organization (tested — §11 test D).
+    - The sole path to `'verified'` (also usable to set `'disabled'` or
+      revert to `'pending'`).
+    - Writes an `audit_events` row.
+
+No RLS policy on any EXISTING table was modified. No existing migration
+was modified. This phase added one new migration file only.
+
+====================================================================
+4. SENDER RESOLUTION
+====================================================================
+
+`src/lib/email/resolve-organization-identity.ts` —
+`resolveOrganizationEmailIdentity(organizationId)`. Server-only. The
+ONE function in the codebase that decides an email's sender identity —
+no other application code independently constructs one (work item §5's
+own explicit requirement). Currently the only two call sites
+(`createDriverInviteAction`/`resendDriverInviteAction`,
+`src/app/operations/drivers/actions.ts`) both go through it, fresh, on
+every call.
+
+Resolution:
+
+  organizationName = organizations.name   (ALWAYS — trustworthy,
+                                            server-resolved, independent
+                                            of email-verification state)
+
+  IF a row exists AND verification_status === 'verified':
+    senderName   = row.sender_name  (falls back to organizationName if blank)
+    senderEmail  = row.sender_email                <- tenant's OWN domain
+    replyToEmail = row.reply_to_email
+    usingPlatformFallback = false
+
+  ELSE (no row / pending / disabled):
+    senderName   = organizationName                <- STILL tenant-branded
+    senderEmail  = platform fallback address        <- NEVER the tenant's
+                                                        claimed/unverified domain
+    replyToEmail = null
+    usingPlatformFallback = true
+
+Verified live (§11) for ALL FOUR logical states: `verified`, `pending`
+(proposed but not yet certified), `disabled` (certified, then
+revoked), and `not_configured` (no row exists at all).
+
+====================================================================
+5. FALLBACK BEHAVIOR
+====================================================================
+
+`src/lib/email/send.ts`'s `platformFallbackFrom()` — the platform's own
+default "From" string. Used (a) by the resolver as the source of the
+fallback technical ADDRESS (via `extractEmailAddress`,
+`src/lib/email/address-format.ts` — a new, pure, unit-tested helper),
+and (b) as `sendEmail()`'s own last-resort default for any future email
+type that doesn't yet resolve a per-tenant identity.
+
+**Changed default value:** `"Notifications <notifications@resend.dev>"`
+— replacing the OLD default `"Zenward Mobility <no-reply@zenwardmobility.com>"`.
+The old default violated work item §8 ("Do not allow fallback logic to
+falsely impersonate an unverified tenant") directly: it asserted
+Zenward Mobility's own domain in the technical envelope for EVERY
+organization the fallback might ever apply to, without that domain
+ever having been verified through Resend. The new default is honest
+about being platform infrastructure and claims no specific domain.
+
+`EMAIL_FROM` remains configurable to override this default (documented,
+in `.env.example` and `docs/deployment/environment-variable-inventory.md`,
+as PLATFORM FALLBACK ONLY — never a tenant's identity). It is not the
+long-term source of any organization's visible sender identity, and the
+fallback path never impersonates an unverified tenant's domain — the
+resolver only ever falls back to this platform address, never to a
+tenant's own claimed-but-unverified `sender_email`/`sender_domain`.
+
+====================================================================
+6. VERIFICATION ENFORCEMENT
+====================================================================
+
+Two independent, deliberately redundant layers:
+
+  1. DATABASE — no client-facing function can ever write `'verified'`
+     (§3). A tenant can propose forever; only a platform admin's call
+     certifies.
+  2. APPLICATION — `resolveOrganizationEmailIdentity` reads
+     `sender_email`/`sender_domain` ONLY when
+     `verification_status === "verified"`. Even a hypothetical future
+     bug that let unverified fields be READ would still not make them
+     USED — this function is the one gate.
+
+An unverified/disabled/missing sender is NEVER used to send from that
+tenant's claimed domain — verified live across all four states (§11).
+An explicit delivery/configuration signal (`usingPlatformFallback`,
+`verificationStatus`) is always available to the resolver's caller;
+nothing is silently pretended.
+
+====================================================================
+7. ZENWARD CONFIGURATION PATH
+====================================================================
+
+No verified state was fabricated for Zenward Mobility. Its
+`organization_email_senders` row does not exist in any real (staging/
+production) database — this phase did not create one there, only
+proved the mechanism locally. The exact, documented human procedure
+(full detail: `docs/product/tenant-email-identity-model.md` §10,
+`docs/deployment/driver-invite-email-production-checklist.md` §B):
+
+  1. An Organization Admin for Zenward Mobility calls
+     `upsert_organization_email_sender` with sender_name="Zenward
+     Mobility", sender_email="notifications@zenwardmobility.com",
+     sender_domain="zenwardmobility.com", and an operator-chosen
+     reply_to_email. Lands at `pending`.
+  2. A human verifies `zenwardmobility.com` as a sending domain in
+     Nemryn's own Resend account (DNS records on the sending domain
+     only — does not touch `app.zenwardmobility.com`'s own routing/DNS
+     or the hosted Supabase project).
+  3. A platform admin calls `set_organization_email_verification_status`
+     to mark it `verified`.
+  4. Usable immediately — no deployment needed; the very next
+     invitation email uses it (verified live this phase).
+
+====================================================================
+8. REPLY-TO HANDLING
+====================================================================
+
+`reply_to_email` is validated server-side (well-formed email shape) at
+proposal time inside `upsert_organization_email_sender`. It is passed
+through `EmailMessage.replyTo` -> Resend's own `reply_to` API parameter
+only when the resolved identity is `verified` and has one configured —
+an unverified/fallback identity never sets a reply-to (there is nothing
+tenant-specific and trustworthy to put there yet). `sendViaResend`
+(`src/lib/email/send.ts`) was extended with one new conditional field
+(`reply_to`) — no other behavior in that function changed.
+
+====================================================================
+9. EMAIL TEMPLATE CHANGES
+====================================================================
+
+`src/lib/email/driver-invite-email.ts`:
+
+  - New required inputs: `senderName`, `senderEmail`, `replyToEmail` —
+    the RESOLVED identity, never decided in this file.
+  - Constructs `from` via `formatFromHeader(senderName, senderEmail)`
+    (new pure helper, `src/lib/email/address-format.ts`) and `replyTo`
+    when present.
+  - **The "— / Sent by Zenward Mobility on behalf of {Organization
+    Name}" footer line was REMOVED entirely.** It hardcoded the
+    platform's OLD identity as if it were universal, and no honest
+    replacement text exists that satisfies both "don't say 'Sent by
+    Nemryn'" and "don't say 'Sent by Zenward Mobility' for a tenant that
+    isn't Zenward Mobility." The correct resolution, per work item §1's
+    own framing ("the operator owns the visible communication"), is no
+    attribution footer at all — the email is simply FROM the
+    organization, full stop.
+  - Subject and body copy are otherwise UNCHANGED from the P0-S2A
+    version (already reviewed/tested): "You're invited to drive for
+    {Organization Name}" / "{Organization Name} has invited you to join
+    their driver team." — both already satisfy "no Nemryn mention,"
+    "no marketing/AI language," and "does not falsely imply the account
+    already exists."
+  - Confirmed no other Resend/internal-implementation-detail/tenant-id
+    exposure exists in the template (re-read in full this phase).
+
+====================================================================
+10. SECURITY REVIEW
+====================================================================
+
+Checklist from the work item's §4 ("If a new table is introduced")
+and general non-negotiables, each independently re-verified:
+
+  RLS enabled immediately on the new table? ................. YES
+  Deny by default? ............................................ YES (zero
+    INSERT/UPDATE/DELETE grant to authenticated; SELECT scoped to
+    org-admin-own-org)
+  Tenant isolation at the database layer? ..................... YES (§3,
+    verified live and in SQL — §11)
+  Organization admin may read their own configuration? ........ YES
+  No tenant may read another tenant's email configuration? .... YES —
+    RLS-enforced (SQL test F) AND verified live (cross-tenant admin
+    session, direct app flow)
+  Verification state not freely self-elevatable? .............. YES —
+    no client-facing function can write 'verified'; verified even
+    against the "resubmit identical already-verified values" edge
+    case (SQL test H)
+  No direct client write allows pending -> verified? .......... CONFIRMED
+    — no authenticated-role grant on INSERT/UPDATE exists on the table
+    at all (SQL tests P1/P2 — direct INSERT and direct UPDATE of
+    verification_status both denied at the GRANT level, sqlstate 42501,
+    not merely by application code)
+  No service-role credential in browser? ....................... UNCHANGED
+    — none exists anywhere in this codebase (re-confirmed by grep)
+  No privileged provider credential exposed? ................... UNCHANGED
+    — RESEND_API_KEY remains server-only, non-NEXT_PUBLIC_, confined to
+    src/lib/email/send.ts, one platform-controlled key (work item §11:
+    "Do not store a separate Resend API key for every organization" —
+    confirmed: no per-org credential of any kind exists in the new
+    table or anywhere else)
+  No existing policy weakened? .................................. CONFIRMED
+    — zero existing migration file modified; 317 pre-existing SQL
+    assertions unchanged (§12)
+
+Additional, work-item-specific checks:
+
+  Unverified sender used to send? ............................... NO
+    (§6, verified for pending/disabled/not_configured — §11)
+  Cross-tenant sender leakage? ................................... NO
+    (§11 — Org A's identity never appeared in Org B's email or
+    vice versa, in either direction)
+  Fallback logic impersonates an unverified tenant? .............. NO
+    (§5 — the fallback address is platform-neutral, never a tenant's
+    domain)
+  Sender name always from the correct organization? .............. YES
+    (organizationName is always the server-resolved `organizations.name`
+    for the ACTUAL organization_id being invited from — verified live)
+
+====================================================================
+11. ADVERSARIAL TESTS
+====================================================================
+
+SQL suite (`supabase/tests/organization_email_sender_tests.sql`, 18
+assertions, same SET ROLE / request.jwt.claim.sub methodology as every
+other suite in this repository):
+
+  A  org admin proposes own-org sender, lands pending ........... PASS
+  B  Dispatcher cannot propose a sender ........................... PASS
+  C  Org A admin cannot propose a sender for Org B (cross-tenant) . PASS
+  D  org admin cannot self-verify their own sender ................ PASS
+  E  platform admin verifies Org A sender ......................... PASS
+  F  Org B admin cannot read Org A's email sender config .......... PASS
+  G  Org A admin CAN read their own verified sender config ........ PASS
+  H  resubmitting even IDENTICAL values resets verified -> pending  PASS
+  I  platform admin can disable a previously-verified sender ...... PASS
+  J  verification status rejects a non-enum value ................. PASS
+  K  sender_email domain must match claimed sender_domain ......... PASS
+  L  malformed sender_domain rejected .............................. PASS
+  M  malformed reply_to_email rejected .............................. PASS
+  N  unauthenticated upsert call rejected ........................... PASS
+  O  unauthenticated verification-status call rejected .............. PASS
+  P1 direct client INSERT denied (permission denied, not RLS logic) . PASS
+  P2 direct client UPDATE of verification_status denied ............. PASS
+  Q  Dispatcher cannot propose a sender for ANY org, including foreign PASS
+                                                          18/18 PASS
+
+Live, non-destructive integration tests (local dev server + Chrome via
+CDP + direct PostgREST, the same methodology used in P0-S1/P0-S2A):
+
+  wl-integration.mjs (15 checks) — Org A (verified sender) invites:
+    honest "Invitation sent"; email FROM = exactly "Fictional Org A
+    <dispatch@fictional-org-a.test>" (their own verified domain); no
+    platform-fallback address used; subject correct; body has NO
+    "Sent by"/"Powered by"/Nemryn attribution; token never in the
+    rendered page. Org B (UNCONFIGURED sender) invites in the SAME run:
+    still an honest "Invitation sent"; FROM shows Org B's real name but
+    the PLATFORM fallback address (not a claimed-but-unverified
+    domain); no leak of Org A's identity into Org B's email or vice
+    versa in either direction; exactly one invite row each, correct
+    org.                                                    15/15 PASS
+
+  wl-pending-disabled.mjs (5 checks) — a PROPOSED-but-unverified
+    (`pending`) sender is not used (falls back, name still shown); a
+    PREVIOUSLY-VERIFIED sender that a platform admin then DISABLES is
+    also not used going forward (falls back, name still shown) — even
+    though it WAS legitimately verified earlier.        5/5 PASS
+
+  wl-resend-fresh.mjs (7 checks) — the single strongest test in this
+    set: an invite created while Org A's sender was VERIFIED is later
+    resent AFTER Org A's sender has been DISABLED — the resend
+    immediately uses the fallback (proving resolution happens FRESH on
+    every send, never cached/decided at invite-creation time); Org A's
+    sender is then RE-verified and resent AGAIN — immediately uses the
+    verified domain again; no duplicate invite row across any of this;
+    Org B's admin still cannot even see Org A's invite (cross-tenant
+    resend remains structurally impossible, unchanged from P0-S2A).
+                                                              7/7 PASS
+
+  TOTAL live integration checks this phase: 27/27 PASS.
+
+Unit tests (Node's built-in test runner, zero new dependencies):
+  src/lib/app-url-core.test.mjs (15, unchanged from P0-S2A) ..... PASS
+  src/lib/email/address-format.test.mjs (8, NEW) ................. PASS
+    — formatFromHeader/extractEmailAddress: Name<email> construction,
+      blank-name fallback to bare address, whitespace trimming,
+      round-trip recovery, and an explicit regression guard that the
+      platform fallback resolves to a neutral (not tenant-shaped)
+      address.
+  TOTAL: 23/23 PASS.
+
+====================================================================
+12. EXISTING REGRESSION TESTS
+====================================================================
+
+Full pre-existing SQL suite (`supabase/tests/*.sql`, 21 files, run
+clean on a freshly reset database, before AND after every code change
+this phase made):
+
+  317/317 PASS, 0 FAIL — byte-for-byte identical to the P0-S1/P0-S2A
+  baseline. No existing test's expected outcome was edited.
+
+Plus the 18 NEW assertions from this phase's own suite = 335/335 total
+across 22 files, 0 FAIL.
+
+Concurrency (real two-process races, re-run after this phase's changes):
+  mutation_concurrency_test.sh ................................ PASS
+  driver_invite_concurrency_test.sh ........................... PASS
+
+All P0-S2A guarantees explicitly re-verified this phase (work item
+§14's own checklist):
+  invite token stays server-side ............................... YES
+    (unchanged code path; also re-confirmed via the new live tests —
+    §11, "token never in the rendered page")
+  sender cannot alter invitation recipient ...................... YES
+    (unchanged — recipient is read from the invite row, never a
+    parameter to any sender-identity-related function)
+  cross-tenant resend impossible ................................. YES
+    (re-verified live this phase, §11 wl-resend-fresh.mjs)
+  pending-only resend ............................................. YES
+    (unchanged code path)
+  no duplicate invite on resend ................................... YES
+    (re-verified live this phase — before=after=1 across 3+ resends)
+  honest delivery status ........................................... YES
+    (unchanged mechanism; content now correctly tenant-branded)
+  malformed APP_URL doesn't crash page ............................. YES
+    (unchanged — the P0-S2A try/catch boundary around
+    buildDriverInviteUrl/getAppOrigin was not touched this phase)
+  no service-role credentials ...................................... YES
+  existing redemption flow unchanged ............................... YES
+    (redeem_driver_invite RPC not touched; driver_invite_concurrency_test.sh
+    PASS confirms it)
+
+====================================================================
+13. BUILD/LINT/TYPECHECK
+====================================================================
+
+  npx tsc --noEmit .............................................. PASS (0 errors)
+  npm run lint ................................................... PASS (0 errors;
+    14 warnings, ALL pre-existing, ALL confined to untracked
+    `.tmp-qa/*.mjs` scratch scripts — none in any file this phase
+    touched)
+  npm run build ................................................... PASS (all
+    routes compiled; regenerated `database.types.ts` — including the
+    new table + both new RPCs' Args/Returns/CompositeTypes — compiles
+    cleanly against every existing call site with no manual edits
+    needed beyond the two actions.ts call-site parameter renames
+    already described in §9/§4)
+  npm test (node --test 'src/**/*.test.mjs') ...................... PASS
+    (23/23 — 15 unchanged from P0-S2A + 8 new this phase)
+
+====================================================================
+14. FILES CREATED
+====================================================================
+
+Database:
+  supabase/migrations/20260914100000_organization_email_senders.sql
+  supabase/tests/organization_email_sender_tests.sql
+
+Application code:
+  src/lib/email/resolve-organization-identity.ts
+  src/lib/email/address-format.ts
+  src/lib/email/address-format.test.mjs
+
+Documentation:
+  docs/product/tenant-email-identity-model.md
+  docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt (this file)
+
+NOT created this phase (already existed, from P0-S2A, still
+uncommitted): `src/lib/app-url.ts`, `src/lib/app-url-core.ts`,
+`src/lib/app-url-core.test.mjs`, `src/lib/email/send.ts`,
+`src/lib/email/driver-invite-email.ts`,
+`docs/deployment/driver-invite-email-production-checklist.md` (all
+MODIFIED this phase — see §15 — not newly created).
+
+====================================================================
+15. FILES MODIFIED
+====================================================================
+
+  src/lib/email/send.ts — `platformFallbackFrom()` (renamed/exported
+    from the former private `fromAddress()`), changed default value
+    (§5); `EmailMessage` gains optional `from`/`replyTo` fields;
+    `sendViaResend` uses `message.from ?? platformFallbackFrom()` and
+    conditionally includes `reply_to`.
+  src/lib/email/driver-invite-email.ts — accepts resolved
+    `senderName`/`senderEmail`/`replyToEmail`; constructs `from`/
+    `replyTo`; removes the "Sent by Zenward Mobility..." footer (§9).
+  src/app/operations/drivers/actions.ts — `deliverDriverInviteEmail`
+    now calls `resolveOrganizationEmailIdentity(organizationId)` before
+    building the email; both call sites pass `organizationId` instead
+    of `organizationName` (the resolver now owns fetching the name).
+    Try/catch error-boundary behavior from P0-S2A is unchanged.
+  src/lib/supabase/database.types.ts — regenerated
+    (`supabase gen types typescript --local`) to include
+    `organization_email_senders`'s Row/Insert/Update/Relationships and
+    both new RPCs' Args/Returns/CompositeTypes. No other table's
+    generated types changed.
+  package.json — no new script or dependency this phase (the `test`
+    script already existed from P0-S2A and needed no change — its glob
+    picks up the new `.test.mjs` file automatically).
+  .env.example — `EMAIL_FROM`'s comment corrected to describe its new,
+    narrower platform-fallback-only role (§5).
+  docs/deployment/environment-variable-inventory.md — `EMAIL_FROM` rows
+    (both the classification table and the per-environment table)
+    corrected to the same effect.
+  docs/product/driver-invite-linkage-model.md — new §1D describing the
+    tenant-owned sender-identity change; §1C's own text corrected where
+    it described the now-removed footer line; work-item/status header
+    updated.
+  docs/deployment/driver-invite-email-production-checklist.md —
+    restructured into platform-infrastructure steps (A, mostly
+    unchanged) + NEW Zenward-specific sender-configuration steps (B) +
+    end-to-end verification (C, renumbered); "If something goes wrong"
+    section extended with the new failure modes and a corrected
+    rollback note (a migration now exists, where the prior version of
+    this document said none did).
+
+NOT modified this phase (reviewed, confirmed still correct, left
+exactly as P0-S2A produced them): `src/lib/app-url.ts`,
+`src/lib/app-url-core.ts`, `src/lib/app-url-core.test.mjs`,
+`src/components/operations/drivers/InviteDriverDialog.tsx`,
+`src/components/operations/drivers/DriversPageClient.tsx` (their
+DELIVERY-STATE logic is unchanged; they render whatever `delivery`/
+resend result they're given, which is unaffected by WHO the sender
+turned out to be). Any pre-existing migration or RLS policy.
+
+====================================================================
+16. MIGRATIONS
+====================================================================
+
+ONE new migration this phase:
+`supabase/migrations/20260914100000_organization_email_senders.sql`
+
+Contents: the `organization_email_senders` table (with its FK, unique
+constraint, CHECK constraint, two triggers reusing existing shared
+trigger functions `set_updated_at`/`prevent_organization_id_change`),
+RLS enablement + one SELECT policy, and the two SECURITY DEFINER
+functions (`upsert_organization_email_sender`,
+`set_organization_email_verification_status`) plus their shared
+composite return type (`organization_email_sender_result`).
+
+Applied and verified locally via `supabase db reset` (full schema
+rebuild from all migrations + seed) multiple times this phase, with
+zero errors attributable to this migration (the one warning `db reset`
+prints — "failed to cache migrations catalog... pg-delta" — is a
+pre-existing, benign, unrelated network/caching warning observed in
+every prior phase's `db reset` in this environment, not specific to
+this migration).
+
+No existing migration file was modified. No RLS policy on any existing
+table was touched.
+
+====================================================================
+17. HUMAN CONFIGURATION REMAINING
+====================================================================
+
+Full detail: `docs/deployment/driver-invite-email-production-checklist.md`
+(updated this phase) and `docs/product/tenant-email-identity-model.md`
+§10.
+
+Platform-level (unchanged in shape from P0-S2A):
+  1. Resend account + `RESEND_API_KEY` in Vercel Production.
+  2. (Optional) a real platform `EMAIL_FROM` on a Nemryn-verified
+     domain, once one exists — otherwise the neutral built-in default
+     is used.
+  3. `NEXT_PUBLIC_APP_URL` confirmed correct for Production (build-time
+     inlined — a fresh deployment is required after setting it).
+
+Tenant-level — NEW this phase, currently entirely undone in any real
+environment (deliberately — no verified state was fabricated):
+  4. An Organization Admin for Zenward Mobility proposes their sender
+     identity (`upsert_organization_email_sender`) — no Settings UI
+     exists yet; this is a direct RPC call today.
+  5. A human verifies `zenwardmobility.com` in Nemryn's Resend account
+     (DNS records on the sending domain only).
+  6. A platform admin certifies it
+     (`set_organization_email_verification_status(..., 'verified')`).
+  7. End-to-end verification with a real, developer-controlled mailbox
+     (checklist §C).
+
+None of the above requires a further code change — everything the code
+needs already exists and is tested.
+
+====================================================================
+18. DEPLOYMENT READINESS
+====================================================================
+
+The architecture, schema, RLS, RPCs, resolver, and email-template
+integration are complete, reviewed, and verified: 335 SQL assertions +
+2 concurrency tests + 23 unit tests + 27 live integration checks, all
+passing, with zero regression against the pre-existing 317/2/15/33
+(P0-S2A) baseline. tsc/lint/build/test are all clean.
+
+What remains before this can be genuinely LIVE in production is
+entirely human configuration (§17) — no further code is required. This
+phase's own code is ready to be reviewed and, separately, committed/
+deployed; NEITHER was done here, per explicit instruction.
+
+Production impact today: NONE. Production still runs commit 95cb329,
+which contains none of this work (nor the prior P0-S2A work it builds
+on). The driver-invitation email in production today still does not
+send at all (the original P0-S1-documented defect) — this phase does
+not change that; it prepares the NEXT layer of the fix.
+
+====================================================================
+19. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   .env.example
+    modified:   docs/deployment/environment-variable-inventory.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   package.json
+    modified:   src/app/operations/drivers/actions.ts
+    modified:   src/components/operations/drivers/DriversPageClient.tsx
+    modified:   src/components/operations/drivers/InviteDriverDialog.tsx
+    modified:   src/lib/supabase/database.types.ts
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/
+    docs/deployment/driver-invite-email-production-checklist.md
+    docs/product/tenant-email-identity-model.md
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt
+    docs/reports/p0-s2a-driver-invite-remediation-validation.txt
+    docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt (this file)
+    src/lib/app-url-core.test.mjs
+    src/lib/app-url-core.ts
+    src/lib/app-url.ts
+    src/lib/email/  (send.ts, driver-invite-email.ts,
+                     resolve-organization-identity.ts,
+                     address-format.ts, address-format.test.mjs)
+    supabase/migrations/20260914100000_organization_email_senders.sql
+    supabase/tests/organization_email_sender_tests.sql
+
+  git diff --stat:
+    .env.example                                       |  19 +-
+    docs/deployment/environment-variable-inventory.md  |  23 +-
+    docs/product/driver-invite-linkage-model.md        |  90 ++++++-
+    package.json                                       |   3 +-
+    src/app/operations/drivers/actions.ts              | 159 ++++++++++--
+    src/components/operations/drivers/DriversPageClient.tsx | 60 ++++-
+    src/components/operations/drivers/InviteDriverDialog.tsx | 34 ++-
+    src/lib/supabase/database.types.ts                 |  79 +++++
+    8 files changed, ~417 insertions(+), ~50 deletions(-)
+
+Nothing was staged. Nothing was committed. Nothing was pushed. No pull
+request was created. No deploy was triggered. No Vercel environment
+variable was changed. No DNS was changed. No hosted Supabase project
+was mutated.
+
+====================================================================
+END OF REPORT
+====================================================================

@@ -1,0 +1,927 @@
+====================================================================
+PHASE:    P0-S2A — Driver Invitation Email Remediation Validation
+DATE:     2026-09-11
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT COMMIT: 95cb329f7eb163da735808e445387b6c951a3645
+                "Fix production auth email confirmation flow"
+                (unchanged — still the latest commit, still what
+                app.zenwardmobility.com serves; nothing this phase
+                touches has been committed)
+WORKING TREE STATUS: NOT clean, as expected. The candidate
+                driver-invitation-email implementation from an earlier
+                local session was present at phase start and was
+                REVIEWED, TESTED, and MINIMALLY CORRECTED — not
+                rewritten from scratch. See §2/§19/§20/§23 for the
+                exact diff.
+MODE:     Review + smallest-necessary-correction + validation. No
+          commit, no push, no deploy, no Vercel/Resend/DNS/Supabase
+          change, no password-reset work, no RLS/migration change.
+====================================================================
+
+1. EXECUTIVE SUMMARY
+====================================================================
+
+The existing, uncommitted driver-invitation-email implementation was
+reviewed line-by-line against every requirement in this phase's brief
+and found to be architecturally sound: the self-signup + redemption
+model is preserved untouched, authorization is entirely server-derived,
+the invite token never reaches the browser, `RESEND_API_KEY`/
+`EMAIL_FROM` are correctly confined to a `server-only` module, and
+provider failures are represented as an explicit, honest delivery state
+rather than a false "sent."
+
+Live testing this phase FOUND ONE GENUINE DEFECT the prior session's own
+testing had not exercised: `src/lib/app-url.ts`'s origin resolution had
+no defense against a malformed `NEXT_PUBLIC_APP_URL` (missing scheme,
+double slash, or — the one that actually fired in testing — a loopback
+address reaching a real production build), and neither Server Action
+caught a thrown error from that module, so the failure mode was an
+**uncaught exception that crashed the whole page** ("This page couldn't
+load") rather than the intended graceful "invite created, email could
+not be sent" state. This was corrected this phase (§6/§7/§21) with the
+smallest fix that closes the gap: origin resolution now goes through
+`new URL()` normalization with explicit guards, and both Server Actions
+route any thrown error through one small try/catch helper that reduces
+it to the SAME honest, already-designed "failed" delivery state. The fix
+was verified to actually work by deliberately reproducing the crash
+against a real production build, then confirming it no longer crashes.
+
+A genuine bug was also found and fixed inside the new focused unit test
+itself before it was trusted: `isLoopbackOrigin` initially mis-detected
+an IPv6 loopback literal (`[::1]`) because `URL#hostname` renders IPv6
+addresses with their brackets — caught by the test that was written to
+catch exactly this class of thing, fixed in one line.
+
+No RLS, migration, schema, tenancy, or authorization-boundary change was
+made or was needed. 317/317 pre-existing SQL assertions and both
+concurrency tests re-ran clean, unchanged from the P0-S1 baseline. tsc,
+lint, and a full production build all pass. 15 new focused unit tests
+(Node's built-in test runner, zero new dependencies) and 33 live,
+non-destructive integration checks against the local Supabase stack
+(happy path, both negative-tenant cases, both stale-invite races, both
+failure states, and the crash-then-fix reproduction) all pass.
+
+Production delivery remains genuinely BLOCKED — no Resend account/key
+exists in this environment, and none was created. This phase did not
+change that; it made the code that will use such a key ready and
+verified.
+
+PRODUCTION READINESS DECISION: READY FOR HUMAN CONFIGURATION + DEPLOY
+AUTHORIZATION
+
+====================================================================
+2. EXISTING FIX REVIEWED
+====================================================================
+
+Reviewed BEFORE any change was made (git diff of every tracked file,
+full read of every untracked file — see §3 for the exact pre-existing
+state). The reviewed architecture, confirmed intact and NOT altered by
+this phase:
+
+  Organization admin
+      ↓
+  create_driver_invite RPC            (unchanged; SECURITY DEFINER;
+                                        Organization Admin, own org only)
+      ↓
+  driver_invites row + secure token   (unchanged; 122-bit UUID)
+      ↓
+  server builds /join/<token>         (src/lib/app-url.ts — reviewed,
+                                        hardened this phase)
+      ↓
+  server sends transactional email    (src/lib/email/send.ts — reviewed,
+                                        unchanged)
+      ↓
+  invitee opens link                  (/join/[token] — pre-existing,
+                                        untouched)
+      ↓
+  invitee authenticates/signs up      (ordinary supabase.auth.signUp(),
+                                        unchanged)
+      ↓
+  redeem_driver_invite RPC            (unchanged; SECURITY DEFINER)
+      ↓
+  Driver + Membership created atomically (unchanged)
+
+`supabase.auth.admin.inviteUserByEmail()` is not used anywhere and was
+not introduced. Confirmed by grep (`grep -rn "inviteUserByEmail" src`
+→ no matches) — the self-signup + redemption model this phase was told
+to preserve is exactly what exists.
+
+====================================================================
+3. FILES ALREADY PRESENT BEFORE THIS PHASE
+====================================================================
+
+Tracked, modified (diff reviewed via `git diff` before any change):
+  .env.example
+  docs/deployment/environment-variable-inventory.md
+  docs/product/driver-invite-linkage-model.md
+  src/app/operations/drivers/actions.ts
+  src/components/operations/drivers/DriversPageClient.tsx
+  src/components/operations/drivers/InviteDriverDialog.tsx
+
+Untracked, new (full contents read before any change):
+  src/lib/app-url.ts
+  src/lib/email/send.ts
+  src/lib/email/driver-invite-email.ts
+
+Nothing was reset, checked out, stashed, cleaned, or discarded. Every
+one of the files above still contains the prior session's own design
+and reasoning; this phase's changes are additive/corrective on top of
+it (§20).
+
+====================================================================
+4. EMAIL SEND BOUNDARY
+====================================================================
+
+`src/lib/email/send.ts` — reviewed, UNCHANGED except one type widening
+(§7 explains why).
+
+  - Module is server-only: `import "server-only"` at the top. Confirmed
+    this actually matters (not just decorative) by the fact plain Node
+    cannot resolve `"server-only"` at all outside Next's own bundler —
+    Next.js ships a compiled copy internally
+    (`node_modules/next/dist/compiled/server-only`) and aliases the bare
+    specifier to it during build; there is no way for this module to be
+    silently pulled into a plain script or a misconfigured bundle without
+    the build failing.
+  - `RESEND_API_KEY` read via `process.env.RESEND_API_KEY` — not
+    `NEXT_PUBLIC_`. Confirmed by grep — zero `NEXT_PUBLIC_RESEND`/
+    `NEXT_PUBLIC_EMAIL` variables exist anywhere.
+  - `EMAIL_FROM` — same, server-only.
+  - Provider failures return `{ status: "failed", provider, detail }` —
+    `detail` is a bounded, generated string (`"resend responded 401"`,
+    or the error's `.name`) — NEVER the provider's raw response body,
+    never the request/response headers, never the API key.
+  - API key: confirmed never appears in any `console.*` call in this
+    file or any file that calls it (grep for the literal variable name
+    inside every `console.*` argument — no match).
+  - Invite token: this module never receives or handles a token at all
+    (it only builds/sends a fully-formed `EmailMessage`) — nothing to
+    leak here by construction.
+  - Local dev without credentials: the "log" transport activates ONLY
+    when `NODE_ENV !== "production"` — confirmed this cannot happen on
+    any real deployment, because Vercel sets `NODE_ENV=production`
+    automatically for every deployment (Preview and Production alike;
+    documented in `docs/deployment/environment-variable-inventory.md`,
+    re-confirmed this phase by directly building+starting the app with
+    `NODE_ENV` left at its real, un-overridden value and observing the
+    log-transport line NEVER appears — §14/§17). Verified live this
+    phase (not merely read): a real production build with no
+    `RESEND_API_KEY` produces `not_configured`, never a false `sent`.
+  - Delivery states remain exactly the three named in the brief: `sent`,
+    `failed`, `not_configured`. No new state was added to this type.
+
+CHANGE MADE: `EmailResult`'s `failed` variant's `provider` field was
+widened from the literal `"resend"` to `"resend" | "unknown"` — needed
+because the NEW error-boundary helper (§7) can now also report a
+`"failed"` result for a failure that happens BEFORE any Resend request
+is attempted (building the join URL) — using the literal `"resend"` for
+that case would have been inaccurate. This is the only change to this
+file.
+
+VERDICT: sound as designed; one accurate, minimal type widening.
+
+====================================================================
+5. INVITE EMAIL TEMPLATE
+====================================================================
+
+`src/lib/email/driver-invite-email.ts` — reviewed, UNCHANGED.
+
+  - Organization name: dynamic (`organizationName` parameter), used in
+    both the subject and the opening sentence of the body.
+  - Recipient email: supplied by the caller from the invite's own
+    IMMUTABLE `email` column (both call sites pass `data.email`/
+    `invite.email` read from the database, never a client-supplied
+    value) — confirmed by reading both call sites in `actions.ts`.
+  - Join URL: `/join/<token>`, built exclusively by
+    `buildDriverInviteUrl` (§6) — confirmed the string `/auth/confirm`
+    does not appear anywhere in this file.
+  - Internal implementation detail exposure: none — no organization id,
+    driver id, stack trace, or provider name appears in the email
+    content.
+  - Wording does not imply the account already exists: the body reads
+    "...has invited you to join their driver team. Use the secure link
+    below to create your account and accept the invitation" — this
+    correctly frames account creation as a pending step, not a fact.
+  - HTML/plain-text safety: every interpolated value in the HTML body
+    (`organizationName`, `recipientEmail`, `joinUrl`) is passed through
+    `escapeHtml`/`escapeAttr` before being placed in markup — confirmed
+    by reading the function; an organization name containing `<`, `&`,
+    or `"` cannot break the HTML structure or inject markup. The
+    plain-text body needs no such escaping (it is never interpreted as
+    markup).
+  - Hard-coded product identity flagged (NOT changed — this phase does
+    not perform the Nemryn rebrand):
+      * The HTML/text footer line "Sent by Zenward Mobility on behalf of
+        {Organization Name}" hard-codes "Zenward Mobility" as the
+        PLATFORM sender identity. This is already correctly isolated —
+        only this one string needs to change to "Nemryn" (or whatever
+        the eventual platform sender name is) at rebrand time; nothing
+        else in this file needs to change.
+      * `src/lib/email/send.ts`'s `fromAddress()` fallback default,
+        `"Zenward Mobility <no-reply@zenwardmobility.com>"`, is the same
+        kind of platform-identity string — used only when `EMAIL_FROM`
+        is unset, so it should never actually appear in a real send once
+        step 4 of the production checklist (§18) is done, but is worth
+        the same one-line update at rebrand time.
+      * Worth noting for whoever does the rebrand: because the CURRENT
+        first tenant is itself named "Zenward Mobility," a real send
+        today for that specific tenant would literally read "Sent by
+        Zenward Mobility on behalf of Zenward Mobility" — accurate but
+        visually redundant. This is a cosmetic observation, not a defect,
+        and not something this phase's brief asked to be fixed (it asked
+        only to flag hard-coded identity, not to edit copy).
+
+VERDICT: sound as designed. Two hard-coded platform-identity strings
+flagged for the (separate, not-yet-authorized) rebrand; neither changed.
+
+====================================================================
+6. APP URL GENERATION
+====================================================================
+
+`src/lib/app-url.ts` — reviewed, CHANGED (the one substantive fix this
+phase made). Split into two files:
+
+  - `src/lib/app-url-core.ts` (NEW) — two pure functions,
+    `resolveConfiguredOrigin` and `isLoopbackOrigin`, with NO
+    `server-only`/`next/headers` import, specifically so they are
+    directly unit-testable with plain Node.
+  - `src/lib/app-url.ts` (rewritten to be a thin wrapper) — still
+    `server-only`, still exports the same `getAppOrigin`/
+    `buildDriverInviteUrl` functions with the same signatures; every
+    existing call site (`src/app/operations/drivers/actions.ts`) needed
+    NO change to keep using it.
+
+BEHAVIOR VERIFIED for the exact malformed-URL cases the brief named,
+via `new URL()` normalization rather than string concatenation:
+
+  LOCAL (`NEXT_PUBLIC_APP_URL=http://localhost:3000`): unchanged —
+    resolves to `http://localhost:3000`, confirmed by unit test and by
+    live use throughout this phase's own integration testing.
+  PRODUCTION (`NEXT_PUBLIC_APP_URL=https://app.zenwardmobility.com`):
+    unchanged — resolves to `https://app.zenwardmobility.com`, confirmed
+    by unit test.
+  Double slash (`https://x.com//`): now stripped — `.origin` never
+    carries a trailing slash, so `/join/<token>` can never become
+    `//join/<token>`. Verified by unit test.
+  Missing protocol (`app.zenwardmobility.com`, no scheme): now rejected
+    — `new URL()` throws for a bare hostname; treated as "not usably
+    configured" (falls back to the request's own forwarded host) rather
+    than silently building a schemeless, broken link. Verified by unit
+    test.
+  Unexpected pathname joining (`https://x.com/some/base`): now
+    impossible — `.origin` is scheme+host+port only, so a stray path in
+    the configured value can never leak into the built link. Verified by
+    unit test.
+  `localhost`/`127.0.0.1`/`[::1]` reaching a real deployment: NEW guard —
+    `getAppOrigin()` now throws if `NODE_ENV === "production"` AND the
+    resolved origin is a loopback address, rather than silently emailing
+    an unreachable link to a real driver. Verified LIVE — see §16 for the
+    crash this initially caused and the fix for it.
+
+`NEXT_PUBLIC_APP_URL` confirmed used ONLY as a public origin value for
+building a link — it plays no role in any authentication or
+authorization decision anywhere in the codebase (confirmed by reading
+every one of its 2 call sites: the module-level Server Action files and
+`app-url.ts`/`app-url-core.ts` themselves; no RLS policy, RPC, or guard
+function reads it).
+
+`app.nemryn.com` was not created and is not referenced anywhere.
+
+FOCUSED TESTS ADDED (§13): `src/lib/app-url-core.test.mjs`, 15 cases,
+run via `node --test` / `npm test` (new `package.json` script, zero new
+dependencies). One genuine bug was found and fixed by this suite before
+it was trusted (§16, item 2).
+
+====================================================================
+7. CREATE INVITE ACTION
+====================================================================
+
+`createDriverInviteAction` (`src/app/operations/drivers/actions.ts`) —
+reviewed; ONE fix applied (the try/catch boundary, shared with the
+resend action — see §16).
+
+  - Caller must be authenticated: `requireOperationsAccess(pathname)` —
+    unchanged, calls `requireUser` internally, redirects otherwise.
+  - Caller organization comes from server-resolved context:
+    `organization.organizationId`/`organization.organizationName`,
+    produced entirely server-side by `resolveOrganizationContext()` —
+    confirmed no form field or client value is read for this purpose.
+  - Caller has the required `organization_admin` role: enforced twice —
+    the RPC's own `has_org_role` check (the actual boundary, returns
+    `ZW002` for a Dispatcher) AND `requireOperationsAccess`'s own role
+    gate (UX-level, unchanged).
+  - RPC returns the token server-side: `data.token`, read directly from
+    the RPC result — confirmed by reading the code — and used ONLY to
+    build the email link; never assigned to any field of the object this
+    action returns to the browser.
+  - Database success and email-delivery success are represented
+    separately: `DriverInviteActionState` carries `invite` (the DB
+    result) and `delivery` (the email result) as two independent
+    optional fields — confirmed by reading the interface and every
+    return statement; there is no code path where `delivery` is set to
+    `"sent"` without `sendEmail` (via the new `deliverDriverInviteEmail`
+    wrapper) having actually reported `sent`.
+  - Database row remains valid if delivery fails: confirmed — the RPC
+    call and the email-send are sequential, independent steps; nothing
+    rolls back the already-committed `driver_invites` row if the email
+    step fails or throws (verified live, §14/§16).
+  - UI never says "Invite sent" when the email was not actually sent:
+    confirmed by reading `InviteDriverDialog.tsx` (unchanged this phase)
+    — the dialog title/body branch strictly on `state.delivery ===
+    "sent"`.
+
+CHANGE MADE: the direct `sendEmail(buildDriverInviteEmail({...
+joinUrl: await buildDriverInviteUrl(...) }))` call sequence was
+extracted into `deliverDriverInviteEmail(...)`, wrapped in a try/catch
+that reduces ANY thrown error (from `buildDriverInviteUrl`/
+`getAppOrigin`, present before AND after this phase's own hardening —
+this was a pre-existing gap, not something this phase introduced) to the
+same `EmailResult` shape `sendEmail` itself already returns for a
+provider failure. `createDriverInviteAction` now calls this one helper
+instead of the raw sequence; its own logic (the `delivery`/`toDelivery`
+mapping, the return shape) is otherwise unchanged.
+
+No tenant/security regression: the fix touches only how a THROWN error
+is converted into an already-existing result shape — it does not change
+who may call the action, what organization it acts on, or what is
+returned to the browser.
+
+====================================================================
+8. RESEND INVITE ACTION
+====================================================================
+
+`resendDriverInviteAction` (`src/app/operations/drivers/actions.ts`) —
+reviewed; same shared fix as §7, no other change.
+
+  - Authenticated `organization_admin` only: `requireOperationsAccess`
+    + an explicit `organization.role !== "organization_admin"` early
+    return. Confirmed live: a Dispatcher never even sees the resend
+    control (it renders only inside the admin-only Pending Invites
+    panel) — §14 item 2.
+  - Invite must belong to the caller's resolved organization: enforced
+    TWICE, independently:
+      1. Application layer — `invite.organization_id !==
+         organization.organizationId` → `{ status: "error" }`.
+      2. Database/RLS layer — the `.select(...).eq("id", inviteId)` call
+         goes through `driver_invites_select_org_admin`
+         (`has_org_role(organization_id, ['organization_admin'])`); a
+         cross-tenant admin's session simply cannot see a foreign
+         invite's row at all, so `invite` is `null` regardless of
+         whether check #1 above even exists. Verified LIVE this phase
+         via a direct, unmodified PostgREST request as an Org B admin
+         for Org A's invite id — `[]`, zero rows (§14 item 3b). This
+         means even a future accidental removal of check #1 would NOT
+         open a cross-tenant hole — RLS is the real backstop, and the
+         application check is defense-in-depth on top of it, not the
+         sole guard.
+  - Pending invites only: `invite.status !== "pending"` → error.
+    Verified LIVE against a genuine race (an invite that became
+    `accepted`/`revoked` in the database AFTER the page rendered the
+    resend button but BEFORE the click was processed) — the action
+    correctly rejects both, dispatches no email, and leaves the row's
+    status untouched (§14 items 5/6).
+  - Recipient cannot be changed: the function signature is
+    `resendDriverInviteAction(inviteId: string)` — there is no parameter
+    through which a different email address could ever be supplied; the
+    address used is always `invite.email`, read from the database row.
+    Verified live: the resent email's `to` field matched the ORIGINAL
+    invite address exactly (§14 item 4d).
+  - Existing token stays server-side: `invite.token` is read from the
+    database and passed only into `buildDriverInviteUrl` — never
+    returned in `ResendInviteState`. Confirmed by reading the interface
+    (`{ status: "idle" | "sent" | "failed" | "not_configured" | "error"
+    }` — no `token` field exists) and live, by inspecting the full
+    rendered page DOM after a resend for the literal token string
+    (absent).
+  - No new `driver_invites` row is created: the function performs ZERO
+    inserts/updates — confirmed by reading it (only a `.select()` and
+    calls into `sendEmail`) and live (row count unchanged before/after
+    resend, §14 item 4e).
+  - Resend does not mutate organization identity: no `UPDATE` of any
+    kind is issued by this function at all.
+  - Revoked/accepted/invalid state handled safely: see "pending invites
+    only" above — both non-pending states are rejected identically, with
+    no distinct error message that would let a caller distinguish
+    "revoked" from "accepted" from "doesn't exist" (matches this
+    codebase's own "no existence oracle" discipline used everywhere
+    else, e.g. `redeem_driver_invite`'s own wrong-email handling).
+
+WHY resend reuses the existing token rather than rotating it (per the
+brief's explicit request to document this): rotating the token on resend
+would invalidate any copy of the link the invitee might already have
+(an open tab, a forwarded email) for no security benefit — the token's
+security property is "unguessable and valid only while the invite is
+`pending`," not "single-use-per-email-sent." Resend is deliberately a
+ZERO-database-write operation (by design, specifically to make "no
+duplicate row, no duplicate Membership/Driver" a structural guarantee
+rather than something to get right in application logic each time), and
+since it touches no row, it has no mechanism to rotate a token even if
+that were desired — re-inviting the SAME email through the ordinary
+Invite Driver dialog (which DOES call the RPC again) already exists as
+the separate, correct path for "I want a fresh token," via
+`create_driver_invite`'s own refresh-if-pending behavior.
+
+No security weakening was introduced to support resend — reviewed and
+confirmed unchanged from the prior session's own design.
+
+====================================================================
+9. DELIVERY STATE UI
+====================================================================
+
+`InviteDriverDialog.tsx` / `DriversPageClient.tsx` — reviewed, UNCHANGED
+in logic (both were already correct); UI text verified live for every
+required state:
+
+  INVITE RECORD CREATED + EMAIL SENT — dialog title "Invitation sent",
+    body "Sent an invitation to <email>." Verified live (§14 item 1a).
+  INVITE RECORD CREATED + EMAIL FAILED (provider error) — dialog title
+    "Invite created", body "...was created, but the invitation email
+    could not be sent. The invite is valid. Resend it from the Pending
+    Invites list...this does not create a duplicate." Verified live
+    against a real Resend 401 (§15).
+  EMAIL NOT CONFIGURED — same "Invite created" framing, with the
+    additional clause "— email delivery is not configured for this
+    environment" appended. Verified live against a genuine production
+    build with no `RESEND_API_KEY` at all (§14 item, corrected run in
+    §16) — no secret, no configuration detail beyond the fact that none
+    is set, is shown.
+  RESEND SUCCESS — inline `role="status"` notice "Invitation re-sent to
+    <email>." Verified live (§14 item 4c).
+  RESEND FAILURE — inline notice "Couldn't re-send the invitation. Try
+    again shortly." (for a provider failure) or "Email delivery isn't
+    configured for this environment." (for not-configured) — neither
+    exposes the invite token, a provider error code, or any secret.
+    Verified live that no token appears anywhere in the rendered page in
+    every one of these states (§14 item 1c performed the strongest
+    version of this check — full DOM scan for the literal token string).
+
+VERDICT: sound as designed; no change needed.
+
+====================================================================
+10. SECURITY REVIEW
+====================================================================
+
+Checklist from the phase brief's "NON-NEGOTIABLE SECURITY" section,
+each independently re-verified this phase (not assumed from the prior
+session's own claims):
+
+  Invite tokens exposed to the browser? NO — confirmed by reading every
+    return-type/return-statement in `actions.ts` (§7/§8) and live, by
+    scanning the full rendered DOM for the literal token after both
+    create and resend (§14 item 1c).
+  RESEND_API_KEY exposed? NO — server-only module, non-`NEXT_PUBLIC_`
+    name, never logged (§4), confirmed absent from the production
+    JavaScript bundle by construction (a `server-only` import cannot
+    reach a client bundle without failing the build).
+  Privileged values in `NEXT_PUBLIC_*`? NO — `NEXT_PUBLIC_APP_URL` is
+    the only `NEXT_PUBLIC_*` variable this feature reads, and it is a
+    location string, not a credential (§6).
+  Supabase service-role credentials used? NO — grep for
+    `service_role`/`SUPABASE_SERVICE`/`createAdminClient` across the
+    changed and new files: zero matches. The one `service_role` REST
+    key used ANYWHERE in this phase was in this phase's OWN throwaway
+    test scripts (never committed, scratch-only) reading fixture data
+    for verification — and even that key was denied SELECT on
+    `driver_invites` by the table's own grants when tried in an earlier
+    phase's testing, independently confirming the table has no
+    service-role-shaped hole either.
+  RLS weakened? NO — zero `.sql` files touched this phase (§11/§16 —
+    317/317 assertions unchanged).
+  `organization_id` accepted from the client as authorization? NO — the
+    RPC derives it from the server-resolved context
+    (`organization.organizationId`); the resend action independently
+    re-checks the row's own `organization_id` against that SAME
+    server-resolved value (§8) — never a client-supplied field.
+  Resend action changes the recipient? NO — structurally impossible
+    (§8) and verified live.
+  Cross-tenant invite resend? NO — denied at both the application layer
+    and, independently, at the RLS layer (§8), verified live via a
+    direct, unmodified REST request (§14 item 3b).
+  Auth user created on behalf of the invitee? NO —
+    `supabase.auth.admin.inviteUserByEmail` is not used anywhere (§2);
+    the invitee still creates their own account via ordinary
+    `supabase.auth.signUp()`, unchanged.
+  Invite tokens logged? NO — confirmed by reading every `console.*`
+    call site touching this feature (§4/§7); the new error-boundary
+    helper's own catch block logs only `cause.message`/a generic string,
+    never the token value passed into it.
+  Email API secrets logged? NO — same review; `RESEND_API_KEY` never
+    appears in any log statement in this codebase.
+
+No security regression was found or introduced. The one code change
+this phase made (§6/§7/§16) makes the system MORE conservative
+(refuses to build a link under a specific misconfiguration) and fixes
+an availability bug (a crash) that the addition of that conservatism
+itself briefly introduced and this phase then closed within the same
+review — net effect: strictly safer than the code this phase started
+from, with no new exposure of any kind.
+
+====================================================================
+11. TENANT-ISOLATION REVIEW
+====================================================================
+
+Re-verified independently this phase, not assumed from §10 alone:
+
+  - `create_driver_invite`'s tenant boundary: unchanged RPC, re-verified
+    via `operator_onboarding_tests.sql` INVITE-4 (foreign-org admin
+    cannot invite into a different org) — PASS, part of the unmodified
+    317-assertion baseline (§16).
+  - `resendDriverInviteAction`'s tenant boundary: NEW application logic
+    this phase specifically targeted with a live test not present in
+    the SQL suite (because the SQL suite cannot test what a TypeScript
+    Server Action returns) — a direct PostgREST SELECT by an Org B
+    admin's own real session, for Org A's own invite row id, returned
+    zero rows (§14 item 3b) — the exact condition
+    `resendDriverInviteAction` depends on to reject a cross-tenant call.
+  - Dispatcher-vs-admin boundary for invite creation: unchanged RPC,
+    re-verified via INVITE-5 — PASS — AND confirmed live that the UI
+    control itself is absent for a Dispatcher session (§14 item 2), so
+    there is no path — UI or direct action call — through which a
+    Dispatcher could even attempt it.
+
+No cross-tenant path was found, structurally or live, for either the
+pre-existing invite-creation flow or the new resend flow.
+
+====================================================================
+12. TOKEN-EXPOSURE REVIEW
+====================================================================
+
+Every place a token could theoretically leak was checked:
+
+  - `createDriverInviteAction`'s return value: `DriverInviteActionState`
+    — no `token` field exists in the type; no return statement
+    constructs one. Verified by static reading AND live DOM inspection
+    (§14 item 1c) — the actual token value (fetched independently via a
+    direct database query, not from the app) does not appear anywhere in
+    the fully-rendered page after a successful invite.
+  - `resendDriverInviteAction`'s return value: `ResendInviteState` — same
+    check, same result — no `token` field, confirmed absent from the
+    rendered page after a resend.
+  - Server-side logs: the token is never passed to `console.*` anywhere
+    in `actions.ts`, `send.ts`, or `driver-invite-email.ts` — confirmed
+    by reading every log call site; only invite IDs (already
+    UI-visible, non-secret identifiers) and generic failure strings are
+    logged.
+  - The email itself: the token appears exactly once, inside the
+    `/join/<token>` URL, which is the INTENDED destination — this is not
+    a leak, it is the mechanism (the token is meant to reach the
+    invitee, and only the invitee, via their own inbox).
+  - The `driver_invites.token` column's RLS exposure: unchanged — an
+    Organization Admin can SELECT their own org's invite tokens (needed
+    for the resend feature to function at all); this is not a new
+    exposure and was already true before this phase (the admin who
+    created the invite already legitimately knows/controls it).
+
+No token exposure to the browser, to logs, or across tenants was found.
+
+====================================================================
+13. TESTS ADDED
+====================================================================
+
+  src/lib/app-url-core.test.mjs (NEW) — 15 focused unit tests against
+  the real, actual `resolveConfiguredOrigin`/`isLoopbackOrigin`
+  functions (not mocks) — clean URLs, single/double trailing slash,
+  accidental path/query, missing scheme, non-http(s) scheme, blank/
+  null/undefined input, IPv6/IPv4/hostname loopback detection, a
+  false-positive-substring guard ("notlocalhost.example.com" must NOT be
+  flagged), and two end-to-end shape checks simulating exactly what
+  `buildDriverInviteUrl` produces. Run via `node --test
+  src/lib/app-url-core.test.mjs` or `npm test` (new script, see §20).
+  Zero new dependencies — Node's own built-in test runner.
+
+  This is genuinely testable, real-assertion coverage — not "mocks
+  against mocks": every test calls the actual production code path with
+  a real input string and asserts on the actual output.
+
+Deliberately NOT added as a "unit test" (and why): the tenant/
+authorization/token-exposure guarantees named in the brief's §10
+checklist mostly cannot be meaningfully unit-tested in isolation — they
+depend on `next/headers`'s request-scoped `cookies()`/`headers()`
+(which throw outside a real request) and on RLS, which only exists in
+the running database. These were instead verified as LIVE,
+non-destructive integration checks against the local Supabase stack
+(§14) — the same methodology this codebase's own `.sql`/`.sh` test
+suite already uses for equivalent database-layer guarantees, extended
+here to the application layer specifically because that is where the
+NEW code (resend, the error-boundary fix) lives. This matches the
+brief's own instruction to reuse existing test infrastructure and avoid
+fake tests: every one of the 33 live checks in §14 asserts on a REAL
+outcome — a real rendered page, a real database row, a real direct
+REST response, or a real server log line — not a mock.
+
+====================================================================
+14. TESTS RUN
+====================================================================
+
+Static / build:
+  npx tsc --noEmit
+  npm run lint
+  npm run build  (run twice more deliberately, with different
+    `NEXT_PUBLIC_APP_URL` values baked in, to exercise §16's finding —
+    see below)
+  npm test  (new — node --test src/lib/app-url-core.test.mjs)
+
+SQL suites (docker exec psql, after `supabase db reset`, all 22 files
+in `supabase/tests/*.sql`) + both concurrency scripts (§16/§17).
+
+Live integration (Next dev/prod server against the local Supabase
+stack, Chrome via CDP at a desktop viewport, non-destructive, seed/
+fixture accounts only):
+
+  1. Happy path + negatives (dev server, log-email-transport):
+     18 checks — invite creation with honest success reporting, token
+     never in the rendered DOM, Dispatcher sees no invite control,
+     cross-tenant invisibility (UI AND direct REST), resend happy path
+     (recipient/no-DB-mutation), resend against a since-accepted invite
+     (race simulation), resend against a since-revoked invite (race
+     simulation).
+  2. Provider-failure path (dev server, deliberately invalid
+     `RESEND_API_KEY` — a real HTTP 401 from Resend's own API): 7
+     checks — honest failure state, no leaked secret/error, invite row
+     preserved and still pending.
+  3. `not_configured` path (real production build + `next start`, zero
+     `RESEND_API_KEY`, a non-loopback `NEXT_PUBLIC_APP_URL` so the NEW
+     loopback guard doesn't mask this specific path): 4 checks.
+  4. The loopback-in-production guard itself, deliberately reproduced
+     (real production build with `NEXT_PUBLIC_APP_URL` pointed at
+     `localhost`): 4 checks — including the specific regression this
+     phase found and fixed (§16).
+
+Total live integration checks: 33.
+
+Production email (a real send to a real inbox) was explicitly NOT
+attempted — no `RESEND_API_KEY` exists in this environment, and the
+phase brief explicitly says not to send test email to arbitrary real
+addresses. All email-path testing used the codebase's own local "log"
+transport (console output, inspected directly) or a deliberately invalid
+key (to exercise the real Resend HTTP failure path without needing a
+valid account).
+
+====================================================================
+15. TEST RESULTS
+====================================================================
+
+  npx tsc --noEmit ......................... PASS (0 errors)
+  npm run lint .............................. PASS (0 errors; 14
+      warnings, ALL pre-existing, ALL confined to untracked
+      `.tmp-qa/*.mjs` scratch scripts — none in any file this phase
+      touched)
+  npm run build ............................. PASS (every build run
+      this phase — default env, corrected non-loopback env, and the
+      deliberately-misconfigured loopback env — all compiled cleanly;
+      the loopback case fails only at RUNTIME, inside the Server
+      Action, exactly as designed, never at build time)
+  npm test (node --test src/lib/app-url-core.test.mjs) .... 15/15 PASS
+      (1 genuine bug found mid-phase — IPv6 loopback bracket handling —
+      fixed in the same test/code cycle, see §16 item 2)
+
+  Live integration — happy path + negatives ................ 18/18 PASS
+  Live integration — provider failure (real Resend 401) .... 7/7 PASS
+  Live integration — not_configured (real production build) 4/4 PASS
+  Live integration — loopback-in-production guard .......... 4/4 PASS
+                                                    TOTAL: 33/33 PASS
+
+  SQL suites (22 files, clean DB, single run each) ......... 317/317
+      PASS, 0 FAIL — byte-for-byte the same total as the P0-S1 baseline
+  Concurrency (real two-process races) ...................... 2/2 PASS
+      (mutation_concurrency_test.sh, driver_invite_concurrency_test.sh)
+
+No test was skipped, weakened, or given a false PASS. No RLS test's
+expectation was edited to make anything pass — none needed to be, since
+no RLS/migration file was touched.
+
+====================================================================
+16. RLS REGRESSION
+====================================================================
+
+Expected (per the brief): 317 SQL assertions remain passing unless
+legitimate new tests increase the count. RESULT: exactly 317/317, 0
+FAIL — the identical total recorded in the P0-S1 audit report, run
+against a freshly reset database, twice during this phase (once before
+any code change, once after every change described in this report).
+
+No RLS test's expected outcome was edited. No policy, migration,
+SECURITY DEFINER function, or grant was modified — confirmed by `git
+status`/`git diff` showing zero touched files under `supabase/` at any
+point this phase (§23).
+
+THE ONE GENUINE DEFECT FOUND AND FIXED THIS PHASE (documented in full
+here since it is this report's most substantive finding):
+
+  1. **The crash.** While deliberately testing the `not_configured`
+     delivery state against a real production build, the actual result
+     was an uncaught exception — the whole `/operations/drivers` page
+     crashed with Next.js's generic "This page couldn't load / A server
+     error occurred" screen, not the intended graceful failure message.
+     Root cause: this phase's OWN new `getAppOrigin()` guard (refusing a
+     loopback origin in production) fired because the specific local
+     production build under test had `NEXT_PUBLIC_APP_URL` baked in as
+     `http://localhost:3000`/`:3100` (from `.env.local`, since
+     `NEXT_PUBLIC_*` values are inlined at BUILD time, not read at
+     server-start time — a genuine, easy-to-repeat operational fact
+     worth remembering for anyone testing this feature locally against
+     a production build) — and NEITHER Server Action caught the
+     resulting throw. This exact gap ALREADY existed before this
+     phase's own change too (the pre-existing "cannot determine the
+     application origin at all" throw was equally uncaught) — this
+     phase's own hardening is simply what made the gap reachable in
+     testing, not what created it.
+  2. **The fix.** `deliverDriverInviteEmail(...)` (§7) — a small
+     try/catch wrapper around URL-building + sending, shared by both
+     Server Actions, reducing ANY thrown error to the same `EmailResult`
+     shape a provider failure already produces. Verified this actually
+     works by rebuilding with the SAME misconfigured
+     (`NEXT_PUBLIC_APP_URL=http://localhost:3000`) value and confirming
+     the page no longer crashes — it now shows the honest "Invite
+     created...could not be sent" state, with the invite row preserved,
+     exactly like every other failure mode (§14 item 4).
+  3. **The unit-test bug.** While writing `app-url-core.test.mjs`, a
+     test asserting `isLoopbackOrigin("http://[::1]:3000")` initially
+     FAILED against the real implementation — `URL#hostname` renders an
+     IPv6 literal with its brackets included (`"[::1]"`, not `"::1"`),
+     which the first version of `isLoopbackOrigin` didn't account for.
+     Fixed in one line (checking both forms). This is exactly the kind
+     of thing a real, non-mock unit test exists to catch, and it did.
+
+None of the three items above touches RLS, a migration, or the tenancy
+model — all three are application-layer (`src/lib/app-url*.ts`,
+`src/app/operations/drivers/actions.ts`) and covered by the regression
+totals above (317/317 unchanged) plus the new/live tests in §13-§15.
+
+====================================================================
+17. CONCURRENCY REGRESSION
+====================================================================
+
+Both pre-existing real two-process concurrency tests re-run this phase,
+after every code change, on a freshly reset database:
+
+  mutation_concurrency_test.sh — PASS. Session B genuinely blocked
+    ~1.85s on the real Trip row lock, then correctly saw Session A's
+    already-committed assignment and was rejected with
+    `assignment_conflict` — no double-assignment.
+  driver_invite_concurrency_test.sh — PASS. Two real, separate sessions
+    raced to redeem the SAME invite token; genuine ~1.8-1.9s lock
+    contention observed; exactly one Driver row and one Membership row
+    resulted regardless of which session's transaction actually won.
+
+Neither test's expected outcome, fixture data, or timing assumption was
+modified. This phase's own changes (§6/§7) do not touch
+`redeem_driver_invite` or any locking behavior at all — these results
+were expected to be, and were, identical to the P0-S1 baseline.
+
+====================================================================
+18. HUMAN PRODUCTION CONFIGURATION REQUIRED
+====================================================================
+
+Documented in full, with no secret values, in the new
+`docs/deployment/driver-invite-email-production-checklist.md` (§19).
+Summary of what a human must still do, none of which this phase
+performed or could safely perform:
+
+  1. Create/verify a Resend account.
+  2. Verify a sending domain in Resend (DNS records on that domain).
+  3. Set `RESEND_API_KEY` in Vercel → Production (sensitive).
+  4. Set `EMAIL_FROM` in Vercel → Production.
+  5. Confirm `NEXT_PUBLIC_APP_URL = https://app.zenwardmobility.com`
+     for Production — and remember it is BUILD-time inlined, so a fresh
+     deployment is required after setting/changing it (this phase's own
+     testing directly encountered this fact — see §16).
+  6. Confirm those values are applied to an actual new deployment.
+  7. Send one real invite to a developer-controlled mailbox.
+  8-15. Verify sender/subject/delivery, open the link, complete signup,
+     verify exactly-once Driver/Membership/organization/invite-status,
+     per the checklist's own numbered steps (mirrors the full lifecycle
+     already proven locally in §14, now to be reproduced once for real).
+
+====================================================================
+19. FILES CREATED
+====================================================================
+
+  src/lib/app-url-core.ts
+  src/lib/app-url-core.test.mjs
+  docs/deployment/driver-invite-email-production-checklist.md
+  docs/reports/p0-s2a-driver-invite-remediation-validation.txt (this file)
+
+====================================================================
+20. FILES MODIFIED
+====================================================================
+
+  src/lib/app-url.ts — rewritten as a thin wrapper around the new
+    `app-url-core.ts`; behavior for every previously-valid input is
+    unchanged; adds the missing-scheme/double-slash/pathname-stripping
+    normalization and the production-loopback guard (§6).
+  src/lib/email/send.ts — one type widening only (`EmailResult`'s
+    `failed.provider` gains `"unknown"` alongside `"resend"`) (§4).
+  src/app/operations/drivers/actions.ts — adds the
+    `deliverDriverInviteEmail` try/catch helper; both
+    `createDriverInviteAction` and `resendDriverInviteAction` now call
+    it instead of the raw build-then-send sequence; no other logic
+    changed (§7/§8/§16).
+  package.json — adds one `"test"` script
+    (`node --test 'src/**/*.test.mjs'`); no dependency added or changed.
+  docs/product/driver-invite-linkage-model.md — one paragraph appended
+    to the existing §5 "what was deliberately not built" note,
+    confirming the resend-cooldown deferral reasoning and recording this
+    phase's app-url hardening; nothing removed or rewritten.
+
+NOT modified this phase (reviewed and left exactly as found):
+  .env.example
+  docs/deployment/environment-variable-inventory.md
+  src/components/operations/drivers/DriversPageClient.tsx
+  src/components/operations/drivers/InviteDriverDialog.tsx
+  src/lib/email/driver-invite-email.ts
+  Any `supabase/migrations/*`, `supabase/config.toml`, or `.sql` file.
+
+====================================================================
+21. REMAINING BLOCKERS
+====================================================================
+
+ 1. (Blocks real production delivery only, not this phase's own
+    completeness) No Resend account/API key/verified sender domain
+    exists anywhere this review had access to. Genuinely cannot be
+    resolved by code — a human action, fully specified in §18/§19's
+    checklist.
+ 2. (Deferred by explicit instruction, not overlooked) No server-side
+    resend cooldown/throttle. A safe, PERSISTENT version needs either a
+    `driver_invites` timestamp column (a migration — out of scope this
+    phase) or an external store neither present nor introduced. An
+    in-memory per-process cooldown was considered and rejected as unsafe
+    (false confidence across Vercel's multiple/serverless instances).
+ 3. (Unrelated, explicitly out of scope) Password reset still does not
+    exist — unchanged from the P0-S1 finding; this phase was explicitly
+    told not to build it.
+ 4. (Unrelated, explicitly out of scope) The Nemryn rebrand — two
+    hard-coded "Zenward Mobility" platform-identity strings are flagged
+    in §5 for that future, separately-authorized phase; neither was
+    touched here.
+
+None of the above is a security, tenancy, or RLS blocker.
+
+====================================================================
+22. PRODUCTION READINESS DECISION
+====================================================================
+
+READY FOR HUMAN CONFIGURATION + DEPLOY AUTHORIZATION
+
+The application code is reviewed, minimally corrected (one real bug
+found and fixed, with a regression test now guarding it), and verified
+end to end against the local stack — including the negative cases, the
+race conditions, both failure states, and the one crash this phase's own
+testing surfaced and closed. RLS, tenant isolation, and concurrency
+behavior are unchanged and re-confirmed at the full 317/317 + 2/2
+baseline. Nothing further can be validated without a real Resend
+credential, which this review does not have and was not authorized to
+create. The next step is exactly §18/§19: a human configures Resend +
+Vercel per the checklist, then authorizes the commit/push/deploy this
+phase deliberately did not perform.
+
+====================================================================
+23. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   .env.example
+    modified:   docs/deployment/environment-variable-inventory.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   package.json
+    modified:   src/app/operations/drivers/actions.ts
+    modified:   src/components/operations/drivers/DriversPageClient.tsx
+    modified:   src/components/operations/drivers/InviteDriverDialog.tsx
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/
+    docs/deployment/driver-invite-email-production-checklist.md
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt
+    docs/reports/p0-s2a-driver-invite-remediation-validation.txt
+    src/lib/app-url-core.test.mjs
+    src/lib/app-url-core.ts
+    src/lib/app-url.ts
+    src/lib/email/
+
+  git diff --stat:
+    .env.example                                       |  19 ++-
+    docs/deployment/environment-variable-inventory.md  |  23 ++--
+    docs/product/driver-invite-linkage-model.md        |  66 +++++++-
+    package.json                                       |   3 +-
+    src/app/operations/drivers/actions.ts              | 144 +++++++++++++--
+    src/components/operations/drivers/DriversPageClient.tsx | 60 ++++--
+    src/components/operations/drivers/InviteDriverDialog.tsx | 34 +++-
+    7 files changed, 299 insertions(+), 50 deletions(-)
+
+Nothing was staged. Nothing was committed. Nothing was pushed. No pull
+request was created. No deploy was triggered. No Vercel, Resend, DNS, or
+Supabase configuration was changed.
+
+====================================================================
+END OF REPORT
+====================================================================

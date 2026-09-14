@@ -1,0 +1,1457 @@
+====================================================================
+PHASE:    P0-S1 — Platform Stabilization + Auth/Cloud Validation Audit
+DATE:     2026-09-11
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT BRANCH: main
+CURRENT COMMIT (HEAD, pushed to origin/main and deployed to production):
+          95cb329f7eb163da735808e445387b6c951a3645  "Fix production auth
+          email confirmation flow"
+WORKING TREE: NOT clean — see §32. Contains an uncommitted, unpushed,
+          UNDEPLOYED fix for the known driver-invitation-email defect
+          (from a prior local session), plus uncommitted Nemryn brand
+          documentation. Production currently runs HEAD (95cb329) ONLY —
+          none of the working-tree changes are live.
+MODE:     Read-only audit. No behavioral fix applied. No commit, no push,
+          no production/Supabase/Vercel/DNS mutation.
+====================================================================
+
+1. EXECUTIVE SUMMARY
+====================================================================
+
+The application's security-critical foundation — RLS, tenant isolation,
+server-derived authorization, and the core auth flows that exist — is
+in genuinely strong shape: every one of 17 business tables has RLS
+enabled, zero `USING (true)` policies exist, zero raw INSERT/UPDATE/
+DELETE grants bypass a SECURITY DEFINER RPC on any mutation-sensitive
+table, and 317 SQL assertions across 22 test files plus 2 real
+two-process concurrency tests all PASS on a freshly reset database (0
+FAIL, 0 ERROR). Four additional live, adversarial PostgREST requests
+(cross-tenant read, tampered organization_id filter, cross-tenant
+membership self-insert, unauthenticated read) were run directly against
+the local stack during this audit and all denied correctly.
+
+The KNOWN driver-invitation-email defect has a root cause that was
+ALREADY FOUND AND FIXED in this repository's own working tree, in an
+earlier local session — the fix is not yet committed, not pushed, and
+NOT deployed to production. Production (`app.zenwardmobility.com`,
+commit 95cb329) today still exhibits the original defect: inviting a
+driver creates the database row but sends no email. This audit traced
+the mechanism independently (§10) and confirms the working-tree fix's
+diagnosis is correct and the fix, as written, is architecturally sound
+— but per this phase's explicit instruction, no code was created or
+modified to advance it further; it is reported as found, not applied.
+
+Two real gaps were found that are NOT security defects but ARE genuine
+functional gaps: there is no Settings surface anywhere in the
+application (deliberately — the code explicitly refuses to ship a fake/
+dead link, so nothing 404s, but there is also nothing to configure), and
+there is no password-reset/forgot-password flow at all. Both are
+pre-existing, both are honestly represented in the UI (no broken
+promises), neither blocks the rebrand.
+
+tsc / lint / build all PASS with zero errors on the current working
+tree (lint warnings are 14, all pre-existing, all confined to untracked
+`.tmp-qa/*.mjs` scratch scripts, none in application code).
+
+REBRAND GO/NO-GO: CONDITIONAL GO (§26)
+REQUEST HUB GO/NO-GO: CONDITIONAL GO (§27)
+
+====================================================================
+2. REPOSITORY BASELINE
+====================================================================
+
+- Branch: `main`. Up to date with `origin/main` at push time; HEAD =
+  95cb329 (deployed to production per GitHub Deployments API, state
+  "success").
+- Framework: Next.js 16.3.3 (App Router, Turbopack), React 19.2.8,
+  TypeScript ^5, Tailwind CSS ^4 (`@tailwindcss/postcss`).
+- Package manager: npm (package-lock.json present; no yarn/pnpm lock).
+- Runtime: Node v24.14.0 / npm 11.9.0 (this environment).
+- Supabase client architecture: `@supabase/ssr` ^0.12.5 +
+  `@supabase/supabase-js` ^2.112.4. Exactly three call sites for the two
+  public env vars (`src/lib/supabase/env.ts` → `client.ts` [browser,
+  fresh instance per call], `server.ts` [Server Components/Actions/Route
+  Handlers, cookie-bound], `proxy.ts` [session-refresh middleware
+  equivalent]). No service-role client exists anywhere (confirmed by
+  direct grep — see §12).
+- Environment variables: 5 total + Next's built-in `NODE_ENV` — see §12.
+- Auth implementation: Supabase Auth (email+password), server-side
+  Server Actions (`signInAction`, `signUpAction`, `joinSignUpAction`),
+  an SSR email-confirmation Route Handler (`/auth/confirm`), and a
+  session-refresh proxy (`src/proxy.ts` → `src/lib/supabase/proxy.ts`,
+  Next 16's renamed `middleware.ts`).
+- Middleware/protected-route implementation: `src/proxy.ts` does
+  session-refresh ONLY (confirmed by reading it — no authorization
+  logic). Actual route protection is enforced in each protected area's
+  `layout.tsx` (`src/app/operations/layout.tsx`,
+  `src/app/driver/layout.tsx`, `src/app/onboarding/layout.tsx`), all
+  calling a `requireOperationsAccess`/`requireDriverAccess`/
+  `requireOnboardingAccess` guard in `src/lib/auth/authorization.ts`
+  BEFORE any child renders — server-side, not UI-only.
+- Organization/workspace model: `organizations` (tenant root) +
+  `memberships` (user_id, organization_id, role, status) is the entire
+  model. No separate "workspace" table — "workspace" is UI/brand
+  vocabulary layered on the `organizations` entity (per the Nemryn brand
+  docs already in this repo), not a second database concept.
+- Driver invitation implementation: `driver_invites` table + 4
+  SECURITY DEFINER RPCs (`create_driver_invite`, `revoke_driver_invite`,
+  `get_driver_invite_preview`, `redeem_driver_invite`) — traced in full
+  in §10.
+- Email/invite provider implementation: NONE wired in production
+  (nothing committed). A Resend-based implementation exists UNCOMMITTED
+  in the working tree (`src/lib/email/`) — see §10/§11.
+- Relevant migrations: 42 files, `supabase/migrations/`, chronologically
+  named and ordered, no duplicates or gaps found (§21).
+- Relevant RLS: 42 policies across 17 tables, all RLS-enabled, inventoried
+  in full in §15.
+
+Nothing here was assumed from older documentation — every claim above
+was re-verified directly this phase (file reads, greps, `pg_policies`/
+`pg_class` queries, live PostgREST calls) rather than carried over.
+
+====================================================================
+3. AUTH ARCHITECTURE
+====================================================================
+
+- `getUser()` (`src/lib/auth/session.ts`) calls `supabase.auth.getUser()`
+  — which re-validates the token against the Auth server — NOT
+  `getSession()`, which only decodes the local JWT. This is the secure
+  choice and is used consistently.
+- `requireUser()` redirects to `/sign-in?next=...` (validated by
+  `isSafeRedirectPath`/`safeRedirectPath`, an allowlist — not a
+  denylist — that rejects protocol-relative URLs, absolute URLs of any
+  scheme, backslashes, and any colon at all; see `src/lib/auth/
+  redirect.ts`).
+- `getActiveMemberships()` queries `memberships` filtered by
+  `.eq("user_id", user.id)` AND `.eq("status", "active")` — the
+  `user_id` filter is explicitly commented as load-bearing (not merely
+  defensive) because `memberships` also carries an ADDITIVE org-admin
+  "see my team" SELECT policy; omitting the filter would silently widen
+  results for an org_admin caller. This is a genuinely subtle, correctly
+  handled case.
+- `resolveOrganizationContext()` (`src/lib/auth/organization.ts`): 0
+  active memberships → `none`; 1 → auto-selected; >1 → requires the
+  `zw_org_context` cookie to match one of the caller's OWN live
+  memberships, else `select-required`. The cookie is re-validated
+  against a fresh `getActiveMemberships()` call every time — a value
+  that doesn't match is treated exactly like no cookie, never a foreign-
+  tenant grant.
+- Route guards (`requireOperationsAccess`, `requireOnboardingAccess`,
+  `requireDriverAccess`) all: require a user → resolve org context →
+  redirect `none` to `/complete-signup` → redirect `select-required` to
+  `/select-organization` → check role for THAT resolved organization
+  only. `requireDriverAccess` additionally calls the real
+  `driver_get_profile` RPC (never infers driver identity from
+  `Membership.role` alone) and returns a discriminated `link-missing`
+  state instead of redirect-looping.
+- Auth error vocabulary (`src/lib/auth/errors.ts`): a small, stable,
+  named set; `INVALID_CREDENTIALS` deliberately never distinguishes "no
+  such account" from "wrong password."
+
+====================================================================
+4. SIGN-IN AUDIT
+====================================================================
+
+- Form → `signInAction` (Server Action) → `supabase.auth.
+  signInWithPassword({ email, password })` (real Supabase Auth call,
+  confirmed by reading the action).
+- Failure → generic `AUTH_ERROR.INVALID_CREDENTIALS` message; the raw
+  Supabase error is discarded, never shown.
+- Success → `redirect(safeRedirectPath(nextRaw, "/"))`. `/` resolves the
+  real destination (role/org context) rather than duplicating that
+  resolution in the sign-in action itself.
+- Already-authenticated visitors hitting `/sign-in` are redirected to
+  `/` immediately (checked in `page.tsx` before rendering the form).
+- Tenant/workspace membership resolution happens downstream at `/`
+  (`resolveOrganizationContext`), not inside `signInAction` — deliberate,
+  documented design: a session can also be established WITHOUT ever
+  submitting this form (the email-confirmation-link path), so the
+  continuation logic lives at the one place ALL authenticated traffic
+  passes through.
+
+VERDICT: PASS. No behavioral issue found.
+
+====================================================================
+5. SIGN-UP AUDIT
+====================================================================
+
+- `signUpAction` (`src/app/sign-up/actions.ts`): validates
+  full name/email/password/business name → `supabase.auth.signUp()`
+  with `options.data = { pending_full_name, pending_business_name }`
+  (persisted on `auth.users.raw_user_meta_data`, independent of
+  confirmation state — plain intent data, never trusted as
+  authorization) → if a session already exists (confirmations
+  disabled), calls `signup_create_organization` directly; if not
+  (`needsEmailConfirmation: true`), returns without creating anything
+  yet.
+- The role granted (`organization_admin`) and the organization/
+  membership identity are derived entirely server-side inside the
+  SECURITY DEFINER RPC from `auth.uid()` — metadata never grants
+  privilege by itself.
+- Organization creation/joining: `signup_create_organization` (direct
+  path) or `complete_pending_signup()` (confirmation-boundary path, see
+  §6) — both SECURITY DEFINER, both idempotent via
+  `pg_advisory_xact_lock` keyed on the caller's own `auth.uid()`.
+- Post-confirmation redirect: `/complete-signup` → `/onboarding` for a
+  genuinely new org (`business_stage IS NULL`), else `/operations` or
+  `/driver`.
+
+VERDICT: PASS. Confirmed via SQL suite `operator_onboarding_tests.sql`
+(SIGNUP-1..6, SIGNUPCONT-1..8 — all PASS this run) and by direct code
+read.
+
+====================================================================
+6. EMAIL CONFIRMATION AUDIT
+====================================================================
+
+- Callback route: `src/app/auth/confirm/route.ts` — a Route Handler
+  (not a Server Component page, deliberately — an RSC redirect after an
+  internal await was found, in an earlier phase, to be silently dropped
+  by the browser under chained navigation).
+- Token handling: reads `token_hash`/`type` as ordinary query
+  parameters, calls `supabase.auth.verifyOtp({ type, token_hash })` on
+  the SERVER client — writes the real session cookie through the
+  established SSR cookie adapter — then redirects. `token_hash` is never
+  logged. Failure (missing params, bad/expired/used token) redirects to
+  `/auth/auth-code-error` with no Supabase error surfaced.
+- Redirect target is a FIXED internal path (`/complete-signup` on
+  success, `/auth/auth-code-error` on failure) — there is no caller-
+  suppliable redirect parameter anywhere in this route, so there is no
+  open-redirect surface to allowlist. (Verified live in a prior phase by
+  appending `&next=`/`&redirect_to=` query params — both were silently
+  ignored.)
+- Allowed redirect URLs / production hostname: governed by the HOSTED
+  Supabase project's Auth → URL Configuration (Site URL / Redirect
+  URLs), not by this repository's code. `docs/deployment/staging-auth-
+  configuration.md` and the prior N0-G0 phase reports document the
+  required Dashboard values; this audit did not re-verify the live
+  Dashboard state (no credential in this environment) — flagged as a
+  §25 dependency, not re-litigated here.
+- Localhost configuration: local-only. `supabase/config.toml`'s
+  `site_url = "http://localhost:3000"` (a documented, local-dev-only
+  Turbopack host-canonicalization workaround, ZD-203) has zero effect on
+  production, which has exactly one canonical host at all times.
+- Expired/invalid confirmation handling: `verifyOtp` failure → redirect
+  to `/auth/auth-code-error`, a calm, branded retry page ("This link has
+  expired... Sign in / Create your account again"), never a raw error.
+- Production route smoke test (read-only, this session):
+  `GET https://app.zenwardmobility.com/auth/confirm` (no params) →
+  `307` → `https://app.zenwardmobility.com/auth/auth-code-error`. The
+  route exists and behaves correctly in production today.
+
+VERDICT: PASS.
+
+====================================================================
+7. PASSWORD RESET AUDIT
+====================================================================
+
+FINDING: password reset / "forgot password" is NOT IMPLEMENTED anywhere
+in this application. Confirmed by:
+  - `grep -rliE "reset.?password|forgot.?password|resetPasswordForEmail|
+    recovery" src` — the only matches are `/complete-signup`'s own
+    unrelated "recovery form" (recovering a signup that never persisted
+    metadata, not a password), verified false-positive by reading each
+    match.
+  - No `/forgot-password`, `/reset-password`, or equivalent route exists
+    under `src/app`.
+  - No call to `supabase.auth.resetPasswordForEmail()` exists anywhere
+    in `src/`.
+  - `SignInForm`/`sign-in/page.tsx` contain no "Forgot password?" link.
+
+This is a genuine, pre-existing functional gap — not a regression, not
+a security defect (there is nothing broken; the capability simply does
+not exist), and consistent with this repository's own prior phase
+instructions ("DO NOT build password recovery in this phase") appearing
+repeatedly across earlier work. An operator who forgets their password
+today has no self-service path.
+
+VERDICT: FAIL (does not exist). Severity: P2 (operational blocker for
+any user who forgets a password — not a security or tenancy issue).
+
+====================================================================
+8. LOGOUT AUDIT
+====================================================================
+
+- `signOutAction` (`src/lib/auth/sign-out-action.ts`): calls
+  `supabase.auth.signOut()` (real Supabase session invalidation, not
+  merely clearing a UI cookie) → deletes the `zw_org_context` cookie →
+  `redirect("/sign-in")`.
+- Present and wired in BOTH shells: `AccountMenu` (Operations header,
+  `src/components/operations/AccountMenu.tsx`) and `DriverLayoutClient`
+  (Driver shell), plus the `/driver` "link-missing" fallback state
+  (`src/app/driver/layout.tsx`). Every authenticated shell has a real,
+  working Sign Out control — no dead-end authenticated state without an
+  exit.
+- After sign-out, the Supabase session cookie is invalidated server-
+  side; a subsequent request to any protected layout re-runs
+  `requireUser()`/`getUser()` (which re-validates against the Auth
+  server, not a cached JWT) and correctly redirects to `/sign-in`. Not
+  independently re-tested live this phase (no code change since the
+  prior phase's own live verification of this exact mechanism), but the
+  mechanism itself was re-read and confirmed unchanged.
+
+VERDICT: PASS.
+
+====================================================================
+9. SESSION AUDIT
+====================================================================
+
+- Session cookie management goes through `@supabase/ssr`'s standard
+  cookie adapter in three places (`server.ts`, `proxy.ts`, and the
+  browser client relies on the same underlying storage) — not
+  hand-rolled.
+- `src/proxy.ts` → `updateSession()` runs on every non-static request
+  (matcher excludes `_next/static`, `_next/image`, favicon, and image
+  extensions) and calls `supabase.auth.getUser()` to trigger a refresh
+  if the session is near expiry — this is what makes a browser refresh /
+  new tab / direct protected-route navigation continue to see a valid
+  session without every layout re-deriving it from scratch.
+- Direct protected-route navigation: enforced server-side (§3) — a
+  request that never touches `/sign-in` at all (e.g. a bookmarked
+  `/operations/drivers`) still passes through `requireOperationsAccess`
+  before any content renders.
+- Expired/invalid session: `getUser()` re-validates against the Auth
+  server every call; an expired/invalid token resolves to `user = null`,
+  and every guard treats that as "not authenticated" → redirect to
+  `/sign-in?next=...`.
+- The `zw_org_context` cookie itself carries no authority — it is a
+  REQUESTED selector only, re-validated against a live membership query
+  every time it's read (§3); a tampered/stale value degrades to "no
+  cookie," never a foreign-tenant grant.
+
+VERDICT: PASS (by code inspection; not independently re-run as a live
+browser session test this phase — the mechanism was exhaustively live-
+tested in the P1-E3-S1/P1-E4-S0A2 phases and is unchanged since).
+
+====================================================================
+10. DRIVER INVITATION ROOT-CAUSE TRACE
+====================================================================
+
+STATUS: ROOT CAUSE FOUND (in a prior local session; re-verified
+independently this phase). A candidate FIX exists in the working tree —
+UNCOMMITTED, UNPUSHED, NOT DEPLOYED. Production still has the original
+defect today.
+
+Full lifecycle trace (STEP 3, items 1-13):
+
+ 1. UI ACTION — `InviteDriverDialog` (`src/components/operations/
+    drivers/InviteDriverDialog.tsx`): a form (fullName/email/phone)
+    inside a Server-Action-backed dialog on `/operations/drivers`.
+ 2. CLIENT REQUEST — a React `useActionState` submit to a Server Action
+    — no separate API route; Next.js Server Actions serialize the form
+    POST directly.
+ 3. SERVER/API ACTION — `createDriverInviteAction`
+    (`src/app/operations/drivers/actions.ts`).
+ 4. DATABASE WRITES — the action calls RPC `create_driver_invite`
+    (`supabase/migrations/20260903100200_driver_invites.sql`), which
+    locks any existing PENDING row for (organization, lower(email))
+    `FOR UPDATE`; refreshes it if present, else INSERTs a new
+    `driver_invites` row plus one `audit_events` row.
+ 5. SUPABASE AUTH/ADMIN INVITATION CALL — NONE. This design deliberately
+    never calls `supabase.auth.admin.inviteUserByEmail()` or creates an
+    auth user on the admin's behalf — the invitee signs up themselves
+    through ordinary `supabase.auth.signUp()`. This is a correct
+    architectural choice (no admin-created credentials, no orphaned
+    auth users on partial failure), NOT the defect.
+ 6. EMAIL PROVIDER/TEMPLATE PATH (CATEGORY D) — **this was the defect.**
+    Before the fix present in the working tree: `create_driver_invite`
+    returns `(invite_id, token, email, status, reused)`; the CALLING
+    Server Action read only `invite_id`/`email`/`reused` — **`token` was
+    discarded, never read.** No email-send function was called anywhere
+    in the request path. No email infrastructure of any kind exists in
+    the committed codebase (confirmed again this phase: `grep -rniE
+    "resend|postmark|sendgrid|nodemailer|ses|smtp|mailgun|sendEmail" src
+    supabase` → zero matches outside comments and the commented-out
+    `[auth.email.smtp]` block in `supabase/config.toml`; `package.json`
+    has no email dependency). Despite this, the dialog's own success
+    state was titled "Invite sent" — a false positive result reported to
+    the operator.
+ 7. REDIRECT URL — none was ever generated (the token was discarded, so
+    no `/join/<token>` link could be built or sent).
+ 8. INVITE TOKEN HANDLING — generated correctly at the database level
+    (`driver_invites.token uuid default gen_random_uuid()`, 122-bit,
+    unique-indexed) but never left the database/RPC-result boundary.
+ 9. ACCEPTANCE ROUTE — `/join/[token]` exists and works correctly
+    (previews via the anon-callable, token-gated `get_driver_invite_
+    preview` RPC) — this part of the lifecycle was already proven
+    working in an earlier phase, PROVIDED the invitee somehow obtained
+    the link out-of-band (the admin copy-pasting it manually — except
+    the action never even returned the token to the browser, so not even
+    that manual workaround was available through the UI).
+ 10. DRIVER-USER RECORD CREATION — `redeem_driver_invite` (SECURITY
+     DEFINER) creates the Driver row atomically, using the INVITE's own
+     admin-specified display_name/phone. Unaffected by the email defect;
+     confirmed working via `operator_onboarding_tests.sql` REDEEM-1..5
+     and a live end-to-end test in a prior session.
+ 11. ORGANIZATION MEMBERSHIP ASSIGNMENT — same RPC, same transaction;
+     `redeem_driver_invite` takes NO `organization_id` parameter at all
+     — the organization is resolved entirely from the invite row itself,
+     making cross-org redemption structurally unexpressible. Unaffected.
+ 12. ROLE ASSIGNMENT — Membership role hardcoded to `'driver'` inside the
+     RPC, never client-supplied. Unaffected.
+ 13. INVITATION STATUS UPDATE — `status: 'pending' → 'accepted'` inside
+     the same transaction as 10/11. Unaffected.
+
+CATEGORY: **D — auth/database invitation created but the email was
+never delivered** (more precisely: no email-send call existed at all;
+"D" is the closest fit of the offered categories, since there is no
+literal "auth invitation" object in this design — the analogous object,
+the `driver_invites` row + token, WAS created, and delivery of it was
+what was missing).
+
+CURRENT STATE OF THE FIX (uncommitted, in the working tree — not
+created or modified by this audit phase):
+  - `src/lib/email/send.ts` (new) — a server-only transactional-email
+    boundary; Resend via plain HTTPS POST in production
+    (`RESEND_API_KEY`/`EMAIL_FROM`, both non-`NEXT_PUBLIC_`), a
+    console-log transport in local dev with no key configured. Returns
+    a discriminated result, never throws a provider error to the caller,
+    never logs the key or the token.
+  - `src/lib/email/driver-invite-email.ts` (new) — builds the invitation
+    subject/body naming the real organization dynamically, linking to
+    `/join/<token>` (never `/auth/confirm`).
+  - `src/lib/app-url.ts` (new) — builds the absolute invite URL from
+    `NEXT_PUBLIC_APP_URL` (falls back to the request's forwarded host).
+  - `src/app/operations/drivers/actions.ts` (modified) — now reads
+    `data.token`, sends the email, and returns an explicit `delivery`
+    state (`sent`/`failed`/`not_configured`) so the dialog can no longer
+    claim success falsely; adds `resendDriverInviteAction` (admin-only,
+    same-tenant-only via a re-bound organization check, pending-only,
+    recipient-immutable, zero DB writes).
+  - `src/components/operations/drivers/InviteDriverDialog.tsx` /
+    `DriversPageClient.tsx` (modified) — honest delivery states in the
+    UI; a resend control in the Pending Invites list.
+
+This audit independently re-traced the mechanism (this section) without
+relying on the prior session's own conclusions, and CONFIRMS the
+diagnosis and the fix's architecture are sound: authorization stays
+server-derived, the token is never exposed to the browser or logged, the
+resend path cannot cross tenants or change the recipient, and no RLS/
+migration/schema change was involved. Per this phase's explicit
+instruction, no further code was written or modified to advance this fix
+— it is reported, not applied or extended.
+
+PRODUCTION IMPACT TODAY: unchanged. `app.zenwardmobility.com` runs
+commit 95cb329, which does NOT contain this fix. Driver invitations sent
+from production today create a valid, pending `driver_invites` row and
+send NO email, exactly as originally reported.
+
+====================================================================
+11. EMAIL DELIVERY CONFIGURATION
+====================================================================
+
+MECHANISM BY EMAIL TYPE:
+
+  Signup confirmation  — Supabase Auth's own "Confirm signup" template.
+    Locally: `[auth.email.template.confirmation]` in
+    `supabase/config.toml`, rendered by the local Mailpit test sink
+    (`[local_smtp]`, HTTP UI only, no outbound send). In the hosted
+    project: governed by that project's Auth → Email Templates
+    Dashboard configuration — NOT re-verified live this phase (no
+    Dashboard credential in this environment); the required template
+    text is already documented in `docs/deployment/staging-auth-
+    configuration.md` and `docs/reports/n0-g0-r2-auth-fix-deployment.txt`
+    from an earlier phase and was not re-litigated here.
+
+  Password reset — N/A. No reset flow exists (§7), so no email path
+    exists for it either.
+
+  Driver invitations — NOT sent in the currently-deployed production
+    code (§10). An UNCOMMITTED, UNDEPLOYED implementation targeting
+    Resend exists in the working tree.
+
+CONFIGURATION PRESENCE (names only — no values, per instruction):
+
+  RESEND_API_KEY        = MISSING (not set in this local environment;
+                           status in production/Vercel not checked by
+                           this audit — no Vercel credential/access used)
+  EMAIL_FROM             = MISSING (same)
+  NEXT_PUBLIC_SUPABASE_URL              = PRESENT (.env.local)
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY   = PRESENT (.env.local)
+  NEXT_PUBLIC_APP_URL                    = PRESENT (.env.local, value is
+                                            the local dev URL only)
+  Supabase default/built-in email sender = ACTIVE locally (Mailpit);
+                                            hosted-project sender status
+                                            not re-checked this phase.
+  Custom SMTP (`[auth.email.smtp]` in supabase/config.toml) = NOT
+                                            CONFIGURED (block present but
+                                            fully commented out).
+
+No secret VALUE is included anywhere in this report.
+
+====================================================================
+12. ENVIRONMENT VARIABLE SECURITY
+====================================================================
+
+Full inventory (re-confirmed by direct `grep -rn "process\.env\." src`
+this phase, not carried over from an older doc):
+
+  Variable                              Classification   Read by
+  NEXT_PUBLIC_SUPABASE_URL               PUBLIC-SAFE       src/lib/supabase/env.ts (browser+server client, proxy)
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY   PUBLIC-SAFE       same 3 call sites — anon/publishable key ONLY, everywhere
+  NEXT_PUBLIC_APP_URL                    PUBLIC-SAFE       src/lib/app-url.ts (names a location, not a credential)
+  RESEND_API_KEY                         SERVER-ONLY/      src/lib/email/send.ts ONLY — module is `import
+                                          PRIVILEGED        "server-only"`; name is deliberately not NEXT_PUBLIC_
+  EMAIL_FROM                             SERVER-ONLY       src/lib/email/send.ts ONLY
+  NODE_ENV                               SERVER-ONLY       src/app/select-organization/actions.ts (cookie `secure`
+                                          (Next built-in)   flag), src/lib/email/send.ts (dev-transport gate)
+
+Verification performed this phase:
+  - `grep -rniE "service_role|service-role|serviceRole|SUPABASE_SERVICE|
+    createAdminClient" src` → matches are exclusively COMMENTS
+    documenting the absence of service-role usage (e.g. "never a
+    service-role shortcut from this — or any — browser-reachable code
+    path"). No service-role key is read, stored, or referenced anywhere
+    in application code.
+  - No `NEXT_PUBLIC_*` variable carries anything privileged — confirmed
+    by reading every one of the 3 public variables' definitions; two are
+    location strings, one is the publishable (anon) key whose privilege
+    model is RLS/RPC authorization, not the key itself.
+  - `RESEND_API_KEY`/`EMAIL_FROM` (present only in the uncommitted
+    working-tree code) are confined to one `server-only` module and are
+    never returned in any Server Action's response value, never logged
+    (confirmed by reading `send.ts`: failures produce a bounded,
+    key-free string like `"resend responded 401"`).
+  - Production build output was inspected in an earlier phase (and the
+    module boundary re-confirmed by reading `import "server-only"` at
+    the top of both new email files this phase) — a `server-only`
+    import throws at build/runtime if ever imported from client code, so
+    an accidental browser-bundle leak would fail the build, not ship
+    silently.
+  - `.gitignore` excludes all `.env*` except `.env.example`
+    (`.env*` / `!.env.example`) — confirmed present and correctly
+    ordered.
+
+No unsafe usage found. No privileged variable is `NEXT_PUBLIC_`. No
+service-role key exists in this codebase at all.
+
+====================================================================
+13. PROTECTED ROUTES
+====================================================================
+
+Enforcement layer: server-side, in `layout.tsx` for each protected
+subtree — NOT UI-only, NOT middleware-only (the proxy does session
+refresh, not authorization).
+
+  /operations/*   → src/app/operations/layout.tsx → requireOperationsAccess
+                    (role ∈ {organization_admin, dispatcher} for the
+                    RESOLVED organization; a Driver-only Membership is
+                    redirected to /driver, not merely denied)
+  /operations/drivers, /facilities, /fleet, /passengers, /trips,
+  /trips/[tripId], /trips/new, /dispatch, /billing, /reports
+                  → all inherit the same layout guard (single shell;
+                    confirmed by directory structure — no route under
+                    /operations/* has its own competing guard)
+  /driver/*       → src/app/driver/layout.tsx → requireDriverAccess
+                    (role=driver OR a dual-hat org_admin/dispatcher who
+                    also has a linked Driver row; independently re-
+                    verifies via the REAL driver_get_profile RPC, never
+                    Membership.role alone)
+  /onboarding/*   → src/app/onboarding/layout.tsx → requireOnboardingAccess
+                    (same role set as Operations)
+  /complete-signup, /complete-signup/form
+                  → each Route Handler/page independently checks
+                    `getUser()`/session itself (confirmed by reading
+                    complete-signup/route.ts — redirects unauthenticated
+                    callers to /sign-in before doing anything else)
+  /select-organization → requires a user; server-validates the
+                    submitted organization_id against a FRESH live
+                    membership query (never trusts the form value alone)
+  /join/[token]   → intentionally PUBLIC for the preview (the 122-bit
+                    token itself is the credential — same "no existence
+                    oracle" model as every other token-gated surface in
+                    this codebase); redemption still requires a real,
+                    email-matched session
+
+No route was found accessible without appropriate server-side
+authorization. "Admin surfaces" as named in the brief (a distinct admin
+area) do not exist as a separate concept — the closest equivalent,
+`platform_admin_grants`, is checked via `is_platform_admin()` at the RLS
+layer for the two tables that reference it (`audit_events`,
+`organizations`) and has no dedicated UI route at all today.
+
+VERDICT: PASS.
+
+====================================================================
+14. TENANCY / WORKSPACE RESOLUTION
+====================================================================
+
+How does the application determine which organization a logged-in user
+belongs to?
+  Live database query only: `getActiveMemberships()` selects
+  `memberships` filtered by the caller's own `auth.uid()` (via RLS's
+  `memberships_select_self` policy AND an explicit application-layer
+  `user_id` filter — see §3) AND `status = 'active'`. Zero memberships →
+  no organization. One → auto-selected. More than one → the
+  `zw_org_context` cookie, itself re-validated against this same live
+  query on every read, picks which.
+
+How is that organization context applied to reads/writes?
+  Every mutation-relevant Server Action re-derives the organization from
+  the SERVER-resolved context object (`OrganizationContext.organizationId`,
+  produced by `resolveOrganizationContext()`), never from a client-
+  supplied field used for authorization. The organization_id passed into
+  RPCs like `create_driver_invite`, `signup_create_organization`, etc.
+  originates from this server-side value. Independently, every RLS
+  policy re-derives authorization from `has_org_role(organization_id,
+  roles)`/`is_org_member(id)`, which themselves resolve from
+  `auth.uid()` against a LIVE `memberships` row — so even if a Server
+  Action were ever compromised or a raw REST/RPC call were made with a
+  forged `organization_id`, the database layer independently denies it
+  (confirmed live this phase — see §17 item 2).
+
+Can users belong to multiple organizations?
+  Yes — modeled directly (`memberships` has no uniqueness constraint on
+  `user_id` alone). Confirmed by the seed fixture `multi-org-user@
+  example.test` (organization_admin in Org A, driver in Org B) and by
+  `rls_adversarial_tests.sql` TEST P, which explicitly asserts the
+  STRONGEST role is NOT inherited globally across a multi-org user's
+  memberships.
+
+Is organization context client-supplied anywhere it should not be?
+  No instance found. Every RPC that accepts an `organization_id`
+  parameter (`create_driver_invite`, `revoke_driver_invite`,
+  `signup_create_organization`-adjacent calls, etc.) independently
+  re-validates the caller's live membership/role for THAT id inside the
+  function body — a client supplying a foreign org's id gets `ZW002`/
+  `not_found`, never silent success. `redeem_driver_invite` goes
+  further and accepts NO organization_id parameter at all — the org is
+  resolved entirely from the invite row, so cross-org redemption is not
+  merely denied, it is not expressible as an input.
+
+====================================================================
+15. RLS INVENTORY
+====================================================================
+
+RLS enablement (queried directly from `pg_class` this phase — all 17
+public tables):
+
+  organizations, memberships, user_profiles, drivers, passengers,
+  facilities, vehicles, transportation_requests, trips, trip_assignments,
+  trip_events, trip_notes, trip_exceptions, audit_events, driver_invites,
+  driver_location_updates, platform_admin_grants
+  → RLS ENABLED: YES on ALL 17. Zero tables with RLS disabled.
+
+Per-table policy summary (full raw `pg_policies` dump captured this
+phase; TENANT KEY is `organization_id` unless noted):
+
+TABLE: organizations
+  RLS ENABLED: YES
+  SELECT: is_org_member(id)  |  is_platform_admin()
+  INSERT: none (no client INSERT grant path — created only via
+          signup_create_organization, SECURITY DEFINER)
+  UPDATE: organization_admin only, own org (has_org_role)
+  DELETE: none
+  TENANT KEY: id (is the tenant)
+  CONCERNS: none.
+
+TABLE: memberships
+  SELECT: self (user_id = auth.uid())  |  org_admin, own org (additive —
+          see §3's documented subtlety re: application-layer filtering)
+  INSERT: org_admin only, own org (has_org_role) — confirmed live this
+          phase: an org_admin cannot self-insert a membership into a
+          DIFFERENT org (§9/§17 live test)
+  UPDATE: org_admin only, own org
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none. (Role escalation via this table would require an
+          org_admin of the TARGET org to insert it — cannot be done
+          cross-tenant.)
+
+TABLE: user_profiles
+  SELECT: self (id = auth.uid())  |  org_admin over their org's members
+          (EXISTS against memberships)
+  INSERT: self only (id = auth.uid())
+  UPDATE: self only (id = auth.uid())
+  DELETE: none
+  TENANT KEY: none directly (keyed to auth.uid(); org-scoping is via the
+          EXISTS subquery for the admin-visibility policy)
+  CONCERNS: none.
+
+TABLE: drivers
+  SELECT: org_admin/dispatcher, own org
+  INSERT: org_admin only, own org
+  UPDATE: org_admin only, own org (`user_id` column NOT in the client
+          UPDATE grant at all — see ZD-195 fix from an earlier phase;
+          only `link_self_as_driver`/`redeem_driver_invite`, both
+          SECURITY DEFINER and structurally self-only, may set it)
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none currently (the ZD-195 gap this table previously had —
+          an unconstrained client UPDATE grant on `user_id` — was already
+          closed by migration 20260903100300; re-verified present and
+          correctly restrictive this phase via `pg_policies`).
+
+TABLE: passengers
+  SELECT/INSERT/UPDATE: org_admin/dispatcher, own org
+  DELETE: none (deactivate via UPDATE `status`, never hard-deleted —
+          matches the codebase's general "never hard-delete" pattern)
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: facilities
+  SELECT/INSERT/UPDATE: org_admin/dispatcher, own org
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: vehicles
+  SELECT: org_admin/dispatcher, own org
+  INSERT/UPDATE: org_admin only, own org
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: transportation_requests
+  SELECT/INSERT/UPDATE: org_admin/dispatcher, own org
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: trips
+  SELECT: org_admin/dispatcher, own org
+  INSERT: none directly (confirmed live: `permission denied for table
+          trips` — creation is exclusively via a controlled SECURITY
+          DEFINER RPC, per the "retire direct trip insert" migration)
+  UPDATE: org_admin/dispatcher, own org
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none. Drivers have NO direct SELECT policy on this table at
+          all (retired in favor of a controlled read API, ZD-096) —
+          intentional, confirmed by TEST F/L.
+
+TABLE: trip_assignments
+  SELECT: org_admin/dispatcher, own org
+  INSERT/UPDATE/DELETE: none directly (controlled via
+          assign_trip/reassignment RPCs only — confirmed live:
+          `permission denied for table trip_assignments`)
+  TENANT KEY: organization_id
+  CONCERNS: none. One-active-assignment-per-trip enforced by a unique
+          constraint, verified under real concurrency (§ concurrency
+          tests).
+
+TABLE: trip_events
+  SELECT: org_admin/dispatcher, own org
+  INSERT/UPDATE/DELETE: none directly (system/RPC-generated only)
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: trip_notes
+  SELECT: org_admin/dispatcher, own org  |  assigned driver via
+          `is_driver_assigned_to_trip(trip_id)` (their own trip only)
+  INSERT: org_admin/dispatcher, own org  |  assigned driver, but ONLY
+          `visibility = 'driver_visible'` notes on their own trip
+          (compound check_expr — confirmed a driver cannot write an
+          `operations_only` note, nor write to a trip they aren't
+          assigned to)
+  UPDATE: org_admin/dispatcher, own org
+  DELETE: none
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: trip_exceptions
+  SELECT: org_admin/dispatcher, own org  |  assigned driver, own trip
+  INSERT/UPDATE/DELETE: none directly (controlled RPC only)
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: driver_location_updates
+  SELECT: org_admin/dispatcher, own org
+  INSERT/UPDATE/DELETE: none directly (controlled RPC only)
+  TENANT KEY: organization_id
+  CONCERNS: none.
+
+TABLE: audit_events
+  SELECT: org_admin, own org  |  platform_admin (global)
+  INSERT/UPDATE/DELETE: none directly (system/RPC-written only —
+          confirmed live: `permission denied for table audit_events`)
+  TENANT KEY: organization_id
+  CONCERNS: none. Append-only by construction (no UPDATE/DELETE policy
+          at all, for anyone including admins).
+
+TABLE: driver_invites  ← the table at the center of §10
+  RLS ENABLED: YES
+  SELECT: org_admin only, own org (has_org_role) — Dispatcher gets ZERO
+          rows, not an error
+  INSERT/UPDATE/DELETE: NONE for `authenticated` at all — every mutation
+          goes through create_driver_invite/revoke_driver_invite/
+          redeem_driver_invite (all SECURITY DEFINER). Confirmed live
+          this phase: the `service_role` REST credential itself was
+          DENIED select on this table ("permission denied for table
+          driver_invites") when a previous session's audit script tried
+          to read it directly — an extra, independent confirmation of
+          the lockdown (service-role bypasses RLS by default in
+          Postgres/Supabase, but here it was denied at the GRANT level,
+          meaning even a service-role misuse would not read this table
+          through PostgREST).
+  TENANT KEY: organization_id
+  CONCERNS: none. The invite `token` column IS readable by an org_admin
+          for their own org's rows (no column-level restriction) — this
+          is necessary (the admin/resend flow needs it) and is not a
+          cross-tenant exposure; flagged here only for completeness, not
+          as a defect.
+
+TABLE: platform_admin_grants
+  SELECT: self (user_id = auth.uid())  |  platform_admin (global,
+          circularly self-consistent — a platform admin can see the
+          grants table that grants platform-admin status)
+  INSERT/UPDATE/DELETE: none via RLS for `authenticated`
+  TENANT KEY: none (platform-global, not tenant-scoped by design)
+  CONCERNS: none — this table is deliberately outside the tenant model.
+
+INVENTORY-WIDE FLAGS (per the audit's explicit checklist):
+  - Tables with RLS disabled: NONE.
+  - Permissive `USING (true)` anywhere: NONE (confirmed by reading every
+    `qual`/`with_check` expression in `pg_policies` — none is a bare
+    `true`).
+  - Policies dependent ONLY on a client-provided id (no live membership
+    check): NONE — every policy resolves through `has_org_role`/
+    `is_org_member`/`is_platform_admin`/`is_driver_assigned_to_trip`, all
+    of which independently re-query `memberships`/`platform_admin_grants`
+    keyed on `auth.uid()`.
+  - Policies permitting cross-tenant access: NONE found, and none
+    demonstrated live (§17).
+  - Service-role usage masking missing policies: NONE — no application
+    code uses the service-role key at all (§12), and the one place a
+    service-role credential WAS used (this audit's own read-only test
+    tooling, against the local stack only) was itself denied by the
+    table's own grants for `driver_invites`, demonstrating the grants
+    are correctly scoped rather than "open because service-role is used
+    everywhere."
+
+Helper-function security (re-read this phase via `pg_get_functiondef`):
+`has_org_role`, `is_org_member`, `is_platform_admin`,
+`is_driver_assigned_to_trip` are all `SECURITY DEFINER`, all
+`SET search_path TO 'public', 'pg_temp'` (prevents search-path
+hijacking), and all resolve exclusively from `auth.uid()` — never a
+parameter the caller could use to impersonate another user.
+
+VERDICT: PASS. No RLS defect found, and none was modified.
+
+====================================================================
+16. TENANT-ISOLATION FINDINGS
+====================================================================
+
+No cross-tenant access path was found, structurally or live. Summary of
+independent confirmation layers (each one alone would be strong; all
+three agreeing is the actual basis for this conclusion):
+
+  1. STRUCTURAL — every policy's `USING`/`WITH CHECK` expression re-
+     derives tenant membership from a live `auth.uid()` lookup (§15).
+  2. SQL-SIMULATED ADVERSARIAL — `rls_adversarial_tests.sql`, 32/32 PASS
+     this run, explicitly including cross-tenant read denial (B, D, H,
+     AF), cross-tenant insert denial via FK constraints (V, W, X),
+     tampered/guessed UUID (AD, AE), and multi-org role non-inheritance
+     (P).
+  3. LIVE POSTGREST ADVERSARIAL (run this phase, against the local
+     stack, non-destructively) — see §17 for the exact requests and
+     results: all 4 denied correctly.
+
+No finding in this section required documenting a policy change — none
+was made.
+
+====================================================================
+17. ADVERSARIAL TEST MATRIX
+====================================================================
+
+Tenant A = "Fictional Org A" (seed fixture), Tenant B = "Fictional Org B"
+(seed fixture). Two test layers were used:
+
+LAYER 1 — SQL, SET ROLE simulation (`supabase/tests/rls_adversarial_
+tests.sql`, run this phase on a freshly reset database):
+
+  | # | Attempt | Result |
+  |---|---|---|
+  | A/B | Org A admin reads Org A / Org B trip | ALLOW own / DENY foreign — PASS |
+  | C/D | Org A dispatcher reads Org A / Org B passenger | ALLOW own / DENY foreign — PASS |
+  | E | Driver A reads any Passenger row directly | DENY — PASS |
+  | F/L | Driver A reads trips directly (no policy at all) | DENY — PASS |
+  | G | Driver A reads Driver A2's trip (same org) | DENY — PASS |
+  | H | Driver A reads Org B trip | DENY — PASS |
+  | I | Driver A reads trip_notes directly | DENY — PASS |
+  | J/K | Driver A reads operations_only / another driver's note | DENY — PASS |
+  | M/N/Q/R/S/T/U | Direct INSERT/SELECT on trip_assignments, trips, transportation_requests, passengers, platform_admin_grants, trip_events, audit_events | DENY (permission denied) — PASS |
+  | O/AB | Inactive-membership user reads Org A data | DENY (zero rows, all tables) — PASS |
+  | P | Multi-org user's admin role in Org A leaks into Org B | NO — driver-only in Org B, confirmed — PASS |
+  | V/W/X | Cross-org FK on trip/assignment insert (foreign passenger/driver/vehicle id) | REJECTED by FK constraint — PASS |
+  | Y | Duplicate active assignment on one trip | REJECTED by unique constraint — PASS |
+  | AA | Zero-membership authenticated user reads anything | DENY (zero rows) — PASS |
+  | AC | Unauthorized passenger INSERT | DENY (RLS violation) — PASS |
+  | AD/AE | Guessing another trip's / another note's UUID | grants nothing — PASS |
+  | AF | Org A dispatcher reads Org B child entities (assignments/notes/exceptions) | DENY, zero rows — PASS |
+
+  32/32 PASS, 0 FAIL.
+
+LAYER 2 — LIVE, direct PostgREST HTTP requests (run this phase,
+non-destructive, against the LOCAL stack only — no production data
+touched):
+
+  | Attempt | Method | Result |
+  |---|---|---|
+  | A user reads B's data (implicit, via unfiltered select) | `GET /rest/v1/trips` as Org A admin | Only Org A rows returned — PASS |
+  | Tampered organization_id (explicit filter for Org B's id) | `GET /rest/v1/trips?organization_id=eq.<OrgB>` as Org A admin | `[]` — PASS |
+  | A user inserts data into B's tenant (self-granting cross-tenant membership) | `POST /rest/v1/memberships` (organization_id=OrgB, user_id=self, role=organization_admin) as Org A admin | `42501 — new row violates row-level security policy` — PASS |
+  | Unauthenticated access | `GET /rest/v1/organizations` with only the anon/publishable key, no session token | `42501 — permission denied for table organizations` — PASS |
+
+  4/4 denied correctly.
+
+LAYER 3 — real two-process concurrency (not adversarial in intent, but
+directly relevant to "a user updates/inserts under contention"):
+  - `mutation_concurrency_test.sh`: two real, separate `docker exec`
+    sessions race to assign a driver to the same Trip; Session B blocks
+    ~1.8s on the real row lock, then correctly sees Session A's
+    committed assignment and is rejected with `assignment_conflict` — no
+    double-assignment. PASS.
+  - `driver_invite_concurrency_test.sh`: two real sessions race to
+    redeem the SAME invite token; genuine ~1.8-1.9s lock contention
+    observed; exactly one Driver row and one Membership row result
+    regardless of which session's transaction wins. PASS.
+
+NOT RUN (by design, per explicit instruction): any destructive
+adversarial test, and anything against PRODUCTION data. All testing in
+this section was against the local Supabase stack, using only seed/
+fixture data (`*.example.test` accounts), after a `supabase db reset`.
+
+Additional items from the requested matrix not separately re-run this
+phase because they are subsumed by the above or by earlier-verified,
+unchanged mechanisms: "staff user escalates role" is covered
+structurally by the `memberships` UPDATE policy (org_admin, own org
+only — an org_admin cannot promote themselves in a foreign org, and
+promoting themselves within their own org to a role they already hold
+changes nothing); "protected API route request" is covered by §13 (no
+route lacks a server-side guard) — there is no separate "API route"
+layer distinct from Server Actions/Route Handlers in this codebase to
+test independently.
+
+====================================================================
+18. SETTINGS / ACCOUNT
+====================================================================
+
+FINDING: there is no Settings route or page anywhere in this
+application (`find src -iname "*settings*"` returns only two files that
+each contain the WORD "settings" in a comment/label, not a route:
+`OperationsLayoutClient.tsx`'s explicitly-`disabled` "Dispatch Settings"
+button — tooltip: "Dispatch Settings has no defined behavior yet." — and
+`AccountMenu.tsx`'s own comment explaining it deliberately omits a
+settings link).
+
+This is NOT a broken-link defect: nothing links to `/settings`, so
+nothing 404s. `AccountMenu.tsx`'s own comment is explicit and was
+written for exactly this reason: "Deliberately no fake profile/settings
+links... only real, working content." This reads as a considered
+product decision from an earlier phase, not an oversight.
+
+- Account/profile surface: does not exist as a page. What DOES exist and
+  works: the `AccountMenu` popover shows the real organization name and
+  real role label (both server-resolved, not placeholder), a "Switch
+  Organization" link (shown ONLY when the caller genuinely has >1 active
+  membership — confirmed conditional, not always-on), and a working Sign
+  Out.
+- Logout: exists and works (§8).
+- Organization context display: accurate — `organizationName`/
+  `roleLabel` passed into `AccountMenu` come from the server-resolved
+  `OrganizationContext`, never a client value.
+- No privileged control is exposed to an unauthorized role: the ONE
+  interactive control besides Sign Out/Switch-Org in this whole area
+  ("Dispatch Settings") is unconditionally disabled for everyone,
+  regardless of role — there is nothing to check.
+
+VERDICT: PARTIAL. No security concern; a genuine, honestly-represented
+functional gap (no way for an operator to configure anything about their
+account or organization). Severity P2/P3 — does not block the rebrand,
+does block eventual "workspace settings" product work.
+
+====================================================================
+19. CLOUD / VERCEL CONFIGURATION
+====================================================================
+
+- No `vercel.json` in the repository — deployment relies on Vercel's
+  standard Next.js auto-detection (build command `next build`, output
+  `.next`, framework preset "Next.js"). No `.vercel/` directory locally
+  either (this environment has never run `vercel link`).
+- Environment-variable requirements: the 6 variables in §12 (3 public +
+  2 email + NODE_ENV, the last automatic). No others are read anywhere
+  in `src/`.
+- Production URL assumption: `NEXT_PUBLIC_APP_URL` — set per-Vercel-
+  environment (not verified live this phase for the actual Vercel
+  project values; no Vercel dashboard access was used). The application
+  code itself hard-codes NO production URL anywhere (confirmed by grep
+  — the only literal `zenwardmobility.com` string in `src/` is a
+  fallback default sender address in the new, uncommitted
+  `src/lib/email/send.ts`, and comments).
+- Callback URL assumptions: `/auth/confirm`'s redirect targets are
+  relative, built from the incoming request (`new URL(path, request.
+  url)`) — never a hard-coded absolute host.
+- Read-only production check performed this phase (GET requests only,
+  no mutation): `app.zenwardmobility.com/sign-in`, `/sign-up`,
+  `/auth/auth-code-error` all `200`; `/auth/confirm` (no params) → `307`
+  → `/auth/auth-code-error`, confirming the currently-deployed commit
+  (95cb329) behaves as expected in production for these surfaces.
+  GitHub's Deployments API confirms the latest Production deployment
+  (sha `95cb329f7`, 2026-09-07) succeeded per Vercel's own commit
+  status ("Deployment has completed").
+- No DNS, Vercel project setting, or environment variable was changed.
+  No deployment was triggered.
+
+====================================================================
+20. LOCAL VS PRODUCTION PARITY
+====================================================================
+
+Known, DOCUMENTED, and INTENTIONAL differences (re-confirmed this
+phase, none newly introduced):
+
+  - `supabase/config.toml`'s local `site_url = "http://localhost:3000"`
+    vs. the hosted project's own Site URL (Dashboard-configured,
+    presumably `https://app.zenwardmobility.com`, not independently
+    re-verified live this phase). This exists to work around a
+    Turbopack-only dev-server host-canonicalization quirk (ZD-203) and
+    has no production analog — production has exactly one canonical
+    host at all times.
+  - `enable_confirmations = false` locally (Mailpit, instant sessions)
+    vs. presumably `true` on the hosted project (per prior phases'
+    documented direct testing of the staging project's Auth API) — this
+    means local testing of "needsEmailConfirmation" branches requires
+    deliberately minting tokens via the admin API (as done in earlier
+    phases) rather than a real signup flow; not re-exercised live this
+    phase since no code in this path changed.
+  - `NEXT_PUBLIC_APP_URL` differs by environment by design (§12/§19);
+    this only became a FUNCTIONAL dependency (not just a vestigial
+    variable) with the uncommitted driver-invite-email code, since that
+    code builds the `/join/<token>` link from it — a wrong value in any
+    given Vercel environment would produce an invite email with an
+    unreachable link. This is a NEW parity risk introduced by the
+    UNCOMMITTED code, worth flagging for whoever eventually commits it:
+    confirm `NEXT_PUBLIC_APP_URL` is correctly set for the target
+    environment before relying on it for invite emails.
+  - Secure cookie flag (`select-organization/actions.ts`): `secure:
+    process.env.NODE_ENV === "production"` — automatically correct in
+    both environments via Next's own `NODE_ENV`, no manual toggle
+    needed, confirmed by reading the one call site.
+  - No CORS/origin-logic divergence found — this application makes no
+    cross-origin requests of its own; all Supabase calls go through the
+    same-origin server (Route Handlers/Server Actions/Server Components)
+    or the browser client hitting the Supabase project URL directly
+    (which is Supabase's own CORS surface, not this app's).
+
+No divergence was found that would make a feature silently work in one
+environment and silently fail in the other, beyond the two already-
+documented, deliberate ones above and the newly-flagged
+`NEXT_PUBLIC_APP_URL` dependency.
+
+====================================================================
+21. MIGRATION HEALTH
+====================================================================
+
+- 42 migration files in `supabase/migrations/`, named
+  `YYYYMMDDHHMMSS_description.sql`, strictly increasing timestamps, no
+  two files share a timestamp, no gaps that suggest a deleted/renumbered
+  migration.
+- No duplicate/conflicting migration found (each file's `create table`/
+  `create or replace function`/`alter table` targets are unique per
+  file; later migrations that touch an earlier table do so via `alter
+  table`/`create or replace function`, e.g. `20260903100300_retire_
+  direct_driver_user_id_update.sql` narrowing a grant added in
+  `20260830130500_drivers.sql`).
+- `supabase migration list --local` (run in an earlier phase of this
+  same environment, re-confirmed structurally consistent this phase by
+  the file listing itself) reported local == remote for all 40+
+  migrations at that time; not re-run live against a remote project this
+  phase (no such connection was established/needed for a local-only
+  audit).
+- No manual-schema assumption found — `supabase db reset` (run this
+  phase) rebuilds the entire schema from these migrations plus
+  `supabase/seed.sql` with zero manual intervention, and all 317 SQL
+  test assertions plus 2 concurrency tests passed against the RESULT of
+  that reset — meaning the migrations are self-sufficient and correct,
+  not dependent on undocumented manual Dashboard changes for the tables/
+  policies they define. (The exception, as always, is Supabase AUTH's
+  own Dashboard-level Email Template/URL Configuration, which by design
+  lives outside migrations — documented, not a migration-health defect.)
+- Invitation/auth-related migrations: `20260903100200_driver_invites.sql`
+  (the full invite lifecycle), `20260903110000_complete_pending_signup.sql`,
+  `20260903100000_organization_signup.sql`, `20260903100100_owner_driver_
+  self_link.sql`, `20260903100300_retire_direct_driver_user_id_update.sql`
+  — all read this phase, all internally consistent with the currently
+  running RLS/RPC state confirmed in §15.
+- Organization-related migrations: `20260830130100_organizations.sql`
+  (root), `20260901100000_organization_operational_timezone.sql`,
+  `20260903100400_organization_business_stage_grant.sql`,
+  `20260903100500_organization_service_area.sql`,
+  `20260903100600_organization_timezone_update_grant.sql` — each a
+  narrow, additive grant/column change; none contradicts an earlier one.
+
+No new migration was generated. None was needed to complete this audit.
+
+====================================================================
+22. SECURITY-SENSITIVE CODE FINDINGS
+====================================================================
+
+Searched this phase (fresh, not carried over): `TODO`, `FIXME`, mock
+user patterns, hardcoded organization/driver identifiers, service-role/
+admin-client usage, unsafe `as any` casts, silent `catch {}` blocks,
+console-only production failure paths.
+
+  - TODO / FIXME: NONE found anywhere in `src/`.
+  - Mock user / hardcoded auth bypass: NONE found. All "hardcoded"
+    string matches are comments EXPLAINING that the code deliberately
+    avoids a hardcoded value (e.g. "never a hardcoded Georgia timezone,"
+    "no more P0-E2-S3-era hardcoded sample data").
+  - `as any`: NONE found in `src/`.
+  - Silent `catch {}` blocks: NONE found (`grep -rn "catch {}" src`
+    returns zero matches; the one empty-body catch pattern that DOES
+    exist, in `src/lib/supabase/server.ts`'s cookie `setAll()`, has an
+    explanatory comment for why it's intentionally a no-op in a
+    Server-Component read-only cookie context — not a swallowed error
+    from a security-relevant operation).
+  - Console-only production failure surfaces: the new (uncommitted)
+    `src/lib/email/send.ts` logs email-delivery failures to the server
+    console (by design — see §10/§11) rather than surfacing them
+    anywhere else; this is a deliberate, bounded, secret-free diagnostic
+    choice, not a hidden failure (the caller still receives an explicit
+    `failed`/`not_configured` result and acts on it).
+
+No security-sensitive code smell was found in the currently-deployed
+(committed) codebase. The one notable pattern worth a human's attention
+going forward is the same one flagged in §10/§20: the uncommitted email
+code introduces this repository's first true server-side secret
+(`RESEND_API_KEY`) — correctly isolated today, but a pattern worth
+holding future server-only credentials to.
+
+====================================================================
+23. FUNCTIONAL READINESS SCORECARD
+====================================================================
+
+  SIGN IN                  PASS
+  SIGN UP                  PASS
+  EMAIL CONFIRMATION       PASS
+  PASSWORD RESET           FAIL
+    CAUSE: not implemented — no route, no `resetPasswordForEmail` call,
+           no "Forgot password?" link anywhere.
+    SEVERITY: P2 (operational blocker for a locked-out user; not a
+           security or tenancy issue).
+    RECOMMENDED FIX: build a standard Supabase `resetPasswordForEmail` +
+           reset-confirmation route (mirroring the `/auth/confirm`
+           pattern already proven in this codebase).
+    DEPENDENCIES: a new Supabase Auth "Reset password" email template
+           (Dashboard, same category of change as the existing "Confirm
+           signup" template work); no schema/RLS change needed.
+  LOGOUT                   PASS
+  SESSION PERSISTENCE      PASS
+  PROTECTED ROUTES         PASS
+  WORKSPACE RESOLUTION     PASS
+  DRIVER INVITATION        FAIL (in production) / a fix exists uncommitted
+    CAUSE: the invitation email was never implemented in committed code
+           — the RPC-returned token was discarded and no email-send
+           call existed anywhere (§10).
+    SEVERITY: P1 (a valid, intended workflow — inviting a driver — does
+           not accomplish its purpose today in production; not a
+           security defect).
+    RECOMMENDED FIX: already written, in the working tree, uncommitted
+           (§10) — review, commit, configure `RESEND_API_KEY`/
+           `EMAIL_FROM` in Vercel, deploy, verify with a real mailbox.
+    DEPENDENCIES: a Resend account + verified sending domain (human
+           action, no code change needed beyond what already exists).
+  INVITE ACCEPTANCE        PASS (independent of the email defect —
+           `/join/[token]` works correctly once a person has the link by
+           any means; proven via SQL suite + prior live testing)
+  ROLE ASSIGNMENT           PASS
+  SETTINGS                  PARTIAL
+    CAUSE: no Settings surface exists at all (deliberate, not a broken
+           link).
+    SEVERITY: P3 (UX/product gap, not a defect).
+    RECOMMENDED FIX: none required for the rebrand; build a real
+           Settings surface in a future product phase.
+    DEPENDENCIES: none.
+  RLS                        PASS
+  TENANT ISOLATION           PASS
+  PRODUCTION CONFIG          PASS (by the checks performed — see §19;
+           the Supabase Auth Dashboard's own template/URL configuration
+           was not independently re-verified live this phase)
+
+====================================================================
+24. FINDINGS BY P0/P1/P2/P3/P4
+====================================================================
+
+P0 — SECURITY / TENANT ISOLATION: NONE FOUND.
+  No RLS gap, no cross-tenant path, no service-role exposure, no
+  client-trusted organization_id used for authorization anywhere.
+
+P1 — AUTH / ACCESS BLOCKER:
+  1. Driver invitation email not sent in production (§10). A fix exists
+     uncommitted; deploying it is the recommended next action, not a new
+     build.
+
+P2 — OPERATIONAL BLOCKER:
+  1. No password-reset flow exists (§7/§23).
+  2. (Contingent, not yet realized) `NEXT_PUBLIC_APP_URL` must be
+     verified correct per-environment BEFORE the uncommitted invite-email
+     code is deployed, or invite links will be built with a wrong origin
+     (§20).
+
+P3 — UX / CONFIGURATION:
+  1. No Settings/account-configuration surface exists (§18/§23) —
+     honestly represented (no dead links), but a real product gap.
+  2. The driver-invite resend path (in the uncommitted fix) has no
+     server-side cooldown/throttle — noted in that fix's own report as a
+     deferred follow-up, re-confirmed still true this phase; not a
+     tenancy or data-integrity issue (recipient is immutable, no
+     duplicate rows possible), just an unrate-limited resend button.
+
+P4 — CLEANUP: NONE material found this phase (no TODO/FIXME/dead code
+  of note — see §22).
+
+====================================================================
+25. REQUIRED FIXES FOR P0-S2
+====================================================================
+
+In priority order:
+
+ 1. (P1) Review, commit, and push the existing uncommitted driver-
+    invitation-email implementation (`src/lib/email/*`,
+    `src/lib/app-url.ts`, the three modified `operations/drivers` files,
+    `.env.example`, the two updated docs) — no new code should need to
+    be WRITTEN, only reviewed and shipped. Confirm
+    `NEXT_PUBLIC_APP_URL` is correct for the target Vercel environment
+    BEFORE relying on it. Configure `RESEND_API_KEY`/`EMAIL_FROM` in
+    Vercel (human step, a Resend account is required — not creatable by
+    this audit). Verify with one real, developer-controlled mailbox in
+    production before declaring the defect closed.
+ 2. (P2) Build a password-reset flow (`resetPasswordForEmail` +
+    a confirm-reset Route Handler, mirroring `/auth/confirm`'s already-
+    proven pattern) + the corresponding Supabase Dashboard "Reset
+    password" email template. No schema/RLS change required.
+ 3. (P2 contingent) Re-verify the hosted Supabase project's own Auth →
+    URL Configuration / Email Templates Dashboard state live (this
+    audit did not have Dashboard credentials) before treating email
+    confirmation as fully closed end-to-end in production — this was
+    flagged as an open dependency in an earlier phase (n0-g0-r2) and was
+    not re-checked here.
+ 4. (P3, optional before rebrand, not required) Add a server-side
+    cooldown to the driver-invite resend action once it ships.
+ 5. (P3, optional, not required before rebrand) Design and build a real
+    Settings surface.
+
+None of the above requires touching RLS, a migration, or the tenancy
+model.
+
+====================================================================
+26. NEMRYN REBRAND GO/NO-GO
+====================================================================
+
+DECISION: CONDITIONAL GO
+
+The foundation this audit was asked to validate — auth, RLS, tenant
+isolation, protected routes, and the core mutation/authorization
+surface — is stable: 317/317 SQL assertions + 2/2 concurrency tests +
+4/4 live adversarial PostgREST requests all passed on a clean database,
+every table has RLS enabled with no permissive policies, and no
+client-supplied organization_id is ever trusted for authorization
+anywhere in the codebase. Nothing found in this audit would be made
+worse, better, or different by a visual/brand rebrand — the rebrand (per
+the existing `docs/brand/nemryn/10-brand-implementation-boundaries.md`
+rules, already in this repo) is explicitly token/copy/asset work that
+does not touch schema, RLS, or tenancy, and this audit found no reason
+to doubt that boundary is safe to rely on.
+
+The CONDITION: the two P1/P2 findings above (driver invitation email,
+password reset) are real user-facing gaps that should be closed — or at
+minimum, explicitly, consciously accepted as known-and-deferred by
+whoever authorizes the rebrand — before or shortly after rebrand work
+begins. Neither blocks the rebrand technically (they are unrelated
+surfaces: email delivery and account recovery, not the visual/brand
+layer), but shipping a rebrand while a known, already-diagnosed,
+already-half-fixed defect (driver invitations) sits uncommitted would be
+an avoidable inconsistency to carry forward.
+
+====================================================================
+27. REQUEST HUB GO/NO-GO
+====================================================================
+
+DECISION: CONDITIONAL GO
+
+Request Hub (per `docs/brand/nemryn/07-product-language.md`) is a
+concept layered on the EXISTING `transportation_requests` table and its
+existing RLS (org_admin/dispatcher, own org, no direct client INSERT
+bypass — confirmed in §15, unchanged). The data/authorization foundation
+Request Hub would build on is exactly the same foundation this audit
+validated as PASS. Nothing found this phase suggests `transportation_
+requests` needs a schema or RLS change before feature work begins on top
+of it.
+
+The CONDITION is the same as §26: Request Hub work should not be the
+vehicle that finally ships the driver-invitation-email fix or password
+reset "along the way" — those are unrelated, already-scoped fixes (§25)
+that deserve their own review and deployment, not a bundled commit. If
+Request Hub development proceeds in parallel with, rather than blocked
+by, those two fixes landing separately, there is no technical reason to
+wait.
+
+====================================================================
+28. TESTS RUN
+====================================================================
+
+  npx tsc --noEmit
+  npm run lint
+  npm run build
+  supabase db reset  (clean fixtures before every SQL run below)
+  docker exec -i supabase_db_ZenWard psql ... -f <each of 22 files in
+    supabase/tests/*.sql>
+  bash supabase/tests/mutation_concurrency_test.sh
+  bash supabase/tests/driver_invite_concurrency_test.sh
+  4 live PostgREST HTTP requests against the local stack (§17 Layer 2)
+  4 live HTTPS GET requests against production (read-only; §6/§19)
+  gh api (read-only) against GitHub's Deployments/commit-status API
+
+No test script was found missing that the brief asked for — every SQL
+suite named informally in the brief's "adversarial tenant test" and
+"RLS audit" sections already exists as a committed `.sql`/`.sh` file in
+`supabase/tests/`; none needed to be authored from scratch this phase
+(a small number of extra live PostgREST requests were issued directly,
+not as a saved script, since they were simple enough not to warrant a
+new committed test file).
+
+====================================================================
+29. TEST RESULTS
+====================================================================
+
+  npx tsc --noEmit  ................................ PASS (0 errors)
+  npm run lint  ..................................... PASS (0 errors;
+      14 warnings, ALL in pre-existing, untracked `.tmp-qa/*.mjs` scratch
+      scripts — none in application code)
+  npm run build  .................................... PASS (all 35
+      routes compiled; no route removed or added by anything touched
+      this phase, since nothing was touched)
+
+  SQL suites (supabase/tests/*.sql, 22 files, clean DB, single run each):
+      317 PASS / 0 FAIL / 0 ERROR  (per-file breakdown below)
+        constraint_tests.sql                        13/13
+        create_trip_atomicity_tests.sql               2/2
+        create_trip_privilege_tests.sql                5/5
+        create_trip_tests.sql                        20/20
+        driver_location_tests.sql                     20/20
+        driver_read_authorization_tests.sql           17/17
+        driver_read_history_tests.sql                   8/8
+        driver_read_minimization_tests.sql            13/13
+        driver_read_privilege_tests.sql                 8/8
+        exception_mutation_boundary_tests.sql          20/20
+        function_privilege_tests.sql                    7/7
+        mutation_assignment_tests.sql                  19/19
+        mutation_atomicity_tests.sql                    2/2
+        mutation_authorization_tests.sql                4/4
+        mutation_idempotent_authorization_tests.sql     6/6
+        mutation_lifecycle_tests.sql                   24/24
+        mutation_privilege_tests.sql                    7/7
+        operator_onboarding_tests.sql                  40/40
+        organization_timezone_tests.sql                14/14
+        rls_adversarial_tests.sql                      32/32
+        security_definer_exposure_tests.sql            20/20
+        trip_exception_tests.sql                       16/16
+
+  Concurrency (real two-process races):
+      mutation_concurrency_test.sh  ................. PASS
+      driver_invite_concurrency_test.sh  ............ PASS
+
+  Live adversarial PostgREST (local stack, this phase):
+      cross-tenant implicit read  ................... PASS (denied)
+      tampered organization_id filter  .............. PASS (denied)
+      cross-tenant membership self-insert  .......... PASS (denied,
+          42501)
+      unauthenticated organizations read  ........... PASS (denied,
+          42501)
+
+  Production read-only smoke check (this phase):
+      GET /sign-in, /sign-up, /auth/auth-code-error  200/200/200
+      GET /auth/confirm (no params)  ................ 307 →
+          /auth/auth-code-error (correct)
+      Latest GitHub Deployment (95cb329)  ........... state: success
+
+No test was skipped, weakened, or given a false PASS. No RLS policy was
+disabled, altered, or bypassed to make any test pass.
+
+====================================================================
+30. FILES CREATED
+====================================================================
+
+By THIS phase (P0-S1):
+  docs/reports/p0-s1-platform-stabilization-auth-audit.txt  (this report)
+
+No other file was created this phase. (Test scripts requested by the
+brief already existed from earlier phases and were reused, not
+recreated — see §28.)
+
+Pre-existing UNCOMMITTED files this phase found already present (NOT
+created by this phase; carried over from earlier local sessions —
+listed here only for completeness of the git-status picture in §32):
+  src/lib/app-url.ts
+  src/lib/email/send.ts
+  src/lib/email/driver-invite-email.ts
+  docs/reports/g0-r3-driver-invitation-email-delivery.txt
+  docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+  docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+  docs/reports/n0-g0-r2-auth-fix-deployment.txt
+  docs/brand/ (Nemryn brand documentation set)
+  .tmp-qa/auth-confirm-e2e.mjs, join-auth-confirm-e2e.mjs,
+    n0-g0-audit-e2e.mjs
+
+====================================================================
+31. FILES MODIFIED
+====================================================================
+
+By THIS phase (P0-S1): NONE. This phase made zero edits to any
+application, configuration, migration, or documentation file. It ran
+read-only inspections, database queries, and pre-existing test
+scripts, and wrote exactly one new file (§30).
+
+Pre-existing UNCOMMITTED modifications this phase found already present
+(NOT made by this phase):
+  .env.example
+  docs/deployment/environment-variable-inventory.md
+  docs/product/driver-invite-linkage-model.md
+  src/app/operations/drivers/actions.ts
+  src/components/operations/drivers/DriversPageClient.tsx
+  src/components/operations/drivers/InviteDriverDialog.tsx
+
+====================================================================
+32. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   .env.example
+    modified:   docs/deployment/environment-variable-inventory.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   src/app/operations/drivers/actions.ts
+    modified:   src/components/operations/drivers/DriversPageClient.tsx
+    modified:   src/components/operations/drivers/InviteDriverDialog.tsx
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt   (this file)
+    src/lib/app-url.ts
+    src/lib/email/
+
+  git diff --stat (unchanged from before this phase started — this
+  phase modified nothing):
+    .env.example                                       |  19 +++-
+    docs/deployment/environment-variable-inventory.md  |  23 ++--
+    docs/product/driver-invite-linkage-model.md        |  65 ++++++++++-
+    src/app/operations/drivers/actions.ts              | 119 +++++++++++++++++++--
+    src/components/operations/drivers/DriversPageClient.tsx | 60 ++++++++---
+    src/components/operations/drivers/InviteDriverDialog.tsx | 34 ++++--
+    6 files changed, 271 insertions(+), 49 deletions(-)
+
+Nothing was staged. Nothing was committed. Nothing was pushed. No pull
+request was created.
+
+====================================================================
+END OF REPORT
+====================================================================

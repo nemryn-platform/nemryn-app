@@ -1,0 +1,285 @@
+====================================================================
+PHASE:    P0-S2A-B1 — Nemryn Platform Email Identity Correction
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT COMMIT: 95cb329f7eb163da735808e445387b6c951a3645
+                "Fix production auth email confirmation flow"
+                (unchanged — production still runs this commit)
+WORKING TREE STATUS: NOT clean, as expected — carries the P0-S2A
+                driver-invitation-email implementation (unchanged),
+                already standardized on Nemryn as the platform sender
+                by the immediately-prior rollback phase, plus earlier
+                uncommitted Nemryn brand documentation.
+MODE:     Inspection + minimum correction + validation. No commit, no
+          push, no deploy.
+====================================================================
+
+OBJECTIVE
+---------
+Make ONLY the minimum email identity corrections necessary before the
+validated P0-S2A implementation is deployed: the two Zenward-specific
+PLATFORM identity strings the P0-S2A report identified (the fallback
+sender in `send.ts`, and the "Sent by Zenward Mobility..." footer in
+`driver-invite-email.ts`) must read Nemryn instead, while the
+organization's own name stays fully dynamic in content. No tenant
+sender infrastructure, no redesign.
+
+====================================================================
+FINDING: THE REQUIRED CORRECTIONS WERE ALREADY PRESENT
+====================================================================
+
+Before making any change, both target files were re-inspected fresh
+(not assumed from an earlier context). Both were found to ALREADY be in
+the exact corrected state this phase asks for — this work was done in
+the immediately-prior phase (P0-S2A-WL-RB, which rolled back a
+tenant-owned-sender architecture and, as part of that rollback,
+corrected the same two platform-identity strings this phase's brief
+independently names). Concretely:
+
+  `src/lib/email/send.ts`, `fromAddress()`:
+    return process.env.EMAIL_FROM?.trim() || "Nemryn <notifications@nemryn.com>";
+    — already the Nemryn identity, NOT
+    `"Zenward Mobility <no-reply@zenwardmobility.com>"`.
+
+  `src/lib/email/driver-invite-email.ts`:
+    — no "Sent by Zenward Mobility on behalf of…" footer exists (it was
+    already removed); no footer of any kind is present; the
+    organization name is read from a plain `organizationName` function
+    parameter, never hard-coded.
+
+A repository-wide search confirmed no other file references the old
+platform-identity strings:
+
+  grep -rn "Zenward Mobility <\|Sent by Zenward\|no-reply@zenwardmobility"
+    src/   →  0 matches
+
+`.env.example`, `docs/deployment/environment-variable-inventory.md`,
+`docs/product/driver-invite-linkage-model.md`, and
+`docs/deployment/driver-invite-email-production-checklist.md` were also
+checked and confirmed to already document the Nemryn identity
+consistently (all four were corrected in the same prior phase).
+
+**No source-code edit was made this phase.** Making one anyway — e.g.
+re-touching already-correct lines — would have been an unnecessary
+change with no effect, contrary to this phase's own "make ONLY the
+minimum correction necessary" instruction. This phase's actual work was
+therefore: (1) independently re-verify the required state is correct
+and complete (not assume it from a prior report), (2) independently
+re-confirm no white-label/tenant-sender infrastructure exists, and (3)
+run the full validation this phase requires, including a live,
+side-by-side proof of the two named example organizations.
+
+====================================================================
+1. FILES CHANGED
+====================================================================
+
+NONE. No file was modified by this phase — the required corrections
+were already in place (see above). This report is the only new file
+this phase produces.
+
+====================================================================
+2. EXACT PLATFORM STRINGS (confirmed current, not changed)
+====================================================================
+
+  Fallback sender (`src/lib/email/send.ts`):
+    "Nemryn <notifications@nemryn.com>"
+    (used only when `EMAIL_FROM` is unset; `EMAIL_FROM` remains the
+    authoritative production value, unchanged mechanism from P0-S2A)
+
+  Footer / "Sent by" attribution:
+    NONE PRESENT. No "Sent by Zenward Mobility on behalf of…", no
+    "Sent by Nemryn", no "Powered by Nemryn" — no attribution footer of
+    any kind exists in either the plain-text or HTML body. This
+    satisfies the instruction's own permitted alternative ("If a footer
+    is retained, use restrained language such as: Sent through
+    Nemryn.") by the simpler route of retaining none at all — the
+    recipient already sees `Nemryn <notifications@nemryn.com>` as the
+    sender in their own inbox, so a restated attribution line was
+    judged redundant, not overlooked.
+
+  Confirmed NOT present anywhere in `src/`:
+    "Zenward Mobility <..." (as any sender/From value)
+    "Sent by Zenward Mobility on behalf of Zenward Mobility"
+    "no-reply@zenwardmobility.com"
+
+====================================================================
+3. TENANT DYNAMIC IDENTITY PRESERVED
+====================================================================
+
+`organizationName` remains a plain function parameter to
+`buildDriverInviteEmail`, resolved by the caller
+(`createDriverInviteAction`/`resendDriverInviteAction`,
+`src/app/operations/drivers/actions.ts`) from the live,
+server-resolved `organizations` table via the existing, unchanged
+`requireOperationsAccess` flow — never hard-coded, never read from a
+lookup table keyed by anything WL-related (none exists).
+
+**Live-verified this phase**, side by side, exactly per the work item's
+own §5 example:
+
+  ZENWARD MOBILITY EXAMPLE (a fresh operator signed up this phase with
+  business name literally "Zenward Mobility", to test the real case
+  rather than only a differently-named fixture):
+    FROM:    Nemryn <notifications@nemryn.com>
+    SUBJECT: You're invited to drive for Zenward Mobility
+    BODY:    Zenward Mobility has invited you to join their driver team.
+
+  HARMONY MEDICAL TRANSPORT EXAMPLE (an existing seed-fixture
+  organization, playing the role of the work item's "ABC Medical
+  Transport" other-organization example):
+    FROM:    Nemryn <notifications@nemryn.com>
+    SUBJECT: You're invited to drive for Harmony Medical Transport
+    BODY:    Harmony Medical Transport has invited you to join their
+             driver team.
+
+The FROM value was byte-for-byte IDENTICAL across both organizations;
+the SUBJECT/BODY correctly differed, naming each organization by its
+own real name and never mentioning the other's. This is the direct,
+live proof that platform and tenant identity remain correctly
+separated — not merely a code-reading inference.
+
+====================================================================
+4. INVITE TOKEN SECURITY PRESERVED
+====================================================================
+
+Re-verified live this phase (not assumed from an earlier report): after
+creating the "Zenward Mobility" example invite above, the full rendered
+`/operations/drivers` page (its entire `document.documentElement.outerHTML`)
+was scanned for the literal invite token value (fetched independently
+via a direct database query, not from the application) — absent. The
+token is never returned to the browser by `createDriverInviteAction`
+(no `token` field in `DriverInviteActionState`) and is used only
+server-side to build the `/join/<token>` link placed inside the email
+itself, unchanged from P0-S2A.
+
+No change was made to: organization authorization, organization
+resolution, the driver-invite recipient (still read from the invite row,
+immutable on resend), invite-token handling, the `/join/[token]` flow,
+`redeem_driver_invite`, RLS, schema, or migrations. `supabase/migrations/`
+and `supabase/tests/` were confirmed unchanged (file listings identical
+to the pre-phase state; no new `.sql` file exists).
+
+No tenant sender table, tenant DNS verification, per-tenant Resend API
+key, per-tenant domain onboarding, custom sender UI, or new RLS policy
+was added — confirmed by a repository-wide search
+(`find . -iname "*organization_email_sender*" -o -iname
+"*tenant-email-identity*" -o -iname "resolve-organization-identity*"
+-o -iname "address-format*"`, excluding `node_modules`) returning only
+the historical, already-superseded report
+`docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt` — no
+application code or schema.
+
+====================================================================
+5. TESTS
+====================================================================
+
+  npx tsc --noEmit .............................................. PASS (0 errors)
+  npm run lint ................................................... PASS (0 errors;
+    14 warnings, ALL pre-existing, ALL confined to untracked
+    `.tmp-qa/*.mjs` scratch scripts)
+  npm run build ................................................... PASS
+    (`✓ Compiled successfully`)
+  npm test (node --test 'src/**/*.test.mjs') .................... PASS
+    (15/15 — `app-url-core.test.mjs`, unchanged)
+
+  Full SQL suite (22 files, clean DB via `supabase db reset`) ..... 317/317
+    PASS, 0 FAIL — identical to the P0-S1/P0-S2A baseline.
+
+  Driver-invitation-relevant subset, single clean run
+  (`operator_onboarding_tests.sql`, INVITE-1..6 + REDEEM-1..5) ..... all
+    PASS (part of the 317 total above). NOTE: a REDUNDANT second run of
+    this SAME single-shot suite against an already-mutated database (an
+    error on this reviewer's part, not a code defect) produced two
+    false FAILs on "exactly one row" assertions (INVITE-3, REDEEM-1) —
+    this is the well-documented "the suite is single-shot, run it once
+    against a fresh reset" artifact already recorded in the P0-S1 audit
+    report, reproduced here for transparency and then correctly
+    re-verified clean on a freshly reset database (all 40/40 PASS,
+    shown above). No test's expected outcome was altered to obtain
+    this result — the second run's output is not counted as a real
+    result, and is disclosed here rather than concealed, per this
+    phase's own "do not falsely report PASS" discipline.
+
+  Concurrency (2 real two-process races) .......................... 2/2 PASS
+    (`mutation_concurrency_test.sh`, `driver_invite_concurrency_test.sh`)
+
+  Live integration proof (this phase, 10 checks — §3/§4 above):
+    signed up a fresh operator named "Zenward Mobility" .............. PASS
+    Zenward Mobility invite: honest "Invitation sent" ................ PASS
+    FROM is exactly "Nemryn <notifications@nemryn.com>" ............... PASS
+    CONTENT: "Zenward Mobility has invited you to join their driver
+      team." ............................................................ PASS
+    SUBJECT names Zenward Mobility ..................................... PASS
+    Harmony Medical Transport invite: honest "Invitation sent" ........ PASS
+    FROM is the IDENTICAL Nemryn sender (platform/tenant separation) .. PASS
+    CONTENT names Harmony Medical Transport, not Zenward Mobility ...... PASS
+    SUBJECT correctly differs, naming the other organization .......... PASS
+    invite token never appears in the rendered page .................... PASS
+                                                                10/10 PASS
+
+No existing test's expected outcome was edited to make it pass. No RLS
+policy, migration, or SECURITY DEFINER function was touched.
+
+====================================================================
+6. BUILD
+====================================================================
+
+  npm run build → `✓ Compiled successfully` — all routes compiled,
+  no error. (No `database.types.ts` regeneration was needed or
+  performed — the schema is unchanged from HEAD, confirmed by the
+  absence of any new/modified migration file this phase or the prior
+  one once its own rollback completed.)
+
+====================================================================
+7. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   .env.example
+    modified:   docs/deployment/environment-variable-inventory.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   package.json
+    modified:   src/app/operations/drivers/actions.ts
+    modified:   src/components/operations/drivers/DriversPageClient.tsx
+    modified:   src/components/operations/drivers/InviteDriverDialog.tsx
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/
+    docs/deployment/driver-invite-email-production-checklist.md
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt
+    docs/reports/p0-s2a-driver-invite-remediation-validation.txt
+    docs/reports/p0-s2a-wl-rollback-platform-sender.txt
+    docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt
+    docs/reports/p0-s2a-b1-platform-email-identity-correction.txt (this file)
+    src/lib/app-url-core.test.mjs
+    src/lib/app-url-core.ts
+    src/lib/app-url.ts
+    src/lib/email/  (send.ts, driver-invite-email.ts — unchanged this phase)
+
+  git diff --stat — IDENTICAL to the state at the start of this phase
+  (no line changed):
+    .env.example                                      |  25 +++-
+    docs/deployment/environment-variable-inventory.md |  23 ++--
+    docs/product/driver-invite-linkage-model.md       |  99 +++++++++++++-
+    package.json                                       |   3 +-
+    src/app/operations/drivers/actions.ts             | 144 +++++++++++++++++++--
+    src/components/operations/drivers/DriversPageClient.tsx | 60 ++++++---
+    src/components/operations/drivers/InviteDriverDialog.tsx | 34 +++--
+    7 files changed, 338 insertions(+), 50 deletions(-)
+
+Nothing was staged. Nothing was committed. Nothing was pushed. No pull
+request was created. No deploy was triggered.
+
+====================================================================
+END OF REPORT
+====================================================================

@@ -1,0 +1,435 @@
+====================================================================
+PHASE:    P0-S2A-D0 — Production Deployment Preflight
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT COMMIT: 95cb329f7eb163da735808e445387b6c951a3645
+                "Fix production auth email confirmation flow"
+BRANCH:   main (up to date with origin/main)
+MODE:     Read-only preflight verification. No commit, no push, no
+          deploy performed.
+====================================================================
+
+OBJECTIVE
+---------
+Final deployment preflight for the validated P0-S2A driver-invitation
+implementation plus its P0-S2A-B1 Nemryn platform-email correction, now
+that Vercel production infrastructure has been configured manually.
+This is verification only — nothing was staged, committed, or pushed.
+
+====================================================================
+1. WORKING TREE REVIEW
+====================================================================
+
+`git status --short`:
+
+  Changes not staged for commit (tracked, modified):
+    M .env.example
+    M docs/deployment/environment-variable-inventory.md
+    M docs/product/driver-invite-linkage-model.md
+    M package.json
+    M src/app/operations/drivers/actions.ts
+    M src/components/operations/drivers/DriversPageClient.tsx
+    M src/components/operations/drivers/InviteDriverDialog.tsx
+
+  Untracked:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/
+    docs/deployment/driver-invite-email-production-checklist.md
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt
+    docs/reports/p0-s2a-b1-platform-email-identity-correction.txt
+    docs/reports/p0-s2a-d0-production-deployment-preflight.txt (this file)
+    docs/reports/p0-s2a-driver-invite-remediation-validation.txt
+    docs/reports/p0-s2a-wl-rollback-platform-sender.txt
+    docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt
+    src/lib/app-url-core.test.mjs
+    src/lib/app-url-core.ts
+    src/lib/app-url.ts
+    src/lib/email/  (send.ts, driver-invite-email.ts)
+
+`git diff --stat` (7 tracked files, unchanged since P0-S2A-B1):
+  .env.example                                             |  25 +++-
+  docs/deployment/environment-variable-inventory.md        |  23 ++--
+  docs/product/driver-invite-linkage-model.md               |  99 +++++++++++++-
+  package.json                                              |   3 +-
+  src/app/operations/drivers/actions.ts                     | 144 +++++++++++++++++++--
+  src/components/operations/drivers/DriversPageClient.tsx  |  60 ++++++---
+  src/components/operations/drivers/InviteDriverDialog.tsx |  34 +++--
+  7 files changed, 338 insertions(+), 50 deletions(-)
+
+The full diff of `actions.ts` was re-read line by line this phase: it
+adds `deliverDriverInviteEmail` (a try/catch-wrapped helper reducing any
+failure — including a thrown `getAppOrigin()` error — to the same
+`EmailResult` shape), wires it into `createDriverInviteAction`, and adds
+`resendDriverInviteAction` (organization-scoped read of the invite row,
+pending-only, recipient taken from the row not the caller, no row
+mutation). This matches the validated P0-S2A design; nothing new this
+phase.
+
+CONFIRMED: no tenant-email white-label architecture remains anywhere in
+the tree. A targeted search found zero matches for:
+  organization_email_senders
+  upsert_organization_email_sender
+  set_organization_email_verification_status
+  resolve-organization-identity.ts
+in `src/` or `supabase/`. A broader filename search
+(`organization_email_sender*`, `resolve-organization-identity*`,
+`tenant-email-identity*`) found only
+`docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt` — the
+historical record of that rolled-back architecture, deliberately
+preserved per instruction, not application code.
+
+====================================================================
+2. INTENDED DEPLOYMENT FILES
+====================================================================
+
+These carry the actual P0-S2A driver-invite feature and its Nemryn
+platform-sender correction and should be part of the deployment commit:
+
+  Tracked (already modified in the working tree):
+    .env.example
+    docs/deployment/environment-variable-inventory.md
+    docs/product/driver-invite-linkage-model.md
+    package.json
+    src/app/operations/drivers/actions.ts
+    src/components/operations/drivers/DriversPageClient.tsx
+    src/components/operations/drivers/InviteDriverDialog.tsx
+
+  Untracked, new files that belong in the same commit:
+    src/lib/email/send.ts
+    src/lib/email/driver-invite-email.ts
+    src/lib/app-url.ts
+    src/lib/app-url-core.ts
+    src/lib/app-url-core.test.mjs
+    docs/deployment/driver-invite-email-production-checklist.md
+
+  Historical/audit documentation worth carrying along (not functional,
+  but genuine project history — each records a real, completed phase):
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt
+    docs/reports/p0-s2a-driver-invite-remediation-validation.txt
+    docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt
+    docs/reports/p0-s2a-wl-rollback-platform-sender.txt
+    docs/reports/p0-s2a-b1-platform-email-identity-correction.txt
+    docs/reports/p0-s2a-d0-production-deployment-preflight.txt (this file)
+  These are inert `.txt` reports — no code, no secrets, no risk to
+  include, and they explain to a future reader why the codebase looks
+  the way it does (in particular, why a tenant-sender architecture was
+  built and then reverted). Deferring them is also reasonable; this is
+  a judgment call for whoever prepares the actual commit, not a
+  blocker.
+
+  `docs/brand/` and `docs/reports/g1-a-nemryn-brand-foundation-architecture.txt`,
+  `docs/reports/g1-b-nemryn-brand-lock-token-specification.txt`,
+  `docs/reports/n0-g0-r2-auth-fix-deployment.txt` were NOT produced by
+  this phase or by P0-S2A/P0-S2A-B1 — they predate this driver-invite
+  workstream. Whether they belong in THIS deployment commit is outside
+  this phase's scope (this phase only clears the driver-invite/email
+  work for deployment); flagging them here so a human reviewer decides
+  deliberately rather than by accident when staging.
+
+====================================================================
+3. EXCLUDED FILES
+====================================================================
+
+Must NOT be committed:
+
+  .tmp-qa/                — ad hoc scratch E2E scripts written during
+                             earlier debugging sessions (auth-confirm,
+                             join-auth-confirm, n0-g0-audit). Not part
+                             of the application, not a test suite the
+                             project runs (`npm test` only picks up
+                             `src/**/*.test.mjs`), and the sole source
+                             of every lint warning currently reported
+                             (14 warnings, 0 errors, all confined to
+                             this directory). No documented reason to
+                             keep them under version control was found
+                             this phase; recommend deleting or adding
+                             to `.gitignore` at commit time rather than
+                             staging them.
+
+None of the scratch validation scripts written during P0-S2A, P0-S2A-B1,
+or this preflight phase live in the repository at all — every one was
+written to the session scratchpad
+(`/private/tmp/claude-501/.../scratchpad/`), which is outside the git
+working tree and was never a staging candidate.
+
+====================================================================
+4. EMAIL SENDER VERIFICATION
+====================================================================
+
+`src/lib/email/send.ts`, `fromAddress()` — re-read fresh this phase,
+full file:
+
+  function fromAddress(): string {
+    return process.env.EMAIL_FROM?.trim() || "Nemryn <notifications@nemryn.com>";
+  }
+
+`EMAIL_FROM` is the sole production source; the fallback (used only in
+local/unconfigured environments) is Nemryn's own identity, never any
+Zenward-shaped string. `sendViaResend` uses `from: fromAddress()`
+exclusively — no per-tenant lookup exists anywhere in this file or
+elsewhere in the codebase.
+
+Conceptual result, matched to the phase's own expected example:
+
+  FROM:    Nemryn <notifications@nemryn.com>
+  SUBJECT: You're invited to drive for Zenward Mobility
+  BODY:    Zenward Mobility has invited you to join their driver team.
+
+This exact combination was live-verified in the immediately-prior
+P0-S2A-B1 phase (a real signup with business name "Zenward Mobility",
+10/10 checks passed, documented in
+`docs/reports/p0-s2a-b1-platform-email-identity-correction.txt`); no
+code has changed since, so it was re-confirmed here by fresh code
+inspection rather than by re-running the same live scenario a third
+time.
+
+====================================================================
+5. DYNAMIC TENANT IDENTITY VERIFICATION
+====================================================================
+
+`src/lib/email/driver-invite-email.ts` — re-read fresh this phase:
+`organizationName` is a plain `DriverInviteEmailInput` field, used
+directly in `subject` and `text`/`html`, never hard-coded, no
+Zenward-specific branch or default. No "Sent by …"/"Powered by …"
+attribution footer of any kind exists — confirmed by reading the full
+file (104 lines) top to bottom.
+
+`grep -rn "Zenward Mobility <\|Sent by Zenward\|no-reply@zenwardmobility" src/`
+→ 0 matches, repository-wide.
+
+====================================================================
+6. VERCEL ENVIRONMENT VARIABLE PRESENCE CHECK
+====================================================================
+
+Result: MANUAL CONFIRMATION REQUIRED.
+
+The Vercel CLI is not installed in this environment (`vercel` resolves
+to "command not found"; no cached credentials, no project link found).
+No Vercel API/CLI access was available to this phase, so the presence
+of the following Production environment variable NAMES could not be
+verified programmatically:
+
+  RESEND_API_KEY
+  EMAIL_FROM
+  NEXT_PUBLIC_APP_URL
+
+No attempt was made to print, infer, or work around this — per
+instruction, if CLI access is unavailable the correct action is to
+report that manual confirmation is required, which this report does.
+A human with Vercel dashboard/CLI access must confirm these three
+Production variable NAMES exist (values are irrelevant to this check
+and must not be disclosed here regardless).
+
+====================================================================
+7. APP URL VERIFICATION
+====================================================================
+
+Confirmed via `docs/deployment/environment-variable-inventory.md` and
+`.env.example`: the documented production value for `NEXT_PUBLIC_APP_URL`
+remains `https://app.zenwardmobility.com`. No reference to
+`app.nemryn.com` exists anywhere in the codebase or docs — the Nemryn
+domain migration has correctly NOT been started.
+
+`src/lib/app-url.ts`'s `getAppOrigin()` was re-read in full: resolution
+order is (1) `NEXT_PUBLIC_APP_URL`, normalized via
+`resolveConfiguredOrigin`, (2) the request's forwarded host as a
+fallback, with an explicit throw if production resolves to a loopback
+address. This logic is unchanged from P0-S2A/P0-S2A-B1 and does not
+reference any hard-coded domain.
+
+====================================================================
+8. TYPECHECK
+====================================================================
+
+  npx tsc --noEmit → PASS (exit 0, no errors)
+
+====================================================================
+9. LINT
+====================================================================
+
+  npm run lint → PASS
+    0 errors, 14 warnings — all 14 confined to `.tmp-qa/*.mjs` scratch
+    scripts (§3, excluded from deployment), all pre-existing
+    `@typescript-eslint/no-unused-expressions`/`no-unused-vars`
+    warnings, none in any file intended for deployment.
+
+====================================================================
+10. BUILD
+====================================================================
+
+  npm run build → PASS
+    "✓ Compiled successfully in 2.5s", TypeScript pass finished clean,
+    all 35 routes generated (static + dynamic), no build error or
+    warning.
+
+====================================================================
+11. UNIT TESTS
+====================================================================
+
+  npm test (node --test 'src/**/*.test.mjs') → PASS
+    15/15 — all in `src/lib/app-url-core.test.mjs` (origin resolution
+    and loopback-guard behavior). 0 fail.
+
+====================================================================
+12. SQL TESTS
+====================================================================
+
+Full suite run against a freshly reset local database
+(`supabase db reset` immediately before the run, single pass, all 22
+files in `supabase/tests/*.sql`):
+
+  0 real FAIL notices across all 22 files.
+
+NOTE ON METHOD: an initial automated pass this phase used a naive
+`grep -c "FAIL"` count per file and reported 5 apparent failures. On
+inspection, each file's own "=== ... complete — review PASS/FAIL lines
+above ===" completion notice itself contains the substring "FAIL" (as
+part of "PASS/FAIL"), which the naive count matched as a false failure
+even on files with a completely clean run. Re-running with a corrected
+filter (matching only lines beginning "NOTICE: ... TEST ... FAIL",
+excluding the completion-notice line) against a freshly reset database
+showed 0 genuine FAIL lines in any of the 22 files. This is consistent
+with — not a contradiction of — the 317/317 clean result already
+recorded for this exact test tree in P0-S2A-B1; the discrepancy this
+phase was a counting artifact in this phase's own tooling, not a
+regression, and was corrected before being reported. (A second,
+uncorrected re-run of a handful of files directly afterward, without an
+intervening reset, did surface real FAILs — that is the
+separately-documented, already-known "these suites are single-shot,
+re-running without a fresh reset produces false FAILs from accumulated
+fixture data" artifact, reproduced here only as part of diagnosing the
+counting issue, not counted as a result.)
+
+Driver-invitation-relevant assertions specifically (part of the clean
+run above, `operator_onboarding_tests.sql`): INVITE-1 through INVITE-6
+and REDEEM-1 through REDEEM-5 all PASS.
+
+====================================================================
+13. CONCURRENCY TESTS
+====================================================================
+
+  mutation_concurrency_test.sh → PASS
+    CONCURRENCY-1: Session B genuinely blocked ~1.86s on the Trip row
+    lock, then correctly observed Session A's already-committed
+    assignment and was rejected with `assignment_conflict` — real
+    row-level serialization, not a lucky interleaving.
+
+  driver_invite_concurrency_test.sh → PASS
+    INVITE-CONCURRENCY-1: two concurrent redemption attempts on the
+    same invite produced no error and no duplicate row — exactly 1
+    Driver row, exactly 1 Membership row, regardless of which session's
+    transaction actually completed the redemption first.
+
+====================================================================
+14. SECURITY REGRESSION REVIEW
+====================================================================
+
+  Invite token remains server-only:
+    `DriverInviteActionState` and `ResendInviteState` (the only values
+    returned to client components) carry no `token` field. The token is
+    read from `driver_invites` and used only inside server-side
+    `deliverDriverInviteEmail`/`buildDriverInviteUrl` calls. Confirmed
+    by grep: no `.token` reference exists anywhere under
+    `src/components/operations/drivers/`.
+
+  Resend does not create duplicate invite rows:
+    `resendDriverInviteAction` performs a `SELECT` only — no `INSERT`/
+    `UPDATE` against `driver_invites` — confirmed by reading the full
+    function body this phase. `INVITE-CONCURRENCY-1` above and
+    `INVITE-3` in the SQL suite both directly assert "exactly one
+    invite row."
+
+  Cross-tenant resend remains impossible:
+    the function checks `invite.organization_id !== organization
+    .organizationId` and returns `{status:"error"}` on mismatch,
+    before any email is built — a cross-tenant `inviteId` cannot
+    resolve to a send. (Live-verified with a real cross-tenant attempt
+    in the P0-S2A-WL-RB phase; code path unchanged since.)
+
+  Recipient remains immutable:
+    `recipientEmail: invite.email` — the address is read from the
+    stored invite row, never accepted as a parameter from the caller.
+
+  RLS unchanged:
+    `git status`/`git diff --stat` show zero changes under
+    `supabase/` (no migration, no policy file) in this phase or since
+    P0-S2A-B1.
+
+  No service-role key exists in client code:
+    `grep -rn "SUPABASE_SERVICE_ROLE_KEY\|service_role" src/` →
+    0 matches anywhere in the application source tree.
+
+  RESEND_API_KEY is not NEXT_PUBLIC:
+    confirmed — it is read only in `src/lib/email/send.ts`, which
+    declares `import "server-only"` as its first line; no
+    `NEXT_PUBLIC_RESEND_API_KEY` or client-reachable reference exists.
+
+  EMAIL_FROM is not NEXT_PUBLIC:
+    same file, same `server-only` guard; no `NEXT_PUBLIC_EMAIL_FROM`
+    or client-reachable reference exists.
+
+====================================================================
+15. DEPLOYMENT READINESS
+====================================================================
+
+Code, tests, and documentation are ready. One external, non-code item
+remains outside this phase's ability to verify: the Vercel Production
+environment variable NAMES (`RESEND_API_KEY`, `EMAIL_FROM`,
+`NEXT_PUBLIC_APP_URL`) require manual human confirmation via the Vercel
+dashboard or an authenticated `vercel` CLI session, since no such
+access was available here. Everything this phase COULD verify —
+working tree contents, absence of white-label infrastructure, sender/
+tenant-identity correctness, typecheck, lint, build, unit tests, the
+full SQL suite, both concurrency tests, and the security-regression
+checklist — passed cleanly with zero real failures.
+
+====================================================================
+16. GIT STATUS (final, unchanged by this phase)
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  (identical to §1 above — this phase made no working-tree changes)
+
+Nothing was staged. Nothing was committed. Nothing was pushed. No
+deploy was triggered.
+
+====================================================================
+SUMMARY
+====================================================================
+
+PRODUCTION PREFLIGHT: PASS (pending the one manual Vercel confirmation
+noted in §6/§15)
+
+Vercel env names present: MANUAL CONFIRMATION REQUIRED
+  (Vercel CLI not available in this environment)
+
+Platform sender: Nemryn
+
+Tenant name dynamic: YES
+
+App URL: https://app.zenwardmobility.com
+
+Security regression: PASS
+
+Tests: PASS
+  (tsc clean, lint clean, build clean, unit 15/15, SQL suite 0 real
+  FAIL across 22 files on a single clean run, concurrency 2/2)
+
+Ready for deployment authorization: YES, contingent on a human
+  confirming in the Vercel dashboard (or an authenticated `vercel` CLI
+  session) that RESEND_API_KEY, EMAIL_FROM, and NEXT_PUBLIC_APP_URL
+  exist as Production environment variable names — every other
+  precondition this phase can verify has already passed.
+
+====================================================================
+END OF REPORT
+====================================================================

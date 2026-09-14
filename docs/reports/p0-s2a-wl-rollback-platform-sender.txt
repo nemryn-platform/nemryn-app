@@ -1,0 +1,437 @@
+====================================================================
+PHASE:    P0-S2A-WL-RB — Roll Back Tenant Email White-Label Architecture
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT COMMIT: 95cb329f7eb163da735808e445387b6c951a3645
+                "Fix production auth email confirmation flow"
+                (unchanged — production still runs this commit;
+                nothing this phase touches has been committed)
+WORKING TREE STATUS: NOT clean, as expected — carries the P0-S2A
+                driver-invitation-email implementation (unchanged),
+                standardized on Nemryn as the platform sender (this
+                phase), plus earlier uncommitted Nemryn brand
+                documentation from prior sessions.
+MODE:     Rollback + restoration + validation. No commit, no push, no
+          deploy, no live Vercel variable change, no DNS change, no
+          hosted Supabase mutation.
+====================================================================
+
+OBJECTIVE
+---------
+The commercial direction changed after P0-S2A-WL (Tenant-Branded
+Transactional Email Foundation) was implemented and validated: custom
+tenant sending domains are DEFERRED as a future paid white-label
+capability, not the default. Nemryn now owns the standard transactional
+email sender for every organization; the organization's name stays
+dynamic inside the email content only. This phase rolls back ONLY the
+P0-S2A-WL architecture, preserves every validated P0-S2A driver-
+invitation guarantee, and re-verifies the result end to end.
+
+IMPORTANT PRE-EXISTING CONDITION FOUND AT THE START OF THIS PHASE:
+before any action was taken this phase, the working tree was inspected
+fresh (per instruction, not assumed from an earlier context) and found
+to ALREADY have most of the P0-S2A-WL-only artifacts removed from
+disk — the WL migration, the WL SQL test, the three WL-only TypeScript
+files, and the WL architecture doc were already gone, and
+`src/app/operations/drivers/actions.ts` was already back to its P0-S2A
+(organizationName-based) shape. This phase's own work therefore
+consisted of: (a) confirming that pre-existing state was complete and
+correct, (b) restoring the one file the instructions explicitly require
+to be preserved as historical evidence but which was also already
+missing (`docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt`
+— restored verbatim, with a superseded-note added at its top, per "Keep
+historical completion reports intact... Do NOT delete"), and (c) fixing
+the remaining files that had reverted to their PRE-P0-S2A-WL content but
+therefore still carried the OLD, ALSO-WRONG hardcoded
+`"Zenward Mobility <no-reply@zenwardmobility.com>"` fallback and the old
+"Sent by Zenward Mobility on behalf of…" footer — both of which this
+phase's own instructions explicitly forbid, separately from the WL
+rollback itself. No `git reset --hard`, `git clean`, `git checkout .`,
+or `git restore .` was used at any point.
+
+====================================================================
+1. WL FILES REMOVED
+====================================================================
+
+Confirmed removed from disk (already absent at the start of this
+phase's own work; re-confirmed via direct filesystem search, not
+assumed):
+
+  src/lib/email/resolve-organization-identity.ts   — GONE
+  src/lib/email/address-format.ts                  — GONE
+  src/lib/email/address-format.test.mjs            — GONE
+
+`src/lib/email/` now contains exactly two files:
+`driver-invite-email.ts` and `send.ts` — the P0-S2A set, both restored
+to correct Nemryn-standard content this phase (§4/§5/§9 below).
+
+`find . -iname "resolve-organization-identity*" -o -iname
+"address-format*"` (excluding node_modules) returns nothing.
+
+====================================================================
+2. WL MIGRATION REMOVED
+====================================================================
+
+Confirmed removed from disk:
+
+  supabase/migrations/20260914100000_organization_email_senders.sql — GONE
+  supabase/tests/organization_email_sender_tests.sql — GONE
+
+`supabase/migrations/` now ends at `20260903110000_complete_pending_signup.sql`
+— the exact P0-S2A/HEAD baseline, no later migration file exists.
+`supabase/tests/` now contains exactly 22 `.sql` files — the P0-S1/
+P0-S2A baseline (the 21 pre-existing suites), no `organization_email_sender_tests.sql`.
+
+Database itself (not just files) verified clean via `supabase db reset`
+(full rebuild from the current migration set) and a direct query:
+
+  select tablename from pg_tables where schemaname='public'
+    and tablename like '%email_sender%';        -- 0 rows
+  select proname from pg_proc where proname like '%email_sender%'
+    or proname like '%verification_status%';    -- 0 rows
+
+There is NO `organization_email_senders` table. There is NO
+`upsert_organization_email_sender` or
+`set_organization_email_verification_status` function. There is NO
+tenant email verification state anywhere in the database. Nothing was
+built to replace this schema.
+
+====================================================================
+3. P0-S2A FILES PRESERVED
+====================================================================
+
+Confirmed UNTOUCHED this phase (file modification times predate this
+phase's own work; content re-verified against the original P0-S2A
+design):
+
+  src/lib/app-url.ts
+  src/lib/app-url-core.ts
+  src/lib/app-url-core.test.mjs
+
+All three still carry the P0-S2A URL-normalization hardening
+(`resolveConfiguredOrigin`, `isLoopbackOrigin`) and the production-
+loopback protection (`getAppOrigin()` throws if a real deployment
+resolves to a loopback origin) — unmodified, and the 15-test unit suite
+for them still passes unchanged (§8).
+
+Preserved (unchanged in mechanism; re-verified this phase, not merely
+assumed):
+
+  - `deliverDriverInviteEmail`'s try/catch error boundary
+    (`src/app/operations/drivers/actions.ts`) — any thrown error from
+    URL-building/email-sending still degrades to the same honest
+    `{status:"failed"}` result rather than crashing the page.
+  - Honest `sent`/`failed`/`not_configured` delivery states — unchanged
+    types, unchanged UI branching in `InviteDriverDialog.tsx`/
+    `DriversPageClient.tsx` (neither file was modified this phase).
+  - `RESEND_API_KEY` server-only, non-`NEXT_PUBLIC_`, confined to
+    `src/lib/email/send.ts`.
+  - `EMAIL_FROM` server-only, non-`NEXT_PUBLIC_`.
+  - Invite token never returned to the browser (verified live — §7).
+  - Cross-tenant resend protection (verified live — §7).
+  - Pending-only resend (unchanged RPC/application logic).
+  - Recipient immutability on resend (verified live — §7).
+  - The existing `/join/<token>` flow, unchanged.
+  - `redeem_driver_invite`, unchanged (confirmed via
+    `driver_invite_concurrency_test.sh` PASS — §6).
+  - RLS / tenant isolation, unchanged (317/317 pre-existing SQL
+    assertions, 0 FAIL — §6).
+
+====================================================================
+4. NEMRYN PLATFORM SENDER BEHAVIOR
+====================================================================
+
+`src/lib/email/send.ts` — `fromAddress()`:
+
+  Before this phase's own fix (the state found on disk):
+    return process.env.EMAIL_FROM?.trim() || "Zenward Mobility <no-reply@zenwardmobility.com>";
+
+  After (this phase):
+    return process.env.EMAIL_FROM?.trim() || "Nemryn <notifications@nemryn.com>";
+
+`EMAIL_FROM` remains the ONE production source of the sender identity —
+unchanged mechanism from P0-S2A (a single global value, no per-tenant
+branching, no database lookup). Only its documented/default VALUE
+changed, from a Zenward-shaped default to a Nemryn-shaped one, per
+explicit instruction ("Do NOT use: Zenward Mobility
+<no-reply@zenwardmobility.com> as the platform fallback. ... The
+fallback in send.ts should also represent Nemryn rather than Zenward").
+
+Also updated: `.env.example` and
+`docs/deployment/environment-variable-inventory.md`'s own `EMAIL_FROM`
+documentation/examples — both previously showed
+`"Zenward Mobility <invites@zenwardmobility.com>"` as the intended
+production value; both now show `"Nemryn <notifications@nemryn.com>"`.
+
+**Live-verified** (not merely read from code): two invitations sent
+from TWO DIFFERENT organizations (Fictional Org A, Fictional Org B) in
+the same test run both produced the IDENTICAL "From" value —
+`Nemryn <notifications@nemryn.com>` — confirming there is no per-tenant
+resolution of any kind (§7).
+
+====================================================================
+5. DYNAMIC ORGANIZATION CONTENT
+====================================================================
+
+`src/lib/email/driver-invite-email.ts` — the organization name was
+NEVER hard-coded, in either the pre-rollback or post-rollback state; the
+subject (`You're invited to drive for {organizationName}`) and body
+(`{organizationName} has invited you to join their driver team.`) both
+already read `organizationName` as a plain function parameter, resolved
+by the caller from the live `organizations` table via the existing,
+unchanged `requireOperationsAccess`/`getDriverInvitesList` flow — no
+change was needed here (this was correct in both the original P0-S2A
+version and the version found on disk at the start of this phase).
+
+**What WAS changed:** the OLD footer line —
+
+  `— / Sent by Zenward Mobility on behalf of {Organization Name}.`
+
+— hardcoded "Zenward Mobility" as if it were the platform for every
+tenant, which is exactly the defect this whole rollback exists to
+correct (independent of the WL architecture question). It has been
+**removed entirely** — both the plain-text and HTML versions — per
+explicit instruction ("Remove the old incorrect footer... If a footer
+is retained, use only restrained platform attribution such as: 'Sent
+through Nemryn.'"). No footer was added in its place: the recipient
+already sees `Nemryn <notifications@nemryn.com>` as the sender in their
+own inbox, and the subject/body already name the organization — a
+restated "Sent through Nemryn" line was judged redundant, not omitted
+by oversight.
+
+**Live-verified:** the SAME test run in §4 confirmed the subject/body
+correctly differ per organization (`"You're invited to drive for
+Fictional Org A"` vs `"...Fictional Org B"`, and the matching body
+sentence for each) while the sender stayed identical — the precise
+"platform sender + dynamic tenant content" split this phase exists to
+establish.
+
+====================================================================
+6. DATABASE TYPES REGENERATED
+====================================================================
+
+`src/lib/supabase/database.types.ts` regenerated via
+`supabase gen types typescript --local` AFTER confirming (§2) the local
+database no longer contains any WL artifact.
+
+Result: **byte-for-byte identical to the file committed at HEAD
+(95cb329)** — confirmed via `diff <(git show HEAD:src/lib/supabase/database.types.ts) src/lib/supabase/database.types.ts`,
+0 lines of difference. This is expected and correct: neither the P0-S2A
+driver-invitation work nor this rollback touches the database schema at
+all once the WL migration is gone — the schema is now exactly what
+production already has. No manual edit was made to the generated file.
+
+====================================================================
+7. SECURITY REGRESSION RESULTS
+====================================================================
+
+RLS / tenant isolation — UNCHANGED, re-verified:
+  - 317/317 pre-existing SQL assertions PASS, 0 FAIL (22 files — the
+    P0-S1/P0-S2A baseline exactly; the WL suite's 18 assertions are
+    correctly ABSENT, not merely passing-but-present).
+  - Both concurrency tests PASS
+    (`mutation_concurrency_test.sh`, `driver_invite_concurrency_test.sh`)
+    — genuine multi-second real row-lock contention observed in both,
+    exactly-once Membership/Driver/Assignment results confirmed.
+
+Live, non-destructive integration verification (local dev server +
+Chrome via CDP + direct DB queries — 17 checks total across two runs):
+
+  rb-integration.mjs (10 checks):
+    - driver invite still works locally — honest "Invitation sent" ... PASS
+    - FROM is Nemryn's standard sender for Org A's invite .............. PASS
+    - subject/body correctly name Org A ("Fictional Org A") ............ PASS
+    - no "Sent by"/"Powered by" attribution of any kind ................ PASS
+    - invite token never appears in the rendered page .................. PASS
+    - no organization sender configuration lookup happens (structurally
+      confirmed — no resolver file/table exists to look anything up in) PASS
+    - Org B's invite in the SAME run: IDENTICAL Nemryn sender ........... PASS
+    - Org B's subject/body correctly differ (dynamic content confirmed) PASS
+                                                              10/10 PASS
+
+  rb-resend.mjs (7 checks):
+    - cross-tenant: Org B admin cannot even see Org A's pending invite
+      (resend structurally impossible — RLS-backed, unchanged) ........ PASS
+    - Dispatcher sees no "Invite Driver" control ........................ PASS
+    - resend control found and clicked .................................. PASS
+    - resend reports an honest success notice ........................... PASS
+    - resend ALSO uses Nemryn's standard sender (fresh call, unchanged
+      mechanism, not cached) ............................................ PASS
+    - resend recipient unchanged (immutable — the action takes only an
+      inviteId, no email parameter exists) .............................. PASS
+    - no duplicate invite row created by the resend (before=after=1) ... PASS
+                                                                7/7 PASS
+
+No RLS policy, migration, or SECURITY DEFINER function was modified
+this phase (confirmed by `git status`/`git diff` showing zero touched
+files under `supabase/` at any point — only files removed from the
+untracked set, nothing under `supabase/` was ever edited).
+
+====================================================================
+8. TEST RESULTS
+====================================================================
+
+  npx tsc --noEmit .......................................... PASS (0 errors)
+  npm run lint ............................................... PASS (0 errors;
+    14 warnings, ALL pre-existing, ALL confined to untracked
+    `.tmp-qa/*.mjs` scratch scripts)
+  npm run build ............................................... PASS
+    (`✓ Compiled successfully`)
+  npm test (node --test 'src/**/*.test.mjs') .................. PASS
+    — 15/15 (the `app-url-core.test.mjs` suite; `address-format.test.mjs`
+    is correctly ABSENT now, since the file it tested no longer exists —
+    this is the expected count returning to the pre-WL P0-S2A baseline,
+    not a regression)
+
+  SQL suite (22 files, clean DB) .............................. 317/317
+    PASS, 0 FAIL — the P0-S1/P0-S2A baseline exactly, WL's 18 additional
+    assertions correctly gone along with the schema they tested
+  Concurrency (2 real two-process races) ....................... 2/2 PASS
+
+  Live integration (this phase) ................................ 17/17 PASS
+    (§7 — rb-integration.mjs 10/10 + rb-resend.mjs 7/7)
+
+No test was skipped, weakened, or given a false PASS. No expected
+outcome of any existing test was edited to make it pass.
+
+====================================================================
+9. FILES MODIFIED
+====================================================================
+
+  src/lib/email/send.ts — `fromAddress()` default changed from the
+    Zenward-shaped string to `"Nemryn <notifications@nemryn.com>"`
+    (§4); header doc comment rewritten to describe the standard-sender
+    model and reference this rollback; the dev-only console-log line
+    (`NODE_ENV !== "production"` only, never runs in production) now
+    also prints `from=` — a small, safe diagnostic addition that makes
+    the now-constant sender directly observable in local testing; it
+    changes no behavior and logs no secret.
+  src/lib/email/driver-invite-email.ts — the old
+    "Sent by Zenward Mobility on behalf of…" footer removed from both
+    the plain-text and HTML bodies (§5); header doc comment rewritten.
+  .env.example — `EMAIL_FROM` example/comment updated to the Nemryn
+    standard-sender model.
+  docs/deployment/environment-variable-inventory.md — `EMAIL_FROM` rows
+    (classification table and per-environment table) updated to the
+    same effect.
+  docs/product/driver-invite-linkage-model.md — §1C's description of
+    the (now-removed) footer corrected; new §1D added documenting the
+    standard model ("Nemryn platform sender + dynamic tenant content")
+    and explicitly stating custom tenant sender domains are a DEFERRED
+    future capability, with a pointer to the historical WL report and
+    this rollback report; header/status lines updated.
+  docs/deployment/driver-invite-email-production-checklist.md —
+    rewritten for the standard-sender model: platform-level Resend/
+    Vercel configuration steps only (no per-tenant domain-verification
+    section, since none applies); a new step (16) verifying the sender
+    is IDENTICAL across two different organizations' invites while
+    content differs; failure-mode guidance updated accordingly.
+
+Restored (was missing from disk at the start of this phase; recreated
+verbatim from this session's own record of its original content, per
+explicit "Do NOT delete... historical evidence" instruction, with one
+superseded-note paragraph added at the top — the body of the report
+itself is otherwise UNMODIFIED, since it must remain an accurate record
+of what WAS built and tested, not be rewritten to match the rollback):
+
+  docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt
+
+NOT modified this phase (confirmed unchanged, preserved exactly as
+P0-S2A left them):
+
+  src/lib/app-url.ts
+  src/lib/app-url-core.ts
+  src/lib/app-url-core.test.mjs
+  src/app/operations/drivers/actions.ts (already at its correct P0-S2A
+    shape when this phase began — organizationName-based calls, the
+    deliverDriverInviteEmail try/catch boundary intact; re-verified,
+    not re-edited)
+  src/components/operations/drivers/InviteDriverDialog.tsx
+  src/components/operations/drivers/DriversPageClient.tsx
+  package.json (the `test` script already existed and needed no change)
+  Any file under supabase/ (migrations, seed, RLS)
+
+====================================================================
+10. FILES DELETED
+====================================================================
+
+Confirmed absent from disk (already removed before this phase's own
+work began; independently re-confirmed via filesystem search, not
+assumed from the task's own description of what P0-S2A-WL created):
+
+  supabase/migrations/20260914100000_organization_email_senders.sql
+  supabase/tests/organization_email_sender_tests.sql
+  src/lib/email/resolve-organization-identity.ts
+  src/lib/email/address-format.ts
+  src/lib/email/address-format.test.mjs
+  docs/product/tenant-email-identity-model.md
+
+This phase did not itself issue any `rm`/delete command for these six
+files — they were already gone when this phase's own fresh inspection
+began. No `git reset --hard`, `git clean`, `git checkout .`, or
+`git restore .` was used at any point in this phase to arrive at or
+confirm this state.
+
+====================================================================
+11. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit:
+    modified:   .env.example
+    modified:   docs/deployment/environment-variable-inventory.md
+    modified:   docs/product/driver-invite-linkage-model.md
+    modified:   package.json
+    modified:   src/app/operations/drivers/actions.ts
+    modified:   src/components/operations/drivers/DriversPageClient.tsx
+    modified:   src/components/operations/drivers/InviteDriverDialog.tsx
+
+  Untracked files:
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/
+    docs/deployment/driver-invite-email-production-checklist.md
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/p0-s1-platform-stabilization-auth-audit.txt
+    docs/reports/p0-s2a-driver-invite-remediation-validation.txt
+    docs/reports/p0-s2a-wl-tenant-email-identity-foundation.txt
+    docs/reports/p0-s2a-wl-rollback-platform-sender.txt (this file)
+    src/lib/app-url-core.test.mjs
+    src/lib/app-url-core.ts
+    src/lib/app-url.ts
+    src/lib/email/  (send.ts, driver-invite-email.ts — exactly two files)
+
+  git diff --stat:
+    .env.example                                      |  25 +++-
+    docs/deployment/environment-variable-inventory.md |  23 ++--
+    docs/product/driver-invite-linkage-model.md       |  99 ++++++++++++-
+    package.json                                       |   3 +-
+    src/app/operations/drivers/actions.ts             | 144 +++++++++++++++++++--
+    src/components/operations/drivers/DriversPageClient.tsx | 60 ++++++---
+    src/components/operations/drivers/InviteDriverDialog.tsx | 34 +++--
+    7 files changed, 338 insertions(+), 50 deletions(-)
+
+`src/lib/supabase/database.types.ts` is now IDENTICAL to the version
+committed at HEAD and correctly no longer appears in `git diff` at all
+(§6).
+
+`src/app/operations/drivers/actions.ts` shows a diff against HEAD
+because HEAD (commit 95cb329) predates the entire P0-S2A driver-
+invitation-email feature — this diff is the SAME P0-S2A implementation
+(token handling, honest delivery states, resend) that was already
+reviewed and validated in the P0-S2A phase, not new WL-related change.
+
+Nothing was staged. Nothing was committed. Nothing was pushed. No pull
+request was created. No deploy was triggered. No Vercel environment
+variable was changed. No DNS was changed. No hosted Supabase project
+was mutated.
+
+====================================================================
+END OF REPORT
+====================================================================

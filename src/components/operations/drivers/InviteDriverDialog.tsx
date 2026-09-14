@@ -33,17 +33,33 @@ export function InviteDriverDialog({ onClose }: InviteDriverDialogProps) {
   }, [state, router]);
 
   if (state.status === "success" && state.invite) {
+    const emailSent = state.delivery === "sent";
     return (
-      <Dialog open onClose={onClose} title="Invite sent">
+      <Dialog open onClose={onClose} title={emailSent ? "Invitation sent" : "Invite created"}>
         <div className="flex flex-col gap-zw-md">
-          <p className={cn(typography.body, "text-text-primary")}>
-            {state.invite.reused ? "Refreshed the existing invite for" : "Invited"} <strong>{state.invite.email}</strong> to
-            join as a driver.
-          </p>
-          <p className={cn(typography.bodySmall, "text-text-secondary")}>
-            They&apos;ll sign up (or sign in) with this exact email address, then follow the invite link to complete
-            setup.
-          </p>
+          {emailSent ? (
+            <>
+              <p className={cn(typography.body, "text-text-primary")}>
+                {state.invite.reused ? "Refreshed the invite and sent it again to" : "Sent an invitation to"}{" "}
+                <strong>{state.invite.email}</strong>.
+              </p>
+              <p className={cn(typography.bodySmall, "text-text-secondary")}>
+                They&apos;ll open the link in the email, create an account with this exact address, confirm it, and
+                land in the driver app.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className={cn(typography.body, "text-text-primary")}>
+                The invite for <strong>{state.invite.email}</strong> was created, but the invitation email could not be
+                sent{state.delivery === "not_configured" ? " — email delivery is not configured for this environment" : ""}.
+              </p>
+              <p className={cn(typography.bodySmall, "text-text-secondary")}>
+                The invite is valid. Resend it from the <strong>Pending Invites</strong> list once delivery is working —
+                this does not create a duplicate.
+              </p>
+            </>
+          )}
           <div className="flex justify-end pt-zw-sm">
             <Button type="button" onClick={onClose}>
               Done

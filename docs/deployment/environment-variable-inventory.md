@@ -1,26 +1,29 @@
 # Zenward Platform — Environment Variable Inventory
 
-**Work item:** P1-E4-S0 — Cloud Staging Foundation & S9 Validation, §3 (re-confirmed unchanged by P1-E4-S0A)
-**Status:** Audited directly against the current application code (`grep -rn "process\.env\."` across `src/`, plus every `.env*` file and `supabase/config.toml`) — nothing here is assumed from older docs. P1-E4-S0A re-verified this inventory is still exhaustive (no new `process.env.*` reference was introduced by the sign-in polish or any other change this phase) and needed no content change beyond this note.
-**Last updated:** 2026-09-03
+**Work item:** P1-E4-S0 — Cloud Staging Foundation & S9 Validation, §3 (re-confirmed unchanged by P1-E4-S0A; **extended by G0-R3 — Driver Invitation Email Delivery**)
+**Status:** Audited directly against the current application code (`grep -rn "process\.env\."` across `src/`, plus every `.env*` file and `supabase/config.toml`) — nothing here is assumed from older docs. **G0-R3 update:** the driver invitation email introduced the first genuinely server-only environment variables (`RESEND_API_KEY`, `EMAIL_FROM`) and made `NEXT_PUBLIC_APP_URL` a real dependency for the first time.
+**Last updated:** 2026-09-08
 
 ## The complete set
 
-The current application reads exactly **3** environment variables, plus Next.js's own built-in `NODE_ENV`. This is the full set — confirmed by direct code search, not inferred from `.env.example`.
+The current application reads **5** environment variables plus Next.js's own built-in `NODE_ENV` — confirmed by direct code search, not inferred from `.env.example`.
 
 | Variable | Classification | Read by | Purpose |
 |---|---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | **BROWSER SAFE** | `src/lib/supabase/env.ts` → browser client, server client, proxy.ts | The Supabase project's API endpoint. Safe for the browser bundle — it names a location, not a credential. |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | **BROWSER SAFE** | Same 3 call sites | The Supabase **publishable** (anon) key — deliberately the ONLY Supabase key this application ever uses, anywhere, browser or server (`docs/security/application-auth-boundary.md`). It grants no privilege by itself; every access decision is enforced by RLS/RPC authorization against the caller's real session. **Never the service-role/secret key** — that key does not appear anywhere in this codebase, `.env.example`, or any doc, and must never be added to a `NEXT_PUBLIC_*` variable if a future phase ever needs it for a genuinely trusted server-only path. |
-| `NEXT_PUBLIC_APP_URL` | **BROWSER SAFE** (currently unused) | Declared in `.env.example`/`.env.local` — **confirmed via `grep -rn "NEXT_PUBLIC_APP_URL" src/`: read by ZERO application code right now.** | Reserved for a future absolute-URL need (e.g., building a link inside an email template, or an OG/meta tag) — currently vestigial. Harmless to set correctly in every environment regardless; not a functional dependency today. |
-| `NODE_ENV` | **SERVER ONLY** (Next.js built-in, never user-set) | `src/app/select-organization/actions.ts` (`secure: process.env.NODE_ENV === "production"` on the org-context cookie) | Automatically `"production"` on every Vercel deployment (both Preview and Production environments), `"development"` locally — this is what makes the session cookie's `Secure` flag automatically correct in every environment without any code change. |
+| `NEXT_PUBLIC_APP_URL` | **BROWSER SAFE** (now used — G0-R3) | `src/lib/app-url.ts` (`getAppOrigin`) → `createDriverInviteAction` / `resendDriverInviteAction` build the `/join/<token>` link inside the driver invitation email. Falls back to the request's forwarded host if unset. | The application's own canonical absolute origin, for absolute links that leave the app (currently: the driver invitation email). Was reserved for exactly this; as of G0-R3 it is a real functional dependency for correct invite links (a wrong value produces an unreachable link). Still browser-safe — it names a location, not a credential. |
+| `RESEND_API_KEY` | **SERVER ONLY — SECRET** | `src/lib/email/send.ts` only (module is `import "server-only"`; the variable name is deliberately NOT `NEXT_PUBLIC_`) | The Resend (https://resend.com) API key for sending the driver invitation email. **Never exposed to the browser, never logged, never written to a doc/report.** Absent in local dev → the email is logged to the server console instead of sent. Absent in production → invites are created but the operator is honestly told the email was not sent. |
+| `EMAIL_FROM` | **SERVER ONLY** (not a secret, but server-scoped) | `src/lib/email/send.ts` only | The `From:` address on transactional email — **Nemryn's own standard platform sender**, used for every organization (e.g. `"Nemryn <notifications@nemryn.com>"`). There is no per-tenant sender domain; the organization's real name still appears dynamically in the email subject/body, only the technical sender is fixed. Must be an address on a domain verified in the Resend account. Defaults to a neutral placeholder if unset — never a tenant-shaped default. |
+| `NODE_ENV` | **SERVER ONLY** (Next.js built-in, never user-set) | `src/app/select-organization/actions.ts` (`secure` cookie flag); `src/lib/email/send.ts` (dev console transport only when no `RESEND_API_KEY`) | Automatically `"production"` on every Vercel deployment, `"development"` locally. |
 
-**That is the entire inventory.** No other `process.env.*` reference exists anywhere in `src/` (confirmed by direct grep, not sampled).
+**That is the entire inventory.** No other `process.env.*` reference exists anywhere in `src/` (confirmed by direct grep after G0-R3, not sampled).
 
 ## What does NOT exist in this codebase (confirmed, not assumed)
 
 - **No service-role / secret Supabase key** is read, stored, or referenced anywhere in application code, `.env.example`, or any committed doc.
-- **No `NEXT_PUBLIC_*` variable carries anything privileged.** All three public variables are safe by their own design (publishable key + a location string), not merely "safe because nobody looks."
+- **No `NEXT_PUBLIC_*` variable carries anything privileged.** All three public variables are safe by their own design (publishable key + two location strings), not merely "safe because nobody looks."
+- **`RESEND_API_KEY` is the first true secret this application reads.** It is confined to one `server-only` module (`src/lib/email/send.ts`), never bundled for the browser, never logged, never placed in a doc/report. It is the model for how any future server-only credential must be handled — a non-`NEXT_PUBLIC_` name, a `server-only` module, a discriminated result instead of a thrown provider error.
 - **No hardcoded `localhost`/`127.0.0.1` string** exists anywhere in `src/` (see `docs/deployment/staging-architecture.md` §Localhost Assumption Audit for the full search).
 
 ## Per-environment values required
@@ -29,7 +32,9 @@ The current application reads exactly **3** environment variables, plus Next.js'
 |---|---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | `http://127.0.0.1:54331` (local Supabase CLI stack) | `https://wyocbivzgrbekuyqdfts.supabase.co` (the linked "ZenwardApp Staging" project's own API URL) | A DIFFERENT, dedicated production Supabase project's URL — **never the staging project's URL.** Not created this phase (work item §15's explicit prohibition). |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The local stack's own anon key (in `.env.local`, gitignored) | The staging project's own publishable key, set as a Vercel Environment Variable (Project Settings → Environment Variables) — **never committed to git, never placed in a doc or report** | A different production project's own publishable key |
-| `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | `https://zenward-app-staging.vercel.app` — the confirmed, working staging deployment URL (see `docs/deployment/staging-auth-configuration.md` §Confirmed staging URL) | The real production domain, once one exists |
+| `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | `https://app.zenwardmobility.com` — the deployment's own reachable origin (invite links are built from this) | `https://app.zenwardmobility.com` (or the production domain in effect) |
+| `RESEND_API_KEY` | *(leave blank — dev logs the email to the console)* | A Resend API key (`re_…`), set only as a Vercel Environment Variable — never committed | A Resend API key for the production Resend account |
+| `EMAIL_FROM` | *(leave blank — a placeholder is used)* | `"Nemryn <notifications@nemryn.com>"` (or equivalent) on a Resend-verified domain | Same — Nemryn's own domain, not a tenant's |
 
 ## Where each environment's values actually live
 
