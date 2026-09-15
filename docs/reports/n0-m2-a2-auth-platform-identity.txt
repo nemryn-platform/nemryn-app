@@ -1,0 +1,573 @@
+N0-M2-A2 — AUTH + UNAUTHENTICATED NEMRYN IDENTITY
+==================================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD (start and end of phase, unchanged): a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (in sync)
+Branch: main
+Report generated: 2026-09-15T02:06:25Z
+Git actions taken: NONE (no commit, no push, no stage — working tree only)
+
+This phase converts platform-owned unauthenticated/account surfaces from
+Zenward-branded to Nemryn-branded, while preserving tenant identity
+wherever tenant content is dynamically rendered (organization_name).
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (matches HEAD)
+- Nothing was staged at any point in this phase (`git add` was never run).
+
+
+2. A1A INHERITED WORKING-TREE STATE
+----------------------------------------
+`git status -sb` at phase start showed exactly the expected N0-M2-A1A
+working-tree modifications (41 files — the design-token/typography
+foundation: globals.css, typography.ts, layout.tsx font imports,
+OperationsSidebar.tsx navy->chrome rename, every brand-interactive-teal
+consumer, foundation/page.tsx), the standing set of untracked report/
+scratch files from prior phases, `docs/brand/` (pre-existing brand
+documentation), and the brand asset pack under `public/`. This matched
+expectations exactly — no unexpected drift from any other source. Per
+every prior phase's own repeated instruction, none of the N0-M2-A1A
+changes were reverted, rewritten, or altered in any way during this
+phase; all edits in this phase are additive on top of that state.
+
+
+3. FINAL BRAND-PACK VERIFICATION
+------------------------------------
+The phase's own stated premise — "the brand folder has now been
+normalized to: public/brand/" — was independently verified and found
+FALSE at phase start: the directory was still literally `public/Brand`
+(capital B) on disk, confirmed via `ls -la public/`, `find public
+-maxdepth 1 -type d`, and `find public -iname "brand" -type d` (all
+returning `public/Brand`). The directory HAD been flattened since
+N0-M2-A1B (no more nested `Nemryn-SVG-Master-Pack` subdirectory), but the
+casing itself was never corrected.
+
+Per this phase's own instruction to "verify [these claims] before
+implementation" rather than blindly trust them, and because §2/§6/§7/§12
+of this phase's own instructions assume a working literal `public/brand/`
+path throughout, I performed a pure directory rename — `public/Brand` →
+`public/brand` — via `mv`. This is a directory-name-only operation: it
+does not redraw, retrace, stretch, rotate, alter, replace, rename, or
+regenerate any of the 10 files inside it, and is therefore outside the
+LOCKED ARTWORK RULE's prohibitions (which govern the asset files
+themselves, not their containing folder name). SHA-256 checksums were
+computed before and after the rename — see §15 — and are byte-identical.
+
+Post-rename, `public/brand/` contains exactly:
+  README.txt
+  nemryn-app-icon.svg
+  nemryn-favicon.svg
+  nemryn-logo-inverse.svg
+  nemryn-logo-on-steel-blue.svg
+  nemryn-logo-primary-preview.png
+  nemryn-symbol-inverse.svg
+  nemryn-symbol-primary.svg
+  nemryn-wordmark-inverse.svg
+  nemryn-wordmark-primary.svg
+
+Of the 8 named files this phase's §2 expected (nemryn-logo-primary.svg,
+nemryn-logo-inverse.svg, nemryn-symbol-primary.svg, nemryn-symbol-
+inverse.svg, nemryn-wordmark-primary.svg, nemryn-wordmark-inverse.svg,
+nemryn-favicon.svg, nemryn-app-icon.svg), 7 are present. The 8th —
+`nemryn-logo-primary.svg` — is NOT present, despite the phase's second
+stated premise ("the missing approved: nemryn-logo-primary.svg has now
+been supplied") also being independently verified and found FALSE:
+`find public/brand -iname "*logo-primary*"` returns only
+`nemryn-logo-primary-preview.png` (a raster preview, not the SVG
+master), and a broader `find public -iname "*.svg" -o -iname "*.png" |
+grep -i brand` confirms the same 9 real files with no
+`nemryn-logo-primary.svg` present anywhere in the repository. This is
+the identical gap N0-M2-A1B already reported — it remains unresolved.
+
+README.txt was inspected (not modified) and still lists
+`nemryn-logo-primary.svg` in its own MASTER FILES manifest as "approved
+symbol + wordmark, Deep Graphite" — confirming the gap is a genuine
+missing deliverable, not a naming mismatch on my part.
+
+No asset file was modified. See §15 for the full before/after checksum
+comparison.
+
+
+4. PRIMARY-LOGO VALIDATION
+-------------------------------
+Not performed — there is nothing to validate. `nemryn-logo-primary.svg`
+does not exist in this repository at any path (see §3). Per this
+phase's own instruction ("do not assume the filename match is
+sufficient... verify it") and N0-M2-A1B's established precedent ("Do
+NOT create a variant to fill a missing role"), no substitute was
+synthesized, derived, or manually composed from the symbol+wordmark
+files that DO exist. This blocks §6/§7 (light-surface logo swap) for
+every light-background call site — see §11/§13.
+
+
+5. EXACT FILES MODIFIED BY N0-M2-A2
+----------------------------------------
+15 files touched this phase (14 modified + 1 deleted), 87 insertions /
+42 deletions, isolated from the pre-existing A1A diff by diffing these
+paths alone:
+
+  src/app/access-unavailable/page.tsx        |  4 +-
+  src/app/auth/auth-code-error/page.tsx      |  7 +-
+  src/app/auth/reset-password/page.tsx       |  7 +-
+  src/app/complete-signup/form/page.tsx      |  2 +-
+  src/app/favicon.ico                        | Bin 25931 -> 0 (deleted)
+  src/app/forgot-password/page.tsx           |  5 +-
+  src/app/join/[token]/page.tsx              | 14 +-
+  src/app/layout.tsx                         | 46 +-  (also carries A1A's own font-import diff — the two coexist in this one file)
+  src/app/onboarding/driver/page.tsx         |  2 +-
+  src/app/onboarding/layout.tsx              |  1 +
+  src/app/select-organization/page.tsx       |  6 +-
+  src/app/sign-in/page.tsx                   | 19 +-
+  src/app/sign-up/page.tsx                   | 10 +-
+  src/components/auth/ResetPasswordForm.tsx  |  4 +-
+  src/lib/auth/errors.ts                     |  2 +-
+
+Plus the non-code directory rename `public/Brand` -> `public/brand`
+(§3), which is not a source-file diff and does not appear in
+`git diff --stat` since the directory was never git-tracked.
+
+No file outside this list, and outside the pre-existing A1A diff, was
+touched. In particular: zero touch to `supabase/` (any path),
+`src/lib/email/`, `src/app/auth/confirm/`, `public/images/zenward-
+mobility-logo.png`, `src/components/operations/OperationsSidebar.tsx`,
+`src/components/operations/AccountMenu.tsx`, or any public-facing
+transportation-business surface (PublicHeader/PublicFooter/driver
+invitation email content) — confirmed via `git status --porcelain`
+against the full expected exclusion list.
+
+
+6. ROOT METADATA CHANGES
+-----------------------------
+File: src/app/layout.tsx
+
+Before:
+  export const metadata: Metadata = {
+    title: "Zenward Mobility",
+    description: "Non-emergency medical transportation.",
+  };
+
+After:
+  export const metadata: Metadata = {
+    title: { default: "Nemryn", template: "%s | Nemryn" },
+    description: "Operating infrastructure for medical transportation.",
+    icons: { icon: "/brand/nemryn-favicon.svg" },
+  };
+
+The title template means every page-level `metadata.title` set below
+(e.g. "Sign in") automatically renders as "Sign in | Nemryn" without
+each page needing to spell out the suffix — confirmed live via curl and
+CDP title reads across all touched routes (§16/§17).
+
+
+7. AUTH-PAGE IDENTITY CHANGES
+----------------------------------
+Route-by-route summary (platform-owned copy and metadata only; tenant
+content left untouched where present):
+
+- /sign-in (src/app/sign-in/page.tsx)
+    title: "Sign in — Zenward Mobility" -> "Sign in" (renders "Sign in | Nemryn")
+    body: "Sign in to continue to Zenward." -> "Sign in to continue to Nemryn."
+    body: "New to Zenward?" -> "New to Nemryn?"
+    logo: unchanged (BLOCKED, see §4/§11) — inline comment added
+
+- /sign-up (src/app/sign-up/page.tsx)
+    title: "Sign up — Zenward Mobility" -> "Sign up"
+    body: "Set up Zenward for your transportation business." -> "Set up Nemryn for your transportation business."
+    logo: unchanged (BLOCKED) — inline comment added
+
+- /forgot-password (src/app/forgot-password/page.tsx)
+    title: "Forgot password — Zenward Mobility" -> "Forgot password"
+    logo: unchanged (BLOCKED) — inline comment added
+    (no other platform-brand body copy existed on this page)
+
+- /auth/reset-password (src/app/auth/reset-password/page.tsx)
+    title: "Reset password — Zenward Mobility" -> "Reset password"
+    logo: unchanged (BLOCKED) — inline comment added
+    ResetPasswordForm.tsx success copy: "continue to Zenward." -> "continue to Nemryn."
+
+- /auth/auth-code-error (src/app/auth/auth-code-error/page.tsx)
+    title: "Link expired — Zenward Mobility" -> "Link expired"
+    logo: unchanged (BLOCKED) — inline comment added
+
+- /complete-signup/form (src/app/complete-signup/form/page.tsx)
+    title: "Complete your account — Zenward Mobility" -> "Complete your account"
+    (no logo on this page; no other platform-brand body copy)
+    Note: /complete-signup itself is a Route Handler (route.ts), not a
+    page — it performs redirects only and carries no title/copy to
+    migrate. No Zenward string found in it.
+
+- /access-unavailable (src/app/access-unavailable/page.tsx)
+    title: "Access unavailable — Zenward Mobility" -> "Access unavailable"
+    body: "does not currently have access to a Zenward organization." -> "does not currently have access to a Nemryn workspace."
+
+- /select-organization (src/app/select-organization/page.tsx)
+    title: "Select organization — Zenward Mobility" -> "Select workspace" (renders "Select workspace | Nemryn")
+    heading: "Select an organization" -> "Select a workspace"
+    body: "more than one Zenward organization" -> "more than one Nemryn workspace"
+    OrganizationSelector.tsx: inspected, contains zero hard-coded platform
+    strings — membership.organizationName is already fully dynamic;
+    nothing to change (confirmed non-finding).
+
+- /join/[token] (src/app/join/[token]/page.tsx) — see §10 for full detail
+    title: "Join — Zenward Mobility" -> "Join"
+    platform frame logo: unchanged (BLOCKED) — inline comment added,
+    explicitly reiterating the tenant-boundary rule at the exact call site
+    invitation body (organizationName, invitedDisplayName): untouched,
+    remains fully dynamic
+
+src/lib/auth/errors.ts — AUTH_ERROR_MESSAGE.NO_ACTIVE_MEMBERSHIP:
+  "does not currently have access to a Zenward organization." ->
+  "does not currently have access to a Nemryn workspace."
+  (error CODE identifiers, all other messages, and every other file in
+  src/lib/auth/ left untouched — see §13.)
+
+
+8. ONBOARDING CHANGES
+--------------------------
+onboarding/layout.tsx: logo unchanged (BLOCKED) — inline comment added.
+`organization.organizationName` in the header: already dynamic before
+this phase, untouched, confirmed still correct live (§16).
+
+onboarding/driver/page.tsx body: "Zenward supports that." -> "Nemryn
+supports that."
+
+onboarding/basics/page.tsx: one HISTORICAL code comment ("since
+Zenward's own initial launch territory is Georgia") left unchanged —
+not user-visible, not platform branding (see §12).
+
+onboarding/page.tsx (Business Stage, step 1): inspected, contains zero
+Zenward references; nothing to change (confirmed non-finding).
+
+No business-logic, org-creation, or membership-creation code was
+touched — `requireOnboardingAccess` and all onboarding Server Actions
+are unchanged.
+
+
+9. ORGANIZATION-SELECTOR CHANGES
+-------------------------------------
+See §7's /select-organization entry. `OrganizationSelector.tsx` itself
+required no change — it already rendered `membership.organizationName`
+per row with zero hard-coded platform or tenant strings. Only the parent
+page's static heading/description/title were platform copy and were
+updated to neutral "workspace" terminology, consistent with
+docs/brand/nemryn/11-brand-lock-v1.md's terminology decision
+("customer-facing UI = workspace"; the `organizations` DB table itself
+was not renamed, consistent with that same document). Actual
+organization names in the selection list were not altered — confirmed
+live rendering real fixture names "Fictional Org A" / "Fictional Org B"
+unchanged (§16).
+
+
+10. JOIN PLATFORM-VS-TENANT VALIDATION
+-------------------------------------------
+Verified by direct inspection of the rendered HTML (via curl) after
+implementation, using a fresh local `driver_invites` fixture (org
+"Fictional Org A", invited driver "V. Tester", created directly in the
+local database for this validation — a controlled fixture, not
+production data):
+
+  <title>Join | Nemryn</title>                          <- PLATFORM, Nemryn
+  <h1>Join Fictional Org A</h1>                          <- TENANT, dynamic
+  "You've been invited to drive for Fictional Org A       <- TENANT, dynamic
+   as V. Tester. Create your account to get started."
+
+This confirms the platform frame (title, chrome) is Nemryn-only while
+the invitation body remains fully driven by `organizationName` /
+`invitedDisplayName` from `get_driver_invite_preview` — never
+hard-coded to Nemryn, exactly as required. The shell's logo remains the
+interim Zenward asset (BLOCKED, §4), with an inline comment at that
+exact call site reiterating the tenant-boundary rule so a future editor
+does not accidentally co-brand it once the asset is available.
+
+
+11. FAVICON IMPLEMENTATION
+-------------------------------
+Mechanism: Next.js App Router Metadata API `icons` field
+(src/app/layout.tsx's `export const metadata`), pointing directly at
+the locked asset's public path: `icons: { icon: "/brand/nemryn-favicon.svg" }`.
+
+This references the file in place — no copy was made into `src/app/` as
+an `icon.svg` convention file, and the SVG's contents were not read,
+converted, or re-encoded in any way. Confirmed live: every touched route
+renders `<link rel="icon" href="/brand/nemryn-favicon.svg">` (verified
+via CDP `document.querySelector('link[rel="icon"]').href` across all 16
+screenshot captures in §16/§17 — output consistently
+`http://localhost:3000/brand/nemryn-favicon.svg`).
+
+`src/app/favicon.ico` (a git-tracked file, part of committed HEAD) was
+removed from the working tree so it can no longer generate a competing
+`<link rel="icon" href="/favicon.ico">` tag via Next's own file-based
+favicon convention, which would otherwise take precedence over the
+Metadata API entry in some browsers. This is a reversible working-tree
+change (`git checkout -- src/app/favicon.ico` restores it); nothing was
+committed. Confirmed via `npm run build`: route count dropped from 37 to
+36 following removal, consistent with the special-file favicon.ico
+route no longer being generated — no other route was affected.
+
+
+12. LOGO SIZING / ASPECT-RATIO HANDLING
+--------------------------------------------
+Not applicable this phase. §7's instruction to use the actual intrinsic
+aspect ratio of `nemryn-logo-primary.svg` cannot be carried out because
+that file does not exist (§4). All light-surface logo `<Image>` call
+sites (`/sign-in`, `/sign-up`, `/forgot-password`, `/auth/reset-
+password`, `/auth/auth-code-error`, `/join/[token]`, `/onboarding`
+layout) were left at their pre-existing `width={240} height={80}` (or
+`width={160} height={53}` for onboarding) dimensions, still rendering
+the interim Zenward asset at its own correct aspect ratio — no
+stretch/crop was introduced because no swap was performed. This is a
+deliberate, honest non-change, not an oversight.
+
+The dark-background `OperationsSidebar.tsx` sizing was not touched — it
+is explicitly excluded from this phase (§13 exclusions) and was already
+unblocked in N0-M2-A1B (its own approved asset, `nemryn-logo-
+inverse.svg`, exists) but remains a decision for N0-M2-A3.
+
+
+13. REMAINING ZENWARD-STRING CLASSIFICATION
+------------------------------------------------
+Final `grep -rniE "zenward"` across every file this phase's §5 names
+(all auth/account routes, src/lib/auth/errors.ts, src/components/auth/)
+returns exactly these categories, each individually confirmed allowed:
+
+  a) The interim Zenward logo `<Image src="/images/zenward-mobility-
+     logo.png" alt="Zenward Mobility">` at 7 light-background call
+     sites (sign-in, sign-up, forgot-password, reset-password,
+     auth-code-error, join, onboarding) — BLOCKED pending the missing
+     nemryn-logo-primary.svg (§4), the file itself untouched per this
+     phase's own "do not modify public/images/zenward-mobility-
+     logo.png" instruction.
+
+  b) My own N0-M2-A2 inline code comments at each of those 7 call
+     sites, documenting the blocked status and pointing to this report
+     — these intentionally contain the word "Zenward" in describing the
+     interim state, not as rendered platform copy.
+
+  c) One HISTORICAL code comment in onboarding/basics/page.tsx
+     ("since Zenward's own initial launch territory is Georgia") —
+     not user-visible, explains a timezone-default business decision,
+     unrelated to platform branding.
+
+No hard-coded Zenward PLATFORM identity remains in any user-visible
+string across the A2 surface set other than the explicitly-blocked
+interim logo `alt` text itself, which is inherent to using that asset
+and cannot be separated from it without fabricating new alt text for an
+asset this phase does not own.
+
+A broader sanity check confirms the explicitly-excluded surfaces
+(OperationsSidebar.tsx, AccountMenu.tsx, PublicHeader/PublicFooter,
+driver invitation email content, operations pages) were not touched by
+this phase — their own pre-existing Zenward references (in-scope for
+N0-M2-A3/A4) are unchanged.
+
+
+14. TENANT-BOUNDARY PROTECTION
+-----------------------------------
+Verified directly (not just by code inspection) via the live join-page
+render in §10: `organizationName` and `invitedDisplayName` remain fully
+dynamic, sourced from `get_driver_invite_preview`, with zero hard-coded
+Nemryn substitution anywhere in the invitation body. The onboarding
+frame's `organization.organizationName` and the organization-selector's
+`membership.organizationName` were independently confirmed the same way
+via live screenshots (§16) showing real fixture org names "Fictional
+Org A" / "Fictional Org B" rendered correctly alongside the new Nemryn
+platform copy. No organization/tenant name was altered, normalized, or
+replaced anywhere in this phase.
+
+
+15. LOCKED-ASSET CHECKSUM COMPARISON
+------------------------------------------
+SHA-256 of every file in public/brand/, computed immediately before the
+directory rename (§3) and again after all implementation work in this
+phase was complete:
+
+  README.txt                       f4d8e59c9ca2a0f53960d931b850fb5874782504a9b204ee3a33a38d5b95bfe3
+  nemryn-app-icon.svg               c8eb57659441b48f6278e5be86b7c4777dca3b1a5b2464b6eecfe7922e70ce4d
+  nemryn-favicon.svg                1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-logo-inverse.svg           6b467688110c3bb5e8f95786b89f71a2996c98b967cbe6d94697550f4501c956
+  nemryn-logo-on-steel-blue.svg     c214d384be154b97a2c10bfc9f7316deb3a7bcaf3def85ccc7631ed2057959cd
+  nemryn-logo-primary-preview.png   c0f15ff955dfa9b94eb3f5850160518dceaa4c55f8f91a5b1a635d529a245411
+  nemryn-symbol-inverse.svg         2dc2406e3d8866654b4c495221c21859e64d4c26683e3fedd84510ea03720439
+  nemryn-symbol-primary.svg         1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-wordmark-inverse.svg       b534897122bbe05c9e0032f6b9734ab2d0a5939945b72ca3d6a22ec1096b064f
+  nemryn-wordmark-primary.svg       c3783686ed84feb33e7fbc53eb05c89fb9685fe3d5d9cfc124ac66a26916c9c0
+
+RESULT: IDENTICAL before and after (every file, every phase step,
+including N0-M2-A1B's own original recording). No hash changed. The
+directory rename touched only the containing folder's name, never file
+bytes. No asset was redrawn, converted, resized, or regenerated.
+
+
+16. DESKTOP VALIDATION (1400×900)
+--------------------------------------
+Captured via headless Chrome + CDP for all 8 named screens (plus
+select-organization and onboarding, which require an authenticated
+fixture session): /sign-in, /sign-up, /forgot-password, /auth/reset-
+password, /auth/auth-code-error, /join/[token] (fixture token), /select-
+organization (multi-org-user@example.test fixture), /onboarding
+(org-a-admin@example.test fixture).
+
+All 8 desktop captures: zero horizontal overflow
+(`document.documentElement.scrollWidth > clientWidth + 2` = false on
+every screen), correct Nemryn titles, correct favicon link
+(/brand/nemryn-favicon.svg), Geist typography rendering, Nemryn
+Deep-Graphite/Mineral-White palette rendering correctly (buttons,
+backgrounds, borders), password-visibility toggle still present and
+rendered on sign-in/join, no clipped text/buttons/logo, tenant org
+names ("Fictional Org A", "Fictional Org B") rendering correctly
+alongside Nemryn platform copy where applicable (select-organization,
+onboarding, join).
+
+
+17. MOBILE VALIDATION (390×844)
+-------------------------------------
+Same 8 screens captured at 390×844. Zero horizontal overflow on any
+screen. Card layouts reflow correctly to full-width with appropriate
+padding; onboarding header logo/org-name pair does not collide or wrap
+awkwardly; join-page invitation card renders cleanly with dynamic
+tenant content intact; sign-in/join password fields and their
+visibility-toggle icons remain correctly positioned and tappable-sized.
+No clipped or truncated text observed on any mobile capture.
+
+
+18. AUTH-FLOW REGRESSION
+------------------------------
+- Sign in (org-a-admin@example.test): form submission redirects to
+  /operations, session cookie present — confirmed both via direct
+  scripted submission and via 4 independent successful authenticated
+  screenshot captures (select-organization desktop/mobile, onboarding
+  desktop/mobile), each performing its own live sign-in.
+- Forgot password: submitting a valid email returns the expected
+  generic success copy ("If an account exists for that email, we've
+  sent password reset instructions...") — unchanged behavior, confirmed
+  live.
+- Password reset (full round trip): submitted forgot-password ->
+  retrieved the actual recovery email from the local Mailpit instance
+  (subject "Reset your Nemryn password" — already correct from prior
+  P0-S2B-C0/C1 work, untouched by this phase) -> followed the real
+  token through /auth/confirm -> landed on /auth/reset-password with
+  title "Reset password | Nemryn" and the expected form -> submitted a
+  new password -> re-visiting the same (now-consumed) recovery link
+  correctly renders the "This link has expired" fallback state with its
+  correct copy. Both branches of ResetPasswordPage's canReset logic
+  were exercised live and rendered correctly.
+- Organization selection: OrganizationSelector's per-row server-action
+  forms were not modified; visually confirmed rendering real
+  memberships correctly (§16).
+- Join/invite redemption: page renders correctly for a fresh pending
+  invite (§10); full redemption (AcceptInviteButton / JoinSignUpForm
+  submission) was not separately re-exercised in this phase beyond
+  rendering, since neither component's code was touched and the
+  underlying RPC/Server Actions are unchanged (confirmed via the
+  concurrency test in §19, which exercises the same redemption RPC
+  under real concurrent load and passed).
+- Logout: sign-out mechanics (signOutAction, AccountMenu) were not
+  modified by this phase and were not separately re-exercised beyond
+  confirming AccountMenu.tsx carries no diff from this phase's edits
+  (its only diff is the pre-existing A1A token-rename change).
+
+
+19. SQL / RLS / CONCURRENCY REGRESSION
+--------------------------------------------
+`supabase db reset` run clean (all pre-existing migrations reapplied,
+zero new migrations — confirmed no Supabase diff exists anywhere in
+this phase, `git status --porcelain supabase/` returns empty).
+
+All 22 SQL test files in supabase/tests/*.sql re-run against the fresh
+database: 0 real FAIL lines in every file (constraint_tests,
+create_trip_atomicity_tests, create_trip_privilege_tests,
+create_trip_tests, driver_location_tests, driver_read_authorization_
+tests, driver_read_history_tests, driver_read_minimization_tests,
+driver_read_privilege_tests, exception_mutation_boundary_tests,
+function_privilege_tests, mutation_assignment_tests, mutation_
+atomicity_tests, mutation_authorization_tests, mutation_idempotent_
+authorization_tests, mutation_lifecycle_tests, mutation_privilege_
+tests, operator_onboarding_tests, organization_timezone_tests, rls_
+adversarial_tests, security_definer_exposure_tests, trip_exception_
+tests).
+
+Both concurrency scripts re-run and PASS:
+  mutation_concurrency_test.sh — TEST CONCURRENCY-1: PASS (genuine
+    row-level lock contention, Session B blocked ~1.82s behind Session
+    A's held lock, correct assignment_conflict on the loser).
+  driver_invite_concurrency_test.sh — TEST INVITE-CONCURRENCY-1: PASS
+    (genuine row-lock contention, exactly 1 Driver row / 1 Membership
+    row produced from two concurrent redemption attempts, no duplicate).
+
+Zero migration diff, zero RLS diff, zero auth-mechanic diff — this
+phase touched only display copy, metadata, and the favicon reference
+mechanism.
+
+
+20. BUILD / LINT / TYPECHECK / TESTS
+------------------------------------------
+- `npx tsc --noEmit`: PASS, zero errors.
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files from prior phases, identical
+  baseline to N0-M2-A1A's own report.
+- `npm run build`: PASS. 36 routes generated (was 37 pre-phase; the
+  drop of exactly 1 is the removed favicon.ico special-file route — see
+  §11 — no other route gained or lost).
+- `npm test`: PASS, 29/29, identical to N0-M2-A1A's baseline.
+
+
+21. DIFF REVIEW
+-------------------
+`git status --porcelain supabase/` — empty (zero migration/RLS diff).
+
+The 15 files newly touched by N0-M2-A2 (§5) are cleanly distinguished
+from the ~33 remaining files in the full working-tree `git diff --stat`
+(globals.css, typography.ts, OperationsSidebar.tsx, foundation/page.tsx,
+every brand-interactive-teal-consumer component, driver/operations
+pages, etc.), which are PRE-EXISTING N0-M2-A1A changes, untouched by
+this phase — confirmed by diffing only the 15 A2-touched paths in
+isolation versus the full 48-file diff. `src/app/layout.tsx` is the one
+file both phases touched: A1A changed the font imports/instances
+(Manrope/Inter -> Geist), A2 changed `metadata` (title/description/
+icons) — both diffs coexist correctly in the same file, confirmed by
+direct reading of the current file content.
+
+Full working tree also still carries the standing set of untracked
+report/scratch files and `docs/brand/`/`public/brand/` from prior
+phases, unchanged in this phase except for the directory rename in §3.
+
+
+22. READINESS FOR N0-M2-A3
+--------------------------------
+PARTIAL — ready for platform-copy/metadata work, BLOCKED for the
+light-surface logo swap.
+
+Everything in this phase's scope that does NOT depend on
+nemryn-logo-primary.svg is complete, tested, and validated: root
+metadata, all auth/account page titles and platform copy, organization-
+selector wording, join-page tenant-boundary preservation, onboarding
+platform-frame copy, auth error strings, and the favicon mechanism (all
+using nemryn-favicon.svg, which IS available).
+
+The 7 light-background logo call sites remain on the interim Zenward
+asset, honestly and visibly documented in-code and in this report,
+exactly as N0-M2-A1B already flagged. N0-M2-A3 (or any earlier
+mid-course human action) should not proceed with a light-surface logo
+swap until `nemryn-logo-primary.svg` is actually delivered to
+public/brand/ — attempting to synthesize one from the existing
+symbol/wordmark files was explicitly out of scope and against both this
+phase's and N0-M2-A1B's own instructions.
+
+
+23. GIT STATUS (FINAL)
+----------------------------
+HEAD: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged)
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged, in sync)
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+Working tree carries: the pre-existing N0-M2-A1A diff (41 files),
+this phase's own 15-file diff (14 modified + 1 deleted), the
+capital-to-lowercase `public/Brand` -> `public/brand` rename (now
+tracked as new untracked path `public/brand/`, since the directory was
+never git-added in the first place), and the standing set of untracked
+report/scratch files from prior phases. `public/Brand` no longer exists
+in any form on disk.

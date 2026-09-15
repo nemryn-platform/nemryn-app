@@ -36,7 +36,7 @@ export function DriverBottomNavigation() {
             aria-current={isActive ? "page" : undefined}
             className={cn(
               "flex flex-1 flex-col items-center justify-center gap-1",
-              isActive ? "text-brand-interactive-teal" : "text-text-muted",
+              isActive ? "text-info-text" : "text-text-muted",
             )}
           >
             <Icon className="size-6" weight={isActive ? "fill" : "regular"} aria-hidden />

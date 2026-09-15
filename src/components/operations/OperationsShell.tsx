@@ -27,7 +27,7 @@ export function OperationsShell({ sidebar, header, children }: OperationsShellPr
       <div className="flex h-dvh flex-col items-center justify-center bg-surface-app px-zw-lg text-center md:hidden">
         <EmptyState
           icon={<DesktopTower className="size-10" aria-hidden />}
-          title="Zenward Operations"
+          title="Operations"
           description="This workspace is designed for tablet and desktop use."
         />
       </div>

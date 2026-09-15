@@ -32,7 +32,7 @@ export function OrganizationSelector({ memberships, next }: OrganizationSelector
           {next ? <input type="hidden" name="next" value={next} /> : null}
           <button
             type="submit"
-            className="flex w-full items-center gap-3 rounded-sm border border-border-strong bg-surface-elevated p-4 text-left transition-colors hover:border-brand-interactive-teal hover:bg-brand-calm-mist focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-interactive-teal"
+            className="flex w-full items-center gap-3 rounded-sm border border-border-strong bg-surface-elevated p-4 text-left transition-colors hover:border-selection-border hover:bg-brand-calm-mist focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-focus"
           >
             <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-surface-secondary text-text-secondary">
               <Buildings className="size-5" aria-hidden />

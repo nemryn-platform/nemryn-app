@@ -28,7 +28,7 @@ export function FormSection({ icon, title, action, children, className }: FormSe
     <Panel className={cn("flex flex-col gap-zw-lg", className)}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-brand-interactive-teal" aria-hidden>
+          <span className="text-text-muted" aria-hidden>
             {icon}
           </span>
           <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>{title}</h2>

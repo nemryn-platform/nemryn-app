@@ -46,7 +46,7 @@ export default async function OperationsOverviewPage() {
       header: "Passenger",
       primary: true,
       render: (row) => (
-        <Link href={`/operations/trips/${row.trip.id}`} className="hover:text-brand-interactive-teal hover:underline">
+        <Link href={`/operations/trips/${row.trip.id}`} className="hover:text-text-link hover:underline">
           {row.trip.passengerName}
         </Link>
       ),
@@ -89,7 +89,7 @@ export default async function OperationsOverviewPage() {
       header: "Passenger",
       primary: true,
       render: (row) => (
-        <Link href={`/operations/trips/${row.id}`} className="hover:text-brand-interactive-teal hover:underline">
+        <Link href={`/operations/trips/${row.id}`} className="hover:text-text-link hover:underline">
           {row.passengerName}
         </Link>
       ),
@@ -153,7 +153,7 @@ export default async function OperationsOverviewPage() {
             <div className="border-t border-border-subtle p-zw-md text-center">
               <Link
                 href="/operations/trips"
-                className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-brand-interactive-teal hover:underline")}
+                className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}
               >
                 View all trips <ArrowRight className="size-4" aria-hidden />
               </Link>
@@ -183,7 +183,7 @@ export default async function OperationsOverviewPage() {
                         className="flex items-center justify-between gap-3 rounded-sm hover:bg-surface-hover"
                       >
                         <div className="flex items-center gap-2">
-                          <span className="size-2 shrink-0 rounded-full bg-brand-interactive-teal" aria-hidden />
+                          <span className="size-2 shrink-0 rounded-full bg-info-strong" aria-hidden />
                           <div>
                             <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{trip.passengerName}</p>
                             <p className={cn(typography.metadata, "text-text-muted")}>
@@ -192,7 +192,7 @@ export default async function OperationsOverviewPage() {
                             </p>
                           </div>
                         </div>
-                        <span className={cn(typography.bodySmall, "shrink-0 font-medium text-brand-interactive-teal")}>
+                        <span className={cn(typography.bodySmall, "shrink-0 font-medium text-info-text")}>
                           {trip.statusLabel}
                         </span>
                       </Link>

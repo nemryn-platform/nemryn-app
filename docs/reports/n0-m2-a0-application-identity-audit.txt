@@ -1,0 +1,1020 @@
+====================================================================
+PHASE:    N0-M2-A0 — Nemryn Application Identity Audit
+DATE:     2026-09-14
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT PRODUCTION CODE SHA: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+MODE:     Read-only audit. No file was modified, no brand asset was
+          touched. No commit, no push, no deploy. No Vercel, Supabase,
+          or DNS configuration was touched.
+====================================================================
+
+OBJECTIVE
+---------
+Audit every visible application identity surface that currently makes
+the platform appear to be "Zenward Mobility" rather than Nemryn, and
+produce the exact implementation plan for N0-M2 — without redesigning,
+without touching the locked logo, and without conflating platform
+identity with tenant identity.
+
+====================================================================
+IMPORTANT — THIS AUDIT BUILDS ON EXISTING, SUBSTANTIAL PRIOR WORK
+====================================================================
+
+Before doing any independent analysis, this audit discovered that a
+prior phase (**NEMRYN G1-A/G1-B**, dated 2026-09-07 — untracked in git
+but present on disk at `docs/brand/nemryn/*.md`, 17 files, ~5,800
+lines, plus two historical completion reports,
+`docs/reports/g1-a-nemryn-brand-foundation-architecture.txt` and
+`docs/reports/g1-b-nemryn-brand-lock-token-specification.txt`) already
+produced:
+
+  - A human-approved, LOCKED brand specification
+    (`11-brand-lock-v1.md`) covering name, category, position,
+    platform-vs-tenant architecture, personality, visual character,
+    palette (the SAME 9 primitives this work item's own CONTEXT
+    lists), color meaning, typography (Geist), iconography, surface
+    identity rules, operator-branding rules, terminology, metadata
+    direction, and the marketing/application boundary.
+  - A complete, LINE-LEVEL rebrand inventory
+    (`15-rebrand-inventory.md`) — 72 numbered findings across 13
+    categories, each classified PLATFORM / TENANT / HISTORICAL /
+    AMBIGUOUS, with a recommended future value, migration phase, and
+    risk rating.
+  - A conceptual (not-yet-implemented) design-token specification
+    (`12-design-token-specification.md`), semantic-color mapping
+    (`05-semantic-color-system.md`), typography specification
+    (`13-typography-specification.md`), and an identity DESIGN BRIEF
+    for a future logo (`14-identity-design-brief.md`).
+
+**This existing work is authoritative and was independently
+re-verified, not merely trusted, by this audit** (§3 below) — every
+prior finding this audit spot-checked was confirmed still accurate.
+This audit's own, independent contribution is: (a) verifying nothing
+material has changed since 2026-09-07 that would invalidate the prior
+inventory, (b) identifying what genuinely IS new since then (three
+files from P0-S2B's password-recovery work, which postdates G1-B and
+was never inventoried), and (c) answering this work item's own
+specific 21-section structure directly, rather than requiring a human
+to cross-reference two documents. Where this report and
+`15-rebrand-inventory.md` agree, this report cites it rather than
+re-deriving the same finding from scratch; where this report found
+something new, that is called out explicitly.
+
+====================================================================
+1. REPOSITORY STATE
+====================================================================
+
+  git branch --show-current  → main
+  git rev-parse HEAD          → a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+  git fetch origin             → (no output; nothing new)
+  git rev-parse origin/main   → a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+  git status -sb               → "## main...origin/main", untracked-only
+
+Local `main` and `origin/main` are aligned. No unexpected change.
+`docs/brand/nemryn/*` remains untracked (as it has been since it was
+first created) — this audit did not stage, modify, or otherwise touch
+it.
+
+====================================================================
+2. PLATFORM-VS-TENANT IDENTITY MODEL
+====================================================================
+
+Restated from the LOCKED `11-brand-lock-v1.md` §4 (re-verified against
+the current codebase, not merely quoted):
+
+  **PLATFORM IDENTITY = Nemryn.** Owns: the product name/wordmark/
+  palette/type/iconography/voice, the marketing website, the
+  authentication surface (sign-in, sign-up, forgot-password,
+  reset-password, auth confirmation/error states), the application
+  shell (sidebar, header, navigation chrome), and operator-neutral
+  system/security messaging about the platform account (signup
+  confirmation, password recovery — already correctly sender-branded
+  Nemryn since P0-S2B/P0-S2B-C1, §12).
+
+  **TENANT IDENTITY = the operator** (Zenward Mobility today, any
+  future operator later). Owns: its own legal/trade name, its own
+  logo (used as ITS identity, never the app's), the content of its own
+  operational data, and communication that goes out AS the operator
+  (driver invitations already correctly name the tenant dynamically,
+  §6/§12).
+
+  **The governing rule, restated exactly as this work item's own §6
+  asks for:**
+
+    PLATFORM CHROME = Nemryn
+    ORGANIZATION CONTEXT = tenant.organization_name (already a live,
+      resolved field — `organizationName` on the operations-access
+      context type, `src/lib/auth/types.ts:15/24` — populated from
+      `organizations.name` via `src/lib/auth/membership.ts:57`; NOT a
+      hard-coded string anywhere it is correctly used today)
+
+**Confirmed independently in this audit: no schema, RLS, or tenancy
+change is required to support this split** — see §14.
+
+====================================================================
+3. COMPLETE VISIBLE-BRAND INVENTORY
+====================================================================
+
+**Baseline: `15-rebrand-inventory.md`'s own 72-row inventory (2026-09-
+07) is accepted as accurate for everything it covers** — spot-checked
+this audit against the CURRENT file contents of `src/app/layout.tsx`,
+`src/app/globals.css` (token names/values), `OperationsSidebar.tsx`,
+`DriverLayoutClient.tsx`, `AccountMenu.tsx`, and the public route
+group, all confirmed byte-identical in substance to what that
+inventory describes. The full 72-row table is not reproduced here in
+full (it is the authoritative source document, referenced directly);
+this section summarizes its shape and adds what has changed since.
+
+**Summary of the existing 72-row inventory, by classification:**
+
+  - **PLATFORM** (→ Nemryn): ~18 copy/metadata strings + 6 logo-usage
+    sites + the entire token file (`globals.css` `@theme`, ~38
+    consuming components) + 2 email templates' visible copy.
+  - **TENANT** (stays Zenward Mobility / becomes dynamic-tenant):
+    ~8 strings — the logo asset itself (reclassified as the tenant's
+    own identity, not removed), `PublicHeader`/`PublicFooter`'s
+    "Zenward Mobility"/tagline/copyright, the two already-dynamic
+    `join/[token]/page.tsx` invitation strings (a model example — no
+    change needed, they already resolve `{organizationName}` live).
+  - **HISTORICAL** (leave alone): ~10 code comments recording why a
+    decision was made, plus the entire `docs/**` corpus (~106 files
+    mentioning "Zenward" — explicitly NOT part of this or any future
+    application-code rebrand pass; see that inventory's own §11 for
+    the full docs-classification table, restated in §Documentation
+    Corpus below for completeness).
+  - **REVIEW/AMBIGUOUS**: `DriverLayoutClient.tsx`'s `"Zenward
+    Driver"` fallback — ALREADY RESOLVED by the Brand Lock (§12/§13.5:
+    explicitly NOT "Nemryn Driver"; becomes plain `"Driver"` or an
+    organization-contextual `"{Organization Name} · Driver"`, decided
+    at the driver-surface module-migration phase, not here); a small
+    number of code comments that read as platform-staff framing and
+    are worth rewording WHEN that file is next touched, not urgently.
+
+**NEW since the 2026-09-07 inventory — independently discovered by
+this audit, not in `15-rebrand-inventory.md` at all** (P0-S2B's
+password-recovery work was built AFTER that inventory was written):
+
+  | # | File : line | Current value | Class | Future value | Phase |
+  |---|---|---|---|---|---|
+  | N1 | `src/app/forgot-password/page.tsx:9` | `metadata.title: "Forgot password — Zenward Mobility"` | PLATFORM | `"Forgot password | Nemryn"` (same pattern as the other auth-page titles) | shell-migration |
+  | N2 | `src/app/forgot-password/page.tsx:28-29` | `<Image src="/images/zenward-mobility-logo.png" alt="Zenward Mobility">` | PLATFORM surface | Nemryn wordmark/lockup (same treatment as sign-in/sign-up) | shell-migration |
+  | N3 | `src/app/auth/reset-password/page.tsx:10` | `metadata.title: "Reset password — Zenward Mobility"` | PLATFORM | `"Reset password | Nemryn"` | shell-migration |
+  | N4 | `src/app/auth/reset-password/page.tsx:48-49` | same logo image | PLATFORM surface | Nemryn wordmark/lockup | shell-migration |
+  | N5 | `src/components/auth/ResetPasswordForm.tsx:38` | `"You're still signed in — continue to Zenward."` | PLATFORM | `"…continue to Nemryn."` | shell-migration |
+  | N6 | `src/lib/email/send.ts:61` (comment) | `"…shaped like any tenant's own domain (Zenward Mobility's or anyone…"` | HISTORICAL | LEAVE-HISTORICAL — illustrative example inside a doc comment, not a literal used in logic | n/a |
+  | N7 | `src/lib/email/driver-invite-email.ts:21` (comment) | `"…never 'Zenward' unless the organization actually is Zenward Mobility, never…"` | HISTORICAL | LEAVE-HISTORICAL — correctly describes the dynamic-tenant-name rule, not a literal | n/a |
+
+These 3 new PLATFORM findings (N1-N5, two comment-only HISTORICAL
+findings N6-N7) are governed by the exact same rules and risk profile
+as the ALREADY-INVENTORIED, near-identical entries for `/sign-in`,
+`/sign-up`, and `/auth/auth-code-error` (rows 4, 5, 6, 17, 18, 19, 36,
+37 of the existing inventory) — the pattern is mechanical to extend,
+not a new category of decision.
+
+**Confirmed via fresh grep this audit, not assumed:** the total count
+of files under `src/` containing "Zenward"/"zenward" is now **29**
+(up from the prior inventory's ~24), fully accounted for by the 5 new
+files above (`forgot-password/page.tsx`, `auth/reset-password/
+page.tsx`, `ResetPasswordForm.tsx`, `send.ts`, `driver-invite-
+email.ts`) — no other drift was found.
+
+**Public marketing pages** (`src/app/(public)/request-transportation/
+page.tsx`, `healthcare-providers/page.tsx`) — confirmed via fresh grep:
+**zero** "Zenward" references in either file or their shared layout.
+Not applicable to this inventory.
+
+**Do NOT globally search-and-replace "Zenward"** — reconfirmed as the
+governing constraint; every one of the ~72+7 findings above required
+individual classification, and several (the logo asset itself, the
+`PublicHeader`/`Footer` tenant copy, the two `join/[token]` dynamic
+strings) would be WRONGLY changed by any blind replace.
+
+====================================================================
+4. AUTH SURFACES
+====================================================================
+
+Every auth-adjacent screen, current state confirmed by fresh reading
+this audit (not merely cited from the prior inventory):
+
+  | Screen | Title | Logo | Heading/body copy | Footer/support text |
+  |---|---|---|---|---|
+  | `/sign-in` | "Sign in — Zenward Mobility" | Zenward logo, alt "Zenward Mobility" | "Sign in to continue to Zenward." | "New to Zenward?" |
+  | `/sign-up` | "Sign up — Zenward Mobility" | same logo | "Set up Zenward for your transportation business." | — |
+  | `/forgot-password` **(new, not in prior inventory)** | "Forgot password — Zenward Mobility" | same logo | (no Zenward-specific body copy found) | — |
+  | `/auth/reset-password` **(new)** | "Reset password — Zenward Mobility" | same logo | (form itself carries no Zenward string) | success state: "…continue to Zenward." |
+  | `/auth/auth-code-error` | "Link expired — Zenward Mobility" | same logo | (no Zenward string in body) | — |
+  | `/complete-signup/form` | "Complete your account — Zenward Mobility" | (not independently re-verified this audit — cited from prior inventory row 8, unchanged per the file-list stability check in §3) | — | — |
+  | `/select-organization` | "Select organization — Zenward Mobility" | — | "Your account has access to more than one Zenward organization…" | — |
+  | `/join/[token]` | "Join — Zenward Mobility" | same logo | dynamic tenant content (correct, no change) | — |
+  | `/access-unavailable` | "Access unavailable — Zenward Mobility" | (cited from prior inventory, unchanged) | — | — |
+
+**Expected platform identity after N0-M2** (per the LOCKED Brand Lock
+§12/§16), exactly matching this work item's own examples:
+
+  "Sign in | Nemryn", "Create your Nemryn account" (sign-up heading —
+  note the CURRENT sign-up heading is actually "Create your account",
+  not "Create your Nemryn account" verbatim — the exact final copy is
+  a shell-migration-phase wording decision, not locked word-for-word
+  here), "Reset your Nemryn password" (already the exact locked
+  pattern for the Supabase EMAIL subject — §12 — the IN-APP page
+  heading "Set a new password" is a separate, currently
+  Zenward-string-free element that needs no change at all, only the
+  browser tab TITLE does).
+
+**No tenant name appears inside any tenant-originated invitation
+content that should be replaced** — confirmed: `/join/[token]`'s own
+body copy ("You've been invited to drive for {organizationName}…")
+already resolves the organization name dynamically (prior inventory
+rows 50-51, re-confirmed unchanged this audit) — this is the CORRECT,
+model pattern the rest of the platform-chrome migration should match,
+not something to touch.
+
+====================================================================
+5. APPLICATION SHELL
+====================================================================
+
+Confirmed by fresh reading this audit:
+
+  - **Sidebar** (`src/components/operations/OperationsSidebar.tsx`):
+    renders the Zenward Mobility logo image (line 100) inside the
+    sidebar's own brand frame — this is a PLATFORM surface (the
+    persistent chrome every operator sees, regardless of which
+    organization they belong to) and should show the Nemryn mark once
+    available. The sidebar ALSO already displays the current
+    organization's own name elsewhere in its UI as workspace context
+    (confirmed via the component's own props/usage — the resolved
+    `organizationName` is threaded into this shell already) — this is
+    the TENANT half and is correctly dynamic today; it requires no
+    change, only the logo/brand-frame half does.
+  - **Header/navigation**: the below-`md` guard state in
+    `OperationsShell.tsx:30` reads `title="Zenward Operations"` —
+    PLATFORM (a hard-coded product-name string), becomes "Operations"
+    or "Nemryn Operations" (a REVIEW@SHELL decision per the existing
+    inventory row 41, not decided here).
+  - **Account menu** (`src/components/operations/AccountMenu.tsx`):
+    confirmed via fresh grep — **zero** "Zenward" string of any kind.
+    Nothing to change here; worth independently confirming during
+    implementation that it doesn't ALREADY need to gain a "Nemryn
+    account" framing it currently lacks (a REVIEW item, not a defect —
+    this audit found no existing Zenward branding to remove, which is
+    different from confirming the RIGHT Nemryn framing is present).
+  - **Mobile navigation**: the driver-side mobile shell
+    (`DriverLayoutClient.tsx`) carries the one `"Zenward Driver"`
+    fallback title discussed in §3/§4 — the ONLY shell-adjacent
+    mobile-specific finding; no separate operations-mobile-nav
+    Zenward string was found beyond the responsive `OperationsShell`
+    guard already covered above.
+  - **Organization selector** (`/select-organization`): covered in
+    §4 — the page title and one body sentence are PLATFORM; the
+    selector's own list of organizations is already fully dynamic
+    (reads real organization names from the caller's real
+    memberships) and correctly requires no change.
+  - **Loading/empty states**: no "Zenward"-branded loading or empty
+    state copy was found anywhere in `src/` via the fresh grep in §3
+    (the 29-file list is exhaustive for the search term) — this is a
+    **non-finding**, not an oversight: no loading/empty-state text
+    string currently names the platform at all, so none needs
+    renaming.
+
+**The two concepts — PLATFORM chrome (logo, product name, the persistent
+shell frame) vs. CURRENT ORGANIZATION (the resolved `organizationName`
+shown as workspace context) — are never confused in the current
+codebase**: everywhere `organizationName` is used, it is read live
+from the resolved membership context, never hard-coded; everywhere the
+literal string "Zenward"/"Zenward Mobility" is hard-coded, it is
+PLATFORM chrome (a page title, a logo `alt`, a copy string) that
+happens to currently say the tenant's name because the platform and
+its first tenant have not yet been visually separated — never the
+reverse (there is no place where a hard-coded "Zenward Mobility"
+stands in for what should be a dynamic value).
+
+====================================================================
+6. TENANT IDENTITY BOUNDARY
+====================================================================
+
+Every place "Zenward Mobility" is genuinely TENANT data/context,
+confirmed this audit — must NOT be statically replaced with "Nemryn":
+
+  - **Driver invitation email content**
+    (`src/lib/email/driver-invite-email.ts`) — `organizationName` is a
+    plain function parameter, resolved server-side from the real
+    organization on every send; the subject/body already read
+    "{Organization Name} has invited you to join their driver team."
+    Already correct; confirmed unchanged since P0-S2A/P0-S2B-C1.
+  - **Organization name itself** — `organizations.name`, a free-text
+    column, per-operator; confirmed zero "zenward" literal anywhere in
+    the schema (fresh re-check this audit, `grep` across
+    `supabase/migrations/*.sql` → 0 matches for a literal tenant
+    name).
+  - **Operations workspace context** — the sidebar/header's own
+    display of the CURRENT organization's name (§5) is tenant context,
+    already dynamic.
+  - **Staff/admin organization context** — every `requireOperationsAccess`-
+    gated page resolves its organization context live from the
+    caller's session; no hard-coded organization name exists in any
+    operations page (confirmed via the same 29-file exhaustive list in
+    §3 — no `src/app/operations/**` file appears in it at all except
+    `operations/facilities/page.tsx`, which contains only a HISTORICAL
+    comment, not a rendered string).
+  - **Tenant-facing records / transportation requests**: `transportation_
+    requests` and every other operational table carry no brand
+    coupling (§14/§16 — reconfirmed, zero literal "zenward" in any
+    migration).
+  - **Future reports**: `src/app/operations/reports/page.tsx` and
+    `billing/page.tsx` are structural stubs today (confirmed — no
+    rendered content to classify yet); when built, per the LOCKED
+    Brand Lock §14, operator-generated documents are operator-branded,
+    with no "Powered by Nemryn" requirement.
+  - **`PublicHeader`/`PublicFooter`** (`src/components/public/*`):
+    "Zenward Mobility" wordmark, "Care that gets you there." tagline,
+    and the copyright line are ALL genuinely tenant marketing copy —
+    confirmed by reading both files fresh this audit — and are
+    explicitly flagged (existing inventory rows 44-47) as likely
+    belonging in a SEPARATE marketing surface/repo longer-term, not
+    this application at all; if they remain here transitionally, they
+    are KEEP→ZENWARD, never touched by a platform-identity pass.
+
+**The documented rule, reconfirmed exactly:**
+
+  PLATFORM CHROME = Nemryn
+  ORGANIZATION CONTEXT = tenant.organization_name
+
+No hard-coded "Zenward Mobility" was found anywhere a FUTURE tenant
+should instead see their own company name — every genuinely dynamic
+site already IS dynamic (§3/§5); every hard-coded site is PLATFORM
+chrome that needs to say Nemryn, not a masked tenant-identity bug.
+
+====================================================================
+7. LOGO / BRAND ASSETS
+====================================================================
+
+**Critical finding, confirmed by direct filesystem inspection:**
+
+  `public/brand/` **DOES NOT EXIST.** `find public/brand -type f` and
+  `find public -type f` were both run fresh this audit — the entire
+  contents of `public/` are: `public/.DS_Store`,
+  `public/images/.DS_Store`, and `public/images/zenward-mobility-
+  logo.png` (the EXISTING Zenward logo, referenced from the 6+ PLATFORM
+  surfaces cataloged in §3/§5). **There is no Nemryn logo, wordmark, or
+  symbol file anywhere in this repository, in any format.**
+
+This is confirmed, not merely assumed, by `14-identity-design-
+brief.md`'s own explicit status line: *"Brief only. No logo, wordmark,
+or symbol is designed in G1-B. This document is the input to the G1-C
+identity exploration."* — the design work that would PRODUCE the
+asset (referred to internally as phase "G1-C") has not happened. The
+work item's own CONTEXT describes "the LOCKED Framework geometric N
+symbol + Nemryn wordmark" as already approved — **this audit found no
+corresponding file on disk to confirm that description against.** Per
+this work item's own explicit instruction ("If an expected Nemryn
+asset is missing: REPORT IT. Do not invent one."), this is reported
+plainly: **the expected Nemryn logo/wordmark asset is missing from
+this repository.** If such an asset exists outside this repository
+(e.g. produced in a design tool, awaiting hand-off), it has not yet
+been added to `public/brand/` or anywhere else this audit can see.
+
+**Current Zenward logo usage** (all confirmed, exact call sites):
+  `src/app/sign-in/page.tsx`, `sign-up/page.tsx`,
+  `auth/auth-code-error/page.tsx`, `forgot-password/page.tsx` (new),
+  `auth/reset-password/page.tsx` (new), `join/[token]/page.tsx`,
+  `onboarding/layout.tsx`, `components/operations/
+  OperationsSidebar.tsx` — 8 call sites total (6 in the prior
+  inventory + the 2 new P0-S2B pages found this audit), all pointing
+  at the single file `public/images/zenward-mobility-logo.png`, all
+  passing a fixed `width={240} height={80}` (sign-in/sign-up/error/
+  forgot-password/reset-password/join — confirmed identical dimensions
+  across every auth-shell page) with a smaller size in the sidebar
+  context (dimensions not independently re-verified this audit for
+  the sidebar specifically — cite the prior inventory's own
+  description of "the sidebar frame" as accurate, unchanged).
+
+**Do existing components assume fixed logo dimensions?** YES — every
+auth-shell page uses the identical `<Image ... width={240} height={80}
+className="h-auto w-60">` pattern (a fixed aspect-ratio box). A Nemryn
+wordmark/lockup with a DIFFERENT aspect ratio than the current Zenward
+logo would need each of these 8 call sites' own `width`/`height`/
+`className` adjusted individually — this is exactly the "component-
+level, not global" risk `15-rebrand-inventory.md` already flagged
+(MED risk, rows 17-22) and this audit's own fresh count (8, not 6)
+slightly raises the surface area of that same finding, not its nature.
+
+**Dark/light variants required?** Not determinable from this audit —
+no dark-mode implementation exists anywhere in this codebase currently
+(confirmed: no `dark:` Tailwind variant, no `prefers-color-scheme`
+handling, no theme toggle found in any component this audit's
+searches touched) — the application is single-theme today. Whether a
+future Nemryn identity needs a dark-variant lockup is a G1-C
+design-brief question, not something this audit's absence of dark
+mode resolves either way.
+
+**Where can supplied locked assets be swapped directly?** Once a real
+Nemryn asset file exists under `public/brand/` (or wherever the
+implementation phase decides), each of the 8 call sites above is a
+mechanical `src`/`alt` swap plus a dimension check — no component
+currently makes the logo swap harder than that (no CSS masking,
+sprite-sheet, or generated-icon complexity was found anywhere the
+logo is used).
+
+**Favicon**: `src/app/favicon.ico` exists (the Next.js App Router
+convention file) — still the current Zenward favicon (unchanged;
+25.9 KB, per the prior inventory's own byte-count, not independently
+re-measured this audit but the file's presence and path were
+reconfirmed). A Nemryn favicon is equally absent — same "missing
+asset, do not invent one" finding as the main logo.
+
+====================================================================
+8. DESIGN-TOKEN AUDIT
+====================================================================
+
+Current token file: `src/app/globals.css`'s `@theme` block — confirmed
+fresh this audit, byte-identical in substance to what
+`15-rebrand-inventory.md` §3 already describes in detail:
+
+  - 5 named "brand-*" colors (`brand-care-navy #123447`,
+    `brand-route-teal #21a89a`, `brand-interactive-teal #178577`,
+    `brand-calm-mist #ddf4f0`, `brand-arrival-gold #f4b860`) —
+    **TOKEN-LEVEL**, can migrate centrally, BUT
+    `brand-interactive-teal` specifically requires a **COMPONENT-LEVEL**
+    per-site split (it currently serves multiple distinct visual roles
+    — primary action, link color, focus ring, selection state, strong
+    border — that the Nemryn token system deliberately separates,
+    per `12-design-token-specification.md` Appendix A).
+  - Neutral tokens (`text-*`, `border-*`, `surface-*`) —
+    **TOKEN-LEVEL**, a 1:1 purpose-based rename.
+  - Semantic status families (`success/warning/critical/info-*`,
+    `critical-*` alone at 44+ uses per the prior inventory) —
+    **TOKEN-LEVEL** rename PLUS a **COMPONENT-LEVEL** meaning re-check
+    (per that inventory: "any `critical-*` on a routine notice →
+    `status.information`/neutral" — some current usages may be
+    SEMANTICALLY wrong today, independent of branding, and this is the
+    natural point to catch that).
+  - `navy-*` on-navy chrome tokens — **TOKEN-LEVEL**, with one
+    component-level behavior change flagged (teal active states →
+    steel blue).
+  - Font variables (`--font-display` Manrope, `--font-sans` Inter) —
+    **TOKEN-LEVEL** for the variable rename, but the underlying FONT
+    SWAP itself (to Geist) is the highest-risk single item in the
+    entire inventory (HIGH — layout-shift risk, touches every text
+    element in the application) — see §10.
+  - Spacing/radius/shadow/motion tokens — **TOKEN-LEVEL**, mechanical,
+    LOW-MED risk.
+  - `~38 component files` consuming these tokens directly (not through
+    a further abstraction) — **COMPONENT-LEVEL**, requires individual
+    review, not a blind rename. This audit re-counted the single
+    highest-traffic token fresh: `brand-interactive-teal` now appears
+    in **54 usages** (up from the 46 the prior inventory recorded on
+    2026-09-07) — the 8 new usages are fully accounted for by the
+    P0-S2B/P0-S2B-UX1 auth surfaces (`forgot-password`,
+    `reset-password`, their form components) built since that count,
+    confirmed via `grep -rln` cross-referenced against those exact
+    files. This is presented as an updated, re-verified number, not a
+    correction of the prior finding.
+  - Hard-coded hex values OUTSIDE `globals.css`: **zero**, reconfirmed
+    fresh this audit (`grep` for a 3/6-digit hex literal across
+    `src/**/*.tsx`, excluding `globals.css` and the generated
+    `database.types.ts` → no component-level hard-coded color found)
+    — token discipline remains clean; nothing to fix beyond the
+    central token file itself.
+
+**TENANT-LEVEL: none found.** No design token in this codebase is
+tenant-specific (no per-organization color, no operator-branded token)
+— confirmed by the same schema/RLS check in §14/§16: zero brand-color
+coupling anywhere in `organizations` or any other table. This is
+expected — operator branding is deferred past v1 per the LOCKED Brand
+Lock §13, so no tenant-level token migration concern exists to
+classify.
+
+**This audit does not recommend a redesign** — consistent with the
+LOCKED "controlled identity migration, not visual reinvention"
+framing: the token migration is a rename-and-re-derive exercise
+against an ALREADY-DESIGNED, ALREADY-DERIVED, ALREADY-WCAG-VALIDATED
+spec (`12-design-token-specification.md`), not new design work.
+
+====================================================================
+9. SEMANTIC STATUS COLORS
+====================================================================
+
+Current semantic families in `globals.css`: `success-*`, `warning-*`,
+`critical-*`, `info-*` (confirmed via the same fresh token-file read
+as §8). The LOCKED palette's 4 status hues map conceptually as:
+
+  Signal Green   `#4FA57A`  → ready · confirmed · complete · healthy
+  Attention Amber `#D79B45` → needs attention · potential problem
+  Critical Red   `#C95C55`  → critical exception · failed condition
+  Steel Blue     `#6F8798`  → information · selection · focus ·
+                              neutral active / in-progress state
+
+**LOCKED constraint, reconfirmed:** these are PRIMITIVE colors, not
+directly usable as text/border/fill values — WCAG validation in
+`05-semantic-color-system.md`/`12-design-token-specification.md`
+already confirmed none of the four raw hues meets 4.5:1 contrast as
+small text on Mineral White; the DERIVED, accessibility-corrected
+token values (already computed, not something this audit needs to
+re-derive) are what components will actually consume.
+
+**Signal colors must remain semantic, never decorative** — reconfirmed
+as a hard constraint this audit fully endorses: the current
+`critical-*`/`success-*` etc. usage (StatusBadge, trip-status
+indicators, exception flags — per the prior inventory's own component
+list) is ALREADY used semantically (status meaning), not
+decoratively, in this application; the migration's own job is to
+re-derive the SAME semantic usages under new token names/values,
+re-checking meaning where flagged (§8), not to introduce new
+decorative color use anywhere.
+
+**Primary CTA / primary action color is explicitly NOT one of the four
+status hues** — per the LOCKED Brand Lock §9: "Signal Green is never
+the default CTA. Primary CTA / primary application action = Deep
+Graphite / Ink high-contrast treatment." This is an important
+constraint for implementation: the CURRENT primary-action color
+(`brand-interactive-teal`, a teal) will NOT simply become "Signal
+Green" — it becomes a dark, high-contrast graphite/ink treatment, a
+different color family entirely, which is exactly why
+`brand-interactive-teal`'s 54 usages need per-site review (§8) rather
+than a single find-and-replace: some of those 54 are the primary CTA
+role (→ graphite/ink) and others are link/focus/selection roles (→
+Steel Blue or a dedicated token), never the same target color for all
+54.
+
+====================================================================
+10. TYPOGRAPHY
+====================================================================
+
+**Current setup, confirmed fresh this audit:** `src/app/layout.tsx`
+imports `Manrope` (weights 600/700, used as `--font-display`) and
+`Inter` (weights 400/500/600, used as `--font-sans`) via
+`next/font/google` — Next.js's own built-in Google Fonts integration,
+which requires no separate npm package (confirmed: `package.json` has
+no font-related dependency entry at all; the fonts are fetched/self-
+hosted automatically by the Next.js build).
+
+**Is Geist already installed/available? NO** — confirmed by grep
+(`next/font` usage across `src/` → only the one `layout.tsx` import,
+Manrope + Inter; no `Geist`/`geist` import or dependency anywhere).
+This matches the LOCKED Brand Lock §10's own explicit instruction to
+G1-B: "Do not modify dependencies or load the font in G1-B" — that
+instruction was followed; Geist remains un-implemented, exactly as
+documented, not silently done already.
+
+**Smallest safe implementation, identified but NOT performed this
+audit:** Geist is available two ways for a Next.js project — (a) as
+`next/font/google`'s own bundled `Geist`/`Geist_Mono` export (the same
+mechanism already used for Manrope/Inter today, requiring no new
+npm dependency, just swapping the import), or (b) the standalone
+`geist` npm package (Vercel's own font package, adds one dependency).
+Given this codebase's existing pattern (loading fonts via
+`next/font/google` with no separate package), option (a) is the
+lower-friction path and requires no `package.json` change — but this
+determination is offered for the LATER implementation phase's own
+judgment, not decided or acted on here.
+
+**Typography scale**: `13-typography-specification.md` already
+contains a finalized Geist-based scale (role names, sizes, the
+specific `type.app.pageTitle` size reduction from 30→24px, and the
+`tabular-nums` treatment for data/numeric roles) — this is
+implementation-ready spec work this audit did not need to re-derive;
+`src/design/typography.ts` is the one file that will need rewriting
+to consume it (per the prior inventory row 32).
+
+**No typography change was made during this audit**, per instruction.
+
+====================================================================
+11. METADATA / BROWSER IDENTITY
+====================================================================
+
+Confirmed fresh this audit, direct file read:
+
+  `src/app/layout.tsx:17-20`:
+    metadata.title = "Zenward Mobility"
+    metadata.description = "Non-emergency medical transportation."
+
+  This is the ROOT metadata — inherited by every page that doesn't
+  override it, and the actual source of the browser tab title for any
+  page without its own `export const metadata` (most authenticated
+  operational pages do not set their own title, confirmed via the
+  file-list in §3 containing only the specific auth/onboarding pages
+  that DO override it).
+
+  Per-page overrides exist only on the specific auth/onboarding
+  screens enumerated in §4 — every other route (all of `/operations/
+  **`, `/driver/**`) inherits the root title unchanged today, meaning
+  EVERY authenticated screen in the application currently shows
+  "Zenward Mobility" as its browser tab title unless a more specific
+  page-level override exists.
+
+  **No favicon, no manifest.json, no `opengraph-image`/`twitter-
+  image`, no robots.txt, no sitemap exists anywhere in this repository**
+  — reconfirmed fresh this audit (`find` for each convention file/
+  directory → zero matches), consistent with N0-M1-A0's own identical
+  finding for the domain-migration audit. The ONE convention file that
+  DOES exist, `src/app/favicon.ico`, is covered in §7.
+
+**Files that need modification for platform metadata** (not performed
+this audit):
+  - `src/app/layout.tsx` — root `title`/`description`, per the LOCKED
+    §16 direction (`"Nemryn"` root title with a `%s | Nemryn` template
+    pattern per-page; `"Operating infrastructure for medical
+    transportation."` as the platform-level description, replacing
+    the current operator-business-line description).
+  - Every page-level `metadata` export enumerated in §4 (9 files).
+  - `src/app/favicon.ico` — once a Nemryn favicon asset exists (§7 —
+    currently missing).
+
+**No SEO infrastructure should be added** — reconfirmed, matching this
+work item's own explicit instruction and N0-M1-A0's identical finding:
+this is an authenticated operating application; adding a
+robots.txt/sitemap/OpenGraph image now would be scope creep unrelated
+to the identity migration itself.
+
+====================================================================
+12. EMAIL IDENTITY
+====================================================================
+
+Reconfirmed, not re-derived — this exact boundary was independently
+built and validated across P0-S2A/P0-S2B/P0-S2B-C1 and is unchanged:
+
+  **PLATFORM AUTH EMAIL** (signup confirmation, password recovery):
+    FROM: `Nemryn <notifications@nemryn.com>`
+    CONTENT: "Confirm your Nemryn account" / "Reset your Nemryn
+    password" — already fully migrated to the Nemryn identity,
+    confirmed via fresh read of `supabase/templates/confirmation.html`
+    and `recovery.html` this audit (unchanged since P0-S2B-C1).
+
+  **DRIVER INVITATION EMAIL**:
+    FROM: `Nemryn <notifications@nemryn.com>` (same platform sender)
+    CONTENT: dynamic tenant name — "{Organization Name} has invited
+    you to join their driver team." — confirmed unchanged via fresh
+    read of `src/lib/email/driver-invite-email.ts` this audit.
+
+**No remaining outdated visible platform branding was found in either
+email pipeline** — both are ALREADY correctly Nemryn-branded at the
+sender AND the auth-account-content level. The only Zenward strings
+remaining in either file are the two HISTORICAL doc-comments found in
+§3 (N6/N7) — illustrative example text inside comments, never rendered
+to a real recipient.
+
+**This audit does not recommend touching working email
+architecture** — per instruction, and because there is genuinely
+nothing left to fix here; N0-M2's own scope, for email specifically,
+is ALREADY COMPLETE (a rare, clean finding worth stating plainly rather
+than manufacturing additional work).
+
+====================================================================
+13. DOMAIN-REFERENCE FINDINGS
+====================================================================
+
+N0-M1 is complete (per this work item's own STATUS). Audited only for
+accidental USER-VISIBLE references to `app.zenwardmobility.com`
+remaining in current application output — not for any infrastructure
+change (none proposed or performed).
+
+  Confirmed via fresh grep this audit: the ONLY `zenwardmobility.com`
+  references anywhere in `src/`/`supabase/` are the same 3 doc-comment-
+  only occurrences N0-M1-A0 already found and classified HISTORICAL
+  (`src/app/auth/confirm/route.ts:66`, `src/lib/app-url-core.ts:21`,
+  `supabase/config.toml:169`) — none is a literal used in application
+  logic, none is rendered to a user, and none has changed since that
+  audit.
+
+  N0-M1-A3's own live production check already independently confirmed
+  (via real HTTP requests against both live domains) that the
+  currently-served `app.nemryn.com` pages contain **zero** accidental
+  `"zenwardmobility"` string in their rendered output — this audit did
+  not repeat that live check (out of scope for a static-code identity
+  audit, and already proven in that separate, more recent validation
+  phase) but cites it as directly relevant, corroborating evidence.
+
+**New product-facing references should prefer `app.nemryn.com`** —
+already true everywhere a reference exists at all: the application's
+own link-generation code (`getAppOrigin()`) has generated
+`app.nemryn.com` links since the N0-M1 cutover (confirmed unchanged
+this audit, zero diff since N0-M1-A3), and no NEW hard-coded
+`app.zenwardmobility.com` reference was introduced by any of the
+identity-audit-relevant files this audit read.
+
+**Historical documentation and old-link compatibility remain the
+explicit, correct exceptions** — per N0-M1-A0's own already-authored
+old-domain strategy, unchanged and un-revisited by this audit.
+
+====================================================================
+14. ORGANIZATION DATA-MODEL FINDINGS
+====================================================================
+
+**Can platform chrome become Nemryn while tenant identity remains
+dynamic WITHOUT a schema migration? YES — confirmed, not merely
+preferred.**
+
+  - `organizations` table: `id, name, status, created_at,
+    updated_at` (plus the timezone column added later) — `name` is
+    free per-operator text, already the sole source of tenant display
+    identity. Confirmed via fresh read of
+    `supabase/migrations/20260830130100_organizations.sql`.
+  - `memberships` joins a user to an organization + role — already
+    the mechanism every dynamic `organizationName` resolution in the
+    application goes through (`src/lib/auth/membership.ts`).
+  - The operations-access context type
+    (`src/lib/auth/types.ts:15/24`) already carries `organizationName:
+    string` as a required, always-resolved field — every
+    `requireOperationsAccess`-gated page and every driver-invite/
+    recovery-adjacent email-sending code path already has this value
+    available with NO additional query, join, or schema change needed.
+  - Organization selector (`/select-organization`): already lists
+    real organization names dynamically from the caller's real
+    memberships (confirmed via §5) — no static organization list
+    exists anywhere to migrate.
+  - Current-organization loading: resolved server-side, live, on every
+    request that needs it (the established `requireOperationsAccess`/
+    `requireDriverAccess` pattern used throughout this codebase) —
+    never cached/hard-coded client-side in a way that would need
+    special handling for a rebrand.
+
+**Zero database migration is required for N0-M2** — reconfirmed by
+the same schema-search methodology used in N0-M1-A0 §16: no table,
+column, RLS policy, or SECURITY DEFINER function anywhere couples to a
+brand string, a hostname, or a platform-vs-tenant distinction that
+isn't already the existing, working `organizations`/`memberships`
+model. This audit found nothing to contradict "prefer YES" — the
+answer is an unqualified YES.
+
+====================================================================
+15. SCREEN-BY-SCREEN MIGRATION INVENTORY
+====================================================================
+
+| Route | Current platform branding | Tenant-specific branding | Required identity change | Visual structure change? | Risk |
+|---|---|---|---|---|---|
+| `/sign-in` | Title, logo, "Sign in to continue to Zenward.", "New to Zenward?" | none | All 4 strings/logo → Nemryn | No — same layout, swap logo + text | LOW-MED |
+| `/sign-up` | Title, logo, "Set up Zenward for your transportation business." | none | 3 items → Nemryn | No | LOW-MED |
+| `/forgot-password` **(new)** | Title, logo | none | 2 items → Nemryn | No | LOW |
+| `/auth/reset-password` **(new)** | Title, logo, success-state "…continue to Zenward." | none | 3 items → Nemryn | No | LOW |
+| `/auth/auth-code-error` | Title, logo | none | 2 items → Nemryn | No | LOW |
+| `/complete-signup`, `/complete-signup/form` | Title (form page only, per prior inventory) | none | 1 item → Nemryn | No | LOW |
+| `/onboarding` (layout) | Logo (+ workspace context already shown once known) | workspace name context (already dynamic) | Logo → Nemryn frame | No | MED |
+| `/operations` (shell) | Sidebar logo; `OperationsShell.tsx`'s responsive-guard title "Zenward Operations" | current-organization name (already dynamic, shown separately) | Logo + guard title → Nemryn; org-name display unchanged | No — same shell layout | MED |
+| `/operations/drivers` | Inherits shell branding only; no page-specific Zenward string found | driver-invite email content (already dynamic/correct) | None beyond shell-level change | No | LOW |
+| `/driver` (shell) | `DriverLayoutClient.tsx`'s `"Zenward Driver"` fallback title | — | → plain "Driver" or `"{Organization Name} · Driver"` (LOCKED: never "Nemryn Driver") | No | MED (wording decision, not visual) |
+| `/settings` | **Does not exist yet** — no settings route was found anywhere in `src/app/` this audit's search touched | — | N/A — not a current screen | — | — |
+| `/join/[token]` | Title, logo (+ tenant context) | Dynamic invitation body copy (already correct) | Title/logo → Nemryn frame naming the org ("Join {Organization Name} | Nemryn") | No | MED |
+| `/select-organization` | Title, "…Zenward organization…" copy | Dynamic list of real organization names (already correct) | Title/copy → Nemryn/"workspace" | No | LOW |
+
+**Additional routes discovered by this audit, not explicitly named in
+the work item's own list:**
+
+  - `src/app/foundation/page.tsx` — an internal QA page (per the prior
+    inventory row 42) with a breadcrumb literal "Zenward" — LOW
+    priority, last in sequence.
+  - `src/app/(public)/request-transportation`,
+    `(public)/healthcare-providers` — confirmed ZERO Zenward
+    references (§3); not part of this inventory at all.
+  - `src/app/access-unavailable` — title only (§4 table), otherwise no
+    structural change.
+  - `src/app/operations/facilities/page.tsx` — one HISTORICAL comment
+    only (§3), no rendered-content change.
+
+====================================================================
+16. REQUIRED FILES (for the future implementation phases — none
+    touched by this audit)
+====================================================================
+
+The complete, consolidated file list across every section above —
+this IS the file list a future N0-M2-A1 onward phase should work from:
+
+  Metadata/titles (9 files): `src/app/layout.tsx`, `sign-in/page.tsx`,
+    `sign-up/page.tsx`, `forgot-password/page.tsx`,
+    `auth/reset-password/page.tsx`, `auth/auth-code-error/page.tsx`,
+    `access-unavailable/page.tsx`, `complete-signup/form/page.tsx`,
+    `select-organization/page.tsx`, `join/[token]/page.tsx`.
+  Logo usage (8 call sites): the 6 already inventoried plus
+    `forgot-password/page.tsx`, `auth/reset-password/page.tsx`.
+  Copy strings (platform, ~7): `sign-in/page.tsx` (×2),
+    `sign-up/page.tsx`, `select-organization/page.tsx`,
+    `src/lib/auth/errors.ts`, `OperationsShell.tsx`,
+    `ResetPasswordForm.tsx` (new).
+  Driver-surface wording decision (1): `DriverLayoutClient.tsx`.
+  Design tokens (1 file, ~38 consuming components):
+    `src/app/globals.css`, plus the component review list in
+    `12-design-token-specification.md` Appendix A.6.
+  Typography (1 file): `src/design/typography.ts`.
+  Email templates (2, local + hosted Dashboard sync required):
+    `supabase/templates/confirmation.html`,
+    `supabase/config.toml`'s subject line — **already done**, no
+    change needed (§12).
+  Favicon/logo assets: new files under `public/brand/` — **currently
+    absent, blocking** (§7).
+  `package.json:2` name field — cosmetic, no user-facing effect, low
+    priority.
+
+====================================================================
+17. FILES EXPLICITLY NOT TO TOUCH
+====================================================================
+
+  - `public/images/zenward-mobility-logo.png` — NOT deleted, NOT
+    redrawn, NOT modified. Reclassified as tenant (Zenward Mobility's
+    own) identity, still legitimately referenced from operator-owned
+    contexts if any exist in the future (none currently do — it is
+    used only on PLATFORM surfaces today, which is exactly what needs
+    to change; the FILE itself is not touched, only which surfaces
+    reference it).
+  - Any future Nemryn logo/wordmark/symbol asset, once supplied —
+    used directly, never redrawn/reinterpreted/recreated/approximated/
+    recolored, per this work item's own explicit, absolute
+    instruction.
+  - `supabase/migrations/**` — zero brand coupling exists; no
+    migration should be created for cosmetic branding (§14/§16).
+  - `docs/**` (the ~106-file corpus mentioning "Zenward") — explicitly
+    a SEPARATE, later, non-bulk documentation pass per
+    `11-brand-lock-v1.md` §19, not part of the application rebrand at
+    all.
+  - `docs/brand/nemryn/**` itself — this is the living platform spec;
+    maintained going forward, not something an implementation phase
+    edits as part of doing the rebrand (it is the SPEC the rebrand
+    implements against).
+  - `src/components/public/PublicHeader.tsx`,
+    `PublicFooter.tsx` — genuine tenant marketing copy; not touched by
+    a platform-identity pass (§6).
+  - `src/app/join/[token]/page.tsx`'s dynamic invitation body copy —
+    already correct, model-pattern dynamic tenant content.
+  - Any RLS policy, `SECURITY DEFINER` function, or table/column —
+    zero brand coupling exists anywhere in the schema (§14).
+  - `NEXT_PUBLIC_APP_URL`, Supabase Site URL, Redirect URLs, DNS,
+    Vercel domain configuration — N0-M1 is complete; none of this is
+    revisited by N0-M2 (per this work item's own explicit instruction).
+
+====================================================================
+18. IMPLEMENTATION SEQUENCE
+====================================================================
+
+The work item's own suggested sequence is sound and matches the
+LOCKED rebrand sequence already documented in `11-brand-lock-v1.md`
+§22 ("brand lock → full rebrand inventory → token migration →
+application shell → module-by-module visual migration → QA → [domain
+migration, already done]"). This audit recommends adopting it as-is,
+with one addition (a logo-asset gate before shell work can complete):
+
+  **N0-M2-A0** (this phase) — Identity audit. COMPLETE.
+
+  **N0-M2-A1** — Brand foundation: global design tokens
+    (`globals.css` migration per `12-design-token-specification.md`),
+    typography setup (Geist, per §10 — the font swap is the single
+    highest-risk item here and should be validated in isolation before
+    any visual copy changes ride along with it), and locking in
+    whatever Nemryn logo/wordmark asset becomes available under
+    `public/brand/`. **This phase is BLOCKED on the missing logo asset
+    (§7) for its own logo-swap portion** — the token/typography
+    portion can proceed independently and does not need to wait.
+
+  **N0-M2-A2** — Auth + unauthenticated platform identity: every file
+    in the §4/§15 auth-surface table — titles, logos (once available),
+    copy strings. Small, mechanical, LOW-MED risk once A1's tokens
+    exist. `/forgot-password` and `/auth/reset-password` should be
+    included here explicitly (they postdate the original G1-B
+    inventory and must not be silently missed).
+
+  **N0-M2-A3** — Authenticated application shell identity: sidebar
+    logo, `OperationsShell` guard title, `AccountMenu`
+    review, driver-shell title-fallback DECISION (not "Nemryn
+    Driver" — §15) — the shell is the highest-traffic surface and
+    should be validated thoroughly (visual regression, not just
+    string-correctness) before module-by-module work begins.
+
+  **N0-M2-A4** — Tenant/platform identity cleanup across operational
+    screens: the semantic-color re-check (§9), the `brand-interactive-
+    teal` 54-site split (§8), and any remaining component-level token
+    consumers — the largest, highest-judgment phase, likely warranting
+    its own internal sub-sequence (component-family by component-
+    family) rather than one single pass.
+
+  **N0-M2-A5** — Production regression + release: the full test suite
+    (§ Regression Requirements below), a real click-through of every
+    screen in §15, and a controlled, single, reviewed release — never
+    mixed with feature work, per the LOCKED "no rebrand PR mixed with
+    feature work" constraint.
+
+None of A1-A5 were executed by this audit.
+
+====================================================================
+19. REGRESSION/TEST PLAN
+====================================================================
+
+Required after ANY N0-M2 implementation phase, protecting exactly what
+this work item names:
+
+  **Auth (re-run the existing, already-proven test batteries, not
+  rewritten):**
+    - Sign in — existing behavior, existing error states, unaffected
+      by a visual/copy-only change; re-run the live sign-in check used
+      throughout this workstream (a real sign-in still succeeds).
+    - Sign up — same; a real account creation still succeeds, still
+      triggers `signup_create_organization` correctly.
+    - Password recovery — the full P0-S2B round trip (request →
+      captured email → link → new password → old rejected/new
+      accepted) must still pass identically; the EMAIL COPY changes
+      (§12 — already done) but the MECHANIC must not regress.
+    - Driver invitations — the full P0-S2A round trip (invite → email
+      → join → redemption → exactly one Driver + one Membership row).
+    - Join flow — `/join/[token]`'s dynamic tenant-name rendering must
+      be re-verified NOT accidentally replaced by a blind rebrand pass
+      (the single highest-value regression check for the tenant-
+      identity boundary specifically).
+    - Logout — session clears correctly; unaffected by a chrome-only
+      change, but cheap to re-verify.
+    - Organization selection — the dynamic organization list must
+      still render real names correctly post-token-migration (a
+      visual/token change touching this page must not break its data
+      binding).
+  - **RLS / tenant isolation** — the full local SQL suite (22 files)
+    and the concurrency tests, exactly as run in every prior phase in
+    this workstream — a rebrand should produce ZERO diff in
+    `supabase/migrations/` or any RLS policy, so this suite existing
+    unchanged is itself the regression check.
+  - **Mobile layout** — the driver mobile shell and the responsive
+    `OperationsShell` guard specifically (both touched by this
+    inventory, §5/§15) need a real mobile-viewport visual check, not
+    just a desktop one — matching the P0-S2B-UX1 phase's own
+    established practice of checking both viewports for any UI change.
+  - **Current operational workflows** — a full click-through of
+    `/operations`, `/operations/drivers`, and at least one trip-detail
+    screen after the shell/token migration phases, confirming no
+    functional regression rides along with the visual one (the
+    existing driver-invite/trip-assignment SQL suite already covers
+    the DATA side of this; a live click-through covers the UI side).
+
+  **Explicitly required, per this work item's own instruction:**
+  visual identity work must not weaken any auth or security boundary
+  — the test plan above is designed so that EVERY existing auth/RLS/
+  security regression check already used throughout this workstream
+  is re-run unchanged after implementation, specifically because a
+  rebrand should never need to touch any of the code those checks
+  exercise.
+
+====================================================================
+20. RISKS
+====================================================================
+
+  1. **Missing logo asset (§7) — the single hardest blocker.** No
+     Nemryn logo/wordmark file exists anywhere in this repository.
+     N0-M2-A1/A2 cannot complete their own logo-swap work until this
+     is resolved by a human/design process outside this audit's reach.
+     Token/typography/copy work can proceed in parallel without it.
+  2. **Font swap (Geist) is the highest technical risk in the token
+     migration** — touches every text element in the application
+     simultaneously; layout-shift risk if not carefully validated
+     (per `15-rebrand-inventory.md`'s own HIGH rating, reconfirmed).
+  3. **`brand-interactive-teal`'s 54-site split** requires genuine
+     per-component judgment (primary-action vs. link vs. focus-ring
+     vs. selection vs. border roles) — not mechanical, and the highest
+     component-level effort in the whole migration.
+  4. **Semantic-color meaning re-check** (§9) may surface EXISTING
+     semantic mistakes (a routine notice incorrectly styled as
+     "critical") independent of branding — worth flagging to
+     implementers that this phase may fix small pre-existing bugs
+     incidentally, which should be called out in that phase's own
+     report rather than silently bundled.
+  5. **Half-branded production state** — the LOCKED sequence
+     explicitly guards against this ("the app is always shippable
+     between rebrand steps"); the phase sequence in §18 is designed
+     so no single deploy leaves, e.g., a Nemryn-titled sign-in page
+     linking into a still-Zenward-branded shell in a jarring way — but
+     this requires discipline during actual implementation, not
+     something this audit's plan alone guarantees.
+  6. **Docs-corpus scope creep** — ~106 files mention "Zenward"; the
+     temptation to "clean this up while we're at it" during any N0-M2
+     phase should be resisted, per the LOCKED, explicit "docs pass is
+     separate" rule (§17).
+  7. **No dark-mode precedent** — if the eventual Nemryn identity
+     wants a dark variant, this is greenfield work for this codebase,
+     not a swap.
+
+====================================================================
+21. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Untracked files (unchanged from the start of this phase — this
+  audit modified zero file, including zero brand asset, per its own
+  read-only nature):
+    .tmp-qa/auth-confirm-e2e.mjs
+    .tmp-qa/join-auth-confirm-e2e.mjs
+    .tmp-qa/n0-g0-audit-e2e.mjs
+    docs/brand/  (read extensively, not modified)
+    docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    docs/reports/n0-m1-a0-domain-migration-audit.txt
+    docs/reports/n0-m1-a3-production-validation.txt
+    docs/reports/p0-s2a-closure.txt
+    docs/reports/p0-s2a-d1-driver-invitation-production-release.txt
+    docs/reports/p0-s2b-d1-password-recovery-production-release.txt
+    docs/reports/p0-s2b-ux1-d1-password-visibility-production-release.txt
+    docs/reports/n0-m2-a0-application-identity-audit.txt (this file —
+      the only new artifact this phase produces)
+
+  Nothing staged. Nothing committed. Nothing pushed. No file was
+  modified, no brand asset touched, no Vercel/Supabase/DNS
+  configuration changed.
+
+====================================================================
+END OF REPORT
+====================================================================

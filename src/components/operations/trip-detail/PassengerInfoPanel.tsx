@@ -40,7 +40,7 @@ export function PassengerInfoPanel({
 }: PassengerInfoPanelProps) {
   const items = [
     { label: "Passenger", value: passengerName },
-    { label: "Phone", value: passengerPhone ? <a href={`tel:${passengerPhone}`} className="text-brand-interactive-teal hover:underline">{passengerPhone}</a> : "—" },
+    { label: "Phone", value: passengerPhone ? <a href={`tel:${passengerPhone}`} className="text-text-link hover:underline">{passengerPhone}</a> : "—" },
     ...(requesterName
       ? [{ label: "Requested By", value: requesterRelationship ? `${requesterName} (${requesterRelationship})` : requesterName }]
       : []),

@@ -6,7 +6,7 @@ import { OrganizationSelector } from "@/components/auth/OrganizationSelector";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Select organization — Zenward Mobility" };
+export const metadata = { title: "Select workspace" };
 
 /**
  * Only reachable meaningfully by a multi-org user with no (or a stale)
@@ -44,9 +44,9 @@ export default async function SelectOrganizationPage({
 
   return (
     <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-12">
-      <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Select an organization</h1>
+      <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Select a workspace</h1>
       <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
-        Your account has access to more than one Zenward organization. Choose which one to continue with.
+        Your account has access to more than one Nemryn workspace. Choose which one to continue with.
       </p>
       <OrganizationSelector memberships={resolution.memberships} next={next} />
     </div>

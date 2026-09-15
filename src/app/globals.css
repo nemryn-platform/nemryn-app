@@ -1,70 +1,123 @@
 @import "tailwindcss";
 
 /*
-  Zenward design tokens.
-  Source of truth: /docs/design/design-tokens.md (approved P0-E2-S1, gate-updated 2026-08-30).
-  Every color/spacing/radius/shadow value below traces back to that document —
-  do not add ad hoc values here or in component files.
+  Nemryn design tokens (N0-M2-A1A — brand foundation: tokens + typography).
+  Source of truth: docs/brand/nemryn/12-design-token-specification.md
+  (values), 05-semantic-color-system.md (meaning), 11-brand-lock-v1.md
+  (LOCKED palette/typography). Every color/typography value below traces
+  back to those documents — do not add ad hoc values here or in component
+  files. Token NAMES were deliberately kept stable where the underlying
+  role is unchanged (e.g. `text-primary`, `border-strong`,
+  `brand-care-navy`) — only the VALUE moved to the Nemryn-derived
+  equivalent — so this migration requires touching only the small set of
+  consumers whose role genuinely changed (see the per-site notes in
+  docs/reports/n0-m2-a1a-brand-foundation-tokens-typography.txt). This is
+  a controlled identity migration, not a redesign: every role this app
+  already distinguished still exists; only the palette behind it moved.
 */
 @theme {
-  /* Brand anchors */
-  --color-brand-care-navy: #123447;
-  --color-brand-route-teal: #21a89a;
-  --color-brand-interactive-teal: #178577;
-  --color-brand-calm-mist: #ddf4f0;
-  --color-brand-arrival-gold: #f4b860;
+  /* Brand anchors — kept as the app's own dark/wash accents where their
+     role is unambiguous and unchanged (background wash, selection wash);
+     `--color-brand-interactive-teal` was retired entirely because A0
+     confirmed it served multiple INCOMPATIBLE roles (primary action,
+     link, focus, selection) that a single value can no longer serve
+     under Nemryn's rules — see the new `action.primary`/`text-link`/
+     `border-focus`/`selection.*` tokens below, and the per-site
+     migration notes in the phase report. `--color-brand-route-teal`
+     (near-unused) and `--color-brand-arrival-gold` (superseded by
+     `warning-strong` below) are dropped — nothing outside the internal
+     foundation/QA page ever referenced either. */
+  --color-brand-care-navy: #171a1d; /* was #123447 (navy) → Deep Graphite. Background wash / dark button / heading-accent role unchanged; only the hue moved. */
+  --color-brand-calm-mist: #e7ecf0; /* was #ddf4f0 (pale teal) → derived selection.background. Selected/active/hover-wash role unchanged; only the hue moved. */
 
-  /* Neutrals */
-  --color-text-primary: #101f27;
-  --color-text-secondary: #3e535c;
-  --color-text-muted: #64777e;
-  --color-text-disabled: #9aacb2;
-  --color-border-subtle: #d5dee1;
-  --color-border-strong: #7c8e93;
-  --color-surface-app: #f6f9fa;
-  --color-surface-secondary: #eef3f4;
-  --color-surface-elevated: #ffffff;
-  --color-surface-hover: #e7eef0;
+  /* Neutrals — 1:1 purpose map to the Nemryn derived values
+     (design-token-specification.md §2.1/§2.2/§2.3, §10.2). Role
+     unchanged for every existing consumer; only the hex moved. */
+  --color-text-primary: #171a1d;
+  --color-text-secondary: #525a61;
+  --color-text-muted: #646a70; /* Nemryn `text.subtle` role — captions/timestamps/muted metadata, which is what this token has always been used for here */
+  --color-text-disabled: #8a9096;
+  --color-border-subtle: #dcddd9;
+  --color-border-strong: #868b85;
+  --color-surface-app: #f7f7f4;
+  --color-surface-secondary: #e8e9e6;
+  --color-surface-elevated: #ffffff; /* Nemryn `surface.primary` — already correct, unchanged */
+  --color-surface-hover: #f1f1ee; /* Nemryn `action.secondary.hover` — the generic neutral hover wash role this token has always served */
 
-  /* Semantic: success */
-  --color-success-text: #1c7a4d;
-  --color-success-bg: #e6f4ec;
-  --color-success-border: #a9d9be;
-  --color-success-strong: #1c7a4d;
+  /* Action — primary application actions (LOCKED: Deep Graphite / Ink,
+     never Signal Green — brand-lock-v1.md §9, design-token-spec §2.4). */
+  --color-action-primary-background: #171a1d;
+  --color-action-primary-foreground: #f7f7f4;
+  --color-action-primary-hover: #23282d;
+  --color-action-primary-disabled-background: #dcddd9;
+  --color-action-primary-disabled-foreground: #8a9096;
+  --color-action-destructive-background: #a5352f;
+  --color-action-destructive-foreground: #ffffff;
+  --color-action-destructive-hover: #8f2e29;
 
-  /* Semantic: warning (tied to Arrival Gold per design system) */
-  --color-warning-text: #8a5a12;
-  --color-warning-bg: #fcefd9;
-  --color-warning-border: #ebc888;
-  --color-warning-strong: #f4b860;
+  /* Interactive text / focus / selection — ONE deliberate accent (a
+     deepened Steel Blue), never Signal Green, never the old teal
+     (design-token-spec §2.2 `text.link`, §2.3 `border.focus`, §2.6). */
+  --color-text-link: #37556b;
+  --color-border-focus: #37556b;
+  --color-selection-background: #e7ecf0;
+  --color-selection-border: #37556b;
 
-  /* Semantic: critical */
-  --color-critical-text: #b3261e;
-  --color-critical-bg: #fbe9e7;
-  --color-critical-border: #f3b7b0;
-  --color-critical-strong: #b3261e;
+  /* Semantic: success → status.ready (Signal Green, derived — design-token-spec §2.5/§10.2) */
+  --color-success-text: #22694a;
+  --color-success-bg: #eaf3ee;
+  --color-success-border: #3c8a63;
+  --color-success-strong: #3c8a63;
 
-  /* Semantic: informational */
-  --color-info-text: #1d5f91;
-  --color-info-bg: #e7f1fa;
-  --color-info-border: #afd3ec;
-  --color-info-strong: #1d5f91;
+  /* Semantic: warning → status.attention (Attention Amber, derived) */
+  --color-warning-text: #7a5312;
+  --color-warning-bg: #f9efdf;
+  --color-warning-border: #b07a2b;
+  --color-warning-strong: #b07a2b;
 
-  /* On-navy surface — the Operations sidebar (P1-E3-S8B design
-     convergence). Care Navy as background per the canonical Stitch
-     references; a small, dedicated on-dark text/border set since the
-     neutral-on-light tokens above are not legible against it. Reserved
-     for the sidebar only — never used as a body/content surface. */
-  --color-navy-surface: var(--color-brand-care-navy);
-  --color-navy-text-muted: #9fb4bd;
-  --color-navy-border: rgba(255, 255, 255, 0.1);
-  --color-navy-hover-bg: rgba(255, 255, 255, 0.06);
-  --color-navy-active-bg: rgba(33, 168, 154, 0.18);
-  --color-navy-active-text: #5fd6c4;
+  /* Semantic: critical → status.critical (Critical Red, derived) */
+  --color-critical-text: #a5352f;
+  --color-critical-bg: #f8e9e7;
+  --color-critical-border: #c15048;
+  --color-critical-strong: #c15048;
 
-  /* Typography families */
-  --font-display: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* Semantic: informational → status.information (Steel Blue, derived).
+     Also reused for former brand-interactive-teal call sites whose real
+     role was "in progress / active-neutral / informational" — see the
+     phase report's per-site table; never invented a parallel
+     `status-information-*` family when this one already carries the
+     identical role and values. */
+  --color-info-text: #37556b;
+  --color-info-bg: #ebeff2;
+  --color-info-border: #5e7686;
+  --color-info-strong: #5e7686;
+
+  /* Chrome — the application-shell frame (the Operations sidebar).
+     Renamed from the old `--color-navy-*` set: the frame is Deep
+     Graphite now, not navy, and "chrome" is Nemryn's own name for this
+     role (design-token-spec §2.7). Reserved for the sidebar frame only —
+     never a body/content surface. teal active-state → steel, per
+     Appendix A.4 ("the active nav item is not a 'ready' state; it's
+     informational"). */
+  --color-chrome-background: #171a1d;
+  --color-chrome-text-primary: #f7f7f4;
+  --color-chrome-text-secondary: #aab1b7;
+  --color-chrome-border: rgba(255, 255, 255, 0.1);
+  --color-chrome-item-hover: rgba(255, 255, 255, 0.06);
+  --color-chrome-item-active-background: rgba(111, 135, 152, 0.2);
+  --color-chrome-item-active-text: #f7f7f4;
+  --color-chrome-item-active-marker: #a8bcc8;
+
+  /* Typography families — Geist Sans replaces Manrope+Inter (LOCKED,
+     brand-lock-v1.md §10). Nemryn is single-family: no separate display
+     face, so `--font-display` is retired — every former `font-display`
+     consumer now resolves through `typography.ts`'s own role definitions
+     onto `--font-sans`, never a second family (Appendix A.5). Inter
+     remains only as the metric-adjacent fallback the typography spec
+     itself calls for (13-typography-specification.md §1), not as a
+     loaded/rendered family. */
+  --font-sans: var(--font-geist-sans), "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Spacing — semantic aliases layered on Tailwind's 4px scale (see design-tokens.md §5)
      P1-E3-S2B: keyed as --spacing-zw-{size}, NOT --spacing-{size}. Tailwind v4's
@@ -89,21 +142,34 @@
   --spacing-zw-3xl: 4rem; /* 64px */
   --spacing-zw-4xl: 5rem; /* 80px */
 
-  /* Radius */
+  /* Radius — deliberately UNCHANGED in this phase. The Nemryn spec calls
+     for a tighter 3-step scale (4/8/12, collapsing the app's current
+     4-step 6/8/10/14) via a "per-usage rounding review"
+     (design-token-spec Appendix A.5) — not a mechanical value swap, since
+     collapsing 4 steps into 3 has no safe 1:1 mapping and risks a real
+     layout/proportion regression across every rounded element in the
+     app. Deferred to the module-migration phase that can review each
+     usage; not one of this phase's own "must distinguish" roles (design
+     tokens §3 of the work item lists color/action/text/status roles
+     only, not radius). See the phase report. */
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 10px;
   --radius-lg: 14px;
   /* radius-full is Tailwind's built-in `rounded-full`, reserved for pills per design system */
 
-  /* Shadows — two levels only, per design-tokens.md §7 */
-  --shadow-sm: 0 1px 2px rgba(16, 31, 39, 0.06), 0 1px 3px rgba(16, 31, 39, 0.08);
-  --shadow-md: 0 2px 4px rgba(16, 31, 39, 0.08), 0 4px 12px rgba(16, 31, 39, 0.12);
+  /* Shadows — two levels only. Tint re-anchored from the old blue-slate
+     rgba(16,31,39) to the Nemryn graphite primitive rgba(23,26,29), per
+     design-token-spec §6. Same two-level structure, same consumers,
+     imperceptibly different tint. */
+  --shadow-sm: 0 1px 2px rgba(23, 26, 29, 0.06), 0 1px 3px rgba(23, 26, 29, 0.08);
+  --shadow-md: 0 2px 4px rgba(23, 26, 29, 0.08), 0 4px 12px rgba(23, 26, 29, 0.12);
 
-  /* Motion */
+  /* Motion — durations re-anchored to design-token-spec §8
+     (120/180/240, was 120/200/280); same easing curve, unchanged. */
   --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 280ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
@@ -113,9 +179,11 @@ body {
   font-family: var(--font-sans);
 }
 
-/* Visible keyboard focus everywhere — never remove without a replacement. */
+/* Visible keyboard focus everywhere — never remove without a replacement.
+   Nemryn's single, deliberate focus color (design-token-spec §2.3
+   `border.focus`) replaces the retired interactive-teal outline. */
 :focus-visible {
-  outline: 2px solid var(--color-brand-interactive-teal);
+  outline: 2px solid var(--color-border-focus);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
 }
@@ -124,9 +192,11 @@ body {
    `<dialog>` element's own `::backdrop` is fully transparent by default in
    every browser; this is the one explicit rule needed to actually dim the
    page behind an open dialog. Plain CSS, not a Tailwind arbitrary variant,
-   since `::backdrop` support in Tailwind v4 utilities isn't relied on. */
+   since `::backdrop` support in Tailwind v4 utilities isn't relied on.
+   Tint re-anchored to the Nemryn graphite primitive (`overlay.scrim`,
+   design-token-spec §6), replacing the old slate-blue tint. */
 dialog::backdrop {
-  background: rgb(15 23 42 / 0.45);
+  background: rgba(15, 18, 20, 0.45);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,0 +1,574 @@
+====================================================================
+PHASE:    N0-M2-A1A — Nemryn Brand Foundation: Tokens + Typography
+DATE:     2026-09-15
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+CURRENT PRODUCTION CODE SHA: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+MODE:     Implementation + local validation. No commit, no push, no
+          deploy. No logo/favicon touched. No platform copy/wording
+          changed. No auth mechanic, Supabase configuration, or schema
+          touched.
+====================================================================
+
+OBJECTIVE
+---------
+Implement the Nemryn global design-token, semantic-color, and Geist
+typography foundation — the parts of the N0-M2 rebrand that do not
+require the (currently missing, per N0-M2-A0) Nemryn logo asset —
+without redesigning the UI, without changing platform copy/wording,
+and without touching the application shell's identity (product name,
+logo) yet.
+
+====================================================================
+1. REPOSITORY STATE
+====================================================================
+
+  git branch --show-current  → main
+  git rev-parse HEAD          → a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+  git fetch origin             → (no output; nothing new)
+  git rev-parse origin/main   → a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+
+Local `main` and `origin/main` were aligned before any edit. No
+unexpected repository change.
+
+====================================================================
+2. AUTHORITATIVE SPECS USED
+====================================================================
+
+Read in full before any edit, per instruction:
+
+  docs/brand/nemryn/11-brand-lock-v1.md (the LOCKED, human-approved
+    palette/typography/rules — authoritative wherever any other doc
+    disagrees)
+  docs/brand/nemryn/12-design-token-specification.md (the exact
+    derived, WCAG-validated hex values consumed below, plus Appendix A,
+    the purpose-based old-token → new-role migration map this
+    implementation follows directly)
+  docs/brand/nemryn/05-semantic-color-system.md (status meaning,
+    the "never decorative" / "never Signal Green as CTA" rules)
+  docs/brand/nemryn/13-typography-specification.md (the finalized
+    Geist-based scale)
+  docs/brand/nemryn/15-rebrand-inventory.md (cross-referenced for
+    consistency with N0-M2-A0's own findings)
+
+No token system was invented and no palette value was reinterpreted —
+every hex value below is copied directly from `12-design-token-
+specification.md`, never recomputed or approximated.
+
+====================================================================
+3. FILES MODIFIED
+====================================================================
+
+41 files, 295 insertions / 181 deletions. Grouped by kind:
+
+  Token layer (1 file):
+    src/app/globals.css — the full token rewrite (§4).
+
+  Typography (2 files):
+    src/design/typography.ts — Geist-based scale, same key names (§8).
+    src/app/layout.tsx — Geist font loading, same variable-injection
+      pattern Manrope/Inter used (§7).
+
+  Component-level token corrections — action/link/focus/selection
+  (§4/component review, per work item §3's own explicit instruction
+  not to blind-rename `brand-interactive-teal`):
+    src/components/ui/buttonStyles.ts, IconButton.tsx, DataTable.tsx,
+    src/components/auth/OrganizationSelector.tsx,
+    src/components/operations/AccountMenu.tsx,
+    src/components/operations/dispatch/AssignmentGrid.tsx,
+    src/app/onboarding/page.tsx,
+    src/components/operations/new-trip/NewTripForm.tsx,
+    src/components/operations/OnboardingChecklistBanner.tsx,
+    src/components/operations/new-trip/FormSection.tsx (decorative
+      icon tint corrected to neutral, §9).
+
+  Component-level token corrections — status/information (§5, §9):
+    src/components/ui/StatusBadge.tsx (semantic correction — see §9),
+    src/components/driver/DriverRoute.tsx, DriverActiveTripLegs.tsx
+      (semantic correction — see §9), DriverBottomNavigation.tsx,
+      DriverNextTripCard.tsx, DriverInstruction.tsx,
+    src/components/operations/trip-detail/TripRoutePanel.tsx,
+      TripInfoStrip.tsx,
+    src/app/operations/page.tsx (semantic correction — see §9).
+
+  Plain link-color migration (`text-brand-interactive-teal` →
+  `text-text-link`, mechanical, same visual role — a plain navigation
+  link, no structural change):
+    src/app/sign-in/page.tsx, sign-up/page.tsx,
+    auth/auth-code-error/page.tsx, auth/reset-password/page.tsx,
+    forgot-password/page.tsx, join/[token]/page.tsx,
+    driver/history/page.tsx, driver/trips/page.tsx,
+    driver/trips/[tripId]/page.tsx, driver/page.tsx,
+    operations/trips/[tripId]/page.tsx, operations/trips/page.tsx,
+    src/components/auth/SignInForm.tsx, ForgotPasswordForm.tsx,
+    src/components/operations/trip-detail/PassengerInfoPanel.tsx.
+
+  Primary-action button migration (§6):
+    src/app/auth/auth-code-error/page.tsx,
+    src/app/auth/reset-password/page.tsx,
+    src/components/auth/ResetPasswordForm.tsx.
+
+  Application-shell chrome rename (navy → chrome, §10):
+    src/components/operations/OperationsSidebar.tsx.
+
+  Internal QA/verification surface, updated to remove dangling
+  references and show the real current palette (not a production
+  screen — see N0-M2-A0 §17's own note that this page is "update
+  last, as a verification surface"; updating it here served this
+  phase's own need to visually verify the new tokens, §12/§13):
+    src/app/foundation/page.tsx.
+
+  One stale doc-comment correction (described current behavior
+  inaccurately after the font swap, not a copy/wording change):
+    src/components/ui/PageHeader.tsx.
+
+====================================================================
+4. OLD → NEW TOKEN MAPPING
+====================================================================
+
+**Kept the same CSS variable NAME, moved only the VALUE** (zero
+consumer file touched for these — the purpose-based 1:1 map from
+design-token-spec Appendix A.1/A.2):
+
+  | Token | Old value | New value | Role (unchanged) |
+  |---|---|---|---|
+  | `--color-text-primary` | `#101f27` | `#171A1D` | default reading text |
+  | `--color-text-secondary` | `#3e535c` | `#525A61` | supporting text |
+  | `--color-text-muted` | `#64777e` | `#646A70` | tertiary/caption text (Nemryn `text.subtle`) |
+  | `--color-text-disabled` | `#9aacb2` | `#8A9096` | inactive text |
+  | `--color-border-subtle` | `#d5dee1` | `#DCDDD9` | hairline |
+  | `--color-border-strong` | `#7c8e93` | `#868B85` | meaningful boundary |
+  | `--color-surface-app` | `#f6f9fa` | `#F7F7F4` | page ground |
+  | `--color-surface-secondary` | `#eef3f4` | `#E8E9E6` | recessed/zebra |
+  | `--color-surface-elevated` | `#ffffff` | `#FFFFFF` | unchanged, already correct |
+  | `--color-surface-hover` | `#e7eef0` | `#F1F1EE` | generic hover wash |
+  | `--color-brand-care-navy` | `#123447` | `#171A1D` | dark bg/text/button accent (navy → Deep Graphite) |
+  | `--color-brand-calm-mist` | `#ddf4f0` | `#E7ECF0` | selected/active/hover wash (pale teal → selection.background) |
+  | `--color-success-text/bg/border/strong` | `#1c7a4d`/`#e6f4ec`/`#a9d9be`/`#1c7a4d` | `#22694A`/`#EAF3EE`/`#3C8A63`/`#3C8A63` | status.ready |
+  | `--color-warning-text/bg/border/strong` | `#8a5a12`/`#fcefd9`/`#ebc888`/`#f4b860` | `#7A5312`/`#F9EFDF`/`#B07A2B`/`#B07A2B` | status.attention |
+  | `--color-critical-text/bg/border/strong` | `#b3261e`/`#fbe9e7`/`#f3b7b0`/`#b3261e` | `#A5352F`/`#F8E9E7`/`#C15048`/`#C15048` | status.critical |
+  | `--color-info-text/bg/border/strong` | `#1d5f91`/`#e7f1fa`/`#afd3ec`/`#1d5f91` | `#37556B`/`#EBEFF2`/`#5E7686`/`#5E7686` | status.information |
+  | `--shadow-sm`/`--shadow-md` | `rgba(16,31,39,…)` tint | `rgba(23,26,29,…)` tint | same 2 levels, graphite-anchored |
+  | `dialog::backdrop` | `rgb(15 23 42/0.45)` | `rgba(15,18,20,0.45)` | graphite-anchored scrim |
+  | `--duration-fast/base/slow` | `120/200/280ms` | `120/180/240ms` | same easing, re-anchored |
+
+**Removed entirely** (near-unused, no real semantic role once
+migrated): `--color-brand-route-teal`, `--color-brand-arrival-gold`.
+
+**Removed and replaced by role-specific tokens** (Appendix A.1's own
+"SPLIT — manual review, highest priority" item — `--color-brand-
+interactive-teal` served 4 incompatible roles; see §6 for the full
+per-site classification):
+  `--color-action-primary-background/foreground/hover/disabled-*`,
+  `--color-action-destructive-background/foreground/hover`,
+  `--color-text-link`, `--color-border-focus`,
+  `--color-selection-background/border`.
+
+**Renamed** (the role itself changed name, per design-token-spec §2.7
+— "navy" → "chrome," Nemryn's own name for the application-shell-
+frame role; only ONE consumer file, `OperationsSidebar.tsx`, was
+touched):
+  `--color-navy-surface` → `--color-chrome-background`
+  `--color-navy-text-muted` → `--color-chrome-text-secondary`
+  `--color-navy-border` → `--color-chrome-border`
+  `--color-navy-hover-bg` → `--color-chrome-item-hover`
+  `--color-navy-active-bg` (teal-tinted `rgba(33,168,154,0.18)`) →
+    `--color-chrome-item-active-background` (steel-tinted
+    `rgba(111,135,152,0.20)`) — the active-nav-item wash is no longer
+    tinted teal.
+  `--color-navy-active-text` (`#5fd6c4`, teal) →
+    `--color-chrome-item-active-text` (`#F7F7F4`) +
+    `--color-chrome-item-active-marker` (`#A8BCC8`, steel) — the
+    active item's own text is now the same white as inactive items;
+    the steel-tinted marker/wash is what signals "active," per
+    Appendix A.4 ("the active nav item is not a 'ready' state; it's
+    informational").
+  Also added, unused by any current consumer but part of the
+  documented chrome set: `--color-chrome-text-primary`.
+
+**Deliberately UNCHANGED, with reasons documented inline in
+`globals.css` itself** (not silently skipped):
+  - `--radius-xs/sm/md/lg` (6/8/10/14) — the spec's target 3-step
+    scale (4/8/12) has no safe mechanical 1:1 mapping from the app's
+    current 4 steps; Appendix A.5 itself calls this a "per-usage
+    rounding review," not a value swap. Deferred to the module-
+    migration phase that can review each rounded element individually
+    — collapsing radius steps blindly risks exactly the kind of
+    layout/proportion regression this phase's own §7 warns against.
+    Also not one of the roles this work item's own §3 lists as needing
+    distinction (background/surface/border/text/action/link/focus/
+    selection/status — radius isn't in that list).
+  - `--spacing-zw-*` — the spec wants a prefix rename
+    (`--spacing-nm-*`) plus new marketing-only steps beyond the app's
+    current range, but the EXISTING steps' VALUES are unchanged per
+    Appendix A.5. Renaming the prefix would require touching every
+    `gap-zw-*`/`p-zw-*`/etc. consumer across the whole application for
+    zero visual benefit (values identical) — judged out of scope for
+    a tokens-only foundation phase; deferred.
+
+====================================================================
+5. SEMANTIC STATUS MAPPING
+====================================================================
+
+Applied exactly per `05-semantic-color-system.md` §4's mapping table:
+
+  Signal Green (`success-*`)   → ready / confirmed / complete / healthy
+  Attention Amber (`warning-*`) → needs attention / potential problem
+  Critical Red (`critical-*`)  → critical exception / failed condition
+  Steel Blue (`info-*`)        → information / selection / in-progress-
+                                  without-a-problem / active-neutral
+
+**Former `brand-interactive-teal` sites reclassified as
+`status.information` (reused the EXISTING `info-*` family — no new
+parallel `status-information-*` tokens were invented, since `info-*`
+already carries the identical role and values):** every "in
+progress / en route / active tab / current step" indicator this app
+already had — `DriverRoute` dot, `TripRoutePanel` dot + chip,
+`AssignmentGrid`'s "in progress" label, `DriverBottomNavigation`'s
+active tab, `DriverNextTripCard`'s time heading, `TripInfoStrip`'s
+emphasized cell, `DriverInstruction`'s accent border/icon, and the
+Operations overview's own trip-status dot/label (`operations/
+page.tsx`).
+
+====================================================================
+6. PRIMARY-ACTION TREATMENT
+====================================================================
+
+Per the LOCKED rule (brand-lock-v1.md §9 / design-token-spec §2.4):
+**primary actions never became Signal Green.** Every filled
+primary-action button in the application now uses the new
+`action-primary-*` tokens (`#171A1D` background / `#F7F7F4`
+foreground / `#23282D` hover — Deep Graphite / Ink), applied to:
+
+  - `src/components/ui/buttonStyles.ts`'s `primary` variant (the
+    shared `<Button variant="primary">` used throughout the app)
+  - `src/components/ui/IconButton.tsx`'s `primary` variant
+  - the three literal filled buttons that weren't routed through
+    `buttonStyles.ts` (`auth-code-error`, `reset-password` pages,
+    `ResetPasswordForm`'s success screen)
+
+**A related correction, documented explicitly:** `buttonStyles.ts`'s
+`destructive` variant previously reused `bg-critical-strong` (a
+STATUS token) for a FILLED BUTTON background — the spec's own
+`action.destructive.background` (`#A5352F`) is a deliberately
+DIFFERENT value from `status.critical.solid` (`#C15048`), precisely
+because a destructive-confirm button and a critical-status indicator
+are different concepts that happened to share a color by coincidence
+in the old system. This phase introduced `action-destructive-
+background/foreground/hover` as their own tokens and repointed the
+`destructive` button variant onto them — the status family
+(`critical-*`) is now used only for actual status indicators, never
+borrowed for a button fill.
+
+====================================================================
+7. GEIST IMPLEMENTATION
+====================================================================
+
+Confirmed directly, before writing any code, that `Geist`/`Geist Mono`
+are available via `next/font/google` in this exact Next.js version
+(16.3.3) — checked Next's own bundled Google Fonts metadata
+(`font-data.json`) directly rather than assuming; both entries are
+present. **No new npm dependency was added** — `next/font/google` is
+the same package Manrope/Inter already used.
+
+`src/app/layout.tsx`: replaced the `Manrope`/`Inter` imports and
+instances with `Geist`/`Geist_Mono`, same loading mechanism (a
+`variable` CSS custom property, `subsets: ["latin"]`), weights
+400/500/600 for Geist Sans (matching `13-typography-specification.md`
+§4's own "700 is not used in the application"), 400/500 for Geist
+Mono. The `<html className>` now injects `geistSans.variable`/
+`geistMono.variable` instead of `manrope.variable`/`inter.variable`.
+
+`src/app/globals.css`: `--font-sans` now resolves through
+`var(--font-geist-sans)` (falling back to `"Inter"` — the metric-
+adjacent fallback the typography spec itself calls for, §1 — then
+generic sans-serif); `--font-display` was retired entirely (Nemryn is
+single-family, per the LOCKED brand-lock-v1.md §10 — "no separate
+display face"); a new `--font-mono` resolves through
+`var(--font-geist-mono)`.
+
+`metadata.title`/`description` in `layout.tsx` were **NOT touched** —
+explicitly excluded from this phase (§9 of the work item).
+
+====================================================================
+8. TYPOGRAPHY-ROLE IMPLEMENTATION
+====================================================================
+
+`src/design/typography.ts` — every existing KEY NAME is unchanged
+(zero consumer file needed to change: every component already
+references `typography.body`, `typography.pageTitleOperational`, etc.
+by these same names). Only the underlying class strings moved to the
+Geist-based Nemryn scale from `13-typography-specification.md` §4:
+
+  | Key | Old size | New size | Note |
+  |---|---|---|---|
+  | `display` | 48px, weight 700 (Manrope) | 48px, weight 600 (Geist) | family + weight only |
+  | `pageTitleMarketing` | 30px/leading-10 | 32px/1.15 | matches `type.marketing.heading` exactly |
+  | `pageTitleOperational` | 30px | **24px** | deliberate shrink — spec principle "avoid oversized application headings" |
+  | `sectionHeading` | 24px | **18px** | deliberate shrink |
+  | `subsectionHeading` | 18px | **15px** | deliberate shrink |
+  | `body` | 16px | **14px** | deliberate shrink |
+  | `bodySmall` | 14px | **13px** | deliberate shrink |
+  | `label` | 13px | 13px | line-height re-anchored (1.3) |
+  | `metadata` | 12px | 12px | line-height re-anchored (1.4) |
+  | `button` | 14px, weight 600 | **13px, weight 500** | matches `type.app.button` exactly |
+  | `tableHeader` | 13px | 13px | aligned to `label`'s line-height |
+  | `tableCell` | 13px | 13px | aligned to `bodySmall`'s line-height |
+  | `numericDisplay` | 36px, weight 700 | **28px, weight 600**, `tabular-nums` added | matches `type.app.numeric` exactly |
+
+These size reductions are the SPEC'S OWN stated intent (13-typography-
+specification.md §2.1: "Avoid oversized application headings... The
+operations UI is a workspace, not a landing page"), not an
+implementation error — validated visually against real screens, §11,
+and NOT reverted to the old sizes to "fix" the resulting density
+change, per this phase's own explicit instruction.
+
+====================================================================
+9. COMPONENT-LEVEL TOKEN CORRECTIONS (documented, per §5 of the
+   work item: "Document every such correction")
+====================================================================
+
+Three genuine semantic corrections were found and made while
+migrating `brand-interactive-teal`'s 54 call sites (not merely a
+rename — see §6's design-token-spec Appendix A.1 characterization,
+"SPLIT — manual review, highest priority"):
+
+  1. **`StatusBadge.tsx`'s `active` category** previously used the
+     SAME teal as the (unrelated) primary-action/link color
+     (`bg-brand-calm-mist text-brand-interactive-teal` / dot
+     `bg-brand-interactive-teal`). Its actual meaning — "currently
+     active/selected," used alongside a SEPARATE `informational`
+     category — is Nemryn's `status.information` (Steel Blue)
+     exactly. Corrected to reuse the SAME `info-bg`/`info-text`/
+     `info-strong` tokens `informational` already uses, rather than
+     inventing a second, redundant token family for what is the same
+     underlying meaning.
+  2. **`DriverActiveTripLegs.tsx`'s two-leg progress indicator**
+     previously used the IDENTICAL teal color for BOTH the "current
+     leg" state (`pickupCurrent`) and the "done" state (`pickupDone`)
+     — conflating "in progress" and "already completed" into one
+     color. Per the semantic mapping table (`05-semantic-color-
+     system.md` §4: "Trip: in service/en route → status.information";
+     "Trip: completed, proof recorded → status.ready"), these are two
+     DIFFERENT meanings. Corrected: `pickupCurrent` → `info-strong`
+     (in progress, Steel Blue), `pickupDone` → `success-strong` (done,
+     Signal Green) — the two states are now visually distinguishable,
+     which they were not before.
+  3. **`FormSection.tsx`'s section-icon tint** used the interactive
+     teal purely decoratively (a colored icon next to a heading,
+     conveying no status or meaning). Per the LOCKED "mostly neutral"
+     visual character (brand-lock-v1.md §6) and the explicit "status
+     colors as decoration" prohibition (`05-semantic-color-system.md`
+     §6), this was corrected to `text-muted` (neutral, matching the
+     primitive table's own "Muted Slate... icon default" role) rather
+     than migrated to any accent/status token.
+
+**A broader semantic re-check was also performed, per §5's own
+instruction, across every `critical-*` consumer in the application**
+(the family most likely to be misused per Appendix A.3's own warning
+about "routine notice" misuse): the overwhelming majority of
+`critical-text`/`critical-strong`/`critical-bg`/`critical-border`
+usage is `role="alert"` FORM VALIDATION ERROR text (every auth form,
+every onboarding form, every operations dialog) and one genuine trip
+EXCEPTION display (`operations/trips/[tripId]/page.tsx`) — both are
+legitimate "failed condition"/blocking uses, not the "routine
+account/security notice" misuse the spec warns against (e.g. "your
+password was changed" wrongly styled critical). **No further
+correction was found necessary** in this family — the existing
+convention was already semantically sound; this is reported as a
+confirmed non-finding, not skipped.
+
+====================================================================
+10. ACCESSIBILITY REVIEW
+====================================================================
+
+Every color value applied in this phase is copied verbatim from
+`12-design-token-specification.md` §10, which already computed and
+documented the WCAG 2.1 contrast ratio for every one against every
+surface it can appear on (§10.2 of that spec: `text.primary` 16.3:1
+AAA, `text.link`/`border.focus` 7.3–7.9:1 AAA, every `status.*
+.foreground` ≥6.1:1 AA, every `status.*.solid` ≥3.4:1 for meaningful
+non-text graphics, `action.primary` foreground/background 16.3:1 AAA).
+No new color combination was invented in this phase that the spec had
+not already validated — this implementation is a direct application
+of already-audited values, not a fresh design requiring its own
+contrast pass.
+
+Re-confirmed live, not just by citation: the screenshots in §11/§12
+show status dots/chips/text rendering with clearly legible contrast
+against their surfaces at both viewport sizes, and no status is
+communicated by color alone anywhere touched this phase (every
+migrated status site retained its existing label/icon pairing — this
+phase changed WHICH color a role uses, never removed a label or icon
+that accompanied it).
+
+====================================================================
+11. DESKTOP VALIDATION
+====================================================================
+
+Performed against the real running application (dev server, local
+Supabase stack) via headless Chrome at 1400×900, for every screen the
+work item names, plus a driver detail screen:
+
+  /sign-in, /sign-up, /forgot-password, /operations, /operations/
+  drivers, /driver — all captured and visually reviewed.
+
+Confirmed, for every screen: no text wrapping regression, no clipped
+buttons, no sidebar/header overflow, no table-column breakage, no
+badge overflow, no vertical-rhythm collapse. `document.documentElement.
+scrollWidth > clientWidth` was also checked programmatically for every
+screen — **false (no horizontal overflow) on all 6 desktop
+screens.**
+
+Visually confirmed correct: the sign-in/sign-up/forgot-password card
+now sits on a Deep Graphite backdrop (was navy blue) with a Deep
+Graphite "Sign in"/"Send reset link" button and a Steel-Blue "Forgot
+password?"/"Create an account" link; the Operations sidebar renders as
+Deep Graphite chrome; the Operations overview's status badges/pills
+render in the correct amber (attention)/steel (information) tones,
+clearly legible; the Drivers list's "Active"/"Inactive" badges render
+in the correct green/neutral tones; the Driver "Today" screen's active
+bottom-nav tab and the trip-time heading render in Steel Blue,
+matching the new semantic mapping.
+
+====================================================================
+12. MOBILE VALIDATION
+====================================================================
+
+Same 6 screens, captured at 390×844 (iPhone-class viewport, device-
+emulated). **No horizontal overflow on any of the 6 mobile
+screens** (same programmatic check as §11). Visually confirmed: the
+sign-in card and its Deep Graphite button/Steel-Blue link render
+correctly at the narrower width; the Driver "Today" shell (bottom
+navigation, trip cards, status pills) renders correctly with the new
+tokens and no clipping; the Operations screen correctly shows its
+EXISTING (pre-existing, unmodified) "This workspace is designed for
+tablet and desktop use" narrow-width guard state — confirming that
+guard's own logic and copy are completely untouched by this phase,
+only its (now correctly neutral) colors changed.
+
+====================================================================
+13. AUTH/SECURITY SCOPE PROTECTION
+====================================================================
+
+Confirmed via `git diff --stat` against every path the work item
+names, both before and after the full edit set — **zero output for
+every one**:
+
+  supabase/migrations/
+  supabase/templates/
+  src/lib/email/
+  src/lib/auth/
+  src/app/auth/confirm/
+  public/images/zenward-mobility-logo.png
+  public/ (in full)
+
+No authentication Server Action, no recovery-session logic, no
+Supabase template/config/migration, no driver-invitation email logic,
+and the approved (Zenward) logo file itself were touched by this
+phase. `metadata.title`/`description`, every page's Zenward-branded
+copy string, and the sidebar's own logo `<Image>` element were
+independently re-confirmed unchanged via the same diff review (§14) —
+only surrounding CSS classes changed on files that also happen to
+render a logo (e.g. `OperationsSidebar.tsx`'s `<Image src="/images/
+zenward-mobility-logo.png" alt="Zenward Mobility">` line itself has
+zero diff; only its parent container's chrome classes changed).
+
+====================================================================
+14. RLS/DATABASE PROTECTION
+====================================================================
+
+  git diff --stat -- supabase/migrations/  → (empty)
+
+Zero migration, zero RLS policy, zero schema change — consistent with
+N0-M2-A0's own finding that domain/brand migration requires none of
+these. Full SQL/RLS regression suite (§15) reconfirms this is not
+merely "no diff" but "genuinely no behavioral change."
+
+====================================================================
+15. TESTS
+====================================================================
+
+  npx tsc --noEmit → PASS (exit 0)
+  npm run lint → PASS (0 errors; 14 pre-existing warnings, all
+    confined to untracked `.tmp-qa/*.mjs`, none in any file this
+    phase touched)
+  npm run build → PASS ("✓ Compiled successfully", all 37 routes
+    generated with no error)
+  npm test → PASS (29/29, unchanged — this phase introduced no new
+    pure logic to unit-test)
+
+  Full local SQL/RLS suite (fresh `supabase db reset`, all 22 files in
+  `supabase/tests/*.sql`, run once each): **0 real FAIL notices**
+  (same established counting method used throughout this workstream).
+
+  `mutation_concurrency_test.sh` → PASS
+  `driver_invite_concurrency_test.sh` → PASS (exactly 1 Driver row, 1
+    Membership row from two concurrent redemption attempts)
+
+All consistent with §13/§14 — the backend is provably unaffected by
+this presentation-layer migration.
+
+====================================================================
+16. DIFF REVIEW
+====================================================================
+
+  git diff --stat → 41 files changed, 295 insertions(+), 181
+  deletions(-).
+
+Every changed file falls into one of the categories in §3 — no file
+outside the design-token/typography/component-token-correction scope
+was touched. Confirmed via the same `git diff --stat` scope-protection
+check in §13 that none of the explicitly-excluded paths appear.
+
+====================================================================
+17. REMAINING LOGO BLOCKER
+====================================================================
+
+Unchanged from N0-M2-A0's own finding, reconfirmed: **no Nemryn logo,
+wordmark, or symbol file exists anywhere in this repository.**
+`public/brand/` was NOT created in this phase (per explicit
+instruction — it should only be created once the human supplies the
+exact approved asset). `public/images/zenward-mobility-logo.png` and
+every one of its 8 call sites (sign-in, sign-up, auth-code-error,
+forgot-password, reset-password, join/[token], onboarding layout,
+OperationsSidebar) remain completely untouched — confirmed via `git
+diff` showing zero change to any `<Image src=.../>` line anywhere.
+N0-M2-A1B (logo installation) remains blocked on the human supplying
+that asset, exactly as A0 reported.
+
+====================================================================
+18. READINESS FOR A1B/A2
+====================================================================
+
+The token/typography foundation is in place and validated. A future
+N0-M2-A1B (logo installation, once supplied) can proceed independently
+— it touches only the 8 `<Image>` call sites and, per N0-M2-A0's own
+finding, has no dependency on anything this phase changed. A future
+N0-M2-A2 (auth + unauthenticated platform identity — page titles,
+"Zenward"/"Zenward Mobility" copy strings) can proceed on top of this
+foundation without needing further token work — every color role an
+auth-copy pass would need (primary action, link, focus) already
+exists and is already correctly wired into the auth pages' surrounding
+chrome.
+
+====================================================================
+19. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit: the 41 files listed in §3 (all
+  modified, none new/deleted).
+
+  Untracked files: unchanged from the start of this phase (the
+  standing set from every prior phase in this workstream — `.tmp-qa/`,
+  `docs/brand/`, several historical `docs/reports/*.txt` — plus this
+  new report).
+
+  Nothing staged. Nothing committed. Nothing pushed. No Vercel,
+  Supabase, or DNS configuration was changed.
+
+====================================================================
+END OF REPORT
+====================================================================

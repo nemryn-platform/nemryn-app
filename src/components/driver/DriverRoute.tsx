@@ -14,7 +14,7 @@ export function DriverRoute({ pickup, destination, appointmentLabel, className }
   return (
     <div className={cn("flex gap-3", className)}>
       <div className="flex flex-col items-center pt-1">
-        <span className="size-2.5 shrink-0 rounded-full bg-brand-interactive-teal" aria-hidden />
+        <span className="size-2.5 shrink-0 rounded-full bg-info-strong" aria-hidden />
         <span className="w-px flex-1 bg-border-strong" aria-hidden />
         <span className="size-2.5 shrink-0 rounded-full bg-brand-care-navy" aria-hidden />
       </div>

@@ -20,7 +20,7 @@ export default async function OnboardingDriverPage() {
         <p className={cn(typography.metadata, "text-text-secondary")}>Step 4 of 6</p>
         <h1 className={cn(typography.sectionHeading, "mt-1 text-text-primary")}>Do you also drive?</h1>
         <p className={cn(typography.bodySmall, "mt-2 text-text-secondary")}>
-          Many small operators are the owner, dispatcher, and driver — Zenward supports that. This keeps your
+          Many small operators are the owner, dispatcher, and driver — Nemryn supports that. This keeps your
           Operations access exactly as it is and additionally sets you up to receive and run trips as a driver.
         </p>
       </div>

@@ -5,7 +5,7 @@ import { CompleteSignupForm } from "@/components/auth/CompleteSignupForm";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Complete your account — Zenward Mobility" };
+export const metadata = { title: "Complete your account" };
 
 /**
  * P1-E4-S0A1 §9 — the explicit, user-initiated recovery form. Reached

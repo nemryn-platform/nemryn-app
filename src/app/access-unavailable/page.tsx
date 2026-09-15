@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Access unavailable — Zenward Mobility" };
+export const metadata = { title: "Access unavailable" };
 
 /**
  * Authenticated + zero active Memberships (work item §28). Calm, no
@@ -21,7 +21,7 @@ export default async function AccessUnavailablePage() {
       </span>
       <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>Access unavailable</h1>
       <p className={cn(typography.body, "mb-8 max-w-sm text-text-secondary")}>
-        Your account does not currently have access to a Zenward organization. If you believe this is a mistake,
+        Your account does not currently have access to a Nemryn workspace. If you believe this is a mistake,
         contact your organization administrator.
       </p>
       <form action={signOutAction}>

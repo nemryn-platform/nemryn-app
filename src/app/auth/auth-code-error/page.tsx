@@ -3,7 +3,7 @@ import Link from "next/link";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Link expired — Zenward Mobility" };
+export const metadata = { title: "Link expired" };
 
 /**
  * P1-E4-S0A2 — the restrained failure state for `/auth/confirm` (work
@@ -18,12 +18,13 @@ export default function AuthCodeErrorPage() {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+        {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
           <Image
-            src="/images/zenward-mobility-logo.png"
-            alt="Zenward Mobility"
-            width={240}
-            height={80}
+            src="/brand/nemryn-logo-primary.svg"
+            alt="Nemryn"
+            width={434}
+            height={127}
             priority
             className="h-auto w-60"
           />
@@ -40,14 +41,14 @@ export default function AuthCodeErrorPage() {
             href="/sign-in"
             className={cn(
               typography.button,
-              "flex h-12 w-full items-center justify-center rounded-md bg-brand-interactive-teal text-white hover:brightness-95",
+              "flex h-12 w-full items-center justify-center rounded-md bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
             )}
           >
             Sign in
           </Link>
           <Link
             href="/sign-up"
-            className={cn(typography.bodySmall, "text-center font-medium text-brand-interactive-teal")}
+            className={cn(typography.bodySmall, "text-center font-medium text-text-link")}
           >
             Create your account again
           </Link>

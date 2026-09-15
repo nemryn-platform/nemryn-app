@@ -1,0 +1,420 @@
+N0-M2-A2-R1 — NEMRYN PRIMARY LOGO REMEDIATION + A2 CLOSURE
+=============================================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD (start and end of phase, unchanged): a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (in sync)
+Branch: main
+Report generated: 2026-09-15T09:58:04Z
+Git actions taken: NONE (no commit, no push, no stage — working tree only)
+
+This remediation validates the human-restored
+public/brand/nemryn-logo-primary.svg, replaces the seven remaining
+interim Zenward PLATFORM logo call sites that N0-M2-A2 had left blocked,
+validates the result, and closes N0-M2-A2. Neither N0-M2-A1A nor
+N0-M2-A2 was reverted, rewritten, or restaged — this phase is strictly
+additive on top of both.
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (matches HEAD)
+- `git status -sb` at phase start showed exactly the expected combined
+  N0-M2-A1A + N0-M2-A2 working-tree diff (48 files: the 41-file A1A
+  design-token/typography foundation plus A2's own 15-file auth/
+  platform-identity diff, including the 1 deleted favicon.ico), the
+  `public/brand/` directory from A2's own casing remediation, and the
+  standing set of untracked report/scratch files from prior phases —
+  no unexpected drift. Nothing was staged at any point in this phase.
+
+
+2. RESTORED SVG VERIFICATION
+---------------------------------
+File: public/brand/nemryn-logo-primary.svg
+
+- Exists: YES, at the exact expected lowercase path.
+- Casing: correct (`public/brand/nemryn-logo-primary.svg`, confirmed via
+  `ls -la`).
+- Valid XML/SVG: confirmed via `xml.etree.ElementTree.parse()` — parses
+  cleanly, root tag `{http://www.w3.org/2000/svg}svg`.
+- viewBox: present, `"0 0 434 127"`.
+- Symbol + wordmark: confirmed present — the path data spans the full
+  viewBox width (the "N" symbol mark occupies roughly x=2 to x=114, the
+  "Nemryn" wordmark letterforms occupy roughly x=139 to x=434), matching
+  a full lockup rather than a symbol-only or wordmark-only asset.
+- Deep Graphite treatment: single `<g fill="#171A1D" fill-rule="evenodd">`
+  wrapping all paths — exactly the LOCKED BRAND COLORS Deep Graphite
+  value (#171A1D) from the pack's own README.
+- Background: none — the SVG has no `<rect>`/background fill, only the
+  Deep Graphite path group, making it fully transparent and light-
+  background-compatible (confirmed by its correct rendering on the
+  white `bg-surface-elevated` auth card in live screenshots, §11).
+- External dependencies: none. Scanned for `xlink:href`, `<image`,
+  `@font-face`, `<!ENTITY`, and bare `http://`/`https://` — the only
+  match is the standard, required `xmlns="http://www.w3.org/2000/svg"`
+  namespace declaration every SVG document carries; this is not a
+  network reference. No embedded raster data, no external font.
+
+VERDICT: valid, matches every requirement. Nothing manufactured — this
+is the human-supplied asset, consumed directly and unmodified.
+
+
+3. EXACT SVG VIEWBOX / ASPECT RATIO
+-----------------------------------------
+viewBox: "0 0 434 127"
+Aspect ratio: 434 / 127 = 3.417322835... (≈ 3.418)
+
+This is the SAME geometry as the already-approved
+`public/brand/nemryn-logo-inverse.svg` (confirmed by diffing both files
+with `fill` attributes stripped — byte-identical path data, differing
+only in fill color: #171A1D primary vs. Mineral White inverse),
+directly matching the README's own manifest description ("nemryn-logo-
+inverse.svg — same geometry, Mineral White"). This cross-check is
+strong independent confirmation the restored file is the genuine
+companion asset, not an unrelated substitute.
+
+
+4. RESTORED SVG CHECKSUM
+------------------------------
+SHA-256: 0703192dfddc85bb6bd860d37b1a458c614d6b38ea8fd8eef16f3d68a4ed1fe4
+File size: 4893 bytes
+
+This value was recorded BEFORE any application call site was edited and
+reconfirmed identical after all implementation work in this phase (§10).
+
+
+5. EXACT SEVEN CALL SITES CHANGED
+---------------------------------------
+All seven sites N0-M2-A2 documented as blocked were updated identically:
+`src="/images/zenward-mobility-logo.png"` -> `src="/brand/nemryn-logo-
+primary.svg"`, `alt="Zenward Mobility"` -> `alt="Nemryn"`, and
+`width={240} height={80}` (or `width={160} height={53}` for onboarding)
+-> `width={434} height={127}` (the SVG's own true intrinsic dimensions).
+
+  1. src/app/sign-in/page.tsx
+  2. src/app/sign-up/page.tsx
+  3. src/app/forgot-password/page.tsx
+  4. src/app/auth/reset-password/page.tsx
+  5. src/app/auth/auth-code-error/page.tsx
+  6. src/app/join/[token]/page.tsx
+  7. src/app/onboarding/layout.tsx
+
+The stale N0-M2-A2 "blocked-asset" inline comments at each of these
+call sites (which documented the then-missing file and pointed to the
+A2 report) were also updated to a short N0-M2-A2-R1 comment reflecting
+resolved status — not a rewrite of A2's own copy/metadata work, just
+the comment directly adjacent to the specific line this remediation
+changed.
+
+Confirmed via grep: zero remaining `zenward-mobility-logo.png`
+references in any of these seven files; all seven now reference
+`/brand/nemryn-logo-primary.svg` exclusively.
+
+`public/images/zenward-mobility-logo.png` itself was NOT deleted or
+modified — confirmed via `git status --porcelain public/images/`
+(empty) — it remains available as the Zenward Mobility TENANT asset for
+whatever future tenant-facing surface may need it (driver invitation
+email, PublicHeader/PublicFooter — none of which this phase touched).
+
+
+6. LOGO SIZING DECISIONS
+------------------------------
+Rather than hand-computing new per-site pixel dimensions, the
+`width`/`height` props passed to each `<Image>` were set to the SVG's
+own true intrinsic values (434 × 127 — exactly its viewBox), and each
+site's existing Tailwind `className` (`h-auto w-60` for the six auth/
+join cards, `h-auto w-32` for onboarding) was left completely
+unchanged. Because Next.js's `<Image>` renders the underlying `<img>`
+with `width`/`height` HTML attributes that establish the browser's
+native intrinsic aspect ratio, and `h-auto` computes the rendered
+height proportionally from a fixed CSS width, this guarantees a
+mathematically exact, non-distorted 3.418 ratio at whatever width the
+layout already specifies — with zero per-site arithmetic and zero risk
+of a manual rounding error introducing drift.
+
+Confirmed live via CDP `getBoundingClientRect()` on the rendered `<img
+alt="Nemryn">` element on every one of the seven screens:
+  - sign-in / sign-up / forgot-password / reset-password / auth-code-
+    error / join: rendered at 240×70px, ratio 3.418 (previously 240×80
+    at the old 3.000 ratio — visual width preserved exactly, height now
+    correctly derived rather than distorted)
+  - onboarding: rendered at 128×37px, ratio 3.418 (previously 128×42px
+    at the old 3.019 ratio — visual width preserved exactly)
+
+No stretch, no crop, on any of the 14 desktop+mobile captures (§11/§12).
+The visual footprint (card layout, spacing, mb-8/mx-auto structure) was
+not redesigned — only the logo's own rendered height changed, by a
+modest amount, as a direct and correct consequence of using the real
+asset's own true proportions.
+
+
+7. JOIN TENANT-BOUNDARY VALIDATION
+----------------------------------------
+Verified live via a fresh local `driver_invites` fixture (org
+"Fictional Org A", invited driver "V. Tester R1" — a controlled local
+fixture, not production data) and a full-page screenshot:
+
+  Platform frame: Nemryn primary lockup logo, page title "Join | Nemryn"
+  Invitation body (unchanged, fully dynamic):
+    "Join Fictional Org A"
+    "You've been invited to drive for Fictional Org A as V. Tester R1.
+     Create your account to get started."
+
+The platform frame is Nemryn-only; the invitation body remains entirely
+driven by `organizationName`/`invitedDisplayName` from
+`get_driver_invite_preview` — no co-branding, no hard-coded tenant name
+substitution. This is the same live-verification method N0-M2-A2 used
+and produces the identical structural result, now simply rendering the
+approved logo instead of the interim one.
+
+
+8. ONBOARDING TENANT-BOUNDARY VALIDATION
+----------------------------------------------
+Verified live via a screenshot of an authenticated
+org-a-admin@example.test session at `/onboarding`: the header shows the
+Nemryn primary lockup logo on the left and the real tenant workspace
+name "Fictional Org A" (from `organization.organizationName`) on the
+right — unchanged, still fully dynamic, no collision or wrapping at
+either 1400×900 or 390×844. No onboarding business logic, org-creation,
+or membership-creation code was touched.
+
+
+9. REMAINING ZENWARD-STRING CLASSIFICATION
+------------------------------------------------
+Final `grep -rniE "zenward"` across the complete A2 surface set (root
+layout, all 11 auth/account routes, src/lib/auth/errors.ts,
+src/components/auth/) returns exactly ONE hit:
+
+  src/app/onboarding/basics/page.tsx:29 — a HISTORICAL code comment
+  ("since Zenward's own initial launch territory is Georgia") that
+  explains a timezone-default business decision. Not user-visible, not
+  platform branding, unchanged from N0-M2-A2's own report (this phase
+  did not touch onboarding/basics/page.tsx).
+
+All seven previously-blocked platform logo `src`/`alt` references are
+gone — confirmed zero remaining `zenward-mobility-logo.png` or
+`Zenward Mobility` alt-text hits anywhere in the seven changed files.
+`public/images/zenward-mobility-logo.png` itself (the file path string)
+correctly still appears nowhere in this surface set now that all seven
+call sites have moved off it.
+
+
+10. LOCKED-ASSET BEFORE/AFTER CHECKSUMS
+---------------------------------------------
+SHA-256 of every file in public/brand/, computed immediately after
+verifying the restored primary SVG (before any application call site
+was edited) and again after all seven call-site edits, comment updates,
+and the full validation pass in this phase:
+
+  README.txt                       f4d8e59c9ca2a0f53960d931b850fb5874782504a9b204ee3a33a38d5b95bfe3
+  nemryn-app-icon.svg               c8eb57659441b48f6278e5be86b7c4777dca3b1a5b2464b6eecfe7922e70ce4d
+  nemryn-favicon.svg                1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-logo-inverse.svg           6b467688110c3bb5e8f95786b89f71a2996c98b967cbe6d94697550f4501c956
+  nemryn-logo-on-steel-blue.svg     c214d384be154b97a2c10bfc9f7316deb3a7bcaf3def85ccc7631ed2057959cd
+  nemryn-logo-primary-preview.png   c0f15ff955dfa9b94eb3f5850160518dceaa4c55f8f91a5b1a635d529a245411
+  nemryn-logo-primary.svg           0703192dfddc85bb6bd860d37b1a458c614d6b38ea8fd8eef16f3d68a4ed1fe4
+  nemryn-symbol-inverse.svg         2dc2406e3d8866654b4c495221c21859e64d4c26683e3fedd84510ea03720439
+  nemryn-symbol-primary.svg         1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-wordmark-inverse.svg       b534897122bbe05c9e0032f6b9734ab2d0a5939945b72ca3d6a22ec1096b064f
+  nemryn-wordmark-primary.svg       c3783686ed84feb33e7fbc53eb05c89fb9685fe3d5d9cfc124ac66a26916c9c0
+
+RESULT: IDENTICAL before and after, for all 11 files, INCLUDING the
+newly restored nemryn-logo-primary.svg itself. No asset — new or
+pre-existing — was redrawn, converted, resized, or regenerated at any
+point in this phase. `nemryn-logo-inverse.svg` in particular remains
+byte-identical to its N0-M2-A1B/A2-recorded value, confirmed again here.
+
+
+11. DESKTOP VALIDATION (1400×900)
+--------------------------------------
+Captured via headless Chrome + CDP for all 7 named screens (plus
+select-organization and onboarding auth-fixture screens carried over
+from A2's own validation, for continuity): /sign-in, /sign-up,
+/forgot-password, /auth/reset-password, /auth/auth-code-error,
+/join/[token] (fresh local fixture), /onboarding
+(org-a-admin@example.test fixture).
+
+All 7 named screens: the Nemryn primary lockup renders correctly at
+240×70px (auth/join) or 128×37px (onboarding), ratio 3.418 on every
+capture (measured via live `getBoundingClientRect()`, not just visual
+inspection) — not distorted, not cropped, restrained whitespace
+matching the prior interim-logo layout exactly. Zero horizontal
+overflow on any screen. Correct Nemryn titles and favicon
+(/brand/nemryn-favicon.svg) on every screen (confirming A2's copy/
+metadata work is intact, §12 of this report). Geist typography and the
+Nemryn Deep-Graphite/Mineral-White palette render correctly. The
+password-visibility toggle remains present and functional-looking on
+sign-in and join. No text collision. Tenant org name "Fictional Org A"
+renders correctly and dynamically on join and onboarding.
+
+
+12. MOBILE VALIDATION (390×844)
+-------------------------------------
+Same 7 screens captured at 390×844. Zero horizontal overflow. Logo
+renders at the same correct 3.418 ratio, appropriately scaled to the
+narrower card width, with no clipping or distortion. Join-page
+invitation card and onboarding header both reflow correctly with no
+collision between the logo and the dynamic tenant name. No regressions
+versus the equivalent N0-M2-A2 mobile captures beyond the intended logo
+swap.
+
+
+13. FUNCTIONAL REGRESSION
+-------------------------------
+This remediation is logo-asset-only; auth logic was not touched. Light,
+focused regression confirms the seven surfaces still load and behave
+correctly:
+
+- /sign-in: loads, renders the sign-in form, password-visibility toggle
+  present (§11 screenshot).
+- /sign-up: loads, renders the sign-up form.
+- /forgot-password: loads; a live POST submission (curl) returns 200.
+- /auth/reset-password (gated behavior): visiting with NO valid
+  recovery session/cookie correctly renders the "This link has expired"
+  fallback state, NOT the reset form — confirming `ResetPasswordPage`'s
+  dual-condition gate (`hasRecoveryMarker && Boolean(user)`) is
+  unchanged and still enforced. This is the same gating logic exercised
+  end-to-end (fresh token -> form -> submit -> re-visit-shows-expired)
+  in N0-M2-A2's own report; not re-run in full here since the gating
+  code itself has zero diff in this phase.
+- /join/[token]: renders correctly for a fresh pending invite fixture
+  (§7), with `organizationName` still rendering dynamically.
+- /onboarding: renders correctly for an authenticated fixture session
+  (§8), with `organization.organizationName` still rendering
+  dynamically.
+
+No Server Action, Route Handler, RPC, or redirect logic was modified in
+this phase — only `<Image>` `src`/`alt`/`width`/`height` JSX attributes
+and their adjacent code comments.
+
+
+14. TESTS
+-------------
+- `npx tsc --noEmit`: PASS, zero errors.
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files, identical baseline to every
+  prior phase's own report.
+- `npm run build`: PASS. 36 routes generated (unchanged from N0-M2-A2's
+  own post-favicon-removal count — no route gained or lost by this
+  logo-only remediation).
+- `npm test`: PASS, 29/29, identical to the standing baseline.
+
+
+15. RLS / SECURITY PROTECTION
+------------------------------------
+`git status --porcelain supabase/` — empty (zero migration/RLS diff, as
+expected for a logo-asset-only phase).
+
+`supabase db reset` run clean (all pre-existing migrations reapplied,
+zero new migrations). All 22 SQL test files in supabase/tests/*.sql
+re-run against the fresh database: 0 real FAIL lines in every file
+(constraint_tests, create_trip_atomicity_tests, create_trip_privilege_
+tests, create_trip_tests, driver_location_tests, driver_read_
+authorization_tests, driver_read_history_tests, driver_read_
+minimization_tests, driver_read_privilege_tests, exception_mutation_
+boundary_tests, function_privilege_tests, mutation_assignment_tests,
+mutation_atomicity_tests, mutation_authorization_tests, mutation_
+idempotent_authorization_tests, mutation_lifecycle_tests, mutation_
+privilege_tests, operator_onboarding_tests, organization_timezone_
+tests, rls_adversarial_tests, security_definer_exposure_tests, trip_
+exception_tests).
+
+Both concurrency scripts re-run and PASS:
+  mutation_concurrency_test.sh — TEST CONCURRENCY-1: PASS (genuine
+    row-level lock contention, Session B blocked ~1.86s behind Session
+    A's held lock, correct assignment_conflict on the loser).
+  driver_invite_concurrency_test.sh — TEST INVITE-CONCURRENCY-1: PASS
+    (genuine row-lock contention, exactly 1 Driver row / 1 Membership
+    row produced from two concurrent redemption attempts, no
+    duplicate).
+
+Zero migration diff, zero RLS diff, zero auth-mechanic diff.
+
+
+16. DIFF REVIEW
+-------------------
+PRE-EXISTING (untouched by this phase):
+  - N0-M2-A1A: the 41-file design-token/typography foundation
+    (globals.css, typography.ts, layout.tsx's font imports,
+    OperationsSidebar.tsx's navy->chrome rename, every brand-
+    interactive-teal consumer, foundation/page.tsx).
+  - N0-M2-A2: root metadata (layout.tsx's title/description/icons),
+    all auth/account platform copy (sign-in, sign-up, forgot-password,
+    reset-password, auth-code-error, complete-signup/form, access-
+    unavailable, select-organization, join, onboarding/driver),
+    src/lib/auth/errors.ts's platform string, the favicon.ico removal,
+    and the public/Brand -> public/brand casing rename.
+
+NEW THIS PHASE (N0-M2-A2-R1), exactly 7 files:
+  src/app/sign-in/page.tsx
+  src/app/sign-up/page.tsx
+  src/app/forgot-password/page.tsx
+  src/app/auth/reset-password/page.tsx
+  src/app/auth/auth-code-error/page.tsx
+  src/app/join/[token]/page.tsx
+  src/app/onboarding/layout.tsx
+
+Each file's diff in this phase is limited to: the `<Image>` `src`,
+`alt`, `width`, and `height` attributes on its one logo element, and
+the adjacent inline code comment describing that element's status.
+Nothing else in any of these 7 files was touched — confirmed by
+re-reading each file's full content after editing and cross-checking
+against N0-M2-A2's own report for what that phase had left in place.
+
+The restored `public/brand/nemryn-logo-primary.svg` file itself is a
+HUMAN-SUPPLIED asset, delivered to this repository outside of any
+Claude Code tool call — it is not, and is not represented anywhere in
+this report as, a Claude-generated or Claude-modified file. This
+phase's own role with respect to that file was strictly read-only
+verification (§2–§4, §10) and consumption via unmodified `src`
+references (§5) — never creation, editing, or derivation.
+
+
+17. N0-M2-A2 CLOSURE RECOMMENDATION
+------------------------------------------
+CLOSE N0-M2-A2 as fully complete. Every item N0-M2-A2's own final
+response marked FAIL or blocked — "Primary logo: FAIL" and "Ready for
+N0-M2-A3: NO" — is now resolved:
+
+  - The restored, verified, approved `nemryn-logo-primary.svg` is in
+    use at all 7 previously-blocked platform call sites.
+  - Every other N0-M2-A2 requirement (root metadata, auth-page copy,
+    organization-selector wording, join tenant-boundary preservation,
+    onboarding platform-frame copy, auth error strings, favicon
+    mechanism) was already complete and is reconfirmed intact by this
+    phase's own validation pass (§11/§12 screenshots showing correct
+    titles/favicon/copy throughout).
+  - No outstanding gap remains in the N0-M2-A2 scope as originally
+    specified.
+
+
+18. READINESS FOR N0-M2-A3
+--------------------------------
+YES for the platform-identity surface set this phase and N0-M2-A2
+together cover (root metadata, auth/account pages, organization
+selector, join platform frame, onboarding platform frame, favicon,
+primary logo). N0-M2-A3's own explicitly-reserved scope — the
+authenticated Operations shell (OperationsSidebar.tsx logo identity,
+OperationsShell platform wording, AccountMenu identity,
+DriverLayoutClient platform wording, operations-module identity) — was
+correctly left untouched in this phase, exactly as instructed; that
+work remains for N0-M2-A3 to take up. The already-available
+`nemryn-logo-inverse.svg` was deliberately NOT installed into
+OperationsSidebar.tsx in this remediation, per this phase's own explicit
+instruction to leave that decision for N0-M2-A3.
+
+
+19. GIT STATUS (FINAL)
+----------------------------
+HEAD: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged)
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged, in sync)
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+Working tree now carries: the pre-existing N0-M2-A1A diff (41 files),
+the pre-existing N0-M2-A2 diff (15 files, including the public/Brand ->
+public/brand rename), this phase's own 7-file logo-call-site diff, and
+the standing set of untracked report/scratch files from prior phases
+(now including this report). `public/brand/nemryn-logo-primary.svg` is
+present, verified, and byte-identical to its state when this phase
+began.

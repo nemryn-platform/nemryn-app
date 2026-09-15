@@ -8,7 +8,7 @@ export interface PageHeaderProps {
   description?: string;
   breadcrumb?: BreadcrumbItem[];
   actions?: ReactNode;
-  /** Operational screens use Inter; the marketing site uses Manrope. See visual-system.md §3. */
+  /** Both variants render in Geist Sans (single-family, N0-M2-A1A); `variant` only selects the size/weight role — `pageTitleOperational` (app) vs `pageTitleMarketing` (marketing). */
   variant?: "operational" | "marketing";
   className?: string;
 }

@@ -52,7 +52,7 @@ export function SignInForm({ next }: SignInFormProps) {
         />
         <Link
           href="/forgot-password"
-          className={cn(typography.bodySmall, "self-end font-medium text-brand-interactive-teal")}
+          className={cn(typography.bodySmall, "self-end font-medium text-text-link")}
         >
           Forgot password?
         </Link>

@@ -49,7 +49,7 @@ export function TripInfoStrip({
       {cells.map((cell) => (
         <div key={cell.label} className="px-zw-lg py-zw-md">
           <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>{cell.label}</p>
-          <p className={cn(typography.subsectionHeading, "mt-0.5", cell.emphasize ? "text-brand-interactive-teal" : "text-text-primary")}>
+          <p className={cn(typography.subsectionHeading, "mt-0.5", cell.emphasize ? "text-info-text" : "text-text-primary")}>
             {cell.value}
           </p>
         </div>

@@ -21,11 +21,17 @@ export default async function OnboardingLayout({ children }: { children: ReactNo
     <div className="min-h-dvh bg-surface-secondary">
       <header className="border-b border-border-subtle bg-surface-elevated px-4 py-4">
         <div className="mx-auto flex max-w-md items-center justify-between">
+          {/*
+            N0-M2-A2-R1: approved Nemryn platform lockup. width/height
+            reflect the SVG's own viewBox (0 0 434 127); the visual
+            width stays w-32, unchanged from the prior interim mark,
+            with h-auto deriving the correct non-distorted height.
+          */}
           <Image
-            src="/images/zenward-mobility-logo.png"
-            alt="Zenward Mobility"
-            width={160}
-            height={53}
+            src="/brand/nemryn-logo-primary.svg"
+            alt="Nemryn"
+            width={434}
+            height={127}
             priority
             className="h-auto w-32"
           />

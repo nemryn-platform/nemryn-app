@@ -16,7 +16,7 @@ function getDriverHeaderTitle(pathname: string) {
   if (pathname.startsWith("/driver/trips/")) return "Trip";
   if (pathname === "/driver/history") return "History";
   if (pathname === "/driver/profile") return "Profile";
-  return "Zenward Driver";
+  return "Driver";
 }
 
 export interface DriverLayoutClientProps {

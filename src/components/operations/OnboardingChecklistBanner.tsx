@@ -36,7 +36,7 @@ export function OnboardingChecklistBanner({ checklist }: { checklist: Onboarding
                 "flex items-center gap-1.5 rounded-full border px-3 py-1.5",
                 item.complete
                   ? "border-success-border bg-success-bg text-success-strong"
-                  : "border-border-strong bg-surface-elevated text-text-secondary hover:border-brand-interactive-teal",
+                  : "border-border-strong bg-surface-elevated text-text-secondary hover:border-selection-border",
               )}
             >
               {item.complete ? (

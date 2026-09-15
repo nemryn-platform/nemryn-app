@@ -40,7 +40,7 @@ export default function BusinessStagePage() {
           {STAGES.map((stage) => (
             <label
               key={stage.value}
-              className="flex cursor-pointer items-center gap-3 rounded-md border border-border-strong bg-surface-elevated px-4 py-3 has-[:checked]:border-brand-interactive-teal has-[:checked]:bg-brand-calm-mist/40"
+              className="flex cursor-pointer items-center gap-3 rounded-md border border-border-strong bg-surface-elevated px-4 py-3 has-[:checked]:border-selection-border has-[:checked]:bg-brand-calm-mist/40"
             >
               <input
                 type="radio"
@@ -48,7 +48,7 @@ export default function BusinessStagePage() {
                 value={stage.value}
                 required
                 disabled={pending}
-                className="size-4 accent-brand-interactive-teal"
+                className="size-4 accent-action-primary-background"
               />
               <span>
                 <span className={cn(typography.body, "block font-medium text-text-primary")}>{stage.label}</span>

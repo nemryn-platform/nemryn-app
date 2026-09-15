@@ -7,7 +7,7 @@ import { AcceptInviteButton } from "./AcceptInviteButton";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Join — Zenward Mobility" };
+export const metadata = { title: "Join" };
 
 /**
  * Driver invite landing (P1-E3-S9, work item §10 — closes GAP-15). The
@@ -27,8 +27,14 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   const shell = (children: React.ReactNode) => (
     <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+        {/*
+          N0-M2-A2-R1: this is the PLATFORM frame — it must stay Nemryn-
+          only, never co-branded with the inviting tenant. The invitation
+          body below intentionally keeps dynamic {"{organizationName}"} —
+          do not hard-code it to Nemryn.
+        */}
         <div className="mb-8 flex justify-center">
-          <Image src="/images/zenward-mobility-logo.png" alt="Zenward Mobility" width={240} height={80} priority className="h-auto w-60" />
+          <Image src="/brand/nemryn-logo-primary.svg" alt="Nemryn" width={434} height={127} priority className="h-auto w-60" />
         </div>
         {children}
       </div>
@@ -66,7 +72,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
             : "This invite has been revoked. Ask your dispatcher for a new one."}
         </p>
         {preview.status === "accepted" && (
-          <Link href="/sign-in" className={cn(typography.bodySmall, "mt-4 inline-block font-medium text-brand-interactive-teal")}>
+          <Link href="/sign-in" className={cn(typography.bodySmall, "mt-4 inline-block font-medium text-text-link")}>
             Sign in
           </Link>
         )}
@@ -87,7 +93,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
         <JoinSignUpForm token={token} email={inviteEmail} />
         <p className={cn(typography.bodySmall, "mt-6 text-center text-text-secondary")}>
           Already have an account?{" "}
-          <Link href={`/sign-in?next=${encodeURIComponent(`/join/${token}`)}`} className="font-medium text-brand-interactive-teal">
+          <Link href={`/sign-in?next=${encodeURIComponent(`/join/${token}`)}`} className="font-medium text-text-link">
             Sign in
           </Link>
         </p>

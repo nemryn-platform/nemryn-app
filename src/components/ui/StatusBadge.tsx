@@ -15,7 +15,7 @@ export type StatusCategory =
 const categoryClasses: Record<StatusCategory, string> = {
   neutral: "bg-surface-secondary text-text-secondary",
   informational: "bg-info-bg text-info-text",
-  active: "bg-brand-calm-mist text-brand-interactive-teal",
+  active: "bg-info-bg text-info-text",
   positive: "bg-success-bg text-success-text",
   warning: "bg-warning-bg text-warning-text",
   critical: "bg-critical-bg text-critical-text",
@@ -26,7 +26,7 @@ const categoryClasses: Record<StatusCategory, string> = {
 const dotClasses: Record<StatusCategory, string> = {
   neutral: "bg-text-muted",
   informational: "bg-info-strong",
-  active: "bg-brand-interactive-teal",
+  active: "bg-info-strong",
   positive: "bg-success-strong",
   warning: "bg-warning-strong",
   critical: "bg-critical-strong",

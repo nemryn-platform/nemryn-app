@@ -52,9 +52,9 @@ export function DriverActiveTripLegs({
             className={cn(
               "size-3 shrink-0 rounded-full border-2",
               pickupCurrent
-                ? "border-brand-interactive-teal bg-surface-elevated"
+                ? "border-info-strong bg-surface-elevated"
                 : pickupDone
-                  ? "border-brand-interactive-teal bg-brand-interactive-teal"
+                  ? "border-success-strong bg-success-strong"
                   : "border-border-strong bg-surface-elevated",
             )}
             aria-hidden

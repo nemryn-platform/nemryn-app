@@ -46,7 +46,7 @@ export default async function DriverHistoryPage() {
         title="Couldn't load your history"
         description="Something went wrong loading your trip history. Try again in a moment."
         action={
-          <Link href="/driver/history" className={cn(typography.button, "text-brand-interactive-teal")}>
+          <Link href="/driver/history" className={cn(typography.button, "text-text-link")}>
             Try again
           </Link>
         }

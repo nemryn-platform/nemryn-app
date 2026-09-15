@@ -76,7 +76,7 @@ export default async function DriverTripsPage() {
         title="Couldn't load your trips"
         description="Something went wrong loading your assignments. Try again in a moment."
         action={
-          <Link href="/driver/trips" className={cn(typography.button, "text-brand-interactive-teal")}>
+          <Link href="/driver/trips" className={cn(typography.button, "text-text-link")}>
             Try again
           </Link>
         }

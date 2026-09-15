@@ -35,12 +35,12 @@ export function ResetPasswordForm() {
     return (
       <div className="flex flex-col gap-zw-md">
         <p className={cn(typography.body, "text-text-primary")}>Your password has been updated.</p>
-        <p className={cn(typography.bodySmall, "text-text-secondary")}>You&apos;re still signed in — continue to Zenward.</p>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>You&apos;re still signed in — continue to Nemryn.</p>
         <Link
           href="/"
           className={cn(
             typography.button,
-            "flex h-12 w-full items-center justify-center rounded-md bg-brand-interactive-teal text-white hover:brightness-95",
+            "flex h-12 w-full items-center justify-center rounded-md bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
           )}
         >
           Continue

@@ -1,0 +1,504 @@
+N0-M2-A4 — NEMRYN OPERATIONAL SURFACE CLEANUP + CONSISTENCY
+===============================================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD (start and end of phase, unchanged): a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (in sync)
+Branch: main
+Report generated: 2026-09-15T12:54:45Z
+Git actions taken: NONE (no commit, no push, no stage — working tree only)
+
+This phase audited every existing operational and driver screen for
+visual/semantic consistency with the approved Nemryn system (legacy
+tokens, primary-action styling, semantic status colors, typography,
+shared components, and any remaining hard-coded platform branding) and
+corrected genuine findings only. This is a cleanup pass, not a redesign,
+not Request Hub, and not new feature development — confirmed against
+every explicit exclusion in this phase's own instructions. Neither
+N0-M2-A1A, N0-M2-A2, N0-M2-A2-R1, nor N0-M2-A3 was reverted, rewritten,
+or restaged.
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (matches HEAD)
+- `git status -sb` at phase start showed the expected combined N0-M2-A1A
+  + N0-M2-A2 + N0-M2-A2-R1 + N0-M2-A3 diff plus the standing untracked
+  report/scratch set — no unexpected drift. Nothing staged at any point.
+
+
+2. ROUTES AUDITED
+---------------------
+All 11 operational routes present under src/app/operations, plus all 5
+driver routes under src/app/driver — every route this phase's own §2/§3
+named, plus every route additionally discovered by directly enumerating
+the directory tree (confirming none were missed):
+
+  Operations (11): /operations, /operations/trips,
+  /operations/trips/[tripId], /operations/trips/new,
+  /operations/dispatch, /operations/passengers, /operations/facilities,
+  /operations/fleet, /operations/drivers, /operations/billing,
+  /operations/reports
+
+  Driver (5): /driver, /driver/trips, /driver/trips/[tripId],
+  /driver/history, /driver/profile
+
+Also audited the full shared-component tree backing these routes: all
+32 files under src/components/operations/ (including every dispatch,
+trip-detail, drivers, facilities, fleet, passengers, and new-trip
+subdirectory) and all 15 files under src/components/driver/, plus the
+shared UI primitives they consume (Button, StatusBadge, TripStatus,
+DriverStatus, DataTable, Panel, PageHeader, AttentionState, EmptyState,
+Avatar).
+
+TOTAL: 16 routes audited (11 operational + 5 driver).
+
+
+3. FILES MODIFIED
+---------------------
+Exactly ONE file, after a systematic audit covering legacy tokens,
+button/action consistency, semantic-color usage, hardcoded colors,
+typography, decorative-effect misuse, and platform-string references
+across the entire 63-file operational/driver surface:
+
+  src/components/ui/buttonStyles.ts
+
+See §5 for the finding and fix. No other file required correction —
+the audit found the operational surface to already be in excellent,
+consistent condition following N0-M2-A1A/A2/A3's own prior work.
+
+
+4. LEGACY-TOKEN FINDINGS
+-----------------------------
+Searched the full src/ tree for `brand-interactive-teal`,
+`brand-route-teal`, `brand-arrival-gold`, `brand-care-navy`, and
+`navy-`:
+
+  - `brand-interactive-teal`, `brand-route-teal`, `brand-arrival-gold`:
+    ZERO live consumers anywhere. Only mentions are in globals.css's own
+    historical migration-notes comments (documenting that these tokens
+    were retired in N0-M2-A1A). Confirmed fully retired — no obsolete
+    consumer remains.
+  - `navy-` prefixed classes: ZERO live consumers. Only mention is a
+    historical comment in globals.css noting the `--color-navy-*` ->
+    `--color-chrome-*` rename (N0-M2-A1A). Confirmed fully migrated.
+  - `brand-care-navy`: MANY live consumers (auth-page backgrounds,
+    buttonStyles.ts, Avatar.tsx, driver page headings, DriverRoute.tsx,
+    DriverActiveTripLegs.tsx, PublicHeader/PublicFooter). This is
+    INTENTIONAL, not a legacy leftover — N0-M2-A1A's own documented
+    strategy was "keep the token NAME, change only its VALUE" for roles
+    that didn't semantically change. Confirmed its current value is
+    `#171a1d` (Deep Graphite, matching the LOCKED brand palette exactly)
+    via globals.css's own inline comment: "Background wash / dark
+    button / heading-accent role unchanged; only the hue moved." Each
+    of its consumers was individually checked against that documented
+    role (auth-card background wash, avatar background, driver
+    page-title heading-accent, neutral route-marker dot) — all
+    consistent with the documented intent, all rendering the correct
+    Deep Graphite hex. No migration needed; this is a confirmed,
+    intentional design decision, not an oversight.
+
+
+5. PRIMARY-ACTION FINDINGS
+-------------------------------
+FOUND AND FIXED: `buttonStyles.ts`'s `secondary` variant was
+`"bg-brand-care-navy text-white hover:brightness-110 active:brightness-95"`
+— a SOLID Deep Graphite fill, visually indistinguishable from the
+`primary` variant (`bg-action-primary-background text-action-primary-
+foreground`, which resolves to the identical `#171a1d` hex). This
+directly contradicts the LOCKED design-token specification
+(docs/brand/nemryn/12-design-token-specification.md §2.4), which
+defines `action.secondary` as a transparent/outline/ghost treatment
+("`action.secondary.background`: transparent... Outline / ghost
+button"), explicitly distinct from the solid-fill `action.primary` —
+the spec's own governing principle is "one primary action per view."
+
+Corrected `secondary` to the same transparent/border/text-primary
+composition the codebase's own `outline` variant already correctly
+uses (`border border-border-strong bg-surface-elevated text-text-
+primary hover:bg-surface-hover`) — the spec defines no separate
+`action-secondary-*` CSS custom properties, and `outline` already
+implements that exact role under a different name, so reusing it
+avoids introducing any new token.
+
+Blast-radius check: `variant="secondary"` had exactly ONE call site in
+the entire application — `src/app/foundation/page.tsx:130`, the
+internal, non-product QA/component-showcase page. Zero real operational
+or driver screens used it. This fix therefore carries zero production
+visual change; it corrects the component's own definition so any
+future consumer gets the spec-correct treatment automatically.
+
+Every actual operational CTA — Create/Save/Assign/Continue/Update/
+Confirm/Submit/Invite Driver, and every dialog's own primary submit
+button — was confirmed to use either the default `variant="primary"`
+(Button.tsx's own default) or an explicit `variant="outline"` for
+de-emphasized actions (e.g. every dialog's "Cancel" button) or
+`variant="destructive"` for genuinely destructive confirms (Cancel
+Trip, No-Show). `DriverPrimaryAction`/`DriverNextTripCard` correctly
+use `variant="primary"`. No CTA anywhere uses Signal Green as a default
+action color — status meaning and action meaning remain fully separate,
+confirmed by direct inspection of every `variant=` call site in
+src/components/operations and src/components/driver (33 non-Cancel/
+non-typography matches reviewed individually).
+
+
+6. SEMANTIC-COLOR FINDINGS
+-------------------------------
+Reviewed every `success-*`/`warning-*`/`critical-*`/`info-*` consumer
+across the operational/driver surface (a `bg-success-`/`bg-action-
+primary` grep across both trees, cross-checked against each call
+site's actual meaning):
+
+  - `StatusBadge.tsx`: informational/active -> info (Steel Blue),
+    positive/completed -> success (Signal Green), warning -> warning
+    (Attention Amber), critical -> critical (Critical Red), neutral/
+    cancelled -> neutral grays. Confirmed correct — matches N0-M2-A1A's
+    own prior correction exactly, unchanged and still correct.
+  - `TripStatus.tsx`'s label->category map: verified full coverage
+    against `operationsTripStatusLabel()`'s every possible output
+    ("Assigned"/"Scheduled"/"En Route"/"Arrived"/"Passenger Onboard"/
+    "Completed"/"Cancelled"/"No Show" — all 8 present as keys, no
+    silent fallback-to-neutral gap). Each mapping verified semantically
+    correct: in-progress states -> active/info (Steel Blue), needs-
+    assignment/running-late -> warning (Amber), no-show/attention-
+    required -> critical (Red), completed -> success (Green).
+  - `DriverStatus.tsx`: Available -> positive/success, On Trip ->
+    active/info, Break -> neutral, Unavailable -> warning. Confirmed
+    correct (a driver being unavailable when dispatch needs capacity is
+    a legitimate "needs attention" condition).
+  - `DriverLocationTracker.tsx`'s "active" tone (location sharing
+    working) -> success (Signal Green): confirmed correct — "healthy,
+    confirmed, working as expected" is exactly success's defined role.
+  - `operations/trips/[tripId]/page.tsx`'s terminal-state banner
+    (completed -> success, cancelled/no_show -> critical): reviewed
+    and judged an acceptable, defensible interpretation (a trip that
+    ended without completing is a condition worth a dispatcher's
+    attention) — not a brand-lock violation, and changing trip-outcome
+    color semantics would edge toward lifecycle-logic/UX judgment this
+    phase's own "do not change trip lifecycle logic" instruction
+    reserves. Left unchanged.
+  - `OnboardingChecklistBanner.tsx`'s completed-item styling (success
+    wash) and `DriverActiveTripLegs.tsx`'s leg-marker colors (info for
+    in-progress, success for done, neutral graphite for the destination
+    end-marker) — both previously corrected in N0-M2-A1A, reconfirmed
+    still correct and unchanged.
+
+No decorative use of any semantic color was found anywhere in the
+operational/driver surface (a `bg-red/blue/green/yellow/gray/teal/...-
+[0-9]` and literal-hex grep across both trees returned zero hits — see
+§4/§7 methodology). Every correction A4 could have made here was
+already made by N0-M2-A1A; this phase's own review is a confirmation
+pass, not a source of new findings, aside from §5's button fix.
+
+
+7. TYPOGRAPHY FINDINGS
+---------------------------
+Searched the operational/driver surface for hardcoded Tailwind size/
+weight classes that would bypass the `typography` design-role system
+(`text-2xl`/`text-3xl`/`text-4xl`/`text-5xl`/`font-bold`): ZERO hits
+anywhere. Every heading, table header/cell, button label, and metadata
+string in both trees consumes a named role from src/design/typography.ts
+(pageTitleOperational, sectionHeading, subsectionHeading, body,
+bodySmall, tableHeader, tableCell, button, metadata, numericDisplay),
+which N0-M2-A1A already reduced to the LOCKED 13-typography-
+specification.md scale (e.g. pageTitleOperational 24px, sectionHeading
+18px — no oversized operational headings anywhere). No violation found;
+no change needed.
+
+
+8. CARDS/TABLES/PANELS FINDINGS
+-------------------------------------
+Reviewed `DataTable.tsx`, `Panel.tsx`, `PageHeader.tsx`,
+`AttentionState.tsx`, `StatusBadge.tsx`, `AccountMenu.tsx`'s popup, and
+`DriverShell.tsx`: all use Mineral-White/Soft-Stone surface tokens
+(`surface-elevated`/`surface-secondary`/`border-subtle`/`border-
+strong`), restrained radii (`rounded-sm`/`rounded-md`, never an
+oversized radius), and minimal shadow usage (`Panel` defaults to NO
+shadow, opt-in `shadow-sm` only; the deepest shadow found anywhere in
+either tree is `shadow-md`, on `AccountMenu`'s popup and
+`DriverShell`'s desktop card border — both restrained, appropriate
+uses for a floating/raised element, not decorative). A dedicated grep
+for `gradient`, `backdrop-blur`, `backdrop-filter`, `shadow-lg`,
+`shadow-xl`, `shadow-2xl`, `ring-4`, `ring-8` across both trees
+returned ZERO hits — no glassmorphism, no gradient, no neon/accent
+decoration anywhere. No new component system was created; every screen
+already composes the existing shared primitives. No change needed.
+
+
+9. OVERVIEW FINDINGS
+-------------------------
+/operations (Today's Operations) reviewed live (§16 screenshot):
+current metrics strip, Needs Attention panel, Upcoming Trips table,
+Active Trips panel, and Activity Log all preserved exactly as they
+were — no new intelligence module, no Request-Hub-shaped content
+introduced. Semantic colors confirmed correct in the live render
+(amber "Needs attention"/"Location unavailable" chips, green
+"Completed" badge, steel-blue "En Route" badge, Deep Graphite primary
+buttons). No code change was needed or made to this route.
+
+
+10. TRIPS/DISPATCH FINDINGS
+--------------------------------
+/operations/trips and /operations/dispatch reviewed live (§16
+screenshots). Dispatch board: "Needs Assignment" queue correctly amber,
+"En Route"/"On Trip" correctly Steel Blue, Driver Capacity panel
+correct, primary "Assign"/"New Trip" buttons correctly Deep Graphite.
+Trip detail: terminal-state banner correctly green for Completed (see
+§6 for the completed-vs-critical reasoning), route markers correct,
+"Edit Trip" correctly de-emphasized via `outline`. No trip lifecycle
+logic was touched anywhere — confirmed via the diff review (§21):
+zero files under src/lib/operations, src/app/operations/trips/*/
+actions.ts, or any Server Action were modified.
+
+
+11. DRIVERS FINDINGS
+-------------------------
+/operations/drivers reviewed live (§16 screenshot): table headers,
+row states ("Active" status in green), Invite Driver primary button,
+sidebar consistency — all correct, matching the same shared DataTable/
+StatusBadge/Button primitives reviewed in §5/§6/§8. No change needed.
+
+
+12. PASSENGERS/FACILITIES/FLEET FINDINGS
+----------------------------------------------
+/operations/passengers, /operations/facilities, /operations/fleet all
+reviewed live (§16 screenshots) and via source (PassengersTable.tsx,
+FacilitiesPageClient.tsx, FleetPageClient.tsx, their respective
+FormDialog components). All consume the same DataTable/Panel/Button/
+PageHeader primitives already confirmed correct in §5/§8; all dialog
+Cancel buttons correctly `outline`, all submit buttons correctly
+default to `primary`. No visual-consistency defect found in any of the
+three; no data logic was touched (no new product features added, per
+this phase's own explicit instruction).
+
+
+13. DRIVER-SURFACE FINDINGS
+---------------------------------
+/driver, /driver/trips, /driver/trips/[tripId], /driver/history,
+/driver/profile reviewed live (§17 screenshots) and via source. Geist
+typography confirmed throughout; Steel Blue used for informational/
+active states ("Assigned" badges, "On Trip"); Signal Green reserved for
+confirmed/complete states only; Amber/Critical Red not observed
+misused anywhere. The driver shell carries no unnecessary Nemryn
+branding — `DriverHeader` shows only the route-driven title (Today/
+Trips/Trip/History/Profile) and the driver's own name, never "Nemryn"
+anywhere in the driver-facing chrome; the operator is never labeled as
+Nemryn anywhere (confirmed via the same platform-string audit, §14).
+No change was needed beyond N0-M2-A3's own already-completed
+DriverLayoutClient fallback-string fix (unchanged, reconfirmed intact).
+
+
+14. PLATFORM-VS-TENANT STRING AUDIT
+------------------------------------------
+`grep -rniE "zenward"` across src/app/operations, src/app/driver,
+src/components/operations, src/components/driver, src/components/ui,
+src/design, src/lib/operations, and src/lib/driver returns exactly the
+same 4 hits N0-M2-A3's own audit already found and classified — no new
+occurrence, confirming stability since that phase:
+
+  a) src/app/operations/facilities/page.tsx:11 — HISTORICAL code
+     comment ("scoped to their tenant only, never the Zenward
+     organization itself") — written before the Nemryn/Zenward
+     platform-vs-tenant split existed, not user-visible. Left
+     unchanged.
+  b) src/components/operations/OperationsSidebar.tsx:69,71 — N0-M2-A3's
+     own inline comment explaining the platform/tenant asset
+     distinction — PLATFORM documentation comment, not rendered copy,
+     intentional.
+  c) src/components/operations/trip-detail/TripNotesPanel.tsx:32 —
+     HISTORICAL/TENANT code comment ("a `trip_notes.author_user_id`
+     points at a Zenward staff account, never a requester") — data-
+     model illustration referencing the current seeded tenant's own
+     staff, not user-visible. Left unchanged.
+
+No hard-coded Zenward PLATFORM identity (title, logo, chrome copy)
+remains anywhere in the authenticated application. Dynamic tenant
+identity (`organizationName`) was independently reconfirmed rendering
+correctly and dynamically ("Fictional Org A") on every live-captured
+screen in §16/§17 — never hard-coded, never co-branded with Nemryn.
+A direct search for hard-coded tenant names ("Fictional Org",
+"Harmony Medical") anywhere in application code (outside seed/test
+fixtures) returned zero hits, confirming no tenant identity was ever
+literally hard-coded into the UI layer.
+
+
+15. ASSET INTEGRITY
+------------------------
+SHA-256 of every file in public/brand/, computed before this phase's
+one edit and again after all implementation and validation work:
+
+  README.txt                       f4d8e59c9ca2a0f53960d931b850fb5874782504a9b204ee3a33a38d5b95bfe3
+  nemryn-app-icon.svg               c8eb57659441b48f6278e5be86b7c4777dca3b1a5b2464b6eecfe7922e70ce4d
+  nemryn-favicon.svg                1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-logo-inverse.svg           6b467688110c3bb5e8f95786b89f71a2996c98b967cbe6d94697550f4501c956
+  nemryn-logo-on-steel-blue.svg     c214d384be154b97a2c10bfc9f7316deb3a7bcaf3def85ccc7631ed2057959cd
+  nemryn-logo-primary-preview.png   c0f15ff955dfa9b94eb3f5850160518dceaa4c55f8f91a5b1a635d529a245411
+  nemryn-logo-primary.svg           0703192dfddc85bb6bd860d37b1a458c614d6b38ea8fd8eef16f3d68a4ed1fe4
+  nemryn-symbol-inverse.svg         2dc2406e3d8866654b4c495221c21859e64d4c26683e3fedd84510ea03720439
+  nemryn-symbol-primary.svg         1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-wordmark-inverse.svg       b534897122bbe05c9e0032f6b9734ab2d0a5939945b72ca3d6a22ec1096b064f
+  nemryn-wordmark-primary.svg       c3783686ed84feb33e7fbc53eb05c89fb9685fe3d5d9cfc124ac66a26916c9c0
+
+RESULT: IDENTICAL before and after — nothing in public/brand/ was
+touched (this phase's own sole edit was a CSS-class string in a
+TypeScript file, not an asset). `public/images/zenward-mobility-
+logo.png` also confirmed untouched (`git status --porcelain public/
+images/` empty).
+
+
+16. DESKTOP VALIDATION (1400×900)
+--------------------------------------
+Captured via headless Chrome + CDP, authenticated as org-a-
+admin@example.test: /operations, /operations/trips, /operations/
+dispatch, /operations/passengers, /operations/facilities, /operations/
+drivers, /operations/fleet, and a live trip-detail page reached via a
+real click-through from the trips list (/operations/trips/[tripId]).
+
+All 8 screens: zero horizontal overflow, zero visible "Zenward" text.
+Direct visual inspection of the dispatch board and trip-detail screens
+(the two most visually complex operational surfaces) confirmed: no old
+teal CTA treatment anywhere, correct semantic colors throughout (Amber
+"Needs Assignment"/"Location unavailable", Steel Blue "En Route"/"On
+Trip", Signal Green "Completed", Deep Graphite primary buttons), no
+oversized headings, no clipping, no sidebar regression (Nemryn inverse
+lockup + "Fictional Org A" tenant context both rendering correctly and
+separately), correct tenant context on every screen. The dispatch
+board's internal hour-by-hour timeline strip has its own intentional
+horizontal scrollbar (a wide time-grid widget) — this is contained
+scroll within that one component, not page-level overflow, and was
+already present before this phase.
+
+
+17. MOBILE VALIDATION (390×844)
+-------------------------------------
+Captured: /driver, /driver/trips, /driver/history, /driver/profile
+(org-a-driver-a@example.test), and the /operations narrow-width guard
+(org-a-admin@example.test at 390×844).
+
+All 5 screens: zero horizontal overflow, zero clipping, correct type
+hierarchy (Geist, restrained heading sizes), correct status colors
+(Steel Blue "Assigned" badges observed on /driver), bottom navigation
+(Today/Trips/History/Profile) intact and usable with correct active-
+item highlighting. /driver/profile correctly shows its existing, honest
+"Profile is not yet implemented" placeholder — no new feature was added
+here, matching this phase's explicit prohibition on new product
+features. The /operations narrow-width guard renders its N0-M2-A3
+"Operations" title unchanged, confirming no regression to that
+guard's own behavior.
+
+
+18. FUNCTIONAL REGRESSION
+-------------------------------
+All verified live (this phase's only code change is a CSS-class string
+on an unused button variant — zero auth/routing/RPC logic was touched):
+
+  - Sign in (org-a-admin@example.test) -> /operations.
+  - Sidebar navigation: Trips, Dispatch, Passengers, Facilities,
+    Drivers, Fleet, and back to Overview — every link correctly
+    navigates to its matching route (verified via `location.pathname`
+    after each click, in one continuous session).
+  - Trip list -> trip detail: a real click-through from the trips table
+    to an individual trip's detail page renders correctly (§16).
+  - Dispatch view: renders correctly with live queue/timeline/capacity
+    data (§16).
+  - Driver list, passenger list, facilities list: each renders its own
+    correct data via the shared DataTable (§11/§12, §16 screenshots).
+  - Account menu: opens correctly, shows "Fictional Org A /
+    Organization Admin / Sign Out".
+  - Logout: correctly redirects to /sign-in.
+  - Driver navigation: /driver, /driver/trips, /driver/history,
+    /driver/profile all render correctly with working bottom nav
+    (§17).
+  - Organization switching: not independently re-exercised this phase
+    (N0-M2-A3 already verified it end-to-end and zero code in that
+    path was touched here) — confirmed via diff review (§21) that
+    OrganizationSelector.tsx, select-organization/actions.ts, and every
+    auth-context resolution file carry no A4 diff.
+
+
+19. TESTS
+-------------
+- `npx tsc --noEmit`: PASS, zero errors.
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files, identical baseline to every
+  prior phase's own report.
+- `npm run build`: PASS. 36 routes generated (unchanged from the
+  N0-M2-A3 baseline).
+- `npm test`: PASS, 29/29, identical to the standing baseline.
+
+
+20. SQL / RLS / CONCURRENCY
+---------------------------------
+`git status --porcelain supabase/` — empty (zero migration/RLS diff —
+no backend file was touched in this phase).
+
+`supabase db reset` run clean. All 22 SQL test files in
+supabase/tests/*.sql re-run against the fresh database: 0 real FAIL
+lines in every file (constraint_tests, create_trip_atomicity_tests,
+create_trip_privilege_tests, create_trip_tests, driver_location_tests,
+driver_read_authorization_tests, driver_read_history_tests, driver_
+read_minimization_tests, driver_read_privilege_tests, exception_
+mutation_boundary_tests, function_privilege_tests, mutation_assignment_
+tests, mutation_atomicity_tests, mutation_authorization_tests,
+mutation_idempotent_authorization_tests, mutation_lifecycle_tests,
+mutation_privilege_tests, operator_onboarding_tests, organization_
+timezone_tests, rls_adversarial_tests, security_definer_exposure_
+tests, trip_exception_tests).
+
+Both concurrency scripts re-run and PASS:
+  mutation_concurrency_test.sh — TEST CONCURRENCY-1: PASS (~1.82s
+    genuine block, correct assignment_conflict on the loser).
+  driver_invite_concurrency_test.sh — TEST INVITE-CONCURRENCY-1: PASS
+    (~1.82s genuine block, exactly 1 Driver row / 1 Membership row, no
+    duplicate).
+
+Zero migration diff, zero RLS diff, zero auth-mechanic diff.
+
+
+21. EXACT A4 DIFF
+---------------------
+PRE-EXISTING (untouched by this phase): the full N0-M2-A1A (41 files),
+N0-M2-A2 (15 files), N0-M2-A2-R1 (7 files), and N0-M2-A3 (4 files)
+diffs — none reverted, none rewritten, none restaged.
+
+NEW THIS PHASE (N0-M2-A4), exactly 1 file:
+
+  src/components/ui/buttonStyles.ts | 21 +++++++++++++++++----
+  1 file changed, 17 insertions(+), 4 deletions(-)
+
+(17 insertions include a 12-line explanatory comment plus the corrected
+`secondary` class string; 4 deletions are the old `secondary` line plus
+its blank-line neighbors.) No other file in the repository was modified
+by this phase — confirmed via `git diff --stat` limited to this one
+path matching the full working-tree diff's own `buttonStyles.ts` entry
+exactly, and via direct review of every other file this phase inspected
+(all read-only).
+
+
+22. READINESS FOR N0-M2-A5
+--------------------------------
+YES. The operational and driver surfaces are visually and semantically
+consistent with the approved Nemryn system: legacy tokens are either
+fully retired or intentionally, correctly repurposed; the one genuine
+button-styling inconsistency found (a spec-violating solid "secondary"
+variant with zero production usage) is corrected; semantic status
+colors are confirmed correct everywhere they're used; typography,
+cards, tables, and panels all already conformed to the LOCKED spec; no
+hard-coded platform branding remains anywhere in the authenticated
+app. This phase deliberately introduced no new workflows, no database
+changes, and no Request Hub / Operations Brief / request-triage
+surfaces of any kind — all explicitly out of scope and confirmed
+untouched.
+
+
+23. GIT STATUS (FINAL)
+----------------------------
+HEAD: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged)
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged, in sync)
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+Working tree now carries: the pre-existing N0-M2-A1A diff (41 files),
+N0-M2-A2 diff (15 files), N0-M2-A2-R1 diff (7 files), N0-M2-A3 diff
+(4 files), this phase's own 1-file diff, and the standing set of
+untracked report/scratch files (now including this report).

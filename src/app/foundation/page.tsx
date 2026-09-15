@@ -88,16 +88,22 @@ export default function FoundationPage() {
       />
 
       <Panel>
-        <SectionHeader title="Color tokens" description="Brand anchors, neutrals, and semantic families." className="mb-zw-lg" />
+        <SectionHeader title="Color tokens" description="Nemryn neutrals, action/link/focus/selection, chrome, and semantic status families (N0-M2-A1A)." className="mb-zw-lg" />
         <div className="grid grid-cols-2 gap-zw-md sm:grid-cols-4">
-          <Swatch name="Care Navy" className="bg-brand-care-navy" />
-          <Swatch name="Route Teal" className="bg-brand-route-teal" />
-          <Swatch name="Interactive Teal" className="bg-brand-interactive-teal" />
-          <Swatch name="Calm Mist" className="bg-brand-calm-mist" />
-          <Swatch name="Arrival Gold" className="bg-brand-arrival-gold" />
+          <Swatch name="Care Navy (Deep Graphite)" className="bg-brand-care-navy" />
+          <Swatch name="Action Primary" className="bg-action-primary-background" />
+          <Swatch name="Text Link / Focus" className="bg-border-focus" />
+          <Swatch name="Selection Wash" className="bg-brand-calm-mist" />
+          <Swatch name="Chrome Background" className="bg-chrome-background" />
           <Swatch name="Surface App" className="bg-surface-app" />
           <Swatch name="Surface Hover" className="bg-surface-hover" />
           <Swatch name="Border Strong" className="bg-border-strong" />
+        </div>
+        <div className="mt-zw-md grid grid-cols-2 gap-zw-md sm:grid-cols-4">
+          <Swatch name="Status: Ready" className="bg-success-strong" />
+          <Swatch name="Status: Attention" className="bg-warning-strong" />
+          <Swatch name="Status: Critical" className="bg-critical-strong" />
+          <Swatch name="Status: Information" className="bg-info-strong" />
         </div>
       </Panel>
 
@@ -105,8 +111,8 @@ export default function FoundationPage() {
         <SectionHeader title="Typography" className="mb-zw-lg" />
         <div className="flex flex-col gap-3">
           <p className={typography.display}>Display — marketing hero only</p>
-          <p className={typography.pageTitleMarketing}>Page title — marketing (Manrope)</p>
-          <p className={typography.pageTitleOperational}>Page title — operational (Inter)</p>
+          <p className={typography.pageTitleMarketing}>Page title — marketing</p>
+          <p className={typography.pageTitleOperational}>Page title — operational</p>
           <p className={typography.sectionHeading}>Section heading</p>
           <p className={typography.subsectionHeading}>Subsection heading</p>
           <p className={typography.body}>Body copy — the default for most reading content.</p>

@@ -46,7 +46,7 @@ export function TripRoutePanel({
         <div className="flex flex-col items-center pt-1">
           <span className="size-3 shrink-0 rounded-full bg-text-primary" aria-hidden />
           <span className="w-px flex-1 bg-border-strong" aria-hidden />
-          <span className="size-3 shrink-0 rounded-full bg-brand-interactive-teal" aria-hidden />
+          <span className="size-3 shrink-0 rounded-full bg-info-strong" aria-hidden />
         </div>
         <div className="flex flex-1 flex-col gap-zw-lg">
           <div>
@@ -71,7 +71,7 @@ export function TripRoutePanel({
             <div className="flex flex-wrap items-center gap-2">
               <p className={cn(typography.bodySmall, "font-semibold text-text-primary")}>Destination</p>
               {appointmentAt && (
-                <span className={cn(typography.metadata, "rounded-full bg-brand-calm-mist px-2 py-0.5 text-brand-interactive-teal")}>
+                <span className={cn(typography.metadata, "rounded-full bg-info-bg px-2 py-0.5 text-info-text")}>
                   Appointment {formatOperationsTime(appointmentAt, timezone)}
                 </span>
               )}

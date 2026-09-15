@@ -9,7 +9,7 @@ const variantClasses: Record<IconButtonVariant, string> = {
   outline:
     "border border-border-strong bg-surface-elevated text-text-primary hover:bg-surface-hover",
   primary:
-    "bg-brand-interactive-teal text-white hover:brightness-95 active:brightness-90",
+    "bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
 };
 
 export interface IconButtonProps

@@ -88,7 +88,7 @@ export default async function DriverTodayPage() {
         title="Couldn't load your trips"
         description="Something went wrong loading today's schedule. Try again in a moment."
         action={
-          <Link href="/driver" className={cn(typography.button, "text-brand-interactive-teal")}>
+          <Link href="/driver" className={cn(typography.button, "text-text-link")}>
             Try again
           </Link>
         }

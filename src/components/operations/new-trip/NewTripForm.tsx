@@ -187,7 +187,7 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
           >
             <input type="hidden" name="passengerId" value={passengerId} />
             {selectedPassenger ? (
-              <div className="flex items-center gap-3 rounded-sm border border-brand-interactive-teal bg-brand-calm-mist/40 px-3 py-2.5">
+              <div className="flex items-center gap-3 rounded-sm border border-selection-border bg-brand-calm-mist/40 px-3 py-2.5">
                 <Avatar name={selectedPassenger.displayName} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>

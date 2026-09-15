@@ -14,12 +14,12 @@ export function DriverInstruction({ icon, instruction, detail, className }: Driv
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-md border-l-2 border-l-brand-interactive-teal bg-brand-calm-mist px-zw-md py-zw-md",
+        "flex items-start gap-3 rounded-md border-l-2 border-l-info-strong bg-brand-calm-mist px-zw-md py-zw-md",
         className,
       )}
     >
       {icon && (
-        <div className="mt-0.5 text-brand-interactive-teal" aria-hidden>
+        <div className="mt-0.5 text-info-strong" aria-hidden>
           {icon}
         </div>
       )}

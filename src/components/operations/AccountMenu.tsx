@@ -69,7 +69,7 @@ export function AccountMenu({ avatarName, organizationName, roleLabel, showSwitc
         aria-controls={menuId}
         aria-label={`Account menu — ${avatarName}, ${roleLabel} at ${organizationName}`}
         onClick={() => setOpen((v) => !v)}
-        className="rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-interactive-teal"
+        className="rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
       >
         <Avatar name={avatarName} size="sm" />
       </button>

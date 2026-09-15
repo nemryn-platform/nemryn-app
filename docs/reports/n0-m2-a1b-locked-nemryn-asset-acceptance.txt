@@ -1,0 +1,640 @@
+====================================================================
+PHASE:    N0-M2-A1B — Locked Nemryn Asset Acceptance
+DATE:     2026-09-15
+PROJECT:  /Users/datamatics/ZenWard  (repository: zenwardmobility/ZenwardApp)
+COMMITTED HEAD: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+MODE:     Read-only asset audit. The ONLY file this phase creates is
+          this report. No brand asset byte was touched. No N0-M2-A1A
+          working-tree file was touched. No commit, no push, no
+          deploy, no stage.
+====================================================================
+
+OBJECTIVE
+---------
+Inventory, validate, and checksum-lock the Nemryn SVG asset pack the
+human owner delivered to the repository, map each approved file to its
+intended usage role, and identify the exact future logo call-site
+mapping — without performing any swap, without touching the
+uncommitted N0-M2-A1A token/typography work already in the working
+tree, and without creating, editing, or regenerating any artwork.
+
+====================================================================
+1. REPOSITORY STATE
+====================================================================
+
+  git branch --show-current  → main
+  git rev-parse HEAD          → a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+  git fetch origin             → (no output; nothing new)
+  git rev-parse origin/main   → a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+
+Local `main` and `origin/main` match the expected committed HEAD.
+`git status -sb` shows exactly the expected working-tree shape: the 41
+pre-existing N0-M2-A1A-modified files (§2), the standing set of
+untracked historical reports/scratch files from prior phases, and one
+NEW untracked entry for the delivered asset pack.
+
+**A naming/casing discrepancy, found and reported rather than
+silently corrected:** the work item's own instructions refer
+throughout to `public/brand/`. The directory the human actually
+created is `public/Brand/` (capital B), containing a further nested
+`Nemryn-SVG-Master-Pack/` subdirectory — so the real path to every
+asset is `public/Brand/Nemryn-SVG-Master-Pack/<file>`, not a flat
+`public/brand/<file>`. This machine's filesystem (APFS) is case-
+insensitive-but-case-preserving, so `public/brand/...` and
+`public/Brand/...` currently resolve to the identical directory
+locally — `ls -ld public/brand public/Brand` both report the same
+single directory. **This is a real risk worth flagging, not a
+formality:** most Linux build/production environments (including
+Vercel's own Next.js build containers) use a CASE-SENSITIVE
+filesystem. If a future implementation phase's code references
+`/brand/...` (lowercase, matching this work item's own convention) but
+the committed path is `Brand/...` (capital), that reference would
+resolve locally on this machine but could 404 once deployed. No path
+was renamed or moved by this phase (out of scope — see §12); this is
+reported for the human/next phase to explicitly decide (rename the
+directory to lowercase before implementation, or standardize on the
+capitalized path consistently) rather than encountering it as a
+surprise production bug later.
+
+====================================================================
+2. PRE-EXISTING N0-M2-A1A WORKING-TREE STATE (recorded before any
+   inspection in this phase, for the before/after comparison in §17)
+====================================================================
+
+41 modified files, exactly matching `docs/reports/n0-m2-a1a-brand-
+foundation-tokens-typography.txt`'s own §3 file list:
+
+  src/app/auth/auth-code-error/page.tsx, src/app/auth/reset-password/
+  page.tsx, src/app/driver/history/page.tsx, src/app/driver/page.tsx,
+  src/app/driver/trips/[tripId]/page.tsx, src/app/driver/trips/
+  page.tsx, src/app/forgot-password/page.tsx, src/app/foundation/
+  page.tsx, src/app/globals.css, src/app/join/[token]/page.tsx,
+  src/app/layout.tsx, src/app/onboarding/page.tsx, src/app/operations/
+  page.tsx, src/app/operations/trips/[tripId]/page.tsx, src/app/
+  operations/trips/page.tsx, src/app/sign-in/page.tsx, src/app/
+  sign-up/page.tsx, src/components/auth/ForgotPasswordForm.tsx,
+  src/components/auth/OrganizationSelector.tsx, src/components/auth/
+  ResetPasswordForm.tsx, src/components/auth/SignInForm.tsx,
+  src/components/driver/DriverActiveTripLegs.tsx, src/components/
+  driver/DriverBottomNavigation.tsx, src/components/driver/
+  DriverInstruction.tsx, src/components/driver/DriverNextTripCard.tsx,
+  src/components/driver/DriverRoute.tsx, src/components/operations/
+  AccountMenu.tsx, src/components/operations/
+  OnboardingChecklistBanner.tsx, src/components/operations/
+  OperationsSidebar.tsx, src/components/operations/dispatch/
+  AssignmentGrid.tsx, src/components/operations/new-trip/
+  FormSection.tsx, src/components/operations/new-trip/NewTripForm.tsx,
+  src/components/operations/trip-detail/PassengerInfoPanel.tsx,
+  src/components/operations/trip-detail/TripInfoStrip.tsx,
+  src/components/operations/trip-detail/TripRoutePanel.tsx,
+  src/components/ui/DataTable.tsx, src/components/ui/IconButton.tsx,
+  src/components/ui/PageHeader.tsx, src/components/ui/StatusBadge.tsx,
+  src/components/ui/buttonStyles.ts, src/design/typography.ts.
+
+These were treated as approved work-in-progress throughout this
+phase — never read for the purpose of editing, never staged, never
+modified. §17 reconfirms this list is byte-for-byte identical at the
+end of the phase.
+
+====================================================================
+3. EXACT ASSET INVENTORY
+====================================================================
+
+Directory: `public/Brand/Nemryn-SVG-Master-Pack/` (plus two macOS
+`.DS_Store` system files at `public/Brand/.DS_Store` and
+`public/Brand/Nemryn-SVG-Master-Pack/.DS_Store` — filesystem metadata
+artifacts, not part of the delivered asset pack, not inventoried
+further, not touched).
+
+| Filename | Format | Size | viewBox / dimensions | Role |
+|---|---|---|---|---|
+| `README.txt` | plain text | 1,243 B | — | documentation |
+| `nemryn-logo-inverse.svg` | SVG | 4,893 B | `0 0 434 127` | full logo (symbol+wordmark), Mineral White fill — for dark backgrounds |
+| `nemryn-logo-on-steel-blue.svg` | SVG | 4,990 B | `0 0 498 175` | full logo, Mineral White fill, with its OWN baked-in `#6F8798` (Steel Blue) background `<rect>` — a self-contained presentation variant, README marks it "optional, limited-use" |
+| `nemryn-logo-primary-preview.png` | PNG, RGBA, 8-bit | 34,925 B | 1200×351 px (raster) | a PREVIEW raster of the full logo in Deep Graphite — NOT a production SVG master (see §16 — the README's own manifest lists a `nemryn-logo-primary.svg` that was not actually delivered; this PNG is the only light-background full-lockup asset present in any form) |
+| `nemryn-symbol-primary.svg` | SVG | 1,413 B | `0 0 128 139` | symbol only, Deep Graphite fill — for light backgrounds |
+| `nemryn-symbol-inverse.svg` | SVG | 1,413 B | `0 0 128 139` | symbol only, Mineral White fill — for dark backgrounds |
+| `nemryn-wordmark-primary.svg` | SVG | 3,912 B | `0 0 301 84` | wordmark only, Deep Graphite fill — for light backgrounds |
+| `nemryn-wordmark-inverse.svg` | SVG | 3,912 B | `0 0 301 84` | wordmark only, Mineral White fill — for dark backgrounds |
+| `nemryn-favicon.svg` | SVG | 1,413 B | `0 0 128 139` | favicon — **byte-identical to `nemryn-symbol-primary.svg`** (confirmed via SHA-256, §6 — same checksum) |
+| `nemryn-app-icon.svg` | SVG | 1,537 B | `0 0 1024 1024` | app icon — a rounded-square (`rx="180"`) Deep Graphite tile with the Mineral White symbol centered/scaled inside; a complete, self-contained installed-app-icon composition, not merely the bare symbol |
+
+**9 real asset files (8 SVG + 1 PNG) + 1 README = 10 files total.**
+None inferred solely from filename — every classification above was
+cross-checked against the README's own §MASTER FILES list (§4) and
+against each file's actual rendered fill color / background treatment
+read directly from its markup.
+
+None of the 8 SVGs declares an explicit `width`/`height` attribute —
+only `viewBox` (confirmed via a proper XML parse, §5) — this is normal
+for artwork meant to be sized by its consuming component, not a
+defect.
+
+====================================================================
+4. README FINDINGS
+====================================================================
+
+Read in full (`public/Brand/Nemryn-SVG-Master-Pack/README.txt`, not
+edited). Verbatim extraction of its authoritative rules:
+
+  **Source of truth statement:** "These files were vectorized from the
+  approved brand-board artwork rather than regenerated. The approved
+  board remains the visual authority if any discrepancy is ever
+  found."
+
+  **Locked brand colors** (restated, matching `docs/brand/nemryn/11-
+  brand-lock-v1.md`'s own LOCKED palette exactly — no discrepancy
+  found): Deep Graphite `#171A1D`, Mineral White `#F7F7F4`, Steel Blue
+  `#6F8798` ("optional, limited-use presentation only").
+
+  **Master files list, verbatim:**
+    - `nemryn-logo-primary.svg` — approved symbol + wordmark, Deep
+      Graphite — **NOT ACTUALLY PRESENT in the delivered directory**
+      (§16 — the single most important finding of this audit).
+    - `nemryn-logo-inverse.svg` — present, matches.
+    - `nemryn-wordmark-primary.svg` — present, matches.
+    - `nemryn-wordmark-inverse.svg` — present, matches.
+    - `nemryn-symbol-primary.svg` — present, matches.
+    - `nemryn-symbol-inverse.svg` — present, matches.
+    - `nemryn-favicon.svg` — present, matches.
+    - `nemryn-app-icon.svg` — present, matches.
+    - `nemryn-logo-on-steel-blue.svg` — present, matches ("optional
+      limited-use presentation variant").
+
+  **Usage rules, verbatim:** "Do not redraw or retrace. Do not
+  stretch, rotate, or alter proportions. Do not replace the approved
+  symbol. Do not alter the wordmark. Do not use semantic status colors
+  as logo colors. Claude Code must consume these files directly and
+  must never recreate them."
+
+  **Background requirements:** implicit in the "primary"/"inverse"
+  naming and each file's own fill color — "primary" (Deep Graphite
+  fill) is for light/Mineral-White-class backgrounds; "inverse"
+  (Mineral White fill) is for dark/Deep-Graphite-class backgrounds.
+  The README does not separately enumerate this as its own rule
+  beyond the file names/fills themselves — inferred directly from the
+  markup, not assumed.
+
+  **Favicon instructions:** none beyond the master-files list entry
+  itself (no separate sizing/format guidance given).
+
+  **App-icon instructions:** none beyond the master-files list entry
+  itself.
+
+  **Spacing/clear-space guidance:** **none given anywhere in this
+  README.** No minimum clear-space, no minimum size, no safe-area
+  rule is specified — this is a genuine gap in the supplied
+  documentation (not invented or assumed by this audit to fill the
+  gap).
+
+  **Project placement instruction, verbatim:** "Keep the original
+  approved brand board in references/. Place production SVG masters
+  in public/brand/." — **Neither instruction was followed exactly by
+  the delivered pack:** no `references/` directory exists anywhere in
+  this repository (the "original approved brand board" is not present
+  as a separate archival copy — only the vectorized SVG masters
+  themselves), and the actual placement is `public/Brand/Nemryn-SVG-
+  Master-Pack/`, not a flat `public/brand/` (§1's own finding,
+  restated here as it directly traces back to this exact README
+  instruction).
+
+====================================================================
+5. SVG VALIDATION
+====================================================================
+
+Every one of the 8 SVG files was parsed with a real XML parser
+(Python's `xml.etree.ElementTree`), not merely visually inspected:
+
+  nemryn-app-icon.svg            → VALID XML, viewBox "0 0 1024 1024"
+  nemryn-favicon.svg             → VALID XML, viewBox "0 0 128 139"
+  nemryn-logo-inverse.svg        → VALID XML, viewBox "0 0 434 127"
+  nemryn-logo-on-steel-blue.svg  → VALID XML, viewBox "0 0 498 175"
+  nemryn-symbol-inverse.svg      → VALID XML, viewBox "0 0 128 139"
+  nemryn-symbol-primary.svg      → VALID XML, viewBox "0 0 128 139"
+  nemryn-wordmark-inverse.svg    → VALID XML, viewBox "0 0 301 84"
+  nemryn-wordmark-primary.svg    → VALID XML, viewBox "0 0 301 84"
+
+**All 8 are well-formed XML with a valid `viewBox`.** No parse error
+of any kind.
+
+Checked separately, across all 8 files, for every category of
+technical problem the work item names: **zero** `xlink:href`, zero
+`<image>` (raster-embedding) elements, zero `@font-face`/external font
+dependency, zero `url(http...)` external resource reference, zero
+`<!ENTITY>`/`<!DOCTYPE>` (a potential XXE/external-entity vector,
+also absent). Every SVG is a single self-contained `<svg>` root
+containing one `<g>` of inline vector `<path>` data (plus, for
+`nemryn-app-icon.svg`, one `<rect>` for the rounded-square background,
+and for `nemryn-logo-on-steel-blue.svg`, one `<rect>` for its baked-in
+Steel Blue background) — no external dependency of any kind, no
+malformed reference.
+
+The PNG (`nemryn-logo-primary-preview.png`) was independently
+verified as a valid, non-corrupt PNG: `file` reports "PNG image data,
+1200 x 351, 8-bit/color RGBA, non-interlaced"; Pillow opens it without
+error, confirming format PNG, size (1200, 351), mode RGBA (alpha
+channel present — it can be composited over any background).
+
+**No technical problem was found in any of the 9 asset files.**
+Nothing was repaired (nothing needed repair).
+
+====================================================================
+6. INITIAL SHA-256 CHECKSUMS
+====================================================================
+
+Computed immediately after the inventory/validation above, before any
+further inspection:
+
+  c8eb57659441b48f6278e5be86b7c4777dca3b1a5b2464b6eecfe7922e70ce4d  nemryn-app-icon.svg
+  1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1  nemryn-favicon.svg
+  6b467688110c3bb5e8f95786b89f71a2996c98b967cbe6d94697550f4501c956  nemryn-logo-inverse.svg
+  c214d384be154b97a2c10bfc9f7316deb3a7bcaf3def85ccc7631ed2057959cd  nemryn-logo-on-steel-blue.svg
+  2dc2406e3d8866654b4c495221c21859e64d4c26683e3fedd84510ea03720439  nemryn-symbol-inverse.svg
+  1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1  nemryn-symbol-primary.svg
+  b534897122bbe05c9e0032f6b9734ab2d0a5939945b72ca3d6a22ec1096b064f  nemryn-wordmark-inverse.svg
+  c3783686ed84feb33e7fbc53eb05c89fb9685fe3d5d9cfc124ac66a26916c9c0  nemryn-wordmark-primary.svg
+  c0f15ff955dfa9b94eb3f5850160518dceaa4c55f8f91a5b1a635d529a245411  nemryn-logo-primary-preview.png
+  f4d8e59c9ca2a0f53960d931b850fb5874782504a9b204ee3a33a38d5b95bfe3  README.txt
+
+**Notable finding, confirmed by checksum (not merely by eye):**
+`nemryn-favicon.svg` and `nemryn-symbol-primary.svg` share the
+IDENTICAL SHA-256 hash — they are byte-for-byte the same file. This is
+consistent with reading both files' markup directly (§3): the favicon
+is the primary symbol reused verbatim, not a separately simplified or
+size-optimized favicon treatment. Reported as a factual observation,
+not a defect — a legitimate, common design choice.
+
+====================================================================
+7. FINAL SHA-256 CHECKSUMS
+====================================================================
+
+Recomputed at the end of the phase, after every inspection/validation
+step above and immediately before writing this report:
+
+  c8eb57659441b48f6278e5be86b7c4777dca3b1a5b2464b6eecfe7922e70ce4d  nemryn-app-icon.svg
+  1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1  nemryn-favicon.svg
+  6b467688110c3bb5e8f95786b89f71a2996c98b967cbe6d94697550f4501c956  nemryn-logo-inverse.svg
+  c214d384be154b97a2c10bfc9f7316deb3a7bcaf3def85ccc7631ed2057959cd  nemryn-logo-on-steel-blue.svg
+  2dc2406e3d8866654b4c495221c21859e64d4c26683e3fedd84510ea03720439  nemryn-symbol-inverse.svg
+  1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1  nemryn-symbol-primary.svg
+  b534897122bbe05c9e0032f6b9734ab2d0a5939945b72ca3d6a22ec1096b064f  nemryn-wordmark-inverse.svg
+  c3783686ed84feb33e7fbc53eb05c89fb9685fe3d5d9cfc124ac66a26916c9c0  nemryn-wordmark-primary.svg
+  c0f15ff955dfa9b94eb3f5850160518dceaa4c55f8f91a5b1a635d529a245411  nemryn-logo-primary-preview.png
+  f4d8e59c9ca2a0f53960d931b850fb5874782504a9b204ee3a33a38d5b95bfe3  README.txt
+
+====================================================================
+8. CHECKSUM COMPARISON
+====================================================================
+
+**IDENTICAL for all 10 files — byte-for-byte, no exceptions.** Every
+hash in §7 matches its corresponding hash in §6 exactly. This proves
+this phase did not alter, touch, re-save, reformat, or run any tool
+against the locked artwork at any point during inspection — reading
+each SVG's markup (via the Read tool) and parsing it (via a read-only
+XML parser) does not, and did not, modify the files on disk.
+
+====================================================================
+9. APPROVED USAGE MAP
+====================================================================
+
+Derived from the actual file contents (fill color, background
+treatment) cross-referenced against the README's own naming
+convention — no role was inferred from filename alone where the file's
+own markup could be checked directly:
+
+  Deep Graphite fill (`#171A1D`), for LIGHT/Mineral-White-class
+  backgrounds: `nemryn-symbol-primary.svg`, `nemryn-wordmark-
+  primary.svg`, `nemryn-favicon.svg` (identical to symbol-primary).
+
+  Mineral White fill (`#F7F7F4`), for DARK/Deep-Graphite-class
+  backgrounds: `nemryn-logo-inverse.svg`, `nemryn-symbol-inverse.svg`,
+  `nemryn-wordmark-inverse.svg`.
+
+  Self-contained (own background baked in), for the specific Steel
+  Blue presentation context named in the README ("optional, limited-
+  use"): `nemryn-logo-on-steel-blue.svg`.
+
+  Self-contained (own Deep Graphite rounded-square background baked
+  in), for an installed-app/PWA icon context specifically: `nemryn-
+  app-icon.svg`.
+
+  **No `nemryn-logo-primary.svg` exists** — see §16. This is the ONE
+  role with no approved single-file SVG asset: a full lockup
+  (symbol+wordmark together) rendered in Deep Graphite for a light
+  background.
+
+====================================================================
+10. EXACT MAPPING FOR ALL 8 LOGO CALL SITES
+====================================================================
+
+**Background context re-verified directly from each page's own JSX**
+(not assumed): all 6 auth-shell pages (`sign-in`, `sign-up`,
+`forgot-password`, `auth/reset-password`, `auth/auth-code-error`,
+`join/[token]`) and `onboarding/layout.tsx` render the logo INSIDE a
+white content card (`bg-surface-elevated`) — the outer page background
+is dark (Deep Graphite, since N0-M2-A1A's own token migration), but
+the logo itself sits on the white card, not directly on the dark page
+background. Only `OperationsSidebar.tsx` renders the logo directly
+against the dark chrome background (no white card).
+
+| # | Surface | Current asset | Background | Future asset | Full lockup or symbol | Current 240×80 must change? | Risk |
+|---|---|---|---|---|---|---|---|
+| 1 | `/sign-in` | `zenward-mobility-logo.png` | white card (light) | **NO APPROVED ASSET AVAILABLE** for a full-lockup-on-light file (§16) | full lockup intended | YES — even if a substitute is composed, dimensions must be re-derived (§11) | HIGH — blocked on the missing master file |
+| 2 | `/sign-up` | same | white card (light) | same gap | full lockup intended | YES | HIGH — same blocker |
+| 3 | `/forgot-password` | same | white card (light) | same gap | full lockup intended | YES | HIGH — same blocker |
+| 4 | `/auth/reset-password` | same | white card (light) | same gap | full lockup intended | YES | HIGH — same blocker |
+| 5 | `/auth/auth-code-error` | same | white card (light) | same gap | full lockup intended | YES | HIGH — same blocker |
+| 6 | `/join/[token]` | same | white card (light) | same gap (plus tenant-context copy, unrelated to the asset itself — N0-M2-A0 §4) | full lockup intended | YES | HIGH — same blocker |
+| 7 | `/onboarding` (layout) | same, at 160×53 | white card (light) | same gap | full lockup intended | YES | HIGH — same blocker |
+| 8 | `OperationsSidebar` | same, at 217×72, with a white badge-chip wrapper (a workaround for the OLD Zenward PNG's own opaque baked-in white background — see that file's own doc comment) | dark chrome (Deep Graphite, direct) | **`nemryn-logo-inverse.svg`** (434×127) — a direct, complete match; no gap | full lockup fits (or `nemryn-symbol-inverse.svg` alone for the narrower md-breakpoint icon rail, a later component-level decision) | YES — 217×72 (ratio 3.01) vs the SVG's real 434:127 (ratio 3.42) — would distort if forced into the old box (§11) | LOW for asset availability; MED for the dimension recompute. **Positive side-finding:** since this SVG has a transparent background (not a baked-in white rectangle like the old PNG), the white badge-chip wrapper this component currently needs may become UNNECESSARY once swapped — a genuine simplification opportunity for the implementation phase to evaluate, not decided or acted on here. |
+
+**Recommended width, per surface, is NOT prescribed by this audit**
+beyond the aspect-ratio math in §11 — actual rendered width is a
+visual-design decision for the implementation phase (how large the
+mark should read at each surface), not something this asset-acceptance
+phase decides. What this audit DOES establish precisely is the
+CORRECT ratio to preserve once a width is chosen.
+
+**No swap was performed.** This table is a mapping for a future
+phase, per instruction.
+
+====================================================================
+11. ASPECT-RATIO FINDINGS
+====================================================================
+
+  Current Zenward auth-logo frame: `width={240} height={80}`,
+  `className="h-auto w-60"` → ratio **3.000** (240/80).
+
+  `nemryn-logo-inverse.svg` real geometry: `viewBox="0 0 434 127"` →
+  ratio **3.4173** (434/127).
+
+  `nemryn-wordmark-primary.svg` alone: `viewBox="0 0 301 84"` → ratio
+  **3.5833**.
+
+  `nemryn-symbol-primary.svg` alone: `viewBox="0 0 128 139"` → ratio
+  **0.9209** — nearly square, TALLER than wide (the symbol alone is a
+  compact mark, not a wide lockup shape).
+
+  `OperationsSidebar`'s current frame: `width={217} height={72}` →
+  ratio **3.0139** — essentially the same as the auth frame's 3.000.
+
+  `onboarding/layout.tsx`'s current frame: `width={160} height={53}`
+  → ratio **3.0189** — also essentially the same.
+
+**Finding: the Nemryn full-lockup geometry (3.417) is measurably WIDER
+relative to its height than every current Zenward logo frame (~3.00–
+3.02).** Forcing the Nemryn artwork into a fixed 240×80 (or 217×72, or
+160×53) box — i.e. supplying BOTH an explicit width AND an explicit
+height that don't match its own 3.417 ratio — would VISIBLY SQUASH the
+mark, directly violating the README's own explicit "Do not stretch...
+alter proportions" rule and this work item's own "Never distort the
+Nemryn artwork to preserve the old Zenward dimensions" instruction.
+
+**Correct future sizing approach (not implemented in this phase):**
+supply only ONE explicit dimension (either width or height) at each
+call site, let the other dimension follow the artwork's own intrinsic
+ratio (e.g. via `height="auto"`/`width="auto"` in combination with
+Next.js `Image`'s own `width`+`height` props computed FROM the real
+434:127 ratio, not copied from the old 240:80 pair) — "the UI must
+adapt to the logo," exactly as instructed, never the reverse.
+
+====================================================================
+12. RECOMMENDED COMPONENT RENDER DIMENSIONS
+====================================================================
+
+Offered as reference MATH ONLY — not a design decision, not
+implemented. If a future phase keeps each current frame's HEIGHT
+constant and recomputes width from the Nemryn lockup's real 3.4173
+ratio (avoiding any distortion):
+
+  | Surface | Current (w×h) | Height-preserving Nemryn (w×h) |
+  |---|---|---|
+  | Auth-shell pages (6 sites) | 240×80 | **273×80** (240→273, +33px wider) |
+  | `OperationsSidebar` | 217×72 | **246×72** (+29px wider) |
+  | `onboarding/layout.tsx` | 160×53 | **181×53** (+21px wider) |
+
+Alternatively, if WIDTH is held constant instead, each height would
+SHRINK by the same ratio (e.g. 240×70 instead of 273×80). Which
+dimension to hold constant, and what the actual target size should be
+visually, is a design decision for the implementation phase — this
+table exists only to make the underlying arithmetic explicit and
+auditable, and to make clear that "keep both 240 and 80" is not a
+valid option once distortion is ruled out.
+
+For `nemryn-symbol-primary.svg`/`nemryn-symbol-inverse.svg` used
+compact/icon-only (role G), the real ratio is 128:139 (0.921,
+near-square) — any compact-icon usage should size from THAT ratio, not
+from a lockup ratio.
+
+For `nemryn-app-icon.svg` (role I), the file is already a fixed
+1024×1024 square (`rx="180"` rounded corners baked in) — it is
+self-sizing and requires no ratio computation; it should be used at
+whatever pixel size a manifest/icon convention calls for, scaled
+uniformly (never non-uniformly).
+
+====================================================================
+13. FAVICON MAPPING
+====================================================================
+
+Current: `src/app/favicon.ico` — confirmed via `file`: "MS Windows
+icon resource - 4 icons, 16x16, 32 bits/pixel, 32x32, 32 bits/pixel"
+(a multi-resolution raster ICO, 25,931 bytes, last modified 2026-08-30
+— the original Zenward favicon, untouched by this phase).
+
+Future (identified, not applied): `nemryn-favicon.svg`
+(`public/Brand/Nemryn-SVG-Master-Pack/nemryn-favicon.svg`) — Deep
+Graphite fill, `viewBox="0 0 128 139"`, byte-identical to
+`nemryn-symbol-primary.svg` (§6).
+
+**A format-change note for the implementation phase, not acted on
+here:** the current asset is a raster `.ico`; the supplied replacement
+is a vector `.svg`. Next.js's App Router supports a scalable
+`icon.svg` file-convention directly (alongside, or instead of,
+`favicon.ico`) — this is a viable, standard mechanism for the swap,
+but selecting and applying that mechanism is implementation work, not
+performed in this acceptance phase (§ explicit instruction: "Do NOT
+replace favicon yet").
+
+====================================================================
+14. APP-ICON MAPPING
+====================================================================
+
+No current asset exists for this role at all (confirmed — no
+`manifest.json`, no `apple-icon`, no PWA icon convention file
+anywhere in this repository, consistent with every prior phase's
+identical finding, most recently N0-M2-A0 §11).
+
+Future (identified, not applied): `nemryn-app-icon.svg`
+(`public/Brand/Nemryn-SVG-Master-Pack/nemryn-app-icon.svg`) —
+1024×1024, `rx="180"` rounded-square Deep Graphite tile with the
+Mineral White symbol centered/scaled inside (`transform="translate(
+226.532 202.000) scale(4.460432)"` — a deliberate, already-composed
+icon treatment, not the bare symbol placed without margin).
+
+**No PWA manifest was created** — explicitly out of scope for this
+phase, per instruction, and consistent with this repository's standing
+"this is an authenticated application, not requiring SEO/PWA
+infrastructure yet" position (N0-M1-A0 §18, N0-M2-A0 §11).
+
+====================================================================
+15. PLATFORM VS TENANT BOUNDARY
+====================================================================
+
+Reconfirmed, unchanged from every prior phase's identical finding:
+
+  `public/Brand/Nemryn-SVG-Master-Pack/*` = **Nemryn PLATFORM
+  identity** — the software company's own approved artwork.
+
+  `public/images/zenward-mobility-logo.png` = **Zenward Mobility
+  TENANT identity** — the first operator's own logo, never redesigned,
+  never deleted.
+
+Confirmed via `git diff`/checksum-equivalent reasoning: the Zenward
+PNG file itself was not inspected for content changes this phase
+(no reason to — this phase created no diff against it), and its
+absence from `git status`'s modified-file list (§1/§2) already proves
+it is untouched. Its own file path/bytes were not altered by this
+phase in any way.
+
+**Governing rule for the future implementation phase, restated
+precisely as instructed:**
+
+  PLATFORM CHROME = Nemryn
+  ORGANIZATION CONTEXT = tenant.organization_name
+
+Nothing in this phase's findings weakens or complicates that rule —
+the Nemryn asset pack supplies exactly the PLATFORM half; the Zenward
+PNG remains exactly the TENANT half, and the two are still never
+meant to be blended into a single co-branded mark (per the already-
+LOCKED `docs/brand/nemryn/11-brand-lock-v1.md` §13: "Tenants are
+peers... no co-brand, no parent/sub-brand").
+
+====================================================================
+16. MISSING ASSET VARIANTS
+====================================================================
+
+**One confirmed, significant gap:**
+
+  **`nemryn-logo-primary.svg` — NOT PROVIDED.** The README's own
+  MASTER FILES list (§4) names this file explicitly ("approved symbol
+  + wordmark, Deep Graphite") as one of 9 master files, but only 8
+  SVGs plus one PNG preview were actually placed in the delivered
+  directory — this exact file does not exist under any name, case, or
+  location this audit could find (`find public/Brand -iname
+  "*logo-primary*"` matches only the PNG preview). **This audit did
+  NOT create, approximate, or substitute a replacement for it** — per
+  the explicit "Do NOT create a variant to fill a missing role"
+  instruction, this is reported as:
+
+    **NO APPROVED ASSET AVAILABLE** for: a single-file, full Nemryn
+    lockup (symbol + wordmark together) in Deep Graphite, suitable for
+    a light/Mineral-White-class background.
+
+  This is the ONE role every current light-background auth/onboarding/
+  join logo call site (7 of the 8 sites in §10) actually needs, and it
+  is exactly the one role with no approved SVG master.
+
+**What DOES exist that a future phase could consider** (offered as a
+factual option, not a recommendation this audit is making or acting
+on): `nemryn-symbol-primary.svg` (the mark alone, Deep Graphite,
+light-background-ready) and `nemryn-wordmark-primary.svg` (the
+wordmark alone, Deep Graphite, light-background-ready) both exist
+independently and are both individually complete, approved,
+light-background-ready assets — composing them together as two
+separate elements (not merged into one new SVG file) is a legitimate
+way to reconstruct the light-background lockup's VISUAL EFFECT without
+"recreating" the artwork itself (the underlying paths are used
+verbatim, unmodified, exactly as delivered) — but this remains a
+LAYOUT decision for whoever implements the swap, not something this
+acceptance phase performed, endorsed as final, or treated as
+equivalent to having the actual named master file.
+
+**Also noted, not a "missing" variant but a documentation gap (§4):**
+no minimum clear-space or minimum-size guidance was supplied anywhere
+in the README — an implementation phase will need to either request
+this from the human or use ordinary judgment (matching the existing
+UI's own restrained spacing conventions) when the swap is actually
+made.
+
+**No other missing variant was found.** Every other role named in
+§6/§9/§10 (dark full lockup, symbol both light/dark, wordmark both
+light/dark, favicon, app icon, the Steel Blue presentation variant)
+has a real, validated, approved asset.
+
+====================================================================
+17. CONFIRMATION — A1A FILES UNTOUCHED
+====================================================================
+
+The 41-file list recorded in §2 (captured before any inspection in
+this phase began) was re-confirmed via `git status -sb` at the end of
+this phase (§1's own final check) — **identical list, identical
+count, no additions, no removals.** This phase performed zero `Edit`
+or `Write` operation against any file under `src/`, `supabase/`, or
+any other application path — the only tools used against those paths
+in this entire phase were read-only (`Read`, `Bash` commands limited
+to `grep`/`find`/`git status`/`file`). The only `Write` operation this
+phase performed at all is this report.
+
+====================================================================
+18. CONFIRMATION — BRAND ASSET BYTES UNTOUCHED
+====================================================================
+
+§8's checksum comparison is the direct proof: all 10 files in
+`public/Brand/Nemryn-SVG-Master-Pack/` produced IDENTICAL SHA-256
+hashes before (§6) and after (§7) every inspection/validation step in
+this phase. No SVG optimizer, formatter, linter, or editor tool was
+run against any of these files. No file was renamed, moved, replaced,
+or derived from. The locked artwork rule was fully honored.
+
+====================================================================
+19. READINESS FOR N0-M2-A2/A3
+====================================================================
+
+**Partially ready, with one explicit, load-bearing blocker documented
+for the human, not worked around:**
+
+  - The token/typography foundation (N0-M2-A1A) is complete and
+    validated, per that phase's own report.
+  - The Nemryn asset pack is now present, technically valid, and
+    checksum-locked — favicon, app-icon, symbol (both contexts), and
+    wordmark (both contexts) are all immediately usable with no gap.
+  - **The single full-lockup-on-light-background asset
+    (`nemryn-logo-primary.svg`) that 7 of the 8 current platform logo
+    call sites would need is missing from the delivered pack.** A
+    future N0-M2-A2 phase attempting the logo swap at those 7 sites
+    will hit this exact gap immediately — it should be resolved (the
+    human supplies the missing master file, or explicitly authorizes
+    the symbol+wordmark composition approach noted in §16, or another
+    explicit decision) BEFORE that phase begins, not discovered
+    mid-implementation.
+  - The 8th site (`OperationsSidebar`, dark chrome background) has a
+    complete, unblocked asset (`nemryn-logo-inverse.svg`) and could
+    proceed independently of the light-background gap.
+  - Aspect-ratio math (§11/§12) is fully worked out and ready to apply
+    once dimensions are chosen — no further audit work is needed
+    there.
+
+====================================================================
+20. GIT STATUS
+====================================================================
+
+  On branch main
+  Your branch is up to date with 'origin/main'.
+
+  Changes not staged for commit: the same 41 N0-M2-A1A files from §2,
+  unchanged, still unstaged.
+
+  Untracked files: the same standing set from every prior phase
+  (`.tmp-qa/`, `docs/brand/`, the historical `docs/reports/*.txt`
+  files) plus `public/Brand/` (the newly delivered, now-inventoried
+  asset pack — still entirely untracked, not staged by this phase)
+  plus this report (`docs/reports/n0-m2-a1b-locked-nemryn-asset-
+  acceptance.txt`).
+
+  Nothing staged. Nothing committed. Nothing pushed. No brand asset
+  byte, no A1A file, and no other application file was modified by
+  this phase.
+
+====================================================================
+END OF REPORT
+====================================================================

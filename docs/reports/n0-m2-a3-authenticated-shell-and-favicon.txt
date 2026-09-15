@@ -1,0 +1,472 @@
+N0-M2-A3 — AUTHENTICATED NEMRYN SHELL + BROWSER ICON CORRECTION
+===================================================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD (start and end of phase, unchanged): a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (in sync)
+Branch: main
+Report generated: 2026-09-15T11:11:48Z
+Git actions taken: NONE (no commit, no push, no stage — working tree only)
+
+This phase converts the authenticated Operations/Driver shell's own
+persistent platform chrome from Zenward-branded to Nemryn-branded, and
+corrects the browser favicon to a visually legible asset. Neither
+N0-M2-A1A, N0-M2-A2, nor N0-M2-A2-R1 was reverted, rewritten, or
+restaged — this phase is strictly additive on top of all three.
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (matches HEAD)
+- Nothing staged at any point in this phase.
+
+
+2. INHERITED WORKING TREE
+------------------------------
+`git status -sb` at phase start showed exactly the expected combined
+N0-M2-A1A + N0-M2-A2 + N0-M2-A2-R1 diff (48 files, including the
+7-file logo-call-site remediation and the 1 deleted favicon.ico), the
+`public/brand/` directory, and the standing set of untracked report/
+scratch files — no unexpected drift. Confirmed all required locked
+assets present before starting: nemryn-logo-inverse.svg, nemryn-symbol-
+inverse.svg, nemryn-app-icon.svg, nemryn-favicon.svg. Baseline SHA-256
+recorded for every file in public/brand/ before any edit (§19).
+
+
+3. OPERATIONS SIDEBAR — BEFORE/AFTER
+------------------------------------------
+File: src/components/operations/OperationsSidebar.tsx
+
+BEFORE:
+  <span className="inline-flex items-center rounded-sm bg-white p-1.5 lg:p-2">
+    <Image src="/images/zenward-mobility-logo.png" alt="Zenward Mobility"
+           width={217} height={72} priority className="h-auto w-7 lg:w-24" />
+  </span>
+
+AFTER:
+  <Image src="/brand/nemryn-logo-inverse.svg" alt="Nemryn"
+         width={434} height={127} priority className="h-auto w-7 lg:w-24" />
+
+The persistent sidebar — authenticated PLATFORM chrome — no longer
+references the Zenward tenant asset anywhere. Confirmed live: every
+authenticated Operations screenshot in this phase renders the Nemryn
+inverse lockup directly against the Deep Graphite `bg-chrome-background`
+sidebar.
+
+
+4. EXACT NEMRYN SIDEBAR ASSET
+-----------------------------------
+`public/brand/nemryn-logo-inverse.svg` — the same-geometry, Mineral
+White companion to `nemryn-logo-primary.svg` (already verified in
+N0-M2-A2-R1's own report as byte-identical path data to the primary
+lockup, differing only in fill color). This is the correct approved
+variant for a dark background per both the README ("nemryn-logo-
+inverse.svg — same geometry, Mineral White") and this phase's own
+instruction. Not modified in any way — see §19 for the checksum proof.
+
+
+5. WHITE-WRAPPER DECISION
+-------------------------------
+The `<span className="inline-flex items-center rounded-sm bg-white
+p-1.5 lg:p-2">` wrapper's ONLY documented purpose (per the sidebar's
+own prior inline comment, preserved verbatim in git history) was to
+counteract the old Zenward PNG's baked-in opaque white background —
+"a small, plain white badge chip behind it... never touching the PNG's
+own pixels." It had no other responsibility: no layout role beyond
+`inline-flex items-center` (which the parent `<div className="flex h-16
+items-center ...">` already provides), no sizing role beyond padding
+around the badge itself, no accessibility role.
+
+Since `nemryn-logo-inverse.svg` has no background of its own (a bare
+`<g fill="#F7F7F4">` path group, confirmed transparent — this exact
+property is why it is the correct dark-background variant in the first
+place), the badge's entire reason for existing is gone. It was removed
+entirely; the `<Image>` now renders as a direct child of the existing
+`h-16 items-center` header row, which still provides correct vertical
+centering and horizontal padding (`px-4 lg:px-6`) with zero new
+wrapper needed. Confirmed live: no visible artifact, seam, or spacing
+regression in any screenshot (§16).
+
+
+6. SIDEBAR LOGO RENDERED DIMENSIONS
+------------------------------------------
+`width`/`height` Image props were set to the SVG's own true intrinsic
+values (434 × 127, ratio ≈3.418), matching the same "let h-auto compute
+the correct height from a fixed CSS width" pattern already established
+and validated in N0-M2-A2-R1. The existing responsive width classes
+(`w-7` icon-only rail at md, `w-24` full sidebar at lg+) were left
+completely unchanged — only the ratio math the browser uses to derive
+the auto height is now correct.
+
+Confirmed live via CDP `getBoundingClientRect()` at 1400×900 (lg+
+breakpoint): rendered at 96×28px, ratio 3.429 (measurement rounding of
+the true 3.418; not distorted, not cropped) — a restrained, readable
+size directly comparable to the prior asset's own footprint at the same
+breakpoint (previously ~96×32px at the old, incorrect 3.014 ratio).
+
+
+7. WORKSPACE IDENTITY VALIDATION
+--------------------------------------
+Inspected `OperationsLayoutClient.tsx`: the sidebar's bottom-rail
+`location` prop is already `organization.organizationName` — fully
+dynamic, sourced from the live-resolved session, with zero hard-coded
+tenant name anywhere in this chain. This was a confirmed non-finding,
+not a change — nothing needed touching. Live-verified: every
+authenticated screenshot in this phase shows "Fictional Org A" /
+"Organization Admin" in the sidebar's bottom rail, directly below the
+Nemryn logo, with no visual merging of the two into a single co-branded
+mark (separate elements, separate rows — platform mark at top, tenant
+identity in its own MapPin-icon row near the bottom).
+
+
+8. OPERATIONS SHELL WORDING
+----------------------------------
+File: src/components/operations/OperationsShell.tsx
+
+Found exactly one hard-coded platform string: the narrow-width guard's
+`EmptyState title="Zenward Operations"` (shown below the md/768px
+breakpoint, where the sidebar has nowhere to go). Changed to `title=
+"Operations"` — the phase's own preferred, restrained choice; "Nemryn
+Operations" was not used since the surrounding UI (a plain "this
+workspace needs a bigger screen" message) does not need the product
+name to be clear. No other wording, no responsive behavior, and no
+other prop was touched. Confirmed live at 390×844 (§17): renders
+"Operations / This workspace is designed for tablet and desktop use."
+correctly, sidebar/main content correctly hidden below md as before.
+
+
+9. ACCOUNT MENU FINDINGS
+------------------------------
+Inspected `src/components/operations/AccountMenu.tsx` in full: zero
+hard-coded Zenward or platform-brand strings anywhere in the component.
+It already renders only real data — `organizationName`, `roleLabel`,
+`avatarName` — with no brand text of any kind. Per this phase's own
+explicit instruction ("Only modify if a genuine hard-coded Zenward
+PLATFORM reference remains"), NO CHANGE was made. Confirmed live: the
+opened account menu shows exactly "Fictional Org A / Organization
+Admin / Sign Out" (plus "Switch Organization" when genuinely
+multi-org) — no platform branding inside the menu at all, which is
+correct and unchanged.
+
+
+10. DRIVER-SHELL WORDING DECISION
+----------------------------------------
+File: src/components/driver/DriverLayoutClient.tsx
+
+`getDriverHeaderTitle()`'s fallback branch returned `"Zenward Driver"`
+for any pathname not matching one of its five known routes (/driver,
+/driver/trips, /driver/trips/[id], /driver/history, /driver/profile).
+Changed to `"Driver"` — the phase's own explicitly preferred choice,
+NOT "Nemryn Driver" (which would incorrectly imply Nemryn, the
+platform, is the driver's transportation employer — the tenant is).
+
+The richer alternative the phase offered — `{organizationName} ·
+Driver` — was considered and NOT used: `organizationName` is not
+currently threaded into `DriverLayoutClient`'s props (only `driverName`
+and `showOperationsLink` are), and adding it would require a new prop
+on `DriverLayoutClientProps` plus a change to the parent server
+`DriverLayout` to pass `access.organization.organizationName` through.
+The phase explicitly said not to introduce new data plumbing for this
+label; the plain "Driver" fallback needs none and was preferred for
+that reason.
+
+Note on reachability: every actual /driver/* route in this application
+(Today, Trips, Trip Detail, History, Profile) is already covered by
+this function's five explicit `if` branches — the fallback branch is
+defensive/unreachable in current routing, never actually rendered by
+any real navigation. The fix was still made because dead code carrying
+stale platform branding is still a genuine finding worth correcting,
+matching this session's established practice of not leaving stale
+brand strings in place merely because they're hard to reach.
+
+
+11. AUTHENTICATED ZENWARD-STRING AUDIT
+--------------------------------------------
+`grep -rniE "zenward"` across src/components/operations,
+src/components/driver, src/app/operations, and src/app/driver returned
+exactly 4 hits after implementation:
+
+  a) src/components/operations/OperationsSidebar.tsx:69,71 — my own
+     N0-M2-A3 inline comment explaining the platform/tenant asset
+     distinction (PLATFORM comment, not rendered copy — intentional).
+
+  b) src/components/operations/trip-detail/TripNotesPanel.tsx:32 — a
+     code comment: "a `trip_notes.author_user_id` points at a Zenward
+     staff account, never a requester." Classification: HISTORICAL/
+     TENANT — describes the current seeded tenant's own staff-authored
+     notes as a data-model illustration, not user-visible, not platform
+     chrome. Left unchanged.
+
+  c) src/app/operations/facilities/page.tsx:11 — a code comment: "this
+     list is the operator's own referring clinics/dialysis centers/
+     etc., scoped to their tenant only, never the Zenward organization
+     itself." Classification: HISTORICAL — a data-scoping explanation
+     written before the Nemryn/Zenward platform-vs-tenant split
+     existed, not user-visible, not platform branding. Left unchanged.
+
+No hard-coded Zenward PLATFORM chrome (title, logo, alt text, header/
+sidebar copy) remains anywhere in the authenticated application.
+`DriverBottomNavigation.tsx` and the driver top-level layout/header
+were independently confirmed to already carry zero Zenward references
+(no changes needed there).
+
+
+12. FAVICON PROBLEM DIAGNOSIS
+-----------------------------------
+`public/brand/nemryn-favicon.svg` (N0-M2-A2's original choice) contains
+only a bare Deep Graphite (#171A1D) path group with no background
+element — fully transparent outside the symbol strokes. Rendered at
+real favicon sizes (16px, 32px) against Chrome's own dark tab-bar color
+(#202124) and near-black, it is nearly imperceptible — confirmed via a
+direct side-by-side visual render (§14), not just source inspection.
+This matches the human's own directly-observed complaint exactly.
+
+
+13. FAVICON ASSET DECISION
+--------------------------------
+Switched to `public/brand/nemryn-app-icon.svg`: a 1024×1024 viewBox
+asset with its own `<rect rx="180" fill="#171A1D">` Deep Graphite
+rounded-square tile behind a centered Mineral White (`#F7F7F4`) Nemryn
+symbol. Because it carries its own opaque background, it renders as a
+legible dark tile with a crisp light mark regardless of the browser's
+own chrome color — confirmed via the same rendered-size visual test
+(§14). This is the exact asset and exact reasoning the phase specified;
+no new file was created, no SVG was recolored or derived, no PWA
+manifest was added — only the `metadata.icons.icon` string in
+src/app/layout.tsx changed, from `/brand/nemryn-favicon.svg` to
+`/brand/nemryn-app-icon.svg`.
+
+`src/app/favicon.ico` remains absent (confirmed: `ls src/app/favicon.ico`
+returns no such file), exactly as N0-M2-A2 left it — this phase did not
+reintroduce it.
+
+
+14. RENDERED FAVICON VERIFICATION
+----------------------------------------
+Live verification, not source inspection alone:
+
+  - Fresh browser context (brand-new, never-used profile directory) +
+    hard reload (`Page.reload` with `ignoreCache: true`) on /sign-in:
+    `document.querySelectorAll('link[rel*="icon"]')` returns EXACTLY
+    ONE link — `rel="icon" href="http://localhost:3000/brand/nemryn-
+    app-icon.svg"`. No competing or duplicate icon link of any kind.
+  - `GET /favicon.ico` (the classic browser-auto-requested path,
+    independent of any `<link>` tag) returns 404 — confirming there is
+    no old favicon.ico file for any browser to fall back to.
+  - Direct visual render: both `nemryn-app-icon.svg` and
+    `nemryn-favicon.svg` were rendered at their real 16px/32px display
+    sizes against Chrome's own dark-tab-bar color (#202124) and near-
+    black, side by side, and screenshotted (a3-favicon-contrast-test.png
+    in the session scratchpad). Result: `nemryn-app-icon.svg` renders
+    as a clearly visible dark rounded tile with a sharp white symbol at
+    both sizes; `nemryn-favicon.svg` is barely a faint gray ghost,
+    nearly invisible at either size — a direct, visual confirmation of
+    both the diagnosed problem and the fix's effectiveness, not an
+    assumption from reading the SVG source alone.
+
+Headless Chrome has no visible browser-chrome/tab UI to capture in a
+page screenshot (there is no window frame in `--headless=new` mode), so
+an actual literal screenshot of "a Chrome tab showing the icon" is not
+obtainable in this environment; the rendered-size side-by-side render
+above is the closest available direct visual proof and is unambiguous.
+
+
+15. PLATFORM-VS-TENANT VALIDATION
+----------------------------------------
+Verified live on an authenticated org-a-admin@example.test session at
+`/operations` (1400×900): the sidebar header shows the Nemryn inverse
+lockup ALONE (no tenant name, no co-branding) at the top; several rows
+below, in its own separate section with a MapPin icon, "Fictional Org A
+/ Organization Admin" renders as the current tenant/workspace context;
+further below, the signed-in user's own email and role render in a
+third, separate section. Three distinct, clearly separated rows — never
+merged into one co-branded lockup, matching the phase's own example
+hierarchy exactly ("[NEMRYN logo] / Fictional Org A / Current
+workspace"). The account menu (§9) reconfirms the same separation in
+its own popup.
+
+
+16. DESKTOP VALIDATION (1400×900)
+--------------------------------------
+Captured via headless Chrome + CDP, authenticated as
+org-a-admin@example.test: /operations, /operations/trips, /operations/
+drivers, /operations/facilities.
+
+All 4 screens: Zenward logo confirmed gone from the sidebar (zero
+`zenward-mobility-logo.png` references, zero visible "Zenward" text on
+any screen); Nemryn inverse lockup renders directly on the Deep
+Graphite `bg-chrome-background` sidebar with no white badge/wrapper;
+measured logo dimensions 96×28px, ratio 3.429 (correct, not distorted);
+"Fictional Org A" tenant identity renders correctly and dynamically in
+the bottom rail on every screen; navigation items (Overview, Trips,
+Dispatch, Passengers, Facilities, Drivers, Fleet) unchanged, active-item
+highlighting correct; zero horizontal overflow; zero clipping; Geist
+typography renders correctly; Deep Graphite chrome and Steel Blue
+active/informational states (e.g. "En Route" badges) render correctly,
+consistent with N0-M2-A1A's own semantic-color work.
+
+
+17. MOBILE VALIDATION (390×844)
+-------------------------------------
+Captured: /driver, /driver/trips (org-a-driver-a@example.test session),
+and the /operations narrow-width guard (org-a-admin@example.test
+session at 390×844, below the md breakpoint).
+
+/driver and /driver/trips: header title "Today" / driver name "Fictional
+Driver A1" render correctly (an actual matched route, not the fallback
+— confirmed the fallback change is correct by direct source reading,
+§10); zero "Zenward" or "Nemryn Driver" text anywhere; bottom navigation
+(Today/Trips/History/Profile) unchanged and usable; Steel Blue "Assigned"
+status badges render correctly per A1A; zero overflow or clipping.
+
+/operations narrow-width guard: correctly renders the "Operations" /
+"This workspace is designed for tablet and desktop use." guard state
+(§8) — the sidebar/main content correctly remain hidden below md,
+unchanged guard-trigger behavior.
+
+
+18. FUNCTIONAL REGRESSION
+-------------------------------
+All verified live, not merely by code inspection (no auth/routing/RPC
+logic was touched in this phase — only `<Image>` attributes, one
+`EmptyState` title string, and one fallback title string):
+
+  - Sign in (org-a-admin@example.test) -> redirects to /operations.
+  - Sidebar navigation: clicking "Trips" in the sidebar correctly
+    navigates to /operations/trips.
+  - Account menu: opens correctly, shows "Fictional Org A /
+    Organization Admin / Sign Out" (Switch Organization correctly
+    absent for this single-org user).
+  - Sign out: correctly redirects to /sign-in.
+  - Organization selection: signing in as multi-org-user@example.test
+    correctly lands on /select-organization; submitting the first
+    organization's selection form correctly redirects to /operations.
+  - Driver shell / driver navigation: /driver and /driver/trips render
+    correctly for org-a-driver-a@example.test, with working bottom
+    navigation (§17).
+
+Trips/drivers navigation confirmed via the desktop screenshot set
+itself (§16) — each route rendered its own correct content with the
+sidebar's "active" highlight on the matching nav item.
+
+
+19. LOCKED-ASSET CHECKSUMS
+--------------------------------
+SHA-256 of every file in public/brand/, computed before this phase's
+first edit and again after all implementation and validation work:
+
+  README.txt                       f4d8e59c9ca2a0f53960d931b850fb5874782504a9b204ee3a33a38d5b95bfe3
+  nemryn-app-icon.svg               c8eb57659441b48f6278e5be86b7c4777dca3b1a5b2464b6eecfe7922e70ce4d
+  nemryn-favicon.svg                1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-logo-inverse.svg           6b467688110c3bb5e8f95786b89f71a2996c98b967cbe6d94697550f4501c956
+  nemryn-logo-on-steel-blue.svg     c214d384be154b97a2c10bfc9f7316deb3a7bcaf3def85ccc7631ed2057959cd
+  nemryn-logo-primary-preview.png   c0f15ff955dfa9b94eb3f5850160518dceaa4c55f8f91a5b1a635d529a245411
+  nemryn-logo-primary.svg           0703192dfddc85bb6bd860d37b1a458c614d6b38ea8fd8eef16f3d68a4ed1fe4
+  nemryn-symbol-inverse.svg         2dc2406e3d8866654b4c495221c21859e64d4c26683e3fedd84510ea03720439
+  nemryn-symbol-primary.svg         1c1b66882528b9b6038fb9a7b1b45e5e0311c7bca4af08bab2d15a2cbfb270c1
+  nemryn-wordmark-inverse.svg       b534897122bbe05c9e0032f6b9734ab2d0a5939945b72ca3d6a22ec1096b064f
+  nemryn-wordmark-primary.svg       c3783686ed84feb33e7fbc53eb05c89fb9685fe3d5d9cfc124ac66a26916c9c0
+
+RESULT: IDENTICAL before and after, all 11 files. No asset was
+redrawn, converted, resized, recolored, or regenerated at any point in
+this phase — including nemryn-app-icon.svg and nemryn-favicon.svg,
+both merely referenced by new `src`/`metadata.icons` strings, never
+opened for editing.
+
+
+20. BUILD / LINT / TYPECHECK / TESTS
+------------------------------------------
+- `npx tsc --noEmit`: PASS, zero errors.
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files, identical baseline to every
+  prior phase's own report.
+- `npm run build`: PASS. 36 routes generated (unchanged from the
+  N0-M2-A2/A2-R1 baseline — this phase touched no route structure).
+- `npm test`: PASS, 29/29, identical to the standing baseline.
+
+
+21. SQL / RLS / CONCURRENCY
+---------------------------------
+`git status --porcelain supabase/` — empty (zero migration/RLS diff, as
+expected — no backend file was touched in this phase).
+
+`supabase db reset` run clean. All 22 SQL test files in
+supabase/tests/*.sql re-run against the fresh database: 0 real FAIL
+lines in every file (constraint_tests, create_trip_atomicity_tests,
+create_trip_privilege_tests, create_trip_tests, driver_location_tests,
+driver_read_authorization_tests, driver_read_history_tests, driver_
+read_minimization_tests, driver_read_privilege_tests, exception_
+mutation_boundary_tests, function_privilege_tests, mutation_assignment_
+tests, mutation_atomicity_tests, mutation_authorization_tests,
+mutation_idempotent_authorization_tests, mutation_lifecycle_tests,
+mutation_privilege_tests, operator_onboarding_tests, organization_
+timezone_tests, rls_adversarial_tests, security_definer_exposure_
+tests, trip_exception_tests).
+
+Both concurrency scripts re-run and PASS:
+  mutation_concurrency_test.sh — TEST CONCURRENCY-1: PASS (genuine
+    row-level lock contention, ~1.85s block, correct assignment_
+    conflict on the loser).
+  driver_invite_concurrency_test.sh — TEST INVITE-CONCURRENCY-1: PASS
+    (genuine row-lock contention, exactly 1 Driver row / 1 Membership
+    row from two concurrent redemption attempts, no duplicate).
+
+Zero migration diff, zero RLS diff, zero auth-mechanic diff.
+
+
+22. EXACT A3 DIFF
+---------------------
+PRE-EXISTING (untouched by this phase): the full N0-M2-A1A (41 files),
+N0-M2-A2 (15 files, including the public/Brand -> public/brand rename
+and the favicon.ico deletion), and N0-M2-A2-R1 (7 files, the light-
+surface logo-call-site remediation) diffs — none reverted, none
+rewritten.
+
+NEW THIS PHASE (N0-M2-A3), exactly 4 files:
+  src/app/layout.tsx                              (metadata.icons.icon
+                                                     string only — this
+                                                     file also carries
+                                                     A1A's font-import
+                                                     diff and A2's
+                                                     title/description
+                                                     diff underneath;
+                                                     all three coexist
+                                                     correctly)
+  src/components/operations/OperationsSidebar.tsx (logo Image element +
+                                                     removed white badge
+                                                     wrapper + comment)
+  src/components/operations/OperationsShell.tsx   (one EmptyState title
+                                                     string)
+  src/components/driver/DriverLayoutClient.tsx    (one fallback title
+                                                     string)
+
+Nothing else in any of these 4 files was touched. No other file in the
+repository was modified by this phase.
+
+
+23. READINESS FOR N0-M2-A4
+--------------------------------
+YES. Both human-reported QA findings are resolved and live-verified:
+the Operations sidebar no longer shows the Zenward Mobility logo (now
+the approved Nemryn inverse lockup, correctly proportioned, no
+white-badge artifact), and the browser favicon is now the legible
+Deep-Graphite-tile Nemryn app icon rather than the nearly-invisible
+transparent symbol. The authenticated shell now fully carries Nemryn
+platform identity (sidebar mark, narrow-guard wording, driver-shell
+fallback wording) while every tenant/workspace name (organizationName)
+remains fully dynamic and never co-branded. No scope beyond this
+phase's own 4-file, chrome-only diff was touched — Request Hub and any
+further N0-M2-A4 scope remain untouched and ready for their own phase.
+
+
+24. GIT STATUS (FINAL)
+----------------------------
+HEAD: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged)
+origin/main: a077d81f1afb85cc0664d5235fd1a94cb2dc91a1 (unchanged, in sync)
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+Working tree now carries: the pre-existing N0-M2-A1A diff (41 files),
+the pre-existing N0-M2-A2 diff (15 files), the pre-existing N0-M2-A2-R1
+diff (7 files), this phase's own 4-file diff, and the standing set of
+untracked report/scratch files (now including this report).

@@ -7,7 +7,7 @@ import { ResetPasswordForm } from "@/components/auth/ResetPasswordForm";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Reset password — Zenward Mobility" };
+export const metadata = { title: "Reset password" };
 
 /**
  * The password-reset landing page (P0-S2B) — reached only via
@@ -43,12 +43,13 @@ export default async function ResetPasswordPage() {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+        {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
           <Image
-            src="/images/zenward-mobility-logo.png"
-            alt="Zenward Mobility"
-            width={240}
-            height={80}
+            src="/brand/nemryn-logo-primary.svg"
+            alt="Nemryn"
+            width={434}
+            height={127}
             priority
             className="h-auto w-60"
           />
@@ -72,12 +73,12 @@ export default async function ResetPasswordPage() {
                 href="/forgot-password"
                 className={cn(
                   typography.button,
-                  "flex h-12 w-full items-center justify-center rounded-md bg-brand-interactive-teal text-white hover:brightness-95",
+                  "flex h-12 w-full items-center justify-center rounded-md bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
                 )}
               >
                 Request a new link
               </Link>
-              <Link href="/sign-in" className={cn(typography.bodySmall, "text-center font-medium text-brand-interactive-teal")}>
+              <Link href="/sign-in" className={cn(typography.bodySmall, "text-center font-medium text-text-link")}>
                 Back to sign in
               </Link>
             </div>

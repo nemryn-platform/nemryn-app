@@ -45,7 +45,7 @@ export function DriverNextTripCard({
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className={cn(typography.sectionHeading, "text-brand-interactive-teal")}>{time}</p>
+        <p className={cn(typography.sectionHeading, "text-info-text")}>{time}</p>
         <TripStatus status={status} />
       </div>
       <p className={cn(typography.subsectionHeading, "text-text-primary")}>{passengerName}</p>

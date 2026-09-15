@@ -41,7 +41,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
         title="Trip unavailable"
         description="This trip doesn't exist, or you don't have access to it."
         action={
-          <Link href="/operations/trips" className={cn(typography.button, "text-brand-interactive-teal")}>
+          <Link href="/operations/trips" className={cn(typography.button, "text-text-link")}>
             Back to Trips
           </Link>
         }

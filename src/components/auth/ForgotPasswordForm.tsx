@@ -31,7 +31,7 @@ export function ForgotPasswordForm() {
         </p>
         <Link
           href="/sign-in"
-          className={cn(typography.bodySmall, "text-center font-medium text-brand-interactive-teal")}
+          className={cn(typography.bodySmall, "text-center font-medium text-text-link")}
         >
           Back to sign in
         </Link>

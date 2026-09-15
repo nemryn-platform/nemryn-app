@@ -69,7 +69,7 @@ export default async function TripsListPage({
       header: "Passenger",
       primary: true,
       render: (row) => (
-        <Link href={`/operations/trips/${row.id}`} className="hover:text-brand-interactive-teal hover:underline">
+        <Link href={`/operations/trips/${row.id}`} className="hover:text-text-link hover:underline">
           {row.passengerName}
         </Link>
       ),
@@ -165,12 +165,12 @@ export default async function TripsListPage({
           </p>
           <div className="flex gap-2">
             {result.page > 1 && (
-              <Link href={buildPageHref(result.page - 1)} className={cn(typography.button, "text-brand-interactive-teal hover:underline")}>
+              <Link href={buildPageHref(result.page - 1)} className={cn(typography.button, "text-text-link hover:underline")}>
                 Previous
               </Link>
             )}
             {result.page < totalPages && (
-              <Link href={buildPageHref(result.page + 1)} className={cn(typography.button, "text-brand-interactive-teal hover:underline")}>
+              <Link href={buildPageHref(result.page + 1)} className={cn(typography.button, "text-text-link hover:underline")}>
                 Next
               </Link>
             )}

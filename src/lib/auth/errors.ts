@@ -32,7 +32,7 @@ export type AuthErrorCode = (typeof AUTH_ERROR)[keyof typeof AUTH_ERROR];
 export const AUTH_ERROR_MESSAGE: Record<AuthErrorCode, string> = {
   INVALID_CREDENTIALS: "That email and password combination doesn't match our records.",
   SESSION_EXPIRED: "Your session has expired. Please sign in again.",
-  NO_ACTIVE_MEMBERSHIP: "Your account does not currently have access to a Zenward organization.",
+  NO_ACTIVE_MEMBERSHIP: "Your account does not currently have access to a Nemryn workspace.",
   ORG_CONTEXT_INVALID: "That organization is not available for your account.",
   ROLE_FORBIDDEN: "Your account does not have access to this area.",
   DRIVER_LINK_MISSING: "Your account is not yet linked to a driver profile.",

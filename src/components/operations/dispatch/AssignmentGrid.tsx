@@ -156,7 +156,7 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                         type="button"
                         data-trip-id={trip.id}
                         onClick={() => onReassign(trip)}
-                        className="absolute top-1/2 -translate-y-1/2 rounded-sm border border-border-subtle bg-surface-elevated px-2 py-1.5 text-left shadow-sm transition-colors hover:border-brand-interactive-teal focus-visible:border-brand-interactive-teal"
+                        className="absolute top-1/2 -translate-y-1/2 rounded-sm border border-border-subtle bg-surface-elevated px-2 py-1.5 text-left shadow-sm transition-colors hover:border-selection-border focus-visible:border-border-focus"
                         style={{ left, width: GRID_BLOCK_WIDTH_PX }}
                         aria-label={`Reassign ${trip.passengerName}'s trip at ${formatOperationsTime(trip.scheduledPickupAt, timezone)}, currently assigned to ${row.driver.displayName}${trip.hasOpenException ? " — has an open issue" : ""}`}
                       >
@@ -175,7 +175,7 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                           className={cn(
                             typography.metadata,
                             "truncate",
-                            IN_PROGRESS_LABELS.has(trip.statusLabel) ? "text-brand-interactive-teal" : "text-text-muted",
+                            IN_PROGRESS_LABELS.has(trip.statusLabel) ? "text-info-text" : "text-text-muted",
                           )}
                         >
                           {formatOperationsTime(trip.scheduledPickupAt, timezone)} · {trip.statusLabel}

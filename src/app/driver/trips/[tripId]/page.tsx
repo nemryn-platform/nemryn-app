@@ -76,7 +76,7 @@ export default async function DriverTripDetailPage({ params }: { params: Promise
         title="Trip unavailable"
         description="This trip isn't accessible — it may have been reassigned, completed, or no longer exists."
         action={
-          <Link href="/driver/trips" className={cn(typography.button, "text-brand-interactive-teal")}>
+          <Link href="/driver/trips" className={cn(typography.button, "text-text-link")}>
             Back to Trips
           </Link>
         }

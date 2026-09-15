@@ -7,7 +7,7 @@ import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import { redirect } from "next/navigation";
 
-export const metadata = { title: "Sign in — Zenward Mobility" };
+export const metadata = { title: "Sign in" };
 
 /**
  * The smallest secure login foundation (work item §10/§12) — not an
@@ -42,17 +42,18 @@ export default async function SignInPage({
       */}
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
         {/*
-          P1-E3-S2A: the approved Zenward Mobility logo (Z/route/pin-heart
-          mark + wordmark), reused from Zenward-Web's own asset — not
-          recreated with icons/CSS. See docs/reports/
-          P1-E3-S2A-sign-in-visual-fix-report.txt "Approved logo correction".
+          N0-M2-A2-R1: approved Nemryn platform lockup (locked artwork —
+          not modified here). width/height reflect the SVG's own
+          viewBox (0 0 434 127); the visual width stays w-60, unchanged
+          from the prior interim mark, with h-auto deriving the correct
+          non-distorted height from that ratio.
         */}
         <div className="mb-8 flex justify-center">
           <Image
-            src="/images/zenward-mobility-logo.png"
-            alt="Zenward Mobility"
-            width={240}
-            height={80}
+            src="/brand/nemryn-logo-primary.svg"
+            alt="Nemryn"
+            width={434}
+            height={127}
             priority
             className="h-auto w-60"
           />
@@ -60,7 +61,7 @@ export default async function SignInPage({
 
         <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Welcome back</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
-          Sign in to continue to Zenward.
+          Sign in to continue to Nemryn.
         </p>
 
         <SignInForm next={next} />
@@ -77,8 +78,8 @@ export default async function SignInPage({
             "mt-8 border-t border-border-subtle pt-6 text-center text-text-secondary",
           )}
         >
-          New to Zenward?{" "}
-          <Link href="/sign-up" className="font-medium text-brand-interactive-teal">
+          New to Nemryn?{" "}
+          <Link href="/sign-up" className="font-medium text-text-link">
             Create an account
           </Link>
         </p>
