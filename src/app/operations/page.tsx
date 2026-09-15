@@ -4,8 +4,11 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTodaysOperations, type TodaysOperationsTrip, type TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { getOnboardingChecklist } from "@/lib/operations/onboarding-checklist";
+import { getDriverSnapshot } from "@/lib/operations/operations-brief";
+import { deriveOperationsBrief } from "@/lib/operations/operations-brief-core";
 import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
+import { OperationsBrief } from "@/components/operations/OperationsBrief";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
@@ -36,7 +39,15 @@ export default async function OperationsOverviewPage() {
   const pathname = await getCurrentPathname("/operations");
   const organization = await requireOperationsAccess(pathname);
   const data = await getTodaysOperations(organization.organizationId, organization.organizationTimezone);
-  const checklist = await getOnboardingChecklist(organization.organizationId);
+  // Operations Brief (P1-E1-S1C) is derived from this SAME already-fetched
+  // `data` — never a second getTodaysOperations() call. Only the driver
+  // snapshot (S1B's one genuinely new query) needs its own fetch, run in
+  // parallel with the onboarding checklist below.
+  const [checklist, driverSnapshot] = await Promise.all([
+    getOnboardingChecklist(organization.organizationId),
+    getDriverSnapshot(organization.organizationId),
+  ]);
+  const brief = deriveOperationsBrief(data, driverSnapshot, new Date());
   const timezone = organization.organizationTimezone;
 
   const attentionColumns: DataTableColumn<TodaysOperationsAttentionItem>[] = [
@@ -104,6 +115,8 @@ export default async function OperationsOverviewPage() {
   return (
     <div className="flex flex-col gap-zw-lg">
       <OnboardingChecklistBanner checklist={checklist} />
+
+      <OperationsBrief brief={brief} timezone={timezone} />
 
       <SummaryStrip
         inline

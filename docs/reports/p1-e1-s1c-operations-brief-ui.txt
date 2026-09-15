@@ -1,0 +1,609 @@
+P1-E1-S1C — OPERATIONS BRIEF UI
+==================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58
+Report generated: 2026-09-15T19:40:30Z
+Mode: UI implementation. No commit, no push, no deploy, no stage.
+
+This phase renders the Operations Brief at the top of /operations, using
+the S1B data layer exactly as built, with one small additive change to
+operations-brief.ts (exporting a function that was already private) to
+avoid a duplicate getTodaysOperations() call.
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = 2c5018e64f02805f63cc20b9be218461a4cc8d58
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = 2c5018e64f02805f63cc20b9be218461a4cc8d58 (matches HEAD)
+- `git status -sb` at phase start showed only the standing untracked
+  scratch/historical-report set, the S1A/S1B reports, and S1B's own 3
+  untracked implementation files — no unexpected tracked-source drift.
+
+
+2. S1B INHERITED STATE
+----------------------------
+Confirmed present and unmodified at phase start:
+  src/lib/operations/operations-brief-core.ts — the pure derivation
+    module (computeDayState, deriveNextDepartures, deriveOperationsBrief,
+    countDriversCurrentlyOnTrip).
+  src/lib/operations/operations-brief.ts — the server-only composition
+    wrapper (getOperationsBrief, private getDriverSnapshot).
+  src/lib/operations/operations-brief-core.test.mjs — 27 passing tests.
+Read both reports (P1-E1-S1A, P1-E1-S1B) in full before writing any code,
+per instruction.
+
+
+3. FILES CREATED / MODIFIED
+----------------------------------
+CREATED (1 file):
+  src/components/operations/OperationsBrief.tsx (279 lines) — the Brief
+    component and its 4 block sub-components, all in one file (avoiding
+    excessive fragmentation, per instruction — the blocks are small and
+    tightly coupled to one parent's day-state branching logic).
+
+MODIFIED (2 files):
+  src/app/operations/page.tsx — 14 insertions / 1 deletion: two new
+    imports, the driver-snapshot fetch + `deriveOperationsBrief` call
+    (replacing the single `getOnboardingChecklist` await with a
+    `Promise.all` of two calls), and one new `<OperationsBrief>` line in
+    the JSX between the OnboardingChecklistBanner and the existing
+    SummaryStrip. No existing section was removed, reordered, or
+    restyled.
+  src/lib/operations/operations-brief.ts — ONE additive change: the
+    previously-private `getDriverSnapshot` function gained an `export`
+    keyword and a doc comment explaining why (§6 below) — see §27 for
+    why this was judged a genuine, minimal, non-contract-reshaping
+    necessity rather than a silent reshape of the S1B contract.
+
+No other file was created or modified.
+
+
+4. FINAL UI HIERARCHY
+----------------------------
+  <OnboardingChecklistBanner />          (unchanged, still first)
+  <OperationsBrief />                     (NEW — this phase)
+  <SummaryStrip />                        (unchanged)
+  <Needs Attention Panel (existing)>      (unchanged)
+  <Upcoming Trips Panel (existing)>       (unchanged)
+  <Active Trips Panel (existing)>         (unchanged)
+  <Activity Log Panel (existing)>         (unchanged)
+
+Exactly the placement the phase specified: after the onboarding banner,
+before the existing SummaryStrip and every existing operational-detail
+section. Nothing existing was removed — the intentional temporary
+overlap (the Brief's own compact Needs Attention/Active Now summaries
+sitting above the existing, unabridged Needs Attention table and Active
+Trips panel) is exactly as instructed, to be evaluated before any future
+consolidation.
+
+
+5. DATA-FETCH INTEGRATION
+--------------------------------
+`getTodaysOperations()` is called EXACTLY ONCE per /operations render —
+the same single call the page already made before this phase, now also
+feeding the Brief via a pure derivation, not a second query. The full
+call sequence, in src/app/operations/page.tsx:
+
+  const data = await getTodaysOperations(organization.organizationId, organization.organizationTimezone);
+  const [checklist, driverSnapshot] = await Promise.all([
+    getOnboardingChecklist(organization.organizationId),
+    getDriverSnapshot(organization.organizationId),
+  ]);
+  const brief = deriveOperationsBrief(data, driverSnapshot, new Date());
+
+`deriveOperationsBrief` (operations-brief-core.ts, S1B, untouched) is a
+PURE function — it performs no I/O of its own, it only transforms the
+already-fetched `data` plus the already-fetched `driverSnapshot` into
+`OperationsBriefData`. The convenience `getOperationsBrief()` wrapper
+(S1B, also untouched) — which internally calls `getTodaysOperations()`
+a SECOND time — was deliberately NOT used here; it remains available
+for any future caller that has not already fetched Today's Operations
+data itself.
+
+
+6. DUPLICATE-QUERY AVOIDANCE
+------------------------------------
+Measured explicitly, per instruction: before this integration decision,
+calling both `getTodaysOperations()` (for the existing page sections)
+and the S1B convenience `getOperationsBrief()` (for the Brief) would
+have executed `getTodaysOperations()` TWICE per render — once directly,
+once again inside `getOperationsBrief`'s own `Promise.all`. This was
+identified and explicitly rejected.
+
+Resolution (approach A from the phase's own two offered options, in
+spirit — a minimal composition adjustment): `operations-brief.ts`'s
+previously-private `getDriverSnapshot` function was exported (one
+keyword, one doc comment — see the diff in §3) so `/operations` can
+compose the Brief itself from data it already has: one
+`getTodaysOperations()` call (shared with every existing page section,
+unchanged from before this phase), one `getDriverSnapshot()` call (the
+one genuinely new query S1B introduced, run in parallel with the
+onboarding-checklist fetch via `Promise.all`), and one pure
+`deriveOperationsBrief()` call to combine them. Confirmed via direct
+code reading of the final `operations/page.tsx`: `getTodaysOperations`
+is referenced exactly once in the entire file. No other file in the
+request path calls it either (`getDriverSnapshot` and
+`deriveOperationsBrief` do not call it).
+
+
+7. NEEDS ATTENTION IMPLEMENTATION
+----------------------------------------
+Source: `brief.attention` (== `getTodaysOperations().attentionItems`,
+S1B's own untouched pass-through) — rendered with ZERO re-sorting; the
+component maps over the array in the exact order it arrives in. Each
+visible row shows: scheduled time + passenger name (`formatOperations
+Time`/`trip.passengerName`), route (`pickupDescription → destination
+Description`), the assurance `StatusBadge` (label + `assuranceStatus
+Category`, the same existing presentation.ts helper the pre-existing
+detailed table already uses), the assurance's own plain-language
+`explanation` string, and an explicit action button. Routing: `NEEDS_
+ASSIGNMENT` → `/operations/dispatch`, everything else → `/operations/
+trips/${trip.id}` — the identical ternary already used by the existing
+Needs Attention table's own "action" column (operations/page.tsx's
+`attentionColumns` — confirmed by direct comparison, not merely
+"similar" logic). Verified live: `Assign` and `Open Trip` links on the
+Brief resolve to `/operations/dispatch` and `/operations/trips/{real-
+uuid}` respectively (extracted directly from the rendered page's own
+anchor `href` attributes).
+
+
+8. ATTENTION ROW-LIMIT DECISION
+--------------------------------------
+`ATTENTION_ROW_LIMIT = 5`, exactly the phase's own recommended cap.
+When `attention.length > 5`, only the first 5 (already in their
+existing priority order — no re-sort) render, followed by a single
+restrained link: "+N more in Dispatch" → `/operations/dispatch`.
+
+Decision documented: `/operations/dispatch` was chosen over the
+existing (also-available) full Needs Attention table further down the
+SAME page, because (a) the phase's own instruction explicitly names
+`/operations/dispatch` as an acceptable, pre-approved destination, (b)
+it is already the established destination for the single most common
+attention reason (`NEEDS_ASSIGNMENT`), and (c) Dispatch is where the
+majority of attention conditions are actually actioned, not merely
+viewed. No new route was created; no pagination was built into the
+Brief itself. This was not exercised at >5 items live (no fixture in
+this environment currently has 6+ simultaneous attention items), but
+the logic (`items.slice(0, 5)`, `items.length - visible.length`) was
+verified by direct code reading and is a simple, deterministic slice
+with no edge case beyond "fewer than 5" (already exercised live on
+every fixture organization tested — see §17/§18).
+
+
+9. UNASSIGNED-COUNT PRESENTATION
+---------------------------------------
+`brief.unassignedCount` (S1B's own count-only field — no row list exists
+anywhere in `OperationsBriefData`, confirmed again in this phase) is
+rendered as one compact sentence directly inside the Needs Attention
+panel, above its row list: "{N} trip{s} need{s} a driver." — only shown
+when `unassignedCount > 0`. No second list of unassigned trips exists
+anywhere in `OperationsBrief.tsx` — every unassigned trip a viewer sees
+is the SAME row already present in the Needs Attention list above/below
+that sentence (via its own `NEEDS_ASSIGNMENT` assurance code), never a
+duplicate.
+
+
+10. ACTIVE NOW IMPLEMENTATION
+------------------------------------
+Source: `brief.activeNow` (== `getTodaysOperations().activeTrips`, S1B's
+own untouched pass-through). Each row shows pickup time, passenger name,
+pickup → destination route, and the trip's own `statusLabel` (e.g. "En
+Route") rendered in Steel Blue (`text-info-text`), matching the
+pre-existing "Active Trips" panel's own established color choice for
+this exact same concept. No ETA/late/on-time/delayed concept was
+introduced anywhere — `statusLabel` is the same string
+`operationsTripStatusLabel()` already produces for every other surface
+on this page. Each row links to `/operations/trips/${trip.id}` (verified
+live via the rendered page's own trip-detail hrefs).
+
+
+11. NEXT DEPARTURES IMPLEMENTATION
+-----------------------------------------
+Source: `brief.nextDepartures` — S1B's own already-filtered,
+already-windowed, already-deduplicated array. The component applies
+ZERO additional filtering, sorting, or windowing logic — it iterates the
+array exactly as received. Each row shows pickup time, passenger name,
+route, and `statusLabel` (e.g. "Assigned"). Rows link to `/operations/
+trips/${trip.id}`. Live-verified the window boundary is genuinely
+enforced upstream (S1B), not duplicated or reimplemented here: a fixture
+trip scheduled 3 hours out correctly did NOT appear in this block (§18).
+
+
+12. DRIVER SNAPSHOT IMPLEMENTATION
+-----------------------------------------
+Source: `brief.driverSnapshot.{totalActiveDrivers,
+driversCurrentlyOnTrip}`. Wording, verified live and matching the
+phase's own exact preferred direction: "1 of 2 active drivers are
+currently on trip." (never "available," never any claim of true
+availability, matching every earlier phase's own established
+restraint). Zero-driver case ("No drivers set up yet" + a "Set up
+drivers" link to `/operations/drivers`) was written per instruction but
+not exercised live in this pass (no fixture organization in this
+environment currently has zero active drivers — every seeded
+organization has at least one). The non-zero case links to
+`/operations/dispatch` via a "View Dispatch" button — verified live,
+present in every screenshot, correct href confirmed via direct anchor
+inspection.
+
+
+13. NO_TRIPS BEHAVIOR
+---------------------------
+`isQuiet = dayState === "NO_TRIPS" && activeNow.length === 0 &&
+attention.length === 0` — when true, the entire trip-oriented section
+collapses to ONE panel: "Nothing scheduled today" / "Trips scheduled
+for today will appear here." (the pre-existing Upcoming Trips empty-
+state copy, reused verbatim for consistency). Driver Snapshot still
+renders below it, unconditionally, showing real counts. Verified LIVE
+against a genuine zero-trip organization (Fictional Org B, confirmed
+via direct database query to have 0 trips scheduled today and 0
+non-terminal trips of any kind before this check): the collapsed panel
+rendered exactly as specified, Driver Snapshot showed "0 of 2 active
+drivers are currently on trip" — a real, non-fabricated count.
+
+
+14. CARRYOVER-ACTIVE-TRIP BEHAVIOR — THE CRITICAL EDGE CASE
+--------------------------------------------------------------------
+Explicitly built and live-tested, not merely reasoned about. A
+controlled fixture was inserted directly into the local database (a
+trip scheduled YESTERDAY, in the `en_route_to_pickup` active state,
+with a real `trip_assignments` row — organization Fictional Org B,
+otherwise genuinely at 0 trips today) to force exactly the scenario S1B
+flagged: `dayState === "NO_TRIPS"` (todayTrips.length is 0) while
+`activeNow.length > 0` (the flat, day-unbounded activeTrips query
+legitimately finds the carryover trip).
+
+Verified live:
+  - `isQuiet` correctly evaluates false (activeNow.length > 0 short-
+    circuits it) — the page does NOT render "Nothing scheduled today."
+  - The heading-level message "No new trips scheduled today." renders
+    instead, honestly distinguishing "no NEW trips" from "nothing
+    happening."
+  - Needs Attention still renders normally (and, in this exact fixture,
+    genuinely shows 1 item — the carryover trip itself, flagged
+    LOCATION_UNAVAILABLE, since no location had been recorded for it —
+    a real, correct, unstaged assurance result, not a scripted outcome).
+  - Active Now renders the real carryover trip, "En Route" in Steel
+    Blue.
+  - Next Departures is correctly OMITTED entirely in this branch
+    (`isCarryoverOnly` skips it) rather than rendering a redundant
+    "Nothing departing soon" panel underneath an already-quiet headline
+    — confirmed absent from the rendered page's own text content.
+  - Driver Snapshot correctly counted the carryover trip's driver as
+    "currently on trip" (1 of 2).
+  - The pre-existing SummaryStrip below (unchanged code) independently
+    corroborated the same facts ("0 trips today, 1 active, 1 need
+    attention"), confirming the Brief and the untouched existing page
+    sections agree on the underlying data.
+
+This is the single most important behavioral requirement in this phase
+and it was verified against real, live-rendered output, not asserted
+from source reading alone.
+
+
+15. ALL_COMPLETE BEHAVIOR
+-------------------------------
+Live-tested with a controlled fixture: one trip inserted for TODAY with
+`state = 'completed'` on an otherwise-empty-today organization (Fictional
+Org B). Verified: the page renders exactly "All caught up" / "Every trip
+scheduled for today has been completed." as a single collapsed panel,
+Driver Snapshot remains visible below it with real counts. No internal
+enum name ("ALL_COMPLETE") was ever exposed anywhere in the rendered
+text — confirmed by a direct string search of the page's own body text.
+
+
+16. TERMINAL MIXED-OUTCOME BEHAVIOR
+------------------------------------------
+Live-tested with a second controlled fixture layered onto the first: a
+`completed` trip AND a `cancelled` trip, both scheduled for today, on
+the same otherwise-empty organization. Verified: the page does NOT
+render "All caught up" or the completed-day copy (confirmed absent via
+direct string search) — it correctly falls through to normal
+`ACTIVE_DAY` block rendering, with each of Needs Attention / Active Now
+/ Next Departures showing its own real, calm, distinct empty state
+(both `completed` and `cancelled` are `TERMINAL` in trip-assurance.ts
+and excluded from `attention`; neither is an active-state trip; neither
+is a `scheduled` trip eligible for Next Departures) — no celebratory
+state was fabricated for a day that only PARTIALLY completed
+successfully.
+
+
+17. SMALL-OPERATOR BEHAVIOR
+----------------------------------
+Tested with three distinct fixture states on the same small
+organization (2 active drivers, 0-or-1 trips): zero trips (§13), and a
+single scheduled-but-3-hours-out trip. In the single-trip case, `day
+State` correctly evaluates `ACTIVE_DAY` (a genuine trip exists, not all
+completed), and all 3 trip-oriented blocks render — each showing its
+own honest, distinct empty state ("Nothing needs attention" / "Nothing
+in progress" / "Nothing departing soon") rather than a padded, identical
+"no data" placeholder repeated three times, and rather than an
+artificial second layer of collapse logic the phase never specified.
+This was NOT conditioned on `organizations.business_stage` anywhere —
+confirmed by grep: that column/field is never referenced in
+`OperationsBrief.tsx`, `operations-brief.ts`, or `operations-brief-
+core.ts`. Every branch is driven purely by real trip/driver counts.
+
+Also validated with real production-shaped fixture data: Fictional Org
+A (6 trips today, 2 drivers, 1 attention item's worth of both NEEDS_
+ASSIGNMENT and LOCATION_UNAVAILABLE) renders a compact, correctly-scaled
+Brief with no empty real estate — every block has real content.
+
+
+18. LARGER-WORKLOAD BEHAVIOR
+------------------------------------
+Tested against Harmony Medical Transport (12 trips today, real fixture
+names — Linda Okafor, Willie Thompson, Harold Jennings, Patricia Nguyen
+— not placeholder text). Verified live: Needs Attention correctly shows
+"3 Items" with all three distinct assurance codes visible in one
+screenshot (Open issue / Needs assignment / Location needs update),
+Active Now shows 3 real in-progress trips, Next Departures shows 2. The
+STRUCTURE is identical to the small-operator screenshots — same block
+order, same Panel/typography, no separate "enterprise mode," only
+content density changed, exactly as instructed.
+
+
+19. ACCESSIBILITY
+----------------------
+A real defect was found and fixed during this phase (not merely
+audited after the fact): `ActiveNowBlock`/`NextDeparturesBlock`
+originally used the shared `SectionHeader` component, which renders an
+`<h2>` internally — but every Brief sub-block must nest as `<h3>` under
+the Brief's own `<h2>Operations Brief</h2>`, matching `NeedsAttention
+Block`/`DriverSnapshotBlock`'s own already-correct manual `<h3>` usage.
+Live-verified via `document.querySelectorAll('h1,h2,h3,h4')` BEFORE the
+fix: `H1: Today's Operations -> H2: Operations Brief -> H3: Needs
+Attention -> H2: Active Now -> H2: Next Departures -> H3: Driver
+Snapshot -> H2: Needs Attention (existing) -> ...` — an inconsistent,
+non-nesting structure a screen-reader heading-scan would find
+confusing. Fixed by replacing both `SectionHeader` usages with a small
+local `BlockHeading` helper rendering the identical visual styling at
+`<h3>`. Re-verified AFTER the fix: `H1 -> H2 Operations Brief -> H3
+(x4: Needs Attention, Active Now, Next Departures, Driver Snapshot) ->
+H2 (existing panels, unchanged, flat siblings as before)` — a clean,
+logical nesting, with zero visual change (confirmed via a final
+screenshot, pixel-identical layout to the pre-fix version, since
+`typography.subsectionHeading` styling is shared regardless of tag).
+
+Other accessibility properties confirmed by direct code review: every
+status is communicated by a `StatusBadge` (label text + color, never
+color alone — the same existing, already-accessible component every
+other Operations surface uses); every action is an explicit `<Link>`/
+`<LinkButton>` with real, descriptive text ("Assign", "Open Trip", "View
+Dispatch", "Set up drivers" — never a bare icon, never "click here");
+every list uses a real `<ul>`/`<li>` structure; the `WarningCircle` icon
+next to "Needs Attention" carries `aria-hidden` (decorative, since the
+adjacent text already names the concept); every link/button in the
+Brief is a real focusable, keyboard-reachable anchor/button element (no
+`onClick`-only `<div>` anywhere in the component).
+
+
+20. DESKTOP VALIDATION (1400×900)
+----------------------------------------
+Captured live via headless Chrome + CDP for every scenario the phase
+named:
+  A. Normal active day — Fictional Org A (6 trips, mixed attention).
+  B. Needs-attention day — same capture (Org A genuinely has 2
+     simultaneous attention items of 2 different codes).
+  C. Zero-trip day — Fictional Org B (§13).
+  D. All-complete day — controlled fixture on Org B (§15).
+  E. Multi-item workload — Harmony Medical Transport, 12 trips (§18).
+  Plus the mixed-terminal-outcome case (§16) and the carryover edge
+  case (§14), both controlled fixtures.
+
+All 7 desktop captures: zero horizontal overflow (`document
+.documentElement.scrollWidth > clientWidth + 2` = false on every
+capture), Brief appears above the existing operational detail exactly
+as placed, hierarchy is visually obvious (Needs Attention full-width and
+first, Active Now + Next Departures side by side, Driver Snapshot
+last), no clipping, not visually oversized (restrained Panel-based
+cards, no KPI tiles, no gradients, no decorative charts, no "health
+score," no AI/smart/intelligent language anywhere in the copy —
+confirmed by direct text review of every rendered string), existing
+SummaryStrip and detailed panels remain intact and visible immediately
+below the Brief on every capture, sidebar (Nemryn inverse lockup,
+navigation) unchanged, tenant identity ("Fictional Org A" / "Fictional
+Org B" / "Harmony Medical Transport") renders correctly and dynamically
+in every capture, never co-branded with the Nemryn platform mark.
+
+
+21. TABLET VALIDATION
+---------------------------
+Captured at 820×1100 (the existing supported md/tablet breakpoint,
+matching this workstream's own established validation width). Verified:
+the Active Now / Next Departures 2-column grid correctly collapses to a
+single stacked column (`grid-cols-1 lg:grid-cols-2` — below `lg`, the
+existing Tailwind breakpoint this exact page's own pre-existing 2-column
+grid already used, reused rather than inventing a new one), zero
+horizontal overflow, all action buttons remain reachable and
+appropriately sized, text is not crushed, the sidebar correctly shows
+its existing icon-only rail (unchanged `OperationsShell`/
+`OperationsSidebar` behavior — neither file was touched this phase).
+
+
+22. NARROW-GUARD VALIDATION
+----------------------------------
+Captured at 390×844 (below the existing md guard threshold). Verified:
+the page renders ONLY the existing, unchanged "Operations / This
+workspace is designed for tablet and desktop use." guard state — a
+direct text search of the rendered page confirmed ZERO occurrence of
+"Operations Brief" anywhere in the DOM at this width, proving the
+Brief's own server-rendered markup never even reaches a client this
+narrow (the guard is evaluated in `OperationsShell`, upstream of where
+`{children}` — including this page's own Brief — would render at all).
+No change was made to `OperationsShell.tsx` or the guard's own logic in
+this phase.
+
+
+23. FUNCTIONAL REGRESSION
+-------------------------------
+All verified live against the real, running application:
+  - /operations loads correctly for every tested organization.
+  - Brief "Assign" action → `/operations/dispatch` (verified via real
+    anchor href extraction).
+  - Brief "Open Trip" action → `/operations/trips/{real-trip-uuid}`
+    (verified via real anchor href extraction).
+  - Active Now row → `/operations/trips/{real-trip-uuid}` (confirmed
+    present among the page's own trip-detail links).
+  - Next Departures row → `/operations/trips/{real-trip-uuid}` (same
+    mechanism, same confirmed link set).
+  - Driver Snapshot → `/operations/dispatch` ("View Dispatch",
+    confirmed via real anchor href extraction).
+  - Existing "View all trips" link (Upcoming Trips panel, unchanged
+    code) → `/operations/trips` — confirmed still present and correct,
+    proving the existing page sections were not disturbed.
+  - Sidebar navigation ("Trips") → `/operations/trips` — confirmed via
+    a real click-and-navigate.
+  - Account menu opens correctly, shows "Fictional Org A / Organization
+    Admin / Sign Out" — confirmed via a real click.
+  - Sign out → `/sign-in` — confirmed via a real click-and-navigate.
+
+No mechanic listed above was altered by this phase; every one of them
+is either pre-existing, unchanged code, or a new link whose destination
+matches an already-existing route.
+
+
+24. TYPECHECK / LINT / BUILD / TESTS
+-------------------------------------------
+- `npx tsc --noEmit`: PASS, zero errors (checked both before and after
+  the accessibility fix in §19).
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files, unchanged baseline.
+- `npm run build`: PASS. 36 routes generated — UNCHANGED (no new route;
+  OperationsBrief.tsx is a component, not a route).
+- `npm test`: PASS, 56/56 — the exact same 56 tests from S1B, all still
+  passing (this phase added no new automated test file; see §27's own
+  reasoning for why none was added).
+
+
+25. SQL / RLS / CONCURRENCY
+---------------------------------
+`git status --porcelain supabase/` — empty, both before and after this
+phase's implementation and live-fixture testing (every controlled test
+fixture inserted directly into the local database during live
+validation — §13-18 — was either explicitly cleaned up afterward, or
+fully cleared by a final `supabase db reset`; no migration file was
+ever created or touched).
+
+Final clean `supabase db reset`, then all 22 files under
+supabase/tests/*.sql re-run: 0 real FAIL lines in every file
+(constraint_tests, create_trip_atomicity_tests, create_trip_privilege_
+tests, create_trip_tests, driver_location_tests, driver_read_
+authorization_tests, driver_read_history_tests, driver_read_
+minimization_tests, driver_read_privilege_tests, exception_mutation_
+boundary_tests, function_privilege_tests, mutation_assignment_tests,
+mutation_atomicity_tests, mutation_authorization_tests, mutation_
+idempotent_authorization_tests, mutation_lifecycle_tests, mutation_
+privilege_tests, operator_onboarding_tests, organization_timezone_
+tests, rls_adversarial_tests, security_definer_exposure_tests, trip_
+exception_tests).
+
+Both concurrency scripts re-run and PASS: mutation_concurrency_test.sh
+(~1.85s genuine block, correct assignment_conflict on the loser),
+driver_invite_concurrency_test.sh (~1.87s genuine block, exactly 1
+Driver row / 1 Membership row, no duplicate).
+
+
+26. DATABASE DIFF
+----------------------
+Empty. Zero migration, zero RLS, zero RPC diff — confirmed via `git
+status --porcelain supabase/` at multiple points throughout this phase,
+including immediately before writing this report.
+
+
+27. EXACT SOURCE DIFF
+--------------------------
+  ?? src/components/operations/OperationsBrief.tsx        (new, 279 lines)
+   M src/app/operations/page.tsx                            (14 insertions, 1 deletion)
+   M src/lib/operations/operations-brief.ts                 (one function gained `export` + a doc comment)
+
+`src/lib/operations/operations-brief-core.ts` and `src/lib/operations/
+operations-brief-core.test.mjs` — CONFIRMED UNTOUCHED (neither file was
+opened for editing at any point in this phase; no genuine implementation
+blocker was ever encountered that would have required changing S1B's
+pure derivation logic or its tests — the one real architectural need
+this phase surfaced, avoiding a duplicate `getTodaysOperations()` call,
+was fully resolved by exporting one already-existing, already-correct
+private function in the server-only wrapper, not by reshaping the S1B
+contract in any way).
+
+
+28. PRODUCT QA ANSWERS
+---------------------------
+  Does the Brief immediately tell an operator what requires attention?
+    YES — Needs Attention is the first block, full-width, always
+    visible (even in its own calm empty state when nothing needs
+    attention), with a warning icon, an item count, real trip context,
+    the plain-language reason, and a clear action per row.
+
+  Can a 1-driver operator understand it without seeing enterprise
+  clutter?
+    YES — verified live with a 2-driver/0-or-1-trip fixture organization
+    across 3 distinct states (zero trips, all-complete, one distant
+    trip): every state renders either a single calm collapsed message
+    or a small set of honestly-empty, clearly-labeled panels — never
+    four padded boxes of identical "no data" filler, never a metric
+    dashboard.
+
+  Does the same trip appear redundantly in multiple Brief row LISTS?
+    NO — Unassigned Trips has no row list at all (count only, §9);
+    Next Departures explicitly excludes any trip already present in
+    Needs Attention (S1B's own de-dup, verified live in §14's carryover
+    fixture, where the same trip legitimately and correctly appears in
+    BOTH Needs Attention and Active Now — those two are never deduped
+    against each other, by design, since they answer different
+    questions ["what needs action" vs "what's happening now"] and a
+    trip can honestly be the answer to both at once).
+
+  Does the Brief avoid claiming true driver availability?
+    YES — the wording is always "N of M active drivers are currently
+    on trip," never "available," anywhere in the component or its
+    rendered output; verified by direct text search of every capture.
+
+  Does NO_TRIPS still correctly handle a prior-day active carryover
+  trip?
+    YES — §14, the single most rigorously live-tested scenario in this
+    phase: a real carryover fixture correctly produces "No new trips
+    scheduled today" while still fully rendering the real Active Now
+    (and, in this case, Needs Attention) content — never a false
+    "nothing is happening" claim.
+
+  Does the existing page remain usable if the Brief is ignored?
+    YES — every existing section (OnboardingChecklistBanner,
+    SummaryStrip, the detailed Needs Attention table, Upcoming Trips,
+    Active Trips, Activity Log) renders exactly as before, unchanged in
+    code, unchanged in behavior, immediately below the Brief; every
+    existing link/action in those sections was verified still
+    functional (§23).
+
+Every answer is YES — per the phase's own rule ("If any answer is NO:
+the phase is not complete"), this phase is complete.
+
+
+29. READINESS FOR P1-E1-S1D
+----------------------------------
+YES. The Operations Brief is implemented, wired into /operations with
+no duplicate data fetching, visually and behaviorally validated across
+every day-state branch (including the one genuinely tricky edge case),
+tablet- and guard-safe, accessible (including one real defect found and
+fixed during this same phase), and fully passes the existing
+typecheck/lint/build/unit-test/SQL/RLS/concurrency battery with zero
+database diff. S1D's own regression + production-release discipline can
+proceed directly against this implementation.
+
+
+30. GIT STATUS
+-------------------
+  On branch main.
+  HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged).
+  origin/main: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged, in
+  sync).
+  Nothing staged. Nothing committed. Nothing pushed. No migration, no
+  RLS change, no auth-mechanic change.
+  Untracked files: the standing scratch/historical-report set, the
+  S1A/S1B reports, the 3 S1B implementation files (untouched), the new
+  OperationsBrief.tsx, and this new report
+  (docs/reports/p1-e1-s1c-operations-brief-ui.txt). Modified-but-
+  unstaged: src/app/operations/page.tsx, src/lib/operations/
+  operations-brief.ts.

@@ -1,0 +1,504 @@
+P1-E1-S1B — OPERATIONS BRIEF DATA LAYER
+==========================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58
+Report generated: 2026-09-15T18:31:01Z
+Mode: Data-layer implementation only. No UI, no /operations page change,
+no migration, no commit/push/deploy/stage.
+
+This phase implements the Operations Brief server-side data composition
+layer, exactly per P1-E1-S1A's own foundation audit: compose existing
+data (getTodaysOperations, trip-assurance's own established ordering),
+add the one genuinely new query (driver snapshot), and expose a pure,
+independently-testable derivation layer for the 2-hour window, attention
+de-dup, and day-state logic.
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = 2c5018e64f02805f63cc20b9be218461a4cc8d58
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = 2c5018e64f02805f63cc20b9be218461a4cc8d58 (matches HEAD)
+- `git status -sb` at phase start showed only the standing untracked
+  scratch/historical-report set plus the S1A report — no unexpected
+  tracked-source drift.
+
+
+2. FILES CREATED / MODIFIED
+----------------------------------
+CREATED (3 files, zero files modified):
+  src/lib/operations/operations-brief-core.ts (160 lines) — the pure
+    derivation module: window filtering, attention de-dup, day-state,
+    and driver-snapshot counting. No `server-only` import, no runtime
+    import of any kind (only `import type`, fully erased) — mirrors
+    src/lib/app-url-core.ts's own established pure-core/server-wrapper
+    split.
+  src/lib/operations/operations-brief.ts (121 lines) — the server-only
+    composition wrapper: calls getTodaysOperations(), runs the one new
+    driver-snapshot query, and calls the pure core to assemble the final
+    OperationsBriefData.
+  src/lib/operations/operations-brief-core.test.mjs (284 lines, 27
+    tests) — Node's built-in test runner, matching src/lib/
+    app-url-core.test.mjs's exact existing convention (a dynamic
+    `await import("./operations-brief-core.ts")`, no new framework).
+
+MODIFIED: none. `src/app/operations/page.tsx`,
+`src/lib/operations/todays-operations.ts`,
+`src/lib/operations/trip-assurance.ts`, and
+`src/lib/operations/dispatch-board.ts` all carry ZERO diff — confirmed
+via a targeted `git diff --stat` against exactly these four paths,
+returning empty output.
+
+
+3. EXISTING FUNCTIONS REUSED
+------------------------------------
+  getTodaysOperations(organizationId, timezone) — called ONCE per
+    Operations Brief request, its full return value consumed for
+    todayTrips/attentionItems/activeTrips/needsAssignmentTrips. No
+    duplicate query issued for anything already present in its return
+    shape.
+  isActiveTripState (presentation.ts) — called by the server-only
+    wrapper to classify each driver-snapshot assignment row; never
+    re-derived as a second active-states set anywhere in either new
+    file.
+  trip-assurance.ts's evaluator and todays-operations.ts's own
+    PRIORITY_RANK-based sort — never imported, never re-implemented;
+    `attentionItems` is passed through from getTodaysOperations() byte-
+    for-byte (literally the same array reference is assigned to
+    `attention` in the returned OperationsBriefData — see §5).
+  dispatch-board.ts's "on trip" interpretation (active assignment +
+    active-state trip) — the SEMANTICS were reused (the driver-snapshot
+    query asks the identical question), but the large
+    getDispatchBoardData() query itself was NOT called or imported —
+    per the phase's own explicit instruction, a small dedicated query
+    was written instead (§12).
+
+
+4. ACTUAL DISCOVERED PRIORITY_RANK ORDER
+------------------------------------------------
+Read directly from src/lib/operations/todays-operations.ts (lines
+181-186) — this is the SOURCE OF TRUTH, and it differs subtly from how
+P1-E1-S1A's own prose described it (that report grouped "LOCATION_STALE/
+LOCATION_UNAVAILABLE" together as if interchangeable-priority; the
+actual numeric ranks are NOT equal):
+
+  const PRIORITY_RANK: Record<string, number> = {
+    OPEN_EXCEPTION: 0,
+    NEEDS_ASSIGNMENT: 1,
+    LOCATION_STALE: 2,
+    LOCATION_UNAVAILABLE: 3,
+  };
+
+Exact order, lowest rank sorts first (most urgent, shown first):
+  1. OPEN_EXCEPTION (0)
+  2. NEEDS_ASSIGNMENT (1)
+  3. LOCATION_STALE (2) — a location EXISTS but has gone stale
+  4. LOCATION_UNAVAILABLE (3) — no location has EVER been recorded for
+     the current assignment
+
+So a trip with a stale-but-present location outranks (is shown before)
+a trip with NO location at all yet — the opposite of what a naive
+reading of "unavailable sounds worse than stale" might suggest, and the
+exact opposite of the informal pairing implied by S1A's own prose. This
+distinction was preserved EXACTLY as-is: neither this module nor its
+tests re-sort, re-rank, or second-guess this ordering anywhere —
+`attentionItems` is consumed strictly as already-ordered input.
+
+This constant lives inside todays-operations.ts itself (not trip-
+assurance.ts) and is applied BEFORE `getTodaysOperations()` ever
+returns — meaning Operations Brief never needs to reference
+PRIORITY_RANK at all; the array it receives is already correctly
+ordered.
+
+
+5. OPERATIONSBRIEFDATA CONTRACT
+--------------------------------------
+  export interface OperationsBriefData {
+    dayState: OperationsBriefDayState;              // "NO_TRIPS" | "ALL_COMPLETE" | "ACTIVE_DAY"
+    totalTripsToday: number;
+    attention: TodaysOperationsAttentionItem[];      // pass-through, exact order preserved
+    activeNow: TodaysOperationsTrip[];                // pass-through
+    nextDepartures: TodaysOperationsTrip[];           // derived subset
+    unassignedCount: number;                          // count only, §11
+    driverSnapshot: OperationsBriefDriverSnapshot;    // { totalActiveDrivers, driversCurrentlyOnTrip }
+  }
+
+Deliberately reuses `TodaysOperationsTrip`/`TodaysOperationsAttentionItem`
+directly (imported via `import type` from todays-operations.ts) rather
+than inventing parallel DTOs — per the phase's own explicit "use the
+existing shape wherever possible" instruction. No new "action
+destination"/href field was added to either type: today's own
+operations/page.tsx constructs every href inline (e.g.
+`/operations/trips/${row.trip.id}`, a plain template literal in JSX,
+never a data-layer field) — there is no existing href-bearing
+convention anywhere in this codebase's data types to extend, and
+inventing one now would be a new, undocumented convention rather than a
+reuse of an existing one. §17 below documents the exact mapping S1C
+should replicate, matching operations/page.tsx's own current pattern
+exactly.
+
+
+6. NEEDS ATTENTION DERIVATION
+------------------------------------
+`OperationsBriefData.attention` is set to
+`getTodaysOperations().attentionItems` with NO transformation of any
+kind — not filtered, not re-sorted, not re-mapped. Every field the
+phase's own §7 asked for is already present on the existing shape:
+trip identity (`trip.id`), scheduled pickup time
+(`trip.scheduledPickupAt`), passenger display name
+(`trip.passengerName`), route descriptions
+(`trip.pickupDescription`/`trip.destinationDescription`), assurance
+code/label/explanation (`assurance.code`/`.label`/`.explanation`). The
+appropriate action destination is NOT baked into the data (§5's own
+reasoning) — S1C should replicate operations/page.tsx's own existing
+ternary: `assurance.code === "NEEDS_ASSIGNMENT" ? "/operations/dispatch"
+: "/operations/trips/" + trip.id"` (this IS operations/page.tsx's own
+current, already-shipped logic, byte-for-byte — see that file's
+`attentionColumns` "action" column).
+
+
+7. ACTIVE NOW DERIVATION
+------------------------------
+`OperationsBriefData.activeNow` is set to `getTodaysOperations()
+.activeTrips` with NO transformation — same object references, same
+order. No new lifecycle concept (delayed/late/at-risk/on-time) was
+introduced anywhere; a unit test (`deriveOperationsBrief — activeNow is
+exactly the input activeTrips (same reference, no re-filtering)`)
+asserts this by reference-equality, not merely by value-equality, to
+make regression against an accidental future re-derivation maximally
+obvious.
+
+
+8. NEXT DEPARTURES DERIVATION
+------------------------------------
+Pure function `deriveNextDepartures(todayTrips, attentionTripIds, now)`
+in operations-brief-core.ts. Filters `getTodaysOperations().todayTrips`
+(already fetched, already ordered ascending by scheduled_pickup_at) —
+NO new database query, NO new index, NO migration. Conditions, all
+application-level:
+  - `trip.state === "scheduled"`
+  - `trip.id` not present in the attention-items id set (§10)
+  - `trip.scheduledPickupAt` is non-null and parses to a valid instant
+  - the parsed instant falls within `[now, now + 2h]`
+
+
+9. EXACT 2-HOUR BOUNDARY BEHAVIOR
+----------------------------------------
+Both boundaries are INCLUSIVE: `pickupMs >= nowMs && pickupMs <=
+windowEndMs`. Directly tested against the phase's own exact example
+(now = 10:00):
+  09:59 -> excluded (before the window opens)
+  10:00 -> included (exactly at `now`)
+  11:59 -> included (inside the window)
+  12:00 -> included (exactly at `now + 2h`, the inclusive upper bound)
+  12:01 -> excluded (past the window)
+Test: `deriveNextDepartures — 2-hour window: both boundaries inclusive,
+outside excluded` — asserts the exact expected id list
+`["t-1000","t-1159","t-1200"]` from all 5 candidate trips in one single
+run, so the boundary semantics are locked down by one deterministic
+assertion, not five separate loosely-related tests.
+
+
+10. DE-DUP BEHAVIOR
+-------------------------
+`attentionTripIds` is built once, in `deriveOperationsBrief`, as
+`new Set(data.attentionItems.map((item) => item.trip.id))`, then passed
+into `deriveNextDepartures`. A trip present in that set is excluded from
+`nextDepartures` regardless of whether it would otherwise fall inside
+the 2-hour window — tested both in isolation (`deriveNextDepartures —
+excludes a trip already present in attentionItems`) and end-to-end
+through the full composed `deriveOperationsBrief` (`deriveOperationsBrief
+— a scheduled trip inside the window AND in attentionItems is never in
+nextDepartures`), which also asserts the SAME trip correctly still
+appears exactly once, inside `attention`.
+
+
+11. UNASSIGNED-COUNT DECISION
+------------------------------------
+`OperationsBriefData.unassignedCount` = `data.needsAssignmentTrips
+.length` — a plain count, already computed by getTodaysOperations() with
+zero new logic. Per the phase's own explicit resolution of P1-E1-S1A's
+own left-open ambiguity: there is NO second row collection anywhere in
+the contract — `OperationsBriefData` has no `unassignedTrips`/
+`unassigned` field of any kind. A dedicated test
+(`deriveOperationsBrief — no duplicate unassigned-row collection exists
+on the result`) asserts both `"unassignedTrips" in result` and
+`"unassigned" in result` are false, so a future accidental re-
+introduction of a duplicate list would fail loudly.
+
+
+12. DRIVER-SNAPSHOT QUERY
+--------------------------------
+Two small, explicit-column, sequential (not N+1 — the second only runs
+if the first returns any rows) queries in operations-brief.ts's private
+`getDriverSnapshot()`:
+
+  Query 1 — `select id from drivers where organization_id = :org and
+  status = 'active'` — gives `totalActiveDrivers` directly (a plain row
+  count) and the candidate driver-id list for query 2. If this returns
+  zero drivers, query 2 is skipped entirely (an early return) rather
+  than issuing a trivially-empty `IN ()` query.
+
+  Query 2 — `select driver_id, trips!trip_assignments_trip_id_
+  organization_id_fkey(state) from trip_assignments where
+  organization_id = :org and ended_at is null and driver_id in
+  (<query 1's ids>)` — the exact PostgREST embed syntax, LIVE-VERIFIED
+  against the real local database (not merely assumed to work): the
+  foreign-key constraint name `trip_assignments_trip_id_organization_id_
+  fkey` was independently confirmed to exist via `pg_constraint`, and
+  the exact query (URL-encoded, identical shape) was run directly
+  against the local PostgREST endpoint, signed in as
+  org-a-admin@example.test, returning real embedded `trips: {state:
+  ...}` objects for Organization A's own two seeded active drivers —
+  confirming both the constraint name and the embed shape are correct
+  before ever being exercised through the TypeScript client.
+
+Neither query uses `select("*")`. Neither is a duplicate of
+getDispatchBoardData()'s own much larger query (which additionally
+fetches vehicles, locations, exceptions, and every non-terminal trip's
+full column set) — this is a two-query, narrowly-scoped alternative
+built specifically for the two numbers Operations Brief needs, exactly
+per the phase's own explicit instruction not to reuse the large board
+query "just to obtain two numbers."
+
+
+13. DRIVER-SNAPSHOT SEMANTICS
+------------------------------------
+`totalActiveDrivers` / `driversCurrentlyOnTrip` — NEVER called
+"available drivers" anywhere in code, comments, or this report, per the
+phase's own explicit naming instruction (the schema has no live
+availability/shift/break concept — P1-E1-S1A §5's own confirmed gap).
+
+Row-to-count logic is split across two layers, mirroring §4's own
+reasoning for why the pure core has zero runtime imports:
+  - operations-brief.ts (server-only): for each `trip_assignments` row
+    returned, unwraps the embedded `trips` relation (the same defensive
+    `unwrapOne` pattern todays-operations.ts/dispatch-board.ts each
+    already carry their own private copy of) and calls
+    `isActiveTripState(trip.state)` ONCE per row, producing a plain
+    `{ driverId, isActiveState: boolean }` row.
+  - operations-brief-core.ts (pure): `countDriversCurrentlyOnTrip(rows)`
+    collects `driverId` into a `Set` for every row where `isActiveState`
+    is true, then returns the Set's size — a driver with two
+    simultaneous active-state assignment rows (not currently possible
+    given the one-active-assignment-per-TRIP constraint, but not
+    schema-prevented across two DIFFERENT trips) is still only ever
+    counted once.
+
+Verified by test (§22-G below): a completed-trip assignment row does
+NOT count, a cancelled-trip row does not count, a future-scheduled-trip
+row does not count, each of the 5 real active states DOES count (each
+independently asserted via `isActiveTripState`, imported directly since
+presentation.ts has no sibling imports of its own and is therefore also
+safely Node-loadable), and an inactive driver is excluded from
+`totalActiveDrivers` BY CONSTRUCTION — the drivers query itself only
+ever selects `status = 'active'` rows, so an inactive driver's id never
+enters either query's result set at all; this is enforced by the same
+single, already-proven `.eq("status", "active")` filter pattern used
+throughout this codebase, not a new mechanism requiring its own parallel
+JS unit test.
+
+
+14. DAY-STATE RULES
+-------------------------
+`computeDayState(todayTrips)`, pure, in operations-brief-core.ts:
+  - `todayTrips.length === 0` -> `"NO_TRIPS"`
+  - `todayTrips.length > 0` AND every trip's `state === "completed"` ->
+    `"ALL_COMPLETE"`
+  - anything else -> `"ACTIVE_DAY"`
+
+The "anything else" branch deliberately covers a day containing
+`completed` mixed with `cancelled`/`no_show` (real terminal outcomes
+that are NOT "everything completed") as well as any day with a
+`scheduled`/in-progress trip — all correctly fall through to
+`ACTIVE_DAY`, never misreported as `ALL_COMPLETE`. Six dedicated tests
+cover every branch explicitly, including both terminal-outcome-mixing
+cases named in the phase's own instructions (completed+cancelled,
+completed+no_show).
+
+
+15. QUIET-DAY BEHAVIOR
+----------------------------
+When `todayTrips.length === 0`: `attention`/`activeNow`/`nextDepartures`
+are not FORCED empty by any special-case code — they fall out naturally
+empty because `getTodaysOperations()`'s own `attentionItems` is derived
+from `todayTrips ∪ activeTrips` and `needsAssignmentTrips` is a filter
+over `todayTrips` — confirmed by a dedicated test asserting all three
+collections are empty and `unassignedCount === 0` when `todayTrips` is
+empty. `driverSnapshot` is NEVER zeroed or suppressed in this case — a
+dedicated test (`deriveOperationsBrief — zero trips today still reports
+real driver counts`) explicitly asserts a non-zero driver snapshot
+passes through unchanged even when `dayState === "NO_TRIPS"`, matching
+P1-E1-S1A §16's own instruction ("driverSnapshot may still contain real
+driver counts").
+
+One genuine edge case, documented rather than silently special-cased:
+`getTodaysOperations()`'s own `activeTrips` query has NO day boundary at
+all (it is a flat "every currently in-progress trip" query, by that
+file's own design comment, ZD-131) — so a trip that began on a prior
+calendar day and is still in progress could theoretically make
+`activeNow` non-empty even while `todayTrips.length === 0` (and
+therefore `dayState === "NO_TRIPS"`). This module does not suppress that
+real data to force an artificially "pure" empty day — per the phase's
+own literal rule ("NO_TRIPS: todayTrips.length === 0"), `dayState` is
+computed from `todayTrips` alone, and `activeNow` is never filtered
+against it. This is a rare, honest edge case, not a bug — flagged here
+explicitly so S1C does not assume `dayState === "NO_TRIPS"` implies
+"nothing to show anywhere on the page."
+
+
+16. SECURITY / RLS HANDLING
+----------------------------------
+Both new queries in `getDriverSnapshot()` run through
+`createServerSupabaseClient()` — the same server-side, RLS-respecting
+client every existing Operations query already uses; no service-role
+client is used anywhere in either new file. `organizationId` is received
+as a plain function parameter, exactly matching `getTodaysOperations()`'s
+and `getDispatchBoardData()`'s own existing signatures — the caller
+(an /operations route, in a future S1C) is responsible for having
+already resolved it server-side via `requireOperationsAccess()`, the
+same trust boundary every existing Operations data-access module
+already relies on; no new pattern, no client-trusted organization_id
+anywhere. Both queries additionally filter by `organization_id`
+explicitly in application code (defense in depth, on top of RLS),
+matching every existing query in this codebase. No new RLS policy, no
+new GRANT, no new SECURITY DEFINER function, and no migration of any
+kind was created — confirmed empty via `git status --porcelain
+supabase/` both before and after implementation.
+
+
+17. QUERY COUNT / PERFORMANCE
+------------------------------------
+Total server-side queries per `getOperationsBrief()` call: the same 4
+queries `getTodaysOperations()` already issues (today's trips, active
+trips, today's events, open exceptions) plus its own internal location
+lookup, PLUS 2 new queries for the driver snapshot (or 1, when an
+organization has zero active drivers — the second is skipped) — 6-7
+total, essentially unchanged from what a bare `getTodaysOperations()`
+call already costs. `getTodaysOperations()` and `getDriverSnapshot()`
+run in `Promise.all(...)` (parallel, not sequential) inside
+`getOperationsBrief()`. No `select("*")` anywhere in either new file
+(both driver-snapshot queries name explicit columns). Both new queries
+are backed by already-existing indexes (`drivers_organization_id_idx`,
+`trip_assignments_driver_id_idx`, `trip_assignments_organization_id_idx`)
+— no new index was created or is needed.
+
+
+18. NEW TESTS
+------------------
+27 new tests in operations-brief-core.test.mjs, covering every item in
+the phase's own A-G list:
+  A. Zero trips: 2 tests (day state + empty collections; driver snapshot
+     still real).
+  B. Next-departures window: 4 tests (the exact 5-point boundary case,
+     non-scheduled-state exclusion, null-pickup exclusion, order
+     preservation).
+  C. Attention de-dup: 2 tests (isolated + end-to-end through
+     deriveOperationsBrief).
+  D. Unassigned count: 2 tests (count correctness + no duplicate
+     collection field).
+  E. Active Now: 1 test (reference-equality pass-through).
+  F. Day state: 6 tests (all 3 states, including both "completed +
+     other terminal" cases explicitly named in the phase's own
+     instructions).
+  G. Driver snapshot: 10 tests (4 for `isActiveTripState` itself, 6 for
+     `countDriversCurrentlyOnTrip`'s counting/de-dup behavior).
+
+All 27 run and pass in isolation
+(`node --test src/lib/operations/operations-brief-core.test.mjs`) and as
+part of the full suite (`npm test`).
+
+
+19. TYPECHECK / LINT / BUILD / UNIT TESTS
+------------------------------------------------
+- `npx tsc --noEmit`: PASS, zero errors.
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files, unchanged baseline.
+- `npm run build`: PASS. 36 routes generated — UNCHANGED (no new route;
+  operations-brief.ts/operations-brief-core.ts are lib modules, not
+  routes, and are not yet imported by any page, exactly as instructed).
+- `npm test`: PASS, 56/56 (29 pre-existing + 27 new).
+
+
+20. SQL / RLS TESTS
+-------------------------
+`git status --porcelain supabase/` — empty, both before and after this
+phase's implementation work.
+
+`supabase db reset` run clean. All 22 files under supabase/tests/*.sql
+re-run against the fresh database: 0 real FAIL lines in every file
+(constraint_tests, create_trip_atomicity_tests, create_trip_privilege_
+tests, create_trip_tests, driver_location_tests, driver_read_
+authorization_tests, driver_read_history_tests, driver_read_
+minimization_tests, driver_read_privilege_tests, exception_mutation_
+boundary_tests, function_privilege_tests, mutation_assignment_tests,
+mutation_atomicity_tests, mutation_authorization_tests, mutation_
+idempotent_authorization_tests, mutation_lifecycle_tests, mutation_
+privilege_tests, operator_onboarding_tests, organization_timezone_
+tests, rls_adversarial_tests, security_definer_exposure_tests, trip_
+exception_tests).
+
+
+21. CONCURRENCY TESTS
+---------------------------
+mutation_concurrency_test.sh — TEST CONCURRENCY-1: PASS (~1.84s genuine
+  block, correct assignment_conflict on the loser).
+driver_invite_concurrency_test.sh — TEST INVITE-CONCURRENCY-1: PASS
+  (~1.82s genuine block, exactly 1 Driver row / 1 Membership row, no
+  duplicate).
+
+
+22. DATABASE DIFF
+----------------------
+`git status --porcelain supabase/` — empty. Zero migration diff, zero
+RLS diff, zero RPC diff. No table, index, policy, or function was
+created, altered, or dropped anywhere in this phase.
+
+
+23. EXACT SOURCE DIFF
+--------------------------
+  ?? src/lib/operations/operations-brief-core.ts
+  ?? src/lib/operations/operations-brief.ts
+  ?? src/lib/operations/operations-brief-core.test.mjs
+
+Three new, untracked files. `git diff --stat` against every existing
+tracked source file in the repository returns empty — nothing was
+modified. Specifically confirmed empty for the four files the phase
+named as needing special attention:
+  src/app/operations/page.tsx — untouched (S1C's own scope).
+  src/lib/operations/todays-operations.ts — untouched; no
+    "unavoidable type-export issue" was ever encountered (every type
+    this phase needed — TodaysOperationsData, TodaysOperationsTrip,
+    TodaysOperationsAttentionItem — was already exported).
+  src/lib/operations/trip-assurance.ts — untouched.
+  src/lib/operations/dispatch-board.ts — untouched (its semantics were
+    reused, its code was not imported or duplicated).
+
+
+24. READINESS FOR P1-E1-S1C
+----------------------------------
+YES. `getOperationsBrief(organizationId, timezone, now?)` is a complete,
+tested, RLS-safe, migration-free entry point returning exactly the
+`OperationsBriefData` shape P1-E1-S1A's own spec called for (renamed
+only where the phase's own §6 explicitly authorized: `attention` for
+Needs Attention, `activeNow` for Active Now, `nextDepartures`,
+`unassignedCount`, `driverSnapshot`, `dayState`, `totalTripsToday`). S1C
+can import this one function, call it once per /operations page render
+with the already-resolved `organization.organizationId`/
+`organization.organizationTimezone` (exactly as `getTodaysOperations()`
+is already called today), and render the 5 blocks from its return value
+with zero further data-layer work.
+
+
+25. GIT STATUS
+-------------------
+  On branch main.
+  HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged).
+  origin/main: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged, in
+  sync).
+  Nothing staged. Nothing committed. Nothing pushed. No migration, no
+  RLS change, no auth-mechanic change.
+  Untracked files: the standing scratch/historical-report set, the S1A
+  report, the 3 new operations-brief files, and this new report
+  (docs/reports/p1-e1-s1b-operations-brief-data-layer.txt).

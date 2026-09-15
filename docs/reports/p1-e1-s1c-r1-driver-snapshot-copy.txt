@@ -1,0 +1,87 @@
+P1-E1-S1C-R1 — DRIVER SNAPSHOT COPY POLISH
+=============================================
+Project: /Users/datamatics/ZenWard
+Base HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58
+Report generated: 2026-09-15T20:01:15Z
+Mode: Copy-only adjustment. No commit, no push, no deploy, no stage.
+
+This phase corrects only the Driver Snapshot sentence in
+src/components/operations/OperationsBrief.tsx to a grammatically stable
+form that never branches on singular/plural. No data logic, query,
+layout, color, or other visible copy was touched.
+
+
+EXACT FILE CHANGED
+-----------------------
+src/components/operations/OperationsBrief.tsx (DriverSnapshotBlock,
+the `hasDrivers` conditional string)
+
+
+BEFORE COPY
+----------------
+  {hasDrivers
+    ? `${driversCurrentlyOnTrip} of ${totalActiveDrivers} active ${totalActiveDrivers === 1 ? "driver is" : "drivers are"} currently on trip.`
+    : "No drivers set up yet."}
+
+Rendered examples: "1 of 2 active drivers are currently on trip." /
+"1 of 1 active driver is currently on trip."
+
+
+AFTER COPY
+---------------
+  {hasDrivers
+    ? `On trip now: ${driversCurrentlyOnTrip} of ${totalActiveDrivers} active drivers`
+    : "No drivers set up yet."}
+
+Rendered examples (matching the phase's own preferred direction exactly):
+  On trip now: 0 of 2 active drivers
+  On trip now: 1 of 2 active drivers
+  On trip now: 2 of 2 active drivers
+
+The singular/plural ternary (`totalActiveDrivers === 1 ? "driver is" :
+"drivers are"`) was removed entirely — the new phrasing is grammatically
+stable for every count with no branching. The zero-driver state ("No
+drivers set up yet.") was left completely untouched, as instructed.
+Preserved unchanged: `driverSnapshot` data flow, the zero-driver
+condition (`hasDrivers = totalActiveDrivers > 0`), the `/operations/
+dispatch` destination (`hasDrivers ? "/operations/dispatch" :
+"/operations/drivers"`), the LinkButton labels ("View Dispatch"/"Set up
+drivers"), component layout, typography classes, colors, and every
+other Brief block — confirmed via `git diff`-equivalent review: the
+only line touched in the entire file is the one string above.
+
+
+LIVE VERIFICATION
+-----------------------
+Signed in as org-a-admin@example.test, loaded /operations: rendered
+Driver Snapshot text is exactly "On trip now: 1 of 2 active drivers" —
+confirmed via a direct body-text search of the live page. Confirmed the
+old phrasing ("currently on trip.") no longer appears anywhere on the
+page.
+
+
+VALIDATION RESULTS
+------------------------
+- `npx tsc --noEmit`: PASS, zero errors.
+- `npm run lint`: PASS, 0 errors, 14 pre-existing warnings — all in
+  untracked `.tmp-qa/*.mjs` scratch files, unchanged baseline.
+- `npm run build`: PASS, 36 routes generated (unchanged).
+- `npm test`: PASS, 56/56 (the same full suite from S1B/S1C — this
+  phase added no new test, per its own copy-only scope).
+- `git status --porcelain supabase/`: empty — no other source file
+  changed as a side effect, so no SQL/RLS/concurrency re-run was
+  required or performed, per instruction.
+
+
+GIT STATUS
+---------------
+  On branch main.
+  HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged).
+  origin/main: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged, in
+  sync).
+  Nothing staged. Nothing committed. Nothing pushed.
+  `src/components/operations/OperationsBrief.tsx` remains untracked
+  (created in S1C, never committed) — its edited content is reflected
+  on disk; `git status` reports it as `??`, not `M`, since there is no
+  committed baseline to diff against. `src/app/operations/page.tsx`
+  remains modified (unchanged from S1C, untouched by this phase).

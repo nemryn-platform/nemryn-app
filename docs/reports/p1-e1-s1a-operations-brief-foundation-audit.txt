@@ -1,0 +1,1119 @@
+P1-E1-S1A — OPERATIONS BRIEF FOUNDATION AUDIT
+================================================
+Project: /Users/datamatics/ZenWard
+Committed HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58
+Report generated: 2026-09-15T14:31:13Z
+Mode: Audit + product/technical design ONLY. No source edited, no
+migration created, no production data touched, no commit/push/deploy.
+
+This report audits the existing /operations surface, data model, trip
+lifecycle, and attention infrastructure, and proposes a concrete,
+implementation-ready v1 specification for an Operations Brief — the
+operator's operational briefing layer — built entirely on data and
+patterns that already exist in this codebase.
+
+
+1. REPOSITORY STATE
+-----------------------
+- `git branch --show-current` = main
+- `git rev-parse HEAD` = 2c5018e64f02805f63cc20b9be218461a4cc8d58
+- `git fetch origin` = no new commits
+- `git rev-parse origin/main` = 2c5018e64f02805f63cc20b9be218461a4cc8d58 (matches HEAD)
+- `git status -sb` shows only the standing untracked scratch/historical-
+  report set carried since N0-M2-A5 — no unexpected drift. Nothing was
+  edited, staged, or committed during this audit.
+
+
+2. CURRENT /operations ASSESSMENT
+---------------------------------------
+File: src/app/operations/page.tsx ("Today's Operations"), backed by
+src/lib/operations/todays-operations.ts.
+
+Current structure, top to bottom:
+  1. OnboardingChecklistBanner — shown only until setup is complete
+     (business/vehicle/driver/facility/passenger/trip, each a real
+     derived count, never a persisted "% complete" field). Disappears
+     permanently once every item is true.
+  2. SummaryStrip — 4 numbers: "N trips today" / "N active" (dot) /
+     "N need attention" (warning, dot) / "N no current issues" (dot).
+  3. Needs Attention panel — a real, deterministic attention queue
+     (not a fabricated "Running Late"), one row per Trip with an open
+     exception, a missing assignment, or a stale/missing location,
+     each row showing Time/Passenger/Route/Reason/Action (Assign or
+     Open Trip).
+  4. Upcoming Trips — every trip scheduled today (any state, including
+     terminal), a plain table, "View all trips" link to /operations/trips.
+  5. Active Trips (right rail) — trips currently in one of the 5
+     non-terminal in-progress states, a compact list with a Steel-Blue
+     dot and status label.
+  6. Activity Log (right rail) — last 20 trip_events rows today, newest
+     first, plain list.
+
+GENUINELY USEFUL, should remain and become the backbone of Operations
+Brief:
+  - Needs Attention: this IS already 80% of an Operations Brief's core
+    job ("what requires attention"). It is deterministic, explainable
+    (each row carries a `TripAssuranceResult.explanation`), and already
+    ordered by a real priority rule (OPEN_EXCEPTION > NEEDS_ASSIGNMENT >
+    LOCATION_STALE > LOCATION_UNAVAILABLE). This should become the
+    Operations Brief's own "Needs attention" block directly, not be
+    rebuilt.
+  - Active Trips: directly answers "what is happening now" — should
+    become the Brief's "Active now" block.
+  - The summary strip's 4 numbers are a reasonable, restrained glance
+    metric — not vanity metrics (each maps to a real underlying set,
+    not an aggregate/percentage/score).
+
+REDUNDANT OR MERELY DESCRIPTIVE (candidates to de-emphasize, not remove
+in this phase):
+  - Upcoming Trips duplicates /operations/trips almost entirely (same
+    columns minus a couple) — its only real Brief-relevant value is
+    "what's coming up soon," not "everything scheduled today regardless
+    of state" (it includes completed/cancelled/no-show rows, which is
+    correct for "the full shape of today" per its own documented intent
+    but is NOT briefing-shaped — a briefing cares about what's still
+    ahead, not a historical ledger). Recommendation: Operations Brief's
+    own "Next departures" block should be a NARROWER, time-windowed
+    subset of this same query (see §8), while the existing full
+    Upcoming Trips table can remain below the Brief, still useful as a
+    "see everything" reference, exactly where it already lives.
+  - Activity Log is a plain event feed with no filtering/prioritization
+    — genuinely useful as a "what happened" audit trail but not
+    itself a briefing item (it doesn't tell the operator what to DO).
+    Recommendation: keep it, unchanged, below/beside the Brief — it is
+    a good "detail" surface once someone already knows a briefing item
+    is worth investigating, not a candidate for a Brief block itself.
+
+WHAT SHOULD EVENTUALLY BE DE-EMPHASIZED (not this phase): once
+Operations Brief exists at the top of the page, the standalone summary
+strip's 4 numbers likely become redundant with the Brief's own header/
+counts — a future consolidation pass (not S1A/S1B/S1C) could fold them
+together. Not touched or decided further here.
+
+
+3. RELEVANT SCHEMA INVENTORY
+----------------------------------
+Every table below was read directly from its migration file, not
+assumed. For each: current columns relevant to briefing, and which
+Operations Brief question(s) it can answer TODAY.
+
+  organizations (20260830130100 + timezone/business_stage additions)
+    Relevant columns: id, timezone (IANA, NOT NULL), business_stage
+    (self-reported at onboarding: starting/growing/established).
+    Answers: "what timezone/day-boundary applies" (already used by
+    every existing query). business_stage exists but is a SELF-
+    REPORTED signup-time classification, not a live measure of today's
+    actual volume — see §11 for why this phase recommends NOT using it
+    to drive Brief behavior.
+
+  memberships (role-based RLS root)
+    Answers: who the current caller is (org_admin/dispatcher/driver),
+    already resolved server-side before any Brief query would run —
+    no new access-control question here.
+
+  trips (9-state lifecycle, organization_id direct)
+    Columns: state, scheduled_pickup_at, appointment_at, pickup/
+    destination_description, request_id (nullable FK), passenger_id,
+    completed_at, cancelled_at, no_show_at.
+    Answers: "what's happening" (state), "what's next" (scheduled_
+    pickup_at), "what's the full shape of today" (all 4 already-
+    computed today's-operations counts). Does NOT answer "is this trip
+    running late against a promised ETA" — no ETA/promised-time concept
+    exists beyond scheduled_pickup_at/appointment_at themselves.
+
+  trip_assignments (append-only, "at most one active row per trip"
+  DB-level constraint)
+    Columns: driver_id, vehicle_id, ended_at (null = active),
+    assigned_at.
+    Answers: "who is responsible" (the active assignment's driver),
+    "is this trip assigned at all" (NEEDS_ASSIGNMENT already derives
+    from this). Also lets a driver's CURRENT workload be derived (see
+    §5) even though no stored "availability" concept exists.
+
+  trip_events (append-only, 16-value allow-listed vocabulary)
+    Answers: "what happened, in order" — already powers the Activity
+    Log. Directly answers "what happened?" for any briefing item that
+    needs a timeline.
+
+  trip_exceptions (exactly 2 states: open/resolved, free-text type)
+    Answers: "is there a real, human-flagged problem" — already the
+    #1 priority signal in evaluateTripAssurance. Cannot currently
+    answer "how severe" (exception_type is unconstrained free text, no
+    severity taxonomy) or "how old" beyond created_at itself.
+
+  drivers (status: active/inactive ONLY)
+    Answers: "how many active drivers exist." Does NOT answer
+    "available right now / on break / off shift" — no such column
+    exists (confirmed gap, already documented elsewhere in this
+    codebase as GAP-6). See §5.
+
+  vehicles (status: active/inactive ONLY)
+    Same shape/limitation as drivers — no capability taxonomy
+    (wheelchair/ambulatory) either, per its own migration comment.
+
+  passengers (status: active/inactive; NO driver-facing SELECT policy
+  at all, by deliberate design — ZD-080)
+    Answers: identity for display on Operations-facing surfaces only
+    (org_admin/dispatcher). Not directly Brief-relevant beyond name
+    display, already used identically to how todays-operations.ts uses
+    it today.
+
+  facilities (status: active/inactive)
+    Answers: pickup/destination context when a trip references one
+    (pickup_facility_id/destination_facility_id on trips are optional).
+    Not independently Brief-relevant for v1.
+
+  transportation_requests (state: pending/accepted/declined/cancelled)
+    Answers: "how much inbound demand is waiting for review" — see
+    §13 for the full audit; directly relevant to the Request Hub
+    integration point (§14).
+
+  driver_location_updates (append-only, via 20260902140000 migration)
+    Answers: "where is this trip's driver right now, and how fresh is
+    that" — already powers LOCATION_STALE/LOCATION_UNAVAILABLE in the
+    assurance evaluator, assignment-scoped (never a stale prior
+    driver's location leaking onto a reassigned trip).
+
+No table was assumed to have a field it does not have — every column
+referenced above was read directly from its own CREATE TABLE
+statement.
+
+
+4. TRIP LIFECYCLE
+-----------------------
+Canonical states (trips.state CHECK constraint, exactly 9, no "draft"):
+  scheduled -> en_route_to_pickup -> arrived_at_pickup ->
+  passenger_onboard -> en_route_to_destination ->
+  arrived_at_destination -> completed
+  (from most non-terminal states) -> cancelled
+  (from en_route_to_pickup or arrived_at_pickup) -> no_show
+
+Existing representation of each briefing-relevant condition:
+  - needs assignment: state='scheduled' AND no trip_assignments row
+    with ended_at IS NULL (`NEEDS_ASSIGNMENT` in trip-assurance.ts).
+  - scheduled: state='scheduled', hasActiveAssignment may be true or
+    false.
+  - assigned: hasActiveAssignment=true (state may still be 'scheduled'
+    — "Assigned" is a PRESENTATION label per operationsTripStatusLabel,
+    not a distinct DB state).
+  - en route / arrived / passenger onboard: the 5
+    ELIGIBLE_LOCATION_TRACKING_STATES literal state values.
+  - completed / cancelled / no_show: the 3 TERMINAL_STATES.
+  - exception/attention: NOT a trips.state value at all — a coexisting
+    trip_exceptions row (`OPEN_EXCEPTION`), deliberately kept separate
+    from lifecycle state per its own migration comment.
+
+Briefing meaning mapping (no new logic invented — this is
+evaluateTripAssurance's own already-established mapping, restated):
+  OPEN_EXCEPTION      -> highest-priority "needs attention" item
+  NEEDS_ASSIGNMENT     -> "needs attention" + directly actionable
+                          (Assign) + the natural "unassigned trips"
+                          Brief block
+  LOCATION_STALE/
+  LOCATION_UNAVAILABLE -> "needs attention," lower priority, only
+                          possible once assigned + in an eligible
+                          tracking state
+  the 5 in-progress
+  states                -> "active now" Brief block
+  scheduled (not yet
+  started, no issue)    -> "next"/"later today" Brief block, bucketed
+                          by scheduled_pickup_at time distance
+  TERMINAL (completed/
+  cancelled/no_show)    -> excluded from any "needs attention"/"active"
+                          Brief block; completed counts toward a
+                          "day's shape" total only
+
+No lifecycle logic was changed or is proposed to change.
+
+
+5. DRIVER / VEHICLE READINESS
+------------------------------------
+AVAILABLE NOW (derivable from existing schema, zero new columns):
+  - "How many active drivers/vehicles exist" — drivers.status/
+    vehicles.status = 'active', a plain count.
+  - "Is this driver currently on an active-state trip right now" —
+    join trip_assignments (ended_at IS NULL) -> trips.state IN the 5
+    active states. This is EXACTLY what DriverCapacityPanel.tsx
+    already computes and displays today ("On Trip" vs "N trips today,
+    none in progress" vs "No trips today") — a real, honest, already-
+    shipped pattern to reuse verbatim for any Brief-level driver
+    readiness signal, never inventing a new "available" state.
+  - "How many trips is a driver assigned today" — trip_assignments
+    joined to today's trips, already computed by the onboarding
+    checklist's own count pattern.
+
+REQUIRES FUTURE DATA (not available today, not to be fabricated):
+  - Any notion of "on break" / "off shift" / scheduled availability
+    window — no column, no table represents this anywhere in the
+    schema (confirmed: drivers has exactly `status text check (status
+    in ('active','inactive'))`, nothing else). This is the same GAP-6
+    DriverCapacityPanel.tsx's own comment already documents.
+  - Vehicle capability/capacity taxonomy (wheelchair/ambulatory) — does
+    not exist (vehicles' own migration comment confirms this is an
+    "unresolved product decision").
+  - Any conflict-detection concept ("this driver is double-booked") —
+    not directly representable; the one-active-assignment-per-trip
+    constraint prevents a TRIP from having two drivers, but nothing
+    currently prevents (or flags) one Driver having two simultaneous
+    active assignments across different trips. This is worth flagging
+    as a possible FUTURE attention condition, not built here — it would
+    require a new derived check, not a new column, and is explicitly
+    out of this phase's scope (no new lifecycle logic).
+
+Recommendation: Operations Brief v1 should surface driver readiness
+using ONLY the "on an active trip right now" signal (already proven,
+already displayed elsewhere), explicitly not attempt an "available
+now" claim beyond that, exactly matching DriverCapacityPanel's own
+honest restraint.
+
+
+6. EXCEPTION / ATTENTION INFRASTRUCTURE
+---------------------------------------------
+Already centralized in src/lib/operations/trip-assurance.ts — the ONE
+evaluator every current surface (Today's Operations, Dispatch, Trip
+Detail) shares. This is the single most important asset this audit
+found: Operations Brief's own "Needs attention" block should call this
+SAME function against the SAME candidate-trip query
+`getTodaysOperations()` already builds — not reimplement any part of
+it.
+
+What currently qualifies as an attention condition (in strict priority
+order, exactly as implemented):
+  1. OPEN_EXCEPTION — a real trip_exceptions row with status='open'.
+  2. NEEDS_ASSIGNMENT — scheduled state, no active assignment.
+  3. LOCATION_UNAVAILABLE — active assignment, eligible tracking state,
+     never any location recorded under the current assignment.
+  4. LOCATION_STALE — active assignment, eligible tracking state, a
+     location exists but its age exceeds the shared 5-minute stale
+     threshold (location-freshness.ts).
+  TERMINAL and ON_TRACK are both explicitly excluded from the queue.
+
+This can safely and directly populate an Operations Brief "Needs
+attention" section using existing data — no new infrastructure
+required. The only genuinely new thing a Brief could add on top is
+grouping/counting by these same codes for a compact summary line (e.g.
+"2 unassigned, 1 open issue") — a presentation-layer aggregation of
+data that already exists, not a new attention rule.
+
+
+7. TIME HORIZONS
+---------------------
+Evaluated against what today's queries already compute:
+
+  NOW (current active service): fully supported today —
+    `getTodaysOperations()`'s own `activeTrips` (the 5 in-progress
+    states) is exactly this, already computed, already ordered by
+    scheduled_pickup_at.
+
+  NEXT (upcoming trips in the near window): PARTIALLY supported — the
+    data exists (todayTrips filtered to state='scheduled', ordered by
+    scheduled_pickup_at ascending), but no query currently applies a
+    "near window" (e.g. next 2 hours) TIME filter — today's own
+    Upcoming Trips table shows the full remaining day, unfiltered by
+    proximity. A v1 "Next departures" Brief block would need a simple
+    additional filter (scheduled_pickup_at BETWEEN now AND now+N hours)
+    applied to data that is already fetched — no new query source,
+    just a narrower slice of an existing result set (can be done in
+    application code, zero new SQL).
+
+  LATER TODAY (remaining scheduled work): fully supported — the
+    complement of NOW/NEXT within `todayTrips`, already available.
+
+  TOMORROW (readiness preview): NOT implemented today and explicitly
+    OUT OF SCOPE for this phase per instruction ("Do not implement
+    Tomorrow Readiness yet"). The underlying data WOULD be straightforward
+    to query (same shape as `getTodaysOperations`, just shifted one
+    organization-local day forward via `organizationDayBoundsUtc`), but
+    this audit does not design or estimate it further, beyond noting
+    that the query pattern needed already exists and would require no
+    new schema.
+
+Summary: NOW and LATER TODAY are supported today, unmodified. NEXT
+requires a trivial time-window filter on already-fetched data (no new
+query). TOMORROW requires a real, but structurally trivial, additional
+query using an existing helper (`organizationDayBoundsUtc` shifted by
+one day) — deferred, not built, per explicit instruction.
+
+
+8. PROPOSED OPERATIONS BRIEF INFORMATION MODEL
+-----------------------------------------------------
+Five blocks, the smallest useful v1 (within the requested 4-6 range).
+Every block's data source is an EXISTING table/query; only "Next
+departures" needs an application-level time-window filter that isn't
+applied today (no new SQL).
+
+  BLOCK 1 — Needs Attention
+    Question answered: "What requires attention right now?"
+    Data source: getTodaysOperations().attentionItems (already built,
+      unchanged).
+    Calculation/filter: trip-assurance.ts's evaluateTripAssurance,
+      already deterministic, already priority-ordered.
+    Priority: HIGHEST — always shown first if non-empty.
+    Actionable: YES — each row already carries its own action
+      (Assign / Open Trip).
+    Click destination: /operations/dispatch (for NEEDS_ASSIGNMENT) or
+      /operations/trips/[tripId] (every other code) — both existing
+      routes, unchanged.
+
+  BLOCK 2 — Active Now
+    Question answered: "What is happening right now?"
+    Data source: getTodaysOperations().activeTrips (already built).
+    Calculation/filter: state IN the 5 non-terminal active states.
+    Priority: HIGH — shown whenever non-empty, below Needs Attention.
+    Actionable: PARTIALLY — informational primarily, but each row
+      links to its own Trip Detail for deeper action.
+    Click destination: /operations/trips/[tripId] (existing).
+
+  BLOCK 3 — Next Departures
+    Question answered: "What's coming up soon that I should be
+      thinking about?"
+    Data source: getTodaysOperations().todayTrips, filtered to
+      state='scheduled' AND scheduled_pickup_at within a near window
+      (proposed: next 2 hours from `now`) — an application-level
+      filter on an already-fetched array, no new query.
+    Calculation/filter: time-window slice, ordered by
+      scheduled_pickup_at ascending (already the query's own order).
+    Priority: MEDIUM.
+    Actionable: YES for any row that's also in Needs Attention (same
+      trip can appear referenced in both — see §9 for how ordering
+      avoids true duplication in the SAME block); otherwise
+      informational-forward-looking.
+    Click destination: /operations/trips/[tripId] (existing).
+
+  BLOCK 4 — Unassigned Trips
+    Question answered: "What can't even start yet?"
+    Data source: getTodaysOperations().needsAssignmentTrips (already
+      built — a filtered subset already computed today, just not
+      currently surfaced as its own named block on the page).
+    Calculation/filter: state='scheduled' AND driverName is null
+      (already exactly this).
+    Priority: this is a SUBSET of Needs Attention's own
+      NEEDS_ASSIGNMENT items — proposed as a distinct block ONLY when
+      the count is non-trivial (see §9's de-duplication rule) so the
+      Brief doesn't show the same trip twice in two different blocks
+      for a small operator with 1-2 unassigned trips (those already
+      appear, individually, inside Needs Attention).
+    Actionable: YES — links straight to Dispatch.
+    Click destination: /operations/dispatch (existing).
+
+  BLOCK 5 — Driver Snapshot
+    Question answered: "Who's out there right now?"
+    Data source: same driver+active-assignment join
+      DriverCapacityPanel.tsx already performs (dispatch-board.ts's
+      driver rows), reused, not duplicated.
+    Calculation/filter: count of active drivers currently "on trip"
+      (has an active assignment on an active-state trip) vs. total
+      active drivers.
+    Priority: LOW — a single summary line, not a full panel, in v1
+      (e.g. "2 of 3 drivers on trip now").
+    Actionable: NO — purely informational for v1 (no per-driver
+      action from the Brief itself; the existing Dispatch board and
+      Drivers list remain where per-driver action happens).
+    Click destination: /operations/drivers (existing) or
+      /operations/dispatch (existing) — either is reasonable; this
+      audit recommends /operations/dispatch since that is where a
+      driver-capacity concern is actually actioned.
+
+Explicitly AVOIDED as vanity metrics: no "on-time percentage," no
+"efficiency score," no "trips per driver average," no unexplained
+single number without a clear operational question behind it — every
+block above maps to a real, already-computed-or-trivially-computable
+operational fact.
+
+
+9. PRIORITY RULES
+----------------------
+Deterministic, no "AI score," extending (not replacing)
+evaluateTripAssurance's own already-established ranking:
+
+  Tier 1 — Blocking exception: OPEN_EXCEPTION items (already rank 0 in
+    PRIORITY_RANK).
+  Tier 2 — Trip currently at risk: LOCATION_STALE/LOCATION_UNAVAILABLE
+    on an ACTIVE (in-progress) trip specifically — i.e. a trip that has
+    already started but has gone quiet (already ranks 2/3 in
+    PRIORITY_RANK, but this phase's own instruction asks to
+    distinguish "at risk" from a merely-unassigned future trip; the
+    existing rank order already achieves this by placing
+    NEEDS_ASSIGNMENT above LOCATION_*, which is correct precisely
+    because a not-yet-started trip's assignment gap is more urgent to
+    resolve than an in-progress trip's stale GPS ping — restated here,
+    not changed).
+  Tier 3 — Imminent unassigned trip: NEEDS_ASSIGNMENT items, already
+    rank 1, with a SECONDARY sort by scheduled_pickup_at (already
+    implemented) so the soonest-departing unassigned trip surfaces
+    first within that tier.
+  Tier 4 — Active-trip exception: covered by Tier 1/2 already (an
+    exception on an active trip is still OPEN_EXCEPTION, Tier 1 — no
+    separate rule needed).
+  Tier 5 — Near-term scheduled work: the Next Departures block (§8),
+    ordered by scheduled_pickup_at ascending — informational-forward,
+    below all attention tiers.
+  Tier 6 — Informational items: Driver Snapshot, Active Now (when not
+    also flagged) — always below every attention tier.
+
+De-duplication rule (new, small, deterministic — the one genuinely new
+piece of ordering logic this phase's design introduces): a Trip that
+already appears in the Needs Attention block is NOT separately
+duplicated as its own row in Unassigned Trips or Next Departures — the
+latter two blocks render only trips NOT already present in the
+attention queue's own id set (a plain Set-based filter over
+already-fetched arrays, zero new query). This directly serves §11's
+small-operator requirement — a 1-driver operator with a single
+unassigned trip should see that trip exactly once, inside Needs
+Attention, not echoed three times across the page.
+
+
+10. ACTIONABILITY MODEL
+-----------------------------
+Every block above already answers "what happened / why does it matter
+/ what should I do next" using only EXISTING routes:
+  - Needs Attention rows: reuse `row.assurance.label` (what) +
+    `row.assurance.explanation` (why, already a one-sentence plain-
+    language string on every TripAssuranceResult) + an existing
+    Assign/Open-Trip action (what to do).
+  - Active Now rows: link to Trip Detail (existing route), which
+    already shows full route/status/exception panels.
+  - Next Departures / Unassigned Trips: link to Trip Detail or
+    Dispatch respectively (existing routes).
+  - Driver Snapshot: links to Dispatch (existing route), where
+    capacity is actually actioned today.
+
+No new route or module is required for v1 actionability — every click
+destination named above already exists and is already reachable.
+
+
+11. SMALL-OPERATOR BEHAVIOR
+----------------------------------
+Progressive behavior, defined purely from today's REAL trip count
+(never from the self-reported `organizations.business_stage`, which
+reflects a signup-time self-classification, not today's actual
+workload — a "Growing" operator can still have a slow Tuesday, and a
+"Starting" operator can have an unusually busy day; using a stale
+self-report to drive a live briefing would be a design mistake this
+audit explicitly recommends against):
+
+  0 trips today: the Brief shows ONLY a calm "Nothing scheduled today"
+    state (see §12) — no empty block scaffolding, no "0 of 0 drivers
+    on trip" busywork line. Needs Attention, Active Now, Next
+    Departures, and Unassigned Trips all collapse into that single
+    quiet-day message; only Driver Snapshot may still show if the
+    organization has active drivers at all (a 1-driver operator
+    benefits from confirming "yes, my driver roster is set up," even
+    with no trips today) — otherwise it also collapses.
+
+  1-5 trips today (the realistic daily volume for a 1-vehicle/1-driver
+    operator): every block renders, but each is naturally tiny — Needs
+    Attention might show 0-1 rows, Next Departures 1-2, Driver Snapshot
+    a single line ("1 of 1 driver on trip now" or "0 of 1 driver on
+    trip now"). No block is artificially padded or hidden merely
+    because it's small — a small operator SEEING "Nothing needs
+    attention" / "1 driver, not currently on trip" is itself useful,
+    calm confirmation, not empty space to fill with fake analytics
+    (§12's own principle). This is the single most important behavior
+    to protect: an operator with one van should never be made to feel
+    they're missing an "enterprise" feature — the SAME 5 blocks apply,
+    they are just honestly small.
+
+  Larger active workload (dozens of trips, multiple drivers): the same
+    5 blocks, unchanged in structure — only Needs Attention and Next
+    Departures grow in row count. No pagination/virtualization decision
+    is made in this audit (out of scope for a foundation phase); a
+    genuinely large attention queue (say, >10 items) MAY warrant a
+    "show top N, link to full list" treatment in the UI phase (S1C),
+    noted here as a UI-phase decision, not a data-layer one — the
+    underlying query already returns the full, correctly-prioritized
+    set regardless of how many the UI eventually chooses to render.
+
+No new "operator size" concept, threshold, or column is proposed —
+this behavior falls out entirely from each block's own real count
+being zero, small, or large.
+
+
+12. QUIET-DAY / EMPTY STATES
+------------------------------------
+Defined per condition, following this codebase's own established
+EmptyState convention (a calm title + one-sentence description, never
+a fabricated chart or metric):
+
+  No trips today: "Nothing scheduled today" / "Trips scheduled for
+    today will appear here." (reuses the exact existing Upcoming
+    Trips empty-state copy already shipped, for consistency).
+
+  All trips completed (today had trips, all now terminal): a distinct,
+    POSITIVE quiet state — "All caught up" / "Every trip scheduled for
+    today has been completed." — deliberately different wording from
+    "no trips today" so an operator can tell "quiet because nothing was
+    scheduled" apart from "quiet because we finished a busy day," which
+    are operationally very different and both worth naming honestly.
+
+  No attention items (but trips exist): reuses the exact existing
+    copy already shipped — "Nothing needs attention" / "No open
+    issues, unassigned trips, or location concerns right now."
+
+  Tomorrow has no trips: OUT OF SCOPE this phase (Tomorrow Readiness
+    is explicitly deferred, §7) — not designed further here.
+
+  Driver data incomplete (zero drivers set up at all): the Driver
+    Snapshot block shows "No drivers set up yet" with a link to
+    /operations/drivers (existing route) rather than a "0 of 0"
+    division-by-zero-flavored line — this is a genuine new copy
+    decision this audit makes explicit so S1C doesn't invent it ad hoc.
+
+No block, in any empty state, renders a fake number, a placeholder
+chart, or a "0%" statistic — every empty state is a plain sentence,
+matching this codebase's own consistent EmptyState pattern throughout
+Operations, Drivers, Facilities, and Fleet today.
+
+
+13. TRANSPORTATION_REQUESTS AUDIT
+-----------------------------------------
+Read directly from supabase/migrations/20260830130900_
+transportation_requests.sql and 20260830131700_rls_policies.sql — not
+assumed.
+
+Current columns: id, organization_id, passenger_id (nullable FK),
+requester_name, requester_relationship (self/family/caregiver/
+facility_coordinator/other), requester_phone, requester_email
+(nullable), requester_user_id (nullable FK to auth.users), pickup_
+description, destination_description, preferred_date, preferred_time,
+return_trip_needed (yes/no/not_sure), assistance_notes,
+additional_notes, state (pending/accepted/declined/cancelled),
+created_at, updated_at.
+
+RLS: `grant select, insert, update on transportation_requests to
+authenticated`, every policy scoped by `has_org_role(organization_id,
+['organization_admin','dispatcher'])` — Driver has zero access, no
+anonymous grant of any kind exists (confirmed: no `anon` grant
+anywhere in the RLS migration for this table). Column-restricted
+UPDATE grant covers every field except organization_id/id/created_at/
+updated_at (those are never client-writable).
+
+Status/lifecycle: pending -> accepted | declined | cancelled. The
+pending -> accepted transition is SYSTEM-DRIVEN, not a manual status
+edit — confirmed live in `create_trip`'s own implementation
+(20260831120000_controlled_trip_creation.sql): when a Trip is created
+with a non-null `p_request_id`, and that request is currently
+'pending', the RPC flips it to 'accepted' in the same transaction, and
+records a `request_converted_to_trip` trip_event. A request already
+'accepted' can legitimately produce a SECOND Trip (e.g. a return leg)
+without being treated as a state change. Only 'declined'/'cancelled'
+requests are rejected by `create_trip` as no longer usable.
+
+Organization scoping: direct `organization_id` column, identical
+pattern to every other tenant-owned table, already indexed
+specifically for an operational queue: `transportation_requests_org_
+state_created_idx on (organization_id, state, created_at)` — the
+migration's own comment literally says "Ops queue: pending requests
+for my org, oldest first," confirming this table was already built
+WITH a future queue UI in mind, even though that UI does not exist
+yet.
+
+Requester/facility context: requester fields are SNAPSHOT text columns
+on the request itself (name/relationship/phone/email), not a join to
+a separate table — deliberate, per the migration's own comment ("no
+standalone requester table"). `passenger_id` is nullable and only
+becomes non-null once/if a request is matched to an existing Passenger
+record — not automatic.
+
+Relationship to passengers: nullable FK, matched (if at all) by
+whoever processes the request — no current application code performs
+this matching automatically.
+
+Relationship to trips: `trips.request_id` (nullable FK) — a real,
+already-migrated 1:N Request-to-Trip relationship (a request may
+produce more than one trip, e.g. outbound + return legs). Already
+surfaced read-side on Trip Detail (`PassengerInfoPanel.tsx`'s
+"Requested By" field, populated only when a trip actually has a
+linked request).
+
+Conversion mechanism: YES, already exists and is fully implemented —
+`create_trip(..., p_request_id uuid default null)`. `NewTripForm`
+(src/lib/operations/new-trip.ts) already fetches the list of
+currently-`pending` requests as a selectable option when creating a
+new trip, and passes the chosen request's id through to `create_trip`.
+This means "convert a request into a trip" is NOT something P1-E1-S2
+needs to build from scratch at the data layer — it needs to build the
+QUEUE/REVIEW UI around a conversion path that already works end to
+end.
+
+CRITICAL GAP, confirmed by direct code search (not assumed): there is
+currently NO way for a `transportation_requests` row to be CREATED
+anywhere in the live application. The public-facing intake route,
+`src/app/(public)/request-transportation/page.tsx`, is a literal,
+explicitly-labeled "structural placeholder" with no form, no fields,
+and no submission handler — its own comment states "the canonical
+request flow is built in a later phase." No RLS grant exists for
+anonymous insert either, so even if that page had a form today, it
+could not write a row without a trusted server-side path that does not
+yet exist. The ONLY application code that touches this table at all is
+`new-trip.ts`'s own read-only SELECT (populating the dropdown). Every
+row currently in this table in any environment came from
+`supabase/seed.sql` or the SQL test suite's own fixture inserts — never
+a real user action. This means an Operations Brief's own "requests
+need review" integration point (§14) is technically queryable and
+correct today, but will show 0 in any real environment until either
+(a) an internal "log a request on behalf of a caller" form is built for
+org_admin/dispatcher (using the already-granted authenticated INSERT),
+or (b) the genuinely public intake path is built with its own trusted
+server-side write mechanism — both are P1-E1-S2 (Request Hub) scope,
+not this phase's.
+
+
+14. FUTURE REQUEST HUB INTEGRATION POINT
+------------------------------------------------
+Defined as a single, minimal Brief block — NOT a Request Hub screen
+design:
+
+  BLOCK (optional 6th, added once Request Hub exists) — Requests
+    Awaiting Review
+    Question answered: "Is there inbound demand I haven't looked at?"
+    Data source: `select count(*) from transportation_requests where
+      organization_id = :org and state = 'pending'` — a single count
+      query against the already-existing `transportation_requests_org_
+      state_created_idx` index (organization_id, state, created_at),
+      which already makes this query index-only and cheap.
+    Calculation: a plain count, optionally with the oldest pending
+      request's `created_at` age ("4 requests need review, oldest from
+      3 days ago") — both derivable from the same one query, no
+      second query needed (ORDER BY created_at ASC LIMIT 1 alongside
+      the count, or a single query returning both via a window
+      function — an implementation-time choice, not decided here).
+    Priority: MEDIUM — shown alongside Next Departures/Unassigned
+      Trips tier, since an unreviewed request is not yet an
+      operational risk the way an unassigned TRIP is, but is still
+      actionable soon.
+    Actionable: YES — the entire point of this block.
+    Click destination: whatever route Request Hub (P1-E1-S2) creates
+      (e.g. a future `/operations/requests`) — THIS integration point
+      is deliberately just a count + a link; it does not render
+      individual request rows, does not implement triage, and does not
+      replace or anticipate Request Hub's own screen design.
+
+This phase does NOT build this block (transportation_requests has zero
+real rows today, per §13, so it would be dead UI), does not create the
+`/operations/requests` route, and does not design Request Hub's own
+review/triage/conversion UI — those are explicitly P1-E1-S2.
+
+
+15. SECURITY / RLS ANALYSIS
+-----------------------------------
+Every table an Operations Brief query would touch (trips,
+trip_assignments, trip_events, trip_exceptions, drivers, vehicles,
+transportation_requests) already has RLS enabled with a policy scoped
+through `has_org_role`/`is_org_member`, both of which perform a LIVE
+lookup against `memberships` keyed on `auth.uid()` — never a cached
+JWT claim, never a client-supplied value (confirmed by reading
+`rls_helper_functions.sql` directly). Every existing query in
+`todays-operations.ts`/`dispatch-board.ts` ALSO explicitly filters by
+`organization_id` in application code, on top of RLS, as defense in
+depth — the same convention any new Operations Brief query would
+follow, since `organization.organizationId` is always the
+server-resolved value from `requireOperationsAccess()` (which itself
+calls `resolveOrganizationContext()`, never trusts a client parameter).
+
+Absolute rules, checked against every proposed block in §8:
+  - No client-trusted organization_id: every proposed query uses the
+    same already-resolved `organization.organizationId` server value
+    every existing Operations query uses — no block introduces a new
+    parameter source.
+  - No service-role credential in client: every proposed query is a
+    plain `createServerSupabaseClient()` call, identical to every
+    existing operations lib module — no block requires elevated
+    privilege.
+  - No cross-tenant aggregation: every proposed block's query is
+    scoped to exactly one `organization_id`, matching every existing
+    query's own shape — no block aggregates across organizations.
+  - Deny-by-default remains intact: no new RLS policy, no new GRANT,
+    and no new SECURITY DEFINER function is proposed anywhere in this
+    audit — every block is answerable through the EXISTING grant set.
+
+No proposed calculation could accidentally bypass RLS — every one of
+them is a straightforward SELECT against already-RLS-protected tables,
+run as the authenticated user's own session (not service role),
+exactly like every operations query that exists today.
+
+
+16. QUERY / PERFORMANCE STRATEGY
+----------------------------------------
+v1 can be implemented entirely through existing server-side queries —
+no dedicated database function or view is justified for this scope.
+Reasoning:
+  - Blocks 1/2/3/4 (Needs Attention, Active Now, Next Departures,
+    Unassigned Trips) are ALL already answerable from the SAME TWO
+    queries `getTodaysOperations()` already runs (today's trips +
+    active trips), plus its own already-existing third/fourth parallel
+    queries (open exceptions, latest locations) — a v1 Operations
+    Brief could literally call `getTodaysOperations()` once and derive
+    every block from its existing return shape plus one small
+    application-level time-window filter (§8, Block 3) and one
+    dedup pass (§9) — ZERO new database round-trips for these four
+    blocks.
+  - Block 5 (Driver Snapshot) needs one additional query: active
+    drivers for the org, LEFT JOINed (or cross-referenced in
+    application code) against today's active-state trip_assignments —
+    the same shape `dispatch-board.ts`'s own driver-rows query already
+    computes. This could be a NEW, small, dedicated query (a subset of
+    what dispatch-board.ts already selects) or, if Operations Brief and
+    Dispatch end up sharing a page-load boundary, could reuse dispatch-
+    board.ts's own existing function — an implementation-time choice,
+    not decided here. Either way: ONE additional query, well-indexed
+    (`drivers_organization_id_idx`, `trip_assignments_driver_id_idx`),
+    no new index required.
+  - The future Requests-Awaiting-Review block (§14, not built this
+    phase) would be exactly one more indexed count query when it is
+    eventually added.
+
+Expected total query count for v1 (Blocks 1-5): the SAME 4 queries
+`getTodaysOperations()` already issues (today's trips, active trips,
+today's events, open exceptions) plus its own existing location-lookup
+call, plus 1 new query for Driver Snapshot — 5-6 total server-side
+queries per page load, essentially unchanged from what /operations
+already costs today. No N+1 pattern is introduced (every existing
+query already uses PostgREST embedded-relationship selects, explicit
+columns, never `select("*")`, matching this codebase's own established
+convention throughout).
+
+No analytics warehouse, no materialized view, no scheduled aggregation
+job is justified or proposed — every block is a live, cheap, indexed
+query against current operational rows for one organization, not a
+historical/trend analysis.
+
+
+17. UI PLACEMENT
+---------------------
+Recommended: top of /operations, ABOVE the current SummaryStrip/Needs-
+Attention/Upcoming-Trips/Active-Trips/Activity-Log grid, BELOW the
+OnboardingChecklistBanner (which must keep taking precedence for a
+genuinely new operator still completing setup — the existing ordering
+already gets this right and should not change).
+
+What moves below the Brief: the existing SummaryStrip's 4 numbers
+likely become partially redundant with the Brief's own presentation
+(see §2's own note that a future consolidation pass, not this phase,
+could merge them) — for THIS phase's own recommended sequencing (§20),
+S1C should initially render the Brief ABOVE the unchanged existing
+strip/panels, not replace them yet, so the existing, already-tested
+Needs Attention/Active Trips/Upcoming Trips/Activity Log panels remain
+exactly as they are (avoiding a redesign, per this phase's own explicit
+"do not redesign it" instruction) while the Brief becomes the new
+top-of-page focal point.
+
+What remains unchanged: Upcoming Trips table, Activity Log, the
+existing Needs Attention DataTable (still useful as the FULL, detailed
+view once someone has already seen the Brief's own summary and wants
+the complete table) — none of these are removed or restructured in
+this phase's own proposed scope.
+
+What becomes subordinate: the SummaryStrip's 4 numbers conceptually
+become "detail behind the Brief's own headline," though this phase
+does not decide whether S1C physically moves/hides them — that is a
+UI-phase decision this audit intentionally leaves open rather than
+prescribing prematurely.
+
+
+18. RESPONSIVE STRATEGY
+------------------------------
+The existing tablet/desktop-only guard (`OperationsShell`'s own
+narrow-width `EmptyState`, md/768px breakpoint) is unchanged and
+unchallenged by this design — Operations Brief is designed to render
+within that same existing constraint, not to introduce a phone-
+dispatcher interface. Target behavior:
+  - Desktop (lg+, 1400px reference used throughout this workstream's
+    own prior visual validation): the 5 blocks can reasonably render
+    as a 2-column or full-width stacked layout — an S1C UI decision,
+    not decided here, but should follow the SAME `Panel`/`SectionHeader`/
+    `DataTable`/`EmptyState` primitives every other Operations surface
+    already uses (no new component system, matching N0-M2-A4's own
+    established principle).
+  - Tablet (md, the guard's own minimum supported width): the existing
+    grid's own `lg:grid-cols-[minmax(0,1fr)_340px]` pattern already
+    demonstrates a working md-to-lg responsive strategy on this exact
+    page — the Brief should follow the same established breakpoint
+    behavior, not invent a new one.
+  - Below md: unchanged — the existing narrow-width guard continues to
+    intercept before any Brief content would ever need to render there.
+
+No redesign of the application into a phone dispatcher interface is
+proposed or implied anywhere in this audit.
+
+
+19. OPERATIONS BRIEF V1 SPEC
+-----------------------------------
+Concrete, implementation-ready:
+
+  BRIEFING BLOCKS (ordered exactly as rendered):
+    1. Needs Attention — data: getTodaysOperations().attentionItems.
+       Condition to render a row: needsAttention(assurance.code) ===
+       true (already the function's own filter). Empty state: "Nothing
+       needs attention" / existing copy, reused verbatim.
+    2. Active Now — data: getTodaysOperations().activeTrips. Condition:
+       state in the 5 active states (already the query's own filter).
+       Empty state: "Nothing in progress" / existing copy, reused
+       verbatim.
+    3. Next Departures — data: getTodaysOperations().todayTrips
+       filtered to state='scheduled' AND scheduled_pickup_at BETWEEN
+       now AND now+2h AND id NOT IN attentionItems' own trip ids
+       (dedup rule, §9). Empty state: "Nothing departing soon" /
+       "No trips scheduled to depart in the next 2 hours." (new copy,
+       to be written at S1C, following this codebase's own two-line
+       EmptyState convention).
+    4. Unassigned Trips — data: getTodaysOperations()
+       .needsAssignmentTrips, filtered to id NOT IN attentionItems'
+       trip ids for display purposes ONLY IF Needs Attention already
+       showed them (dedup rule) — in practice, since NEEDS_ASSIGNMENT
+       is already inside attentionItems, this block in v1 either (a) is
+       folded entirely into Needs Attention's own presentation with no
+       separate block, or (b) is shown ONLY as a compact count line
+       ("3 trips need a driver") rather than a duplicate row list — an
+       S1C presentation decision; the DATA and de-dup RULE are fully
+       specified here regardless of which presentation is chosen.
+    5. Driver Snapshot — data: active drivers count + count currently
+       on an active-state trip (new small query or dispatch-board.ts
+       reuse, §16). Empty state: "No drivers set up yet" (new copy,
+       §12) when zero active drivers exist at all.
+
+  ORDERING: exactly the block order above, Needs Attention always
+    first when non-empty; when Needs Attention is empty, it still
+    renders (its own calm empty state), it does not disappear (a
+    quiet, confirmed "nothing needs attention" IS the briefing answer
+    on a good day).
+
+  DETERMINISTIC CONDITIONS: every condition above is a pure function
+    of already-fetched data (trip state, assignment presence, open
+    exception count, location freshness, scheduled_pickup_at) — no
+    randomness, no external score, no LLM/AI involvement of any kind.
+
+  DATA SOURCE PER BLOCK: as listed above — 4 of 5 blocks need zero new
+    queries (§16); only Driver Snapshot needs one small new/reused
+    query.
+
+  CLICK DESTINATIONS: /operations/dispatch (Needs-Assignment items,
+    Unassigned Trips, Driver Snapshot), /operations/trips/[tripId]
+    (every other Needs Attention item, Active Now, Next Departures),
+    /operations/drivers (alternate Driver Snapshot destination,
+    implementation's choice) — all four routes already exist, unchanged.
+
+  EMPTY STATE: per-block, as specified above, all following this
+    codebase's existing EmptyState component and two-line copy
+    convention (title + one descriptive sentence, never a chart/metric
+    placeholder).
+
+  QUIET-DAY BEHAVIOR: when todayTrips.length === 0, blocks 1-4 collapse
+    into ONE page-level "Nothing scheduled today" state (not four
+    separate empty panels) — Driver Snapshot may still render if
+    active drivers exist (§11). This single collapse behavior is the
+    one piece of Brief-level (not block-level) logic S1C must
+    implement, on top of the per-block empty states.
+
+  ERROR BEHAVIOR: identical to /operations' own existing behavior
+    today — `getTodaysOperations()` already throws a real Error on any
+    query failure (`Failed to load today's trips: ...` etc.), which
+    Next.js's own error boundary already handles for the whole page;
+    an Operations Brief built from the SAME function call inherits
+    this exact same fail-loud-not-silent behavior with no new error
+    handling required. If Driver Snapshot's own new query fails
+    independently, it should fail the SAME way (a thrown Error,
+    surfaced by the page's existing error boundary) — not a silently
+    swallowed/blank block, consistent with this codebase's own
+    "never fabricate success" convention seen throughout (e.g.
+    trip-assurance.ts never fabricates "Available").
+
+  TENANT SCOPING: every block scoped by the same server-resolved
+    `organization.organizationId`, §15.
+
+  REFRESH BEHAVIOR: v1 requires NO new refresh mechanism — /operations
+    today is a plain server-rendered snapshot (reloaded on navigation
+    only; Realtime was evaluated and deliberately deferred for
+    Dispatch, and Today's Operations has never had polling at all).
+    Recommendation: ship v1 with the SAME behavior (no polling) for
+    consistency with the rest of the page it lives on; if live
+    refresh is later wanted, `DispatchLiveRefresh.tsx`'s own already-
+    proven, already-security-reviewed 20-second `router.refresh()`
+    pattern can be reused verbatim — this audit does not recommend
+    building a new refresh mechanism, and does not recommend adding
+    polling in the initial v1 given the existing page's own current
+    behavior.
+
+
+20. IMPLEMENTATION SEQUENCE
+----------------------------------
+The requested default sequence is well-justified by this audit's own
+findings and is RECOMMENDED AS-IS, with one clarifying note:
+
+  P1-E1-S1A — Foundation audit (this phase, complete).
+  P1-E1-S1B — Operations Brief data layer: a new
+    `src/lib/operations/operations-brief.ts` module. Given §16's own
+    finding that 4 of 5 blocks need ZERO new queries, S1B's real net-
+    new work is narrower than a from-scratch data layer: (a) call
+    `getTodaysOperations()` once, (b) apply the Next-Departures time
+    window + de-dup filters in application code, (c) add ONE new
+    driver-snapshot query. This is a genuinely small, low-risk phase.
+  P1-E1-S1C — Operations Brief UI: the presentation layer, using only
+    existing shared components (Panel/SectionHeader/DataTable/
+    EmptyState/StatusBadge), placed per §17, following §18's responsive
+    strategy.
+  P1-E1-S1D — Regression + production release: the same rigorous
+    local-test-battery + staged-release discipline this workstream has
+    already used for every N0-M2 phase (tsc/lint/build/test/SQL-RLS-
+    suite/concurrency, explicit-path staging, single commit, human-
+    authorized push).
+  P1-E1-S2 — Request Hub: begins only after S1D, per every phase's own
+    explicit "do not begin Request Hub" instruction repeated
+    throughout this workstream.
+
+No change to this sequence is recommended — the repository's own
+architecture (a single shared assurance evaluator, an already-
+computed today's-operations query, already-existing routes for every
+click destination) makes this exact sequence both correct and
+appropriately small at each step.
+
+
+21. FILE IMPACT
+--------------------
+Files likely to MODIFY (P1-E1-S1B/S1C, not this phase):
+  src/app/operations/page.tsx — to render the new Brief above the
+    existing content (§17).
+
+Files likely to CREATE (P1-E1-S1B/S1C, not this phase):
+  src/lib/operations/operations-brief.ts — the data-layer module
+    (§16, §19).
+  src/components/operations/OperationsBrief.tsx (or a small set of
+    per-block components under a new src/components/operations/brief/
+    directory) — the presentation layer (§19).
+
+Files explicitly NOT to touch, in any future phase of this specific
+initiative, per this audit's own findings:
+  src/lib/operations/trip-assurance.ts — reused as-is, never
+    reimplemented.
+  src/lib/operations/todays-operations.ts — reused as-is (called, not
+    forked/duplicated).
+  src/lib/operations/dispatch-board.ts — reused/referenced for the
+    driver-snapshot shape, not rewritten.
+  supabase/migrations/** — no migration is proposed (§22).
+  Any auth/RLS/email/driver-invite file — entirely unrelated to this
+    initiative's scope.
+
+DATABASE MIGRATION EXPECTED: NO for v1 as specified in §19. Every
+proposed block is answerable through existing tables, existing
+indexes, and existing RLS policies — nothing in this spec requires a
+new column, new table, new index, or new RLS policy. (A future
+Tomorrow-Readiness or Requests-Awaiting-Review addition, both
+explicitly out of this phase's scope, would also require no migration
+— both use existing indexed queries.)
+
+
+22. MIGRATION RECOMMENDATION
+-----------------------------------
+NONE required for the v1 spec in §19. This audit explicitly did not
+create, draft, or even sketch SQL for any migration, per instruction.
+If a future phase discovers a genuine need (e.g. a driver-availability
+column, per §5's documented gap), that would be its own explicitly
+scoped, separately-authorized migration — not something this audit
+recommends bundling into P1-E1-S1B/S1C.
+
+
+23. TEST PLAN
+------------------
+  Organization isolation: verify an Operations Brief query for
+    Organization A never returns a row belonging to Organization B —
+    the SAME adversarial pattern `rls_adversarial_tests.sql` already
+    exercises against `trips`/`trip_assignments`/`trip_exceptions`;
+    since the Brief issues no new grant/policy, this is primarily a
+    REGRESSION check that existing RLS still holds, not a new attack
+    surface to design tests for from scratch.
+  Zero-trip state: an organization with 0 trips today renders the
+    single collapsed "Nothing scheduled today" state (§19), not four
+    separate empty panels.
+  Small-operator state (1-5 trips, 1 driver): every block renders
+    correctly-scaled, non-padded content; the de-dup rule (§9) is
+    exercised directly — a single unassigned trip must appear exactly
+    once across the whole Brief, not in both Needs Attention and
+    Unassigned Trips.
+  Active-trip state: a trip in an in-progress state appears in Active
+    Now; if it also has a stale/missing location, it ALSO appears in
+    Needs Attention (both blocks legitimately show it — only the
+    Unassigned-Trips/Next-Departures dedup rule excludes attention
+    items, per §9's own precise scope).
+  Attention-item ordering: OPEN_EXCEPTION items rank above
+    NEEDS_ASSIGNMENT, which ranks above LOCATION_STALE/
+    LOCATION_UNAVAILABLE, with a stable secondary sort by
+    scheduled_pickup_at within a tier — exactly `PRIORITY_RANK`'s
+    existing, already-tested ordering; a Brief-level test should assert
+    the SAME ordering is preserved once wrapped in the new module,
+    not re-derive new expected orderings.
+  Completed-day state: an organization where every trip today is
+    already 'completed' renders the distinct "All caught up" state
+    (§12), not the same copy as "no trips scheduled."
+  Driver availability: Driver Snapshot correctly counts "on trip now"
+    only from an active assignment on an ACTIVE-state trip (not merely
+    "has any assignment today") — mirroring DriverCapacityPanel's own
+    already-correct logic; a test should confirm a driver with only a
+    completed trip today shows as NOT "on trip now."
+  Unassigned trips: a trip in 'scheduled' state with no active
+    assignment is correctly counted and correctly excluded from
+    duplicate display per the dedup rule.
+  Responsive rendering: desktop (1400×900) and tablet (the existing
+    md breakpoint) both render without overflow/clipping, matching
+    this workstream's own established CDP-screenshot validation
+    method; the narrow-width guard below md remains entirely
+    unaffected (no Brief code should ever execute below that
+    breakpoint, since OperationsShell's own guard already intercepts
+    first).
+  Existing operations workflows: sign-in -> /operations navigation,
+    the existing Needs Attention/Active Trips/Upcoming Trips/Activity
+    Log panels, and every other current /operations behavior must be
+    unchanged — a straightforward regression check against this
+    phase's own §2 assessment.
+
+Existing RLS/security regression remains MANDATORY at every future
+implementation phase (S1B/S1C/S1D), per instruction: the full 22-file
+supabase/tests/*.sql suite plus both concurrency scripts, exactly as
+already run before every N0-M2 production release in this workstream.
+
+
+24. RISKS
+--------------
+  - Presentation duplication risk: without the explicit de-dup rule in
+    §9, a small operator could see the same single trip echoed across
+    3 different Brief blocks, which would feel exactly like the
+    "enterprise command center" this phase's own product thesis warns
+    against. Mitigated by the de-dup rule being specified now, in the
+    data layer, not left to a UI-phase afterthought.
+  - Scope-creep risk toward Request Hub: the natural temptation, once
+    `transportation_requests` is understood to already have a working
+    conversion RPC, is to start building request-list UI "since it's
+    right there." This audit deliberately stops at the single integration-
+    point definition (§14) and explicitly recommends AGAINST building
+    it in S1B/S1C, since the underlying table has zero real rows in any
+    environment today (§13) — building it now would be dead UI.
+  - Stale business_stage risk: using `organizations.business_stage`
+    (a one-time signup self-report) to drive live Brief behavior would
+    silently misrepresent a business that has since grown or slowed
+    down. Mitigated by this audit's own explicit recommendation (§11)
+    to derive all progressive behavior from TODAY's real trip count
+    instead.
+  - Driver-conflict blind spot: nothing in the current schema flags a
+    Driver holding two simultaneous active assignments across
+    different trips (§5) — not a bug in existing code (the one-active-
+    assignment-per-TRIP constraint is correctly scoped to a trip, not a
+    driver), but a genuine gap this audit surfaces for awareness; not
+    proposed to be closed in this phase.
+  - Empty-day flatness risk: if S1C does not implement the page-level
+    quiet-day collapse (§19) and instead renders 4-5 separately empty
+    panels for a genuinely idle day, the Brief will read as broken/
+    padded rather than calm — called out explicitly here so S1C treats
+    it as a single, deliberate page-level state, not an emergent side
+    effect of four independently-empty components.
+
+
+25. GIT STATUS
+-------------------
+  On branch main.
+  HEAD: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged).
+  origin/main: 2c5018e64f02805f63cc20b9be218461a4cc8d58 (unchanged, in
+  sync).
+  Nothing staged. Nothing committed. Nothing pushed. No source file was
+  edited, no migration was created, no production data was touched.
+  Untracked files: the standing scratch/historical-report set carried
+  since N0-M2-A5, plus this new report
+  (docs/reports/p1-e1-s1a-operations-brief-foundation-audit.txt).
