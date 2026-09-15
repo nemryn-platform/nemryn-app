@@ -17,7 +17,11 @@ import { OperationsLayoutClient } from "@/components/operations/OperationsLayout
  *
  * `dispatcherDisplayName` is real, live-resolved identity (P1-E3-S4,
  * ZD-129) — the raw `user.email` this used to pass straight through as a
- * "name" is gone.
+ * "name" is gone. P1-UX-R1: `user.email` is still resolved right here
+ * (already required for `getDisplayName`'s own fallback) and is now ALSO
+ * threaded through separately as `dispatcherEmail` — a restrained,
+ * optional personal-identity line in the account menu, never used as a
+ * display name anywhere. No new query.
  */
 export default async function OperationsLayout({ children }: { children: ReactNode }) {
   const pathname = await getCurrentPathname("/operations");
@@ -48,6 +52,7 @@ export default async function OperationsLayout({ children }: { children: ReactNo
     <OperationsLayoutClient
       organization={organization}
       dispatcherDisplayName={dispatcherDisplayName}
+      dispatcherEmail={user?.email ?? null}
       hasMultipleOrganizations={hasMultipleOrganizations}
       hasLinkedDriverProfile={hasLinkedDriverProfile}
     >

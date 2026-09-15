@@ -10,6 +10,8 @@ import { signOutAction } from "@/lib/auth/sign-out-action";
 
 export interface AccountMenuProps {
   avatarName: string;
+  /** P1-UX-R1: the signed-in user's own auth email — already resolved server-side, no new query. Optional restrained third line under name/role; omitted entirely when null rather than rendering an empty line. */
+  dispatcherEmail: string | null;
   organizationName: string;
   roleLabel: string;
   /** Only offered when the signed-in user genuinely holds more than one active Membership (work item §27: "ONLY where meaningful / user has multiple organizations") — never shown merely because the UI has room for it. */
@@ -26,11 +28,25 @@ export interface AccountMenuProps {
  * rather than inventing a second sign-out mechanism.
  *
  * Deliberately no fake profile/settings links (work item §27's own
- * explicit prohibition) — only real, working content: the current
- * organization name, the current role, an optional Switch Organization
- * link (only when genuinely meaningful), and Sign Out.
+ * explicit prohibition) — only real, working content.
+ *
+ * P1-UX-R1: the popup header now headlines with the signed-in PERSON
+ * (`avatarName` + `roleLabel`, optionally `dispatcherEmail`) — it
+ * previously headlined with `organizationName` first, which made the
+ * popup read as "this is a second organization," not "this is your
+ * account." `organizationName` is no longer rendered anywhere in this
+ * popup's visible body (it remains in the trigger button's own
+ * `aria-label` only, for screen-reader context — that announcement
+ * never creates the same visual ambiguity a rendered heading would).
+ * The active workspace name is already shown persistently in the
+ * sidebar, at all times this menu could be open, so no context is lost
+ * by not repeating it here. ACCOUNT (this identity block) and WORKSPACE
+ * (the "Switch Organization" action below) remain visually separated by
+ * the existing `border-b` divider — the same section-break convention
+ * this codebase already uses throughout (Panel/SectionHeader), not a
+ * new pattern introduced for this fix.
  */
-export function AccountMenu({ avatarName, organizationName, roleLabel, showSwitchOrganization }: AccountMenuProps) {
+export function AccountMenu({ avatarName, dispatcherEmail, organizationName, roleLabel, showSwitchOrganization }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -85,18 +101,39 @@ export function AccountMenu({ avatarName, organizationName, roleLabel, showSwitc
             {/* P1-E3-S8C1 (work item §2): `title` restores the full value
                 on hover/focus for anything long enough to truncate — the
                 popup itself stays compact (w-56) rather than growing to
-                fit a long organization name. */}
-            <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={organizationName}>
-              {organizationName}
+                fit a long name/email. P1-UX-R1: headlines with the
+                signed-in PERSON, never the organization — see this
+                component's own doc comment. */}
+            <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={avatarName}>
+              {avatarName}
             </p>
             <p className={cn(typography.metadata, "truncate text-text-muted")} title={roleLabel}>
               {roleLabel}
             </p>
+            {/* Omitted when it would just repeat the line above — the
+                display name itself falls back to the raw email whenever
+                no real profile name has been set yet (getDisplayName's
+                own established behavior), which would otherwise render
+                the identical string twice in a 2-line-tall popup. */}
+            {dispatcherEmail && dispatcherEmail !== avatarName && (
+              <p className={cn(typography.metadata, "truncate text-text-muted")} title={dispatcherEmail}>
+                {dispatcherEmail}
+              </p>
+            )}
           </div>
 
           {showSwitchOrganization && (
             <Link
-              href="/select-organization"
+              // P1-UX-R1A: `?switch=1` is required here — without it, a
+              // caller who already has a valid organization selected (the
+              // normal case, since they're looking at this menu from
+              // inside an already-resolved workspace) would immediately
+              // bounce straight back from /select-organization, and this
+              // link would do nothing. `?switch=1` carries no organization
+              // id; it only tells that route to show the picker instead
+              // of auto-redirecting — see resolveOrganizationContext's own
+              // `forceSelection` option and that route's doc comment.
+              href="/select-organization?switch=1"
               role="menuitem"
               onClick={() => setOpen(false)}
               className={cn(

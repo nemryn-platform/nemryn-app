@@ -38,6 +38,8 @@ const ROLE_LABEL: Record<OrganizationContext["role"], string> = {
 export interface OperationsLayoutClientProps {
   organization: OrganizationContext;
   dispatcherDisplayName: string;
+  /** P1-UX-R1: the signed-in user's own auth email — already resolved server-side by the parent layout (`getUser()`), no new query. Optional/nullable purely because `user.email` itself is nullable on the auth type; threaded through to AccountMenu's popup as a restrained, secondary personal-identity line, never shown in place of the display name. */
+  dispatcherEmail: string | null;
   /** Real fact from a live `getActiveMemberships()` call (P1-E3-S8B1) — gates the account menu's "Switch Organization" item, never assumed. */
   hasMultipleOrganizations: boolean;
   /** Real fact from a live `current_driver_id()` call (P1-E3-S9, Owner-Operator Mode) — gates the sidebar's conditional "Drive" item. Never inferred from Membership.role. */
@@ -89,10 +91,12 @@ function buildHeaderProps(
   pathname: string,
   organization: OrganizationContext,
   avatarName: string,
+  dispatcherEmail: string | null,
   hasMultipleOrganizations: boolean,
 ): AppHeaderProps {
   const identity = {
     avatarName,
+    dispatcherEmail,
     organizationName: organization.organizationName,
     roleLabel: ROLE_LABEL[organization.role],
     hasMultipleOrganizations,
@@ -195,6 +199,7 @@ function buildHeaderProps(
 export function OperationsLayoutClient({
   organization,
   dispatcherDisplayName,
+  dispatcherEmail,
   hasMultipleOrganizations,
   hasLinkedDriverProfile,
   children,
@@ -205,12 +210,11 @@ export function OperationsLayoutClient({
     <OperationsShell
       sidebar={{
         location: organization.organizationName,
-        orgUnit: ROLE_LABEL[organization.role],
         dispatcherName: dispatcherDisplayName,
         dispatcherRole: ROLE_LABEL[organization.role],
         hasLinkedDriverProfile,
       }}
-      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, hasMultipleOrganizations)}
+      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations)}
     >
       {children}
     </OperationsShell>

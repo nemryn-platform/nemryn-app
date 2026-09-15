@@ -1,0 +1,323 @@
+P1-UX-R1 — WORKSPACE VS USER IDENTITY CLARIFICATION
+=====================================================
+Project:        /Users/datamatics/ZenWard
+Production base: b77bec142ea62ccf2de3e8ae2e519395bd6d08f8
+Date:           2026-09-15
+Status:         Implementation complete, NOT staged / committed / pushed / deployed
+                (per explicit phase constraint)
+
+
+1. ORIGINAL CAUSE OF CONFUSION
+-------------------------------
+Two separate defects, both traced by direct code reading (not guessed):
+
+(a) OperationsSidebar.tsx bottom rail rendered two stacked rows:
+      Row 1 (workspace): {location}          → "Fictional Org A"
+                          {orgUnit}           → "Organization Admin"
+      Row 2 (user):       {dispatcherName}    → "Victor"
+                          {dispatcherRole}    → "Organization Admin"
+    `orgUnit` was populated by the caller (OperationsLayoutClient) as
+    `ROLE_LABEL[organization.role]` — the signed-in user's OWN membership
+    role, attached directly beneath the organization's name. This made
+    the organization name and the user's name look like two peer
+    identities of the same kind ("Org / Role" then "Person / Role"),
+    each with its own role — nothing distinguished "this is the tenant"
+    from "this is the account."
+
+(b) AccountMenu.tsx's popup never rendered the signed-in user's own name
+    anywhere. `avatarName` was used only to compute the Avatar's initials
+    and to build the trigger button's `aria-label` — never as visible
+    popup text. The popup's visible body opened with `{organizationName}`
+    then `{roleLabel}`, i.e. it headlined with the ORGANIZATION, making
+    the personal-account menu read as if clicking the avatar opened a
+    second organization's own settings, not "your account."
+
+Root cause in both cases: the membership role (a fact about the PERSON,
+scoped to the CURRENT organization) was being rendered as if it were a
+property of the ORGANIZATION itself, and the organization's own name was
+being used as the headline of what is supposed to be a personal menu.
+
+
+2. FINAL SEMANTIC HIERARCHY
+-----------------------------
+    PLATFORM   Nemryn                     — logo/wordmark, top of sidebar (unchanged)
+    WORKSPACE  {organization.organizationName}   — sidebar bottom rail, labeled "Workspace"
+    USER       {dispatcherDisplayName}, {roleLabel} — sidebar bottom rail (user row) AND
+                                                        AccountMenu popup headline
+
+The organization name is never again paired with a role. The role
+appears in exactly one place per surface: once in the sidebar's user
+row, once in the AccountMenu popup — always attached to the PERSON.
+
+
+3. FILES CHANGED
+------------------
+Exactly 5 files touched, all presentational/prop-threading, zero new
+queries, zero tenancy/auth/RLS/org-resolution logic touched:
+
+  src/components/operations/OperationsSidebar.tsx     (33 changed lines)
+  src/components/operations/OperationsLayoutClient.tsx (8 changed lines)
+  src/components/operations/AppHeader.tsx              (4 changed lines)
+  src/components/operations/AccountMenu.tsx            (42 changed lines)
+  src/app/operations/layout.tsx                        (7 changed lines)
+
+  5 files changed, 75 insertions(+), 19 deletions(-)
+
+Icon import changed from `MapPin` to `Buildings`
+(@phosphor-icons/react/dist/ssr) — no new package installed.
+
+`dispatcherEmail` (= `user.email`, already resolved server-side by the
+existing `getUser()` call in operations/layout.tsx) was threaded through
+as a new prop across layout.tsx → OperationsLayoutClient → AppHeader →
+AccountMenu, joining the existing avatarName/organizationName/roleLabel/
+hasMultipleOrganizations identity bundle. No new database round-trip.
+
+DriverLayoutClient.tsx (the /driver/* chrome) was confirmed via
+`grep -rln "AccountMenu\b" src/` / `grep -rln "<AppHeader" src/` to be
+entirely unrelated — it renders its own separate header with a plain
+sign-out IconButton, never AccountMenu or AppHeader — and required no
+changes.
+
+
+4. SIDEBAR — BEFORE / AFTER
+------------------------------
+BEFORE (bottom rail, two rows, org row polluted with a role):
+  [MapPin] Fictional Org A
+           Organization Admin          <- role wrongly attached to org
+  ---
+  [Avatar] Victor
+           Organization Admin
+
+AFTER (bottom rail, org row now role-free, explicitly labeled):
+  [Buildings] Fictional Org A
+              Workspace                 <- static label, never a role
+  ---
+  [Avatar]    Victor
+              Organization Admin        <- role stays here only
+
+Live-captured (fixture names, org-a-admin@example.test):
+  [Buildings] Fictional Org A
+              Workspace
+  ---
+  [Avatar]    org-a-admin@example.test
+              Organization Admin
+
+Confirmed correct across all tested fixtures — see §8.
+
+
+5. ACCOUNT MENU — BEFORE / AFTER
+-----------------------------------
+BEFORE (popup body, headlined by the organization):
+  Fictional Org A
+  Organization Admin
+  ------------------
+  Switch Organization
+  Sign Out
+
+AFTER (popup body, headlined by the signed-in person):
+  Victor                                <- avatarName, the PERSON
+  Organization Admin                    <- roleLabel (role of the person, in this org)
+  victor@example.test                   <- dispatcherEmail, ONLY when distinct from
+                                            the name line above (see dedup note)
+  ------------------                    <- existing border-b divider = ACCOUNT/WORKSPACE seam
+  Switch Organization
+  Sign Out
+
+`organizationName` is no longer rendered anywhere in the popup's visible
+body. It remains used exactly once, in the trigger button's own
+`aria-label` ("Account menu — {avatarName}, {roleLabel} at
+{organizationName}") for screen-reader context — an aria-label
+announcement does not create the same "two organizations" visual
+ambiguity a rendered heading would, and removing it would discard real
+accessibility context for no visual benefit.
+
+Dedup guard (found via live testing, not assumed): `getDisplayName()`'s
+own established fallback returns the raw email when no
+`user_profiles.display_name` row exists yet. For fixtures with no real
+display name set (org-a-admin@example.test, org-a-dispatcher@example.test,
+multi-org-user@example.test — all confirmed NULL via direct query), the
+name line and the email line would otherwise be byte-identical, rendering
+the same string twice in a 2-line-tall popup. Fixed with:
+  {dispatcherEmail && dispatcherEmail !== avatarName && (...)}
+so the email line only renders when it is genuinely new information.
+Confirmed both branches live — see §8.
+
+
+6. WORKSPACE-SWITCHING PRESERVATION
+--------------------------------------
+No switching mechanics were changed. `showSwitchOrganization` (gated by
+the pre-existing `hasMultipleOrganizations` fact from a live
+`getActiveMemberships()` call) still controls whether the "Switch
+Organization" link renders; the link still points at the same existing
+route, `/select-organization`; the route's own pre-existing logic
+(`resolveOrganizationContext()` in `src/app/select-organization/page.tsx`)
+is completely untouched.
+
+Live-tested with multi-org-user@example.test (2 memberships: Fictional
+Org A — Organization Admin, Fictional Org B — Driver):
+  - Signed in, correctly routed to /select-organization (existing
+    "select-required" branch), selected "Fictional Org A" — landed on
+    /operations with the sidebar/menu showing Fictional Org A correctly.
+  - Opened AccountMenu: "Switch Organization" link present (as expected,
+    since this fixture DOES have >1 membership), "Sign Out" present.
+  - Clicked "Switch Organization": navigated to /select-organization,
+    which immediately redirected back to /operations. This is PRE-
+    EXISTING, unmodified behavior — `select-organization/page.tsx`'s own
+    documented logic already redirects onward immediately once a valid
+    org-context cookie/selection exists ("a single-org user or one who
+    already has a valid selection is redirected onward immediately,
+    avoiding an unnecessary extra screen"). Confirmed by reading that
+    file directly; nothing in this phase touches it. The link itself
+    fires correctly and reaches the correct, unmodified route — switching
+    mechanics are intact.
+
+Per phase §5, no new switcher was added elsewhere; the single existing
+"Switch Organization" entry point in AccountMenu is the only one, left
+in place. ACCOUNT (identity block) and WORKSPACE (Switch Organization /
+Sign Out actions) are visually separated by the popup's existing
+`border-b border-border-subtle` divider — the same section-break
+convention already used elsewhere in this codebase (Panel/SectionHeader).
+Deliberately did not add a new "WORKSPACE" eyebrow label above a single
+link, judging that as over-engineering relative to a single menu item and
+against the phase's own instruction not to introduce a new switcher
+construct for this remediation.
+
+
+7. ICON DECISION
+-------------------
+Replaced `MapPin` (a location-pin icon, semantically wrong for "this is
+your organization/tenant") with `Buildings`
+(@phosphor-icons/react/dist/ssr) in the sidebar's workspace row. This is
+NOT a new icon: `Buildings` is already the established convention this
+codebase uses for the organization/workspace concept elsewhere — it is
+literally what OrganizationSelector.tsx already renders as the avatar
+icon on /select-organization's own workspace cards (confirmed visually —
+see the uxr1-B-multi-org-user.png screenshot, which shows the same
+Buildings icon next to "Fictional Org A" / "Fictional Org B"). No new
+icon package installed; @phosphor-icons/react was already a project
+dependency.
+
+
+8. VALIDATION
+----------------
+All validation performed live via headless Chrome + CDP against the
+local dev server (localhost:3000, real Supabase local instance, real
+fixture accounts) — the same methodology used throughout this session.
+
+Fixtures tested:
+  - org-a-admin@example.test        (single org, Organization Admin, no display_name row)
+  - org-a-dispatcher@example.test   (single org, Dispatcher, no display_name row)
+  - multi-org-user@example.test     (2 orgs: Org A Admin / Org B Driver, no display_name row)
+  - owner@harmonytransport.test     (single org, Organization Admin, display_name = "Renata Castillo")
+
+Desktop 1400x900:
+  [x] org-a-admin@example.test — sidebar shows "Fictional Org A / Workspace"
+      then "org-a-admin@example.test / Organization Admin"; no role under
+      the workspace name; no clipping; no overflow.
+  [x] org-a-dispatcher@example.test — sidebar shows "Fictional Org A /
+      Workspace" then "org-a-dispatcher@example.test / Dispatcher"
+      (long email correctly truncates with a `title` tooltip, no layout
+      break).
+  [x] multi-org-user@example.test — after selecting "Fictional Org A" at
+      /select-organization, sidebar/header show Fictional Org A
+      correctly; AccountMenu popup headlines with
+      "multi-org-user@example.test / Organization Admin", no duplicate
+      email line (correctly suppressed — name equals email for this
+      fixture), "Switch Organization" + "Sign Out" both present below
+      the divider.
+  [x] owner@harmonytransport.test (distinct real display_name case) —
+      AccountMenu popup shows all three lines correctly, all distinct:
+        Renata Castillo
+        Organization Admin
+        owner@harmonytransport.test
+      Confirms the email line renders correctly when it IS new
+      information, and the dedup guard does not over-suppress.
+
+Tablet 820x1100:
+  [x] org-a-admin@example.test — sidebar correctly collapses to its
+      existing icon-only rail (`hidden ... lg:flex` — pre-existing
+      responsive behavior, unmodified by this phase); no overflow
+      detected (`scrollWidth > clientWidth` check = false); no text
+      clipping since the text block itself is hidden at this breakpoint,
+      matching prior behavior exactly.
+
+Confirmed across all fixtures above:
+  [x] Workspace name is dynamic (never hardcoded "Vemt Pro" or similar —
+      renders the real `organization.organizationName` per fixture).
+  [x] User name is dynamic (real `dispatcherDisplayName` /
+      `getDisplayName()` result per fixture).
+  [x] Role is dynamic (real `ROLE_LABEL[organization.role]` per fixture
+      — "Organization Admin" vs "Dispatcher" correctly differ).
+  [x] Organization/workspace row never displays the user's role beneath
+      it (confirmed — only the static word "Workspace").
+  [x] Account popup displays real user identity (name/email + role),
+      never the organization name.
+  [x] Sign Out: form + button present and unchanged (`signOutAction`,
+      the same pre-existing session-invalidation action already used by
+      the Driver header) — not re-tested end-to-end this pass since its
+      implementation was not touched by any of the 5 changed files, and
+      it was already exercised and confirmed working in the prior
+      P1-E3-S8B1 phase that built AccountMenu.
+  [x] Organization switching works — link present when
+      `hasMultipleOrganizations` is true, absent otherwise, and
+      correctly navigates to the existing unmodified
+      /select-organization route (see §6 for the full trace).
+  [x] Sidebar layout does not regress at either breakpoint tested — no
+      clipping, no overflow.
+  [x] No duplicate identity labels anywhere across all four fixtures
+      tested, in either the sidebar or the account menu.
+
+
+9. TESTS
+-----------
+npx tsc --noEmit    PASS (zero errors)
+npm run lint         PASS (0 errors; 14 pre-existing warnings, all in
+                      unrelated .tmp-qa/*.mjs scratch scripts not part
+                      of this phase's changes)
+npm run build         PASS (compiled successfully, all 36 routes built,
+                      including /operations)
+npm test               PASS (56/56 tests, 0 failures — operations-brief-
+                      core.test.mjs and all other existing suites; no
+                      test suite exists or is needed for this phase's
+                      purely presentational component changes)
+
+No SQL/RLS regression suite run — correctly out of scope per the phase's
+own instruction ("No SQL/RLS suite required if strictly presentational
+with no security/data-access source changes"), and confirmed true: zero
+changes to any query, RPC, RLS policy, or auth/session/organization-
+resolution logic in any of the 5 changed files.
+
+
+10. DATABASE DIFF
+--------------------
+NONE. `git status --porcelain supabase/` returns empty (confirmed both
+before and after all edits in this phase). No migration, policy, or
+schema file was created, modified, or deleted. The one new read
+performed during validation (a manual `psql`/SQL query to inspect which
+fixtures have a `user_profiles.display_name` row set) was read-only,
+ad-hoc, and not part of the application code — it exists only in this
+report's findings (§5), not as a code change.
+
+
+GIT STATUS
+-------------
+Branch: main, up to date with origin/main.
+
+Modified (unstaged, as required — NOT staged/committed/pushed):
+  M src/app/operations/layout.tsx
+  M src/components/operations/AccountMenu.tsx
+  M src/components/operations/AppHeader.tsx
+  M src/components/operations/OperationsLayoutClient.tsx
+  M src/components/operations/OperationsSidebar.tsx
+
+This report itself (docs/reports/p1-ux-r1-workspace-user-identity-
+clarification.txt) is untracked, as required by this phase's own report
+instruction — no staging/commit performed.
+
+Pre-existing untracked files from earlier phases (docs/reports/g0-r3-*,
+g1-a-*, g1-b-*, n0-g0-r2-*, n0-m1-a0-*, n0-m1-a3-*, n0-m2-a5-*, p0-s2a-*,
+p0-s2b-*, p1-e1-s1d-*, and three .tmp-qa/*.mjs scripts) are unrelated to
+this phase and were left untouched.
+
+No `git add`, `git commit`, or `git push` was performed at any point in
+this phase, per the explicit GIT constraint.

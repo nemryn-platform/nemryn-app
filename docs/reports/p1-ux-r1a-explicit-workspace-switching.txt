@@ -1,0 +1,478 @@
+P1-UX-R1A — FIX EXPLICIT WORKSPACE SWITCHING
+================================================
+Project:        /Users/datamatics/ZenWard
+Production base: b77bec142ea62ccf2de3e8ae2e519395bd6d08f8
+                 (P1-UX-R1 already implemented locally, uncommitted)
+Date:           2026-09-15
+Status:         Implementation complete, NOT staged / committed / pushed / deployed
+                (per explicit phase constraint)
+
+
+1. ROOT CAUSE
+----------------
+`resolveOrganizationContext()` (src/lib/auth/organization.ts) has always had
+exactly one way to decide whether a multi-Membership caller sees the
+picker: does the `zw_org_context` cookie already match one of their active
+Memberships? If yes → `status: "selected"`. `/select-organization`'s own
+page component treats `"selected"` identically to `"single"` — an
+immediate `redirect(next ?? "/")`, no picker ever rendered.
+
+This is completely correct for NORMAL navigation (a deep link, a stale
+bookmark, a redirect chain arriving here mid-request) — there is nothing
+to ask the caller in that case, they already have a valid selection.
+
+But AccountMenu's "Switch Organization" link pointed at that exact same
+route with no way to signal "I am not just passing through, I am
+deliberately asking to change my mind." The route had no mechanism to
+distinguish that intent from ordinary resolution, so it applied the same
+immediate-redirect rule to both, and an explicit switch request always
+silently no-opped.
+
+
+2. PREVIOUS BEHAVIOR
+------------------------
+1. Multi-org user signs in, selects a workspace → `zw_org_context` cookie
+   set, `resolveOrganizationContext()` now returns `status: "selected"`.
+2. User opens AccountMenu → Switch Organization → navigates to
+   `/select-organization`.
+3. Page resolves `status: "selected"` (the cookie still matches) →
+   `redirect(next ?? "/")` → user is bounced straight back to
+   `/operations`, having never seen a picker.
+4. Confirmed by this session's own P1-UX-R1 live testing (see that
+   phase's report, §6) — the link fired and reached the correct route,
+   but the workflow itself never accomplished anything.
+
+
+3. FINAL SWITCHING MECHANISM
+--------------------------------
+AccountMenu's "Switch Organization" link now points at
+`/select-organization?switch=1` instead of `/select-organization`.
+
+`resolveOrganizationContext()` gained one new, optional parameter:
+
+    resolveOrganizationContext(options?: { forceSelection?: boolean })
+
+When `forceSelection` is true AND the caller genuinely has more than one
+active Membership, the function returns `status: "select-required"`
+(carrying the full membership list) instead of computing the normal
+cookie-match branch — i.e. it takes the exact same code path this
+function already uses for "no valid selection exists yet," just entered
+deliberately rather than because the cookie was missing/stale.
+
+`forceSelection` changes NOTHING for:
+  - zero Memberships (`status: "none"`, unchanged)
+  - exactly one Membership (`status: "single"`, unchanged — always, even
+    if `forceSelection` is true, satisfying §7)
+  - the normal, unflagged call path used by every other caller in the
+    codebase (root `/`, `requireOperationsAccess`, `requireOnboardingAccess`,
+    `requireDriverAccess`, `/complete-signup`) — none of these pass the
+    new option, so their behavior is byte-for-byte identical to before.
+
+`/select-organization/page.tsx` reads `?switch=1` from its own
+`searchParams` (already an existing pattern there for `?next=`) and
+passes `{ forceSelection: switchRequested }` through. This is the ONLY
+place in the codebase that ever sets this flag.
+
+A small, additive UX detail: when in explicit-switch mode, the page also
+resolves which membership the caller was already using (via the
+already-existing `getRequestedOrganizationId()` cookie reader, a plain
+read with no new query) purely to mark that card "Current" in the
+picker — see §6.
+
+
+4. SECURITY MODEL
+---------------------
+`?switch=1` is a boolean UI-mode flag, never an organization identifier.
+It cannot select, imply, or bias toward any specific organization — it
+only chooses which of two ALREADY-COMPUTED, membership-validated
+resolution outcomes (`"selected"` vs `"select-required"`) the route acts
+on. The underlying computation — a fresh `getActiveMemberships()` call,
+re-run on every single request, never cached — is completely unchanged.
+
+The actual selection is, exactly as before, performed exclusively by
+`selectOrganizationAction` (src/app/select-organization/actions.ts),
+which independently re-validates the submitted `organizationId` against
+a SEPARATE fresh `getActiveMemberships()` call and silently redirects
+back to the picker (never accepting, never erroring in a way that leaks
+existence) if it is not one of the caller's own active Memberships. This
+phase did not touch that file at all.
+
+Verified directly, not assumed:
+  - No RLS policy touched (`git status --porcelain supabase/` empty
+    throughout).
+  - No query anywhere in this phase's 4 changed files trusts a
+    client-supplied organization id — grepped for `searchParams`/`params`
+    usage in `select-organization/page.tsx` and confirmed `switch` is
+    read only as a boolean gate (`=== "1"`), never passed to any
+    Supabase call.
+  - `getRequestedOrganizationId()` (the "Current" badge's data source) is
+    a plain cookie read used ONLY for display; it is never compared
+    against anything to grant access — `resolveOrganizationContext`
+    itself does that comparison separately and authoritatively.
+  - A single-org caller cannot reach the picker by any means, including
+    manually crafting `?switch=1` in the address bar — confirmed live
+    (§8/§9 below): `resolveOrganizationContext` returns `status: "single"`
+    for them regardless of the flag, and the page redirects onward
+    exactly as for any other single-org request.
+  - No service-role client introduced or used anywhere in this phase.
+
+
+5. FILES CHANGED
+--------------------
+  src/lib/auth/organization.ts                  (+23/-1  lines)
+  src/app/select-organization/page.tsx           (+25/-4 lines)
+  src/components/auth/OrganizationSelector.tsx   (+30/-22 lines, net +8)
+  src/components/operations/AccountMenu.tsx      (href + comment change;
+                                                   diff also still carries
+                                                   this file's prior,
+                                                   still-uncommitted
+                                                   P1-UX-R1 edits — see
+                                                   note below)
+
+No other files were touched. `requireOperationsAccess`,
+`requireOnboardingAccess`, `requireDriverAccess`, root `/`, and
+`/complete-signup` all call `resolveOrganizationContext()` with zero
+arguments, exactly as before — confirmed via
+`grep -rn "resolveOrganizationContext" src/` (7 call sites total, 6
+outside this phase's own files, none passing the new option).
+
+Note on AccountMenu.tsx: this file was already modified, uncommitted, by
+the prior P1-UX-R1 phase (its identity-headline rework). Since that work
+is still uncommitted, `git diff` on this file necessarily shows BOTH
+phases' changes together. This phase's own contribution to it is exactly
+one thing: the "Switch Organization" link's `href` changed from
+`/select-organization` to `/select-organization?switch=1`, plus an
+explanatory comment. Nothing from P1-UX-R1's identity hierarchy (person
+headline, role, optional distinct email, `organizationName` removed from
+the visible popup body) was touched or reverted — confirmed both by
+reading the current file content and by live-testing the popup below
+(§8), which still shows the P1-UX-R1 hierarchy exactly.
+
+
+6. EXPLICIT-SWITCH BEHAVIOR
+-------------------------------
+1. AccountMenu → "Switch Organization" → navigates to
+   `/select-organization?switch=1`.
+2. Page calls `resolveOrganizationContext({ forceSelection: true })`.
+3. For a genuinely multi-Membership caller, this now returns
+   `status: "select-required"` EVEN THOUGH a valid cookie match exists —
+   the picker renders instead of bouncing back.
+4. The picker (`OrganizationSelector`) marks whichever membership the
+   cookie currently points at with a small, restrained "Current" badge
+   (pill, existing `typography.metadata` + `surface-secondary` tokens —
+   no new visual language), so the caller can see at a glance which
+   workspace they are already in while choosing. This is the one
+   response to phase §6's invitation to show the current workspace "if
+   the existing component already supports doing so without unnecessary
+   complexity" — it did not before, so a small, explicitly-scoped
+   addition was made (one boolean comparison per card, no new component,
+   no redesign).
+5. Selecting a DIFFERENT membership submits the existing, unmodified
+   `selectOrganizationAction` form exactly as always — server-validates
+   the choice, sets the cookie, redirects to `next ?? "/"`.
+6. Root `/` (unmodified) then re-resolves the (now-updated) organization
+   context and routes by the NEW membership's role — `/operations` for
+   organization_admin/dispatcher, `/driver` for driver (see §10).
+
+
+7. NORMAL-SELECTION BEHAVIOR (must remain unchanged)
+--------------------------------------------------------
+Every call path OTHER than the explicit "Switch Organization" link is
+completely unaffected: no `?switch=1`, so `forceSelection` is
+`undefined`/falsy, so `resolveOrganizationContext` takes its original,
+untouched code path — cookie match → `"selected"` → immediate redirect
+onward; no match → `"select-required"` → picker (the picker in this case
+receives `currentOrganizationId: null`, since `switchRequested` is
+false, so no "Current" badge renders — nothing to mark as current when
+there was no valid prior selection anyway).
+
+Live-confirmed (§8): a multi-org user who already has a valid cookie and
+navigates DIRECTLY to `/select-organization` with no query string is
+still bounced straight to `/operations`, byte-for-byte the same as
+before this phase.
+
+
+8. SINGLE-ORG BEHAVIOR
+---------------------------
+Single-Membership callers:
+  - Never see "Switch Organization" in AccountMenu at all —
+    `showSwitchOrganization` is still driven by the same pre-existing
+    `hasMultipleOrganizations` fact (from a live `getActiveMemberships()`
+    call in `operations/layout.tsx`), completely untouched by this phase.
+  - Cannot reach the picker even by manually typing
+    `/select-organization?switch=1` — `resolveOrganizationContext`
+    returns `status: "single"` regardless of the flag (the `forceSelection`
+    branch is only ever reached after the `memberships.length === 1`
+    check has already failed), and the page redirects onward exactly as
+    for a plain `/select-organization` visit.
+
+Live-tested with org-a-admin@example.test and org-a-dispatcher@example.test:
+  - AccountMenu: no "Switch Organization" entry present for either.
+  - Manual navigation to `/select-organization?switch=1` while signed in
+    as org-a-admin@example.test: landed on `/operations`, no picker
+    shown — confirmed.
+
+
+9. MULTI-ORG BEHAVIOR (Switch Organization end-to-end)
+------------------------------------------------------------
+Live-tested with multi-org-user@example.test (Fictional Org A —
+Organization Admin, Fictional Org B — Driver), on a freshly reset local
+database:
+
+  1. Sign in → routed to `/select-organization` (no cookie yet — normal
+     "select-required" case).
+  2. Selected "Fictional Org A" → landed on `/operations`; sidebar
+     workspace correctly reads "Fictional Org A".
+  3. Opened AccountMenu → "Switch Organization" href confirmed to be
+     `/select-organization?switch=1`.
+  4. Clicked it → landed on `/select-organization?switch=1` — THE
+     PICKER REMAINED VISIBLE (did not bounce back), showing:
+       Fictional Org A  [Current]
+       Organization Admin
+       Fictional Org B
+       Driver
+  5. Selected "Fictional Org B" → see §10 for the resulting cross-role
+     destination.
+
+Back/Cancel (phase §9): inspected the existing selector — it has no
+explicit Cancel affordance in either mode (never did). Deliberately did
+not add one: the browser's own Back navigation already returns the
+caller to exactly where they were (the click that opened this page was a
+plain `<Link>` navigation, not a modal or a state mutation — nothing was
+changed server-side merely by viewing the picker), which satisfies "a
+simple way to return without changing workspace" using an existing,
+already-present navigation pattern rather than inventing new UI, per the
+phase's own "keep scope small" instruction.
+
+
+10. CROSS-ROLE BEHAVIOR
+----------------------------
+Selecting "Fictional Org B" (role: driver) from the explicit-switch
+picker did NOT force the caller into `/operations`. `selectOrganizationAction`
+still redirects to `next ?? "/"` exactly as before (no `next` was
+supplied by this particular click, matching AccountMenu's own link,
+which — unchanged by this phase — never sets a `next` param); root `/`
+(unmodified) then re-resolved the organization context under the NEW
+cookie value and redirected to `/driver`, per its own existing
+`redirect(role === "driver" ? "/driver" : "/operations")` logic.
+
+Live-confirmed: landed page showed the Driver chrome/header
+("Fictional Multi-Org Driver", Today/Trips/History/Profile tabs) — the
+correct destination and the correct role-driven UI for the newly
+selected organization, with no code in this phase having to know or care
+about that routing decision at all.
+
+
+11. SIGN-OUT REGRESSION
+----------------------------
+Re-tested end-to-end (not just by source reading), per phase §10, since
+AccountMenu was modified: signed in as org-a-dispatcher@example.test,
+opened AccountMenu, confirmed "Sign Out" present, clicked it. Result:
+  - Landed on `/sign-in` (the existing `signOutAction`'s own redirect
+    target, unmodified).
+  - Re-visited `/operations` directly afterward → redirected to
+    `/sign-in?next=%2Foperations` — proving the session was genuinely
+    invalidated server-side (a stale client-side-only "looks signed out"
+    state would not have triggered this redirect), not merely a
+    client-side navigation.
+
+
+12. TESTS
+-------------
+npx tsc --noEmit    PASS (zero errors, both after the initial 4-file
+                      change and again after the final "Current" badge
+                      addition)
+npm run lint         PASS (0 errors; 14 pre-existing warnings, all in
+                      unrelated .tmp-qa/*.mjs scratch scripts not part
+                      of this phase's changes — identical warning set to
+                      the P1-UX-R1 report)
+npm run build         PASS (compiled successfully, all 36 routes built
+                      including /select-organization and /operations)
+npm test               PASS (56/56 tests, 0 failures — unchanged from
+                      P1-UX-R1; no test suite exists or is needed for
+                      this phase's own changes, which have no pure-
+                      function logic warranting a unit test beyond what
+                      tsc/build/live-testing already covers)
+
+SQL/RLS regression battery — RUN (not skipped), because this phase
+modifies `src/lib/auth/organization.ts`, which is organization-context
+resolution logic, squarely inside the phase's own "If organization-
+context/session/auth logic is modified, ALSO run" condition, even though
+the change itself is a purely additive, backward-compatible parameter
+that touches no query, no RLS policy, and no membership-validation logic:
+
+  supabase db reset                                   ran successfully
+                                                        before each check
+                                                        below
+
+  All 22 files under supabase/tests/*.sql              ALL PASS, each run
+                                                        against its OWN
+                                                        freshly reset
+                                                        database (an
+                                                        initial single-
+                                                        reset-then-chain-
+                                                        all-22 run showed
+                                                        several apparent
+                                                        failures that
+                                                        were traced and
+                                                        confirmed to be
+                                                        cross-file fixture
+                                                        pollution from
+                                                        chaining stateful
+                                                        SQL files in one
+                                                        database, not a
+                                                        real regression —
+                                                        re-verified by
+                                                        running the
+                                                        specific
+                                                        "failing" file
+                                                        alone against a
+                                                        fresh reset, where
+                                                        it passed cleanly;
+                                                        the full per-file-
+                                                        reset run below is
+                                                        the authoritative
+                                                        result)
+
+  mutation_concurrency_test.sh                         PASS — TEST
+                                                        CONCURRENCY-1:
+                                                        Session B blocked
+                                                        2.02s on the real
+                                                        row lock, then
+                                                        correctly rejected
+                                                        with
+                                                        assignment_conflict;
+                                                        exactly 1 active
+                                                        assignment for
+                                                        Driver A1 at the
+                                                        end.
+
+  driver_invite_concurrency_test.sh                    PASS — TEST
+                                                        INVITE-
+                                                        CONCURRENCY-1:
+                                                        Session B blocked
+                                                        1.96s on the real
+                                                        row lock; exactly
+                                                        1 Driver row and 1
+                                                        Membership row at
+                                                        the end, no error,
+                                                        no duplicate,
+                                                        regardless of
+                                                        which session's
+                                                        transaction
+                                                        actually completed
+                                                        the redemption.
+
+`git status --porcelain supabase/`: confirmed empty (checked before this
+phase's changes, immediately after every `supabase db reset`, and again
+at the end) — no migration, schema, seed, or policy file was ever
+created, modified, or deleted.
+
+Live browser validation (headless Chrome + CDP, real local Supabase, on
+a freshly reset database — see §7-11 above for the specific
+transcripts): multi-org explicit-switch end-to-end, cross-role
+destination, single-org gating (both via the UI and via manually typed
+`?switch=1`), normal-navigation auto-redirect preservation, and Sign Out
+end-to-end all independently re-verified, not assumed from source
+reading alone.
+
+Desktop 1400x900 used throughout, matching phase §11.
+
+
+13. DATABASE DIFF
+----------------------
+NONE. `git status --porcelain supabase/` returns empty throughout this
+phase, including after every `supabase db reset` performed for testing.
+No migration, RLS policy, schema, or seed file was created, modified, or
+deleted. The multiple `supabase db reset` runs performed during testing
+only restore the repository's existing, unmodified migrations/seed —
+they do not constitute a database change.
+
+
+14. EXACT SOURCE DIFF
+--------------------------
+src/lib/auth/organization.ts:
+  - `resolveOrganizationContext()` signature changed to accept
+    `options?: { forceSelection?: boolean }`.
+  - One new branch inserted between the single-Membership check and the
+    cookie-match check: `if (options?.forceSelection) { return { status:
+    "select-required", memberships }; }`.
+  - Doc comment extended explaining the flag's exact scope and security
+    posture (see file for full text).
+
+src/app/select-organization/page.tsx:
+  - New import: `getRequestedOrganizationId` (already existed in
+    organization.ts, just not previously imported here).
+  - `const switchRequested = params.switch === "1";` added.
+  - `resolveOrganizationContext()` call now passes
+    `{ forceSelection: switchRequested }`.
+  - `const currentOrganizationId = switchRequested ? await
+    getRequestedOrganizationId() : null;` added, display-only.
+  - `<OrganizationSelector>` now also receives `currentOrganizationId`.
+  - Doc comment extended explaining the `?switch=1` exception.
+
+src/components/auth/OrganizationSelector.tsx:
+  - New optional prop `currentOrganizationId?: string | null`.
+  - Per-membership `isCurrent` boolean computed inline; when true, a
+    small "Current" badge (`typography.metadata`, existing
+    `surface-secondary`/`text-secondary` tokens, `rounded-full`) renders
+    next to the organization name. No new component, no new design
+    token, no new icon.
+
+src/components/operations/AccountMenu.tsx (this phase's own portion of
+the diff only — see §5's note on this file also still carrying
+P1-UX-R1's uncommitted changes):
+  - "Switch Organization" `<Link>`'s `href` changed from
+    `/select-organization` to `/select-organization?switch=1`.
+  - Explanatory comment added directly above it.
+
+Full diffs (`git diff`) for all four files were reviewed in full during
+this phase; the summary above is complete — no other lines changed.
+
+
+15. READINESS FOR PRODUCTION RELEASE
+-----------------------------------------
+All required tests pass (tsc/lint/build/unit tests, the full 22-file SQL
+suite, both concurrency scripts). All required live validation scenarios
+pass (explicit switch genuinely opens and keeps open the picker,
+normal/passive navigation still auto-redirects exactly as before,
+single-org users are gated both via the UI and via a manually-crafted
+URL, cross-role destination routing is correct and untouched, Sign Out
+is independently re-verified end-to-end). No database diff. No RLS/auth/
+tenancy logic weakened — the change is a single additive, backward-
+compatible parameter that only ever chooses between two already-
+authoritatively-computed outcomes, never trusts new input for
+authorization. The P1-UX-R1 identity hierarchy (platform/workspace/user,
+no role duplication) remains fully intact and was re-confirmed live in
+this phase's own testing (§8's dispatcher account-menu check).
+
+Not yet committed, staged, or pushed, per explicit phase instruction —
+this and P1-UX-R1 together are ready to be reviewed and released as a
+single change set whenever explicitly authorized.
+
+
+16. GIT STATUS
+------------------
+Branch: main, up to date with origin/main.
+
+Modified (unstaged, as required — NOT staged/committed/pushed):
+  M src/app/operations/layout.tsx                 (P1-UX-R1, unchanged this phase)
+  M src/app/select-organization/page.tsx           (P1-UX-R1A)
+  M src/components/auth/OrganizationSelector.tsx   (P1-UX-R1A)
+  M src/components/operations/AccountMenu.tsx      (P1-UX-R1, + P1-UX-R1A's href change)
+  M src/components/operations/AppHeader.tsx        (P1-UX-R1, unchanged this phase)
+  M src/components/operations/OperationsLayoutClient.tsx (P1-UX-R1, unchanged this phase)
+  M src/components/operations/OperationsSidebar.tsx (P1-UX-R1, unchanged this phase)
+  M src/lib/auth/organization.ts                   (P1-UX-R1A)
+
+This report itself
+(docs/reports/p1-ux-r1a-explicit-workspace-switching.txt) is untracked,
+as required — no staging/commit performed.
+
+Pre-existing untracked files from earlier phases (docs/reports/g0-r3-*,
+g1-a-*, g1-b-*, n0-g0-r2-*, n0-m1-a0-*, n0-m1-a3-*, n0-m2-a5-*, p0-s2a-*,
+p0-s2b-*, p1-e1-s1d-*, p1-ux-r1-*, and three .tmp-qa/*.mjs scripts) are
+unrelated to this phase and were left untouched.
+
+No `git add`, `git commit`, or `git push` was performed at any point in
+this phase, per the explicit GIT constraint.

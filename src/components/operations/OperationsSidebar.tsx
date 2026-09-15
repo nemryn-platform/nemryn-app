@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { MapPin } from "@phosphor-icons/react/dist/ssr";
+import { Buildings } from "@phosphor-icons/react/dist/ssr";
 import { navIcons } from "@/design/icons";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
@@ -28,12 +28,14 @@ const NAV_ITEMS: { key: keyof typeof navIcons; label: string; href: string }[] =
 
 export interface OperationsSidebarProps {
   /**
-   * Sample operating context to render in the bottom rail — not a product
-   * decision about the actual launch territory. That remains ZD-016
-   * UNKNOWN; callers supply whatever the real operating unit is.
+   * P1-UX-R1: the active tenant/workspace name (`organization
+   * .organizationName`) — never the signed-in user's own identity, and
+   * never paired with a membership role (that role belongs to the user,
+   * not to the organization itself — see the bottom `dispatcherRole`
+   * row below, and docs/reports/p1-ux-r1-workspace-user-identity-
+   * clarification.txt for the full before/after reasoning).
    */
   location: string;
-  orgUnit: string;
   dispatcherName: string;
   dispatcherRole?: string;
   /** P1-E3-S9 (Owner-Operator Mode, work item §4/§12) — real fact from a live `current_driver_id()` check, never inferred from role. Gates the conditional "Drive" nav item only; the actual /driver/* access decision is independently re-checked by `requireDriverAccess`. */
@@ -48,7 +50,6 @@ export interface OperationsSidebarProps {
  */
 export function OperationsSidebar({
   location,
-  orgUnit,
   dispatcherName,
   dispatcherRole,
   hasLinkedDriverProfile,
@@ -120,11 +121,25 @@ export function OperationsSidebar({
       </nav>
 
       <div className="border-t border-chrome-border px-3 py-3 lg:px-4">
+        {/*
+          P1-UX-R1: the WORKSPACE row — the active tenant's own name,
+          labeled with the plain, static word "Workspace," never a
+          membership role. Previously showed the signed-in user's role
+          here (e.g. "Organization Admin"), which visually read as a
+          second organization/account rather than "this platform account
+          belongs to this tenant." The role belongs to the person, not
+          the organization — it now appears exactly once, in the user
+          row directly below. Buildings (not a location pin) is the
+          same icon OrganizationSelector.tsx already uses for this exact
+          workspace/organization concept — reused, not newly introduced.
+        */}
         <div className="hidden items-center gap-2 px-1 pb-3 text-chrome-text-secondary lg:flex">
-          <MapPin className="size-4 shrink-0" aria-hidden />
+          <Buildings className="size-4 shrink-0" aria-hidden />
           <div className={typography.metadata}>
-            <p>{location}</p>
-            <p>{orgUnit}</p>
+            <p className="truncate font-medium" title={location}>
+              {location}
+            </p>
+            <p>Workspace</p>
           </div>
         </div>
 

@@ -20,6 +20,8 @@ export interface AppHeaderProps {
   actions?: ReactNode;
   /** Real resolved identity (never a placeholder) — omit entirely on a route with nothing real to show yet. */
   avatarName?: string;
+  /** P1-UX-R1: the signed-in user's own auth email — already resolved server-side, no new query. Purely personal-identity context for the account menu popup; never shown in the sidebar. */
+  dispatcherEmail?: string | null;
   /** Account menu context (P1-E3-S8B1) — required alongside `avatarName` for the menu to render; kept optional as a pair so a route with no real identity yet (none currently) can still omit both cleanly. */
   organizationName?: string;
   roleLabel?: string;
@@ -36,6 +38,7 @@ export function AppHeader({
   description,
   actions,
   avatarName,
+  dispatcherEmail,
   organizationName,
   roleLabel,
   hasMultipleOrganizations,
@@ -59,6 +62,7 @@ export function AppHeader({
         {avatarName && organizationName && roleLabel && (
           <AccountMenu
             avatarName={avatarName}
+            dispatcherEmail={dispatcherEmail ?? null}
             organizationName={organizationName}
             roleLabel={roleLabel}
             showSwitchOrganization={hasMultipleOrganizations ?? false}

@@ -25,8 +25,25 @@ export async function getRequestedOrganizationId(): Promise<string | null> {
  * `select-required`. Zero → `none`. Never infers "the strongest role
  * across all organizations" (work item §19) — each organization's role is
  * independent.
+ *
+ * P1-UX-R1A: `forceSelection` is for exactly one caller — the explicit
+ * "Switch Organization" action — and only ever changes the outcome for a
+ * genuinely multi-Membership caller who already has a VALID cookie match
+ * (the `status: "selected"` branch below). It makes that branch resolve
+ * to `select-required` instead, so `/select-organization` renders the
+ * picker rather than bouncing the caller straight back to their current
+ * workspace. It does NOT touch the zero- or single-Membership branches —
+ * a single-org caller gets `status: "single"` regardless of this flag,
+ * so they can never be shown a picker with nothing to pick (work item
+ * §7). This flag never reads or trusts any caller-supplied organization
+ * id; it only decides which of the two already-computed outcomes to
+ * return. The cookie itself is still re-validated against a fresh
+ * `getActiveMemberships()` call exactly as before, and the actual
+ * selection is still exclusively performed by `selectOrganizationAction`,
+ * which independently re-validates the submitted id against the caller's
+ * own active Memberships.
  */
-export async function resolveOrganizationContext(): Promise<OrganizationResolution> {
+export async function resolveOrganizationContext(options?: { forceSelection?: boolean }): Promise<OrganizationResolution> {
   const memberships = await getActiveMemberships();
 
   if (memberships.length === 0) {
@@ -36,6 +53,10 @@ export async function resolveOrganizationContext(): Promise<OrganizationResoluti
   if (memberships.length === 1) {
     const [only] = memberships;
     return { status: "single", context: only };
+  }
+
+  if (options?.forceSelection) {
+    return { status: "select-required", memberships };
   }
 
   const requestedId = await getRequestedOrganizationId();
