@@ -1,0 +1,759 @@
+P1-UX-R2 — COLLAPSIBLE OPERATIONS SIDEBAR
+=============================================
+Project:              /Users/datamatics/ZenWard
+Production base:      cb62367e43bc3754d75e74fe72d4c40b18cb7eb7
+Date:                 2026-09-16
+Status:               Local implementation complete. NOT staged, NOT
+                       committed, NOT pushed, NOT deployed, per explicit
+                       phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        cb62367e43bc3754d75e74fe72d4c40b18cb7eb7
+  origin/main: cb62367e43bc3754d75e74fe72d4c40b18cb7eb7
+  Match confirmed — origin/main had not advanced. Proceeded per §1.
+
+
+2. ARCHITECTURE AUDIT
+--------------------------
+  src/components/operations/OperationsSidebar.tsx
+    "use client". Owns: nav item list, active-route detection
+    (usePathname), the Nemryn logo, and the bottom workspace/user
+    identity rail. Root `<aside>` is `hidden ... md:flex` — invisible
+    below md (768px), a fixed-icon rail `md:w-16` from md up, widened to
+    `lg:w-64` (1024px+) where full labels/identity text appear. Labels
+    were hidden via plain `hidden lg:inline`/`hidden lg:flex`/
+    `hidden lg:block` — pure Tailwind responsive utilities, no JS state
+    of any kind before this phase.
+
+  src/components/operations/OperationsLayoutClient.tsx
+    "use client". Builds the `sidebar` prop object
+    (location/dispatcherName/dispatcherRole/hasLinkedDriverProfile) and
+    passes it straight to OperationsShell. Contains zero sidebar-width or
+    collapse-related logic, before or after this phase — confirmed by
+    reading the current file; nothing here needed to change, since the
+    new collapse state is pure UI state fully local to
+    OperationsSidebar.tsx.
+
+  src/components/operations/OperationsShell.tsx
+    Server-renderable composition: below-md unsupported-width guard
+    (`md:hidden` EmptyState — "This workspace is designed for tablet and
+    desktop use.") plus, at md+, a flex row of
+    `<OperationsSidebar> + <div className="flex min-w-0 flex-1 flex-col">`
+    holding AppHeader + main content. The content column already uses
+    `min-w-0 flex-1` — meaning content reflow when the sidebar's own
+    rendered width changes is ALREADY guaranteed by this existing flex
+    layout, with no fixed pixel widths anywhere fighting it. Confirmed
+    unchanged and untouched.
+
+  src/components/operations/AppHeader.tsx
+    Persistent top header — search/actions/notifications/help + the REAL
+    AccountMenu trigger (a separate avatar button, top-right). Entirely
+    independent of OperationsSidebar; confirmed unchanged and untouched.
+
+  src/app/operations/layout.tsx
+    Server component — auth/org resolution only, passes
+    dispatcherDisplayName/dispatcherEmail/hasMultipleOrganizations/
+    hasLinkedDriverProfile down. No sidebar-width concept exists here.
+    Confirmed unchanged and untouched.
+
+  Shared navigation primitives: `src/design/icons.ts` (navIcons map,
+  Phosphor icons per nav key) — read, not modified. No `Tooltip`
+  component/pattern exists anywhere in `src/` (confirmed via
+  `find src -iname "*tooltip*"`, zero results) — every nav item's
+  existing discoverability already relied on a plain `title` attribute
+  (present before this phase), never a custom tooltip widget.
+
+  Client vs server: OperationsSidebar, OperationsLayoutClient are both
+  "use client"; OperationsShell, AppHeader, operations/layout.tsx are
+  plain/server components (AppHeader has no "use client" directive of
+  its own, but is a pure function component with no hooks — it works
+  fine rendered from a server or client parent).
+
+  Active-route styling: driven by `pathname.startsWith(item.href)` (or
+  exact match for `/operations`), applying
+  `bg-chrome-item-active-background text-chrome-item-active-text` plus
+  `weight="fill"` on the icon — entirely independent of any `lg:`
+  breakpoint class, so it was ALREADY consistent across every rail
+  width, including the existing tablet icon-only rail, before this
+  phase.
+
+  Workspace/user bottom rail (pre-existing, from P1-UX-R1): a
+  `border-t` block with a `Buildings`-icon workspace row (already
+  `hidden` below lg — i.e., NOT shown at tablet width even before this
+  phase) and a user row (`Avatar` + name/role text, where only the TEXT
+  block was `hidden` below lg — the Avatar circle itself was already
+  visible at every supported width, including tablet).
+
+
+3. FILES CHANGED
+--------------------
+  src/components/operations/OperationsSidebar.tsx  (145 insertions, 9 deletions)
+
+Exactly ONE file — smaller than the phase's own "likely files" estimate
+(which listed up to 3). OperationsLayoutClient.tsx and OperationsShell.tsx
+needed no changes: the new collapse state is pure client UI state,
+entirely local to OperationsSidebar, with no new prop threading required
+anywhere in the tree. No STOP was triggered (§29) — scope stayed smaller
+than expected, not larger.
+
+Auth, organization resolution, /select-organization, AccountMenu
+semantics, Operations Brief data, Supabase, RLS, and migrations were not
+touched — confirmed by `git diff --name-only` showing only the one file
+above.
+
+
+4. DESKTOP STATE MODEL
+---------------------------
+Two states, `collapsed: boolean` (React `useState`, default `false` =
+expanded):
+
+  EXPANDED (collapsed=false): `<aside>` gets `lg:w-64`; full wordmark
+    logo shown at lg+; workspace row (Buildings icon + org name +
+    "Workspace") shown at lg+; user row shows Avatar + name + role text;
+    nav items show icon + label.
+
+  COLLAPSED (collapsed=true): `<aside>` does NOT get `lg:w-64` (falls
+    back to the base `md:w-16`, i.e. the exact same width tablet already
+    uses); symbol-only logo shown; workspace row hidden (matching
+    tablet's pre-existing treatment exactly); user row shows only the
+    Avatar circle; nav items show icon only, with hover/`title` tooltip
+    and an explicit `aria-label` for the accessible name.
+
+The key implementation insight: every "show the lg: extras" class is
+computed as `!collapsed && "lg:X"` rather than always emitting `"lg:X"`.
+This means `collapsed` never has to know or query the actual viewport
+width — at md–lg (tablet) the `lg:` media query never matches regardless
+of `collapsed`'s value, so tablet is structurally unaffected no matter
+what; at lg+, the `lg:` classes only apply when `!collapsed`. This is
+what makes tablet automatically stay compact (§3/§18), and what makes the
+desktop preference automatically "reapply" the instant the viewport
+crosses back over 1024px (§18's example) — there is no viewport-size
+detection code anywhere; it falls entirely out of ordinary CSS media
+query evaluation against a value that itself never depends on viewport
+size.
+
+
+5. PERSISTENCE IMPLEMENTATION
+----------------------------------
+`localStorage` only, key `nemryn.sidebar.collapsed`, value the string
+`"true"`/`"false"`. No database column, no profile field, no Supabase
+call, no cookie (localStorage was technically sufficient — no
+architectural reason required a cookie), no cross-device sync of any
+kind. Read once on mount (see §6); written on every toggle click, inside
+a `try/catch` so a private-browsing storage-quota error or disabled
+storage never crashes the sidebar — it just means the preference won't
+survive a reload for that one session, not a functional failure.
+
+
+6. HYDRATION STRATEGY
+--------------------------
+`useState(false)` — the component's very first render, on BOTH the
+server (SSR) and the client's initial hydration pass, always renders
+"expanded." This guarantees zero hydration mismatch, since server and
+client output are byte-identical by construction, with the real stored
+preference not yet applied.
+
+The real preference is then read inside a tiny "isomorphic layout
+effect":
+
+    const useIsomorphicLayoutEffect =
+      typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+`useLayoutEffect` fires synchronously, after DOM mutations but BEFORE
+the browser paints the frame — so if the stored preference is
+"collapsed," the resulting `setCollapsed(true)` and its re-render are
+both flushed before anything is ever shown on screen, meaning there is
+no visible expanded→collapsed flash on reload. `useLayoutEffect` is
+documented to do nothing during server rendering (and would print a
+console warning if called unconditionally in an SSR context); the
+`typeof window` check is the standard, widely-used ~1-line pattern that
+avoids that warning by using the plain `useEffect` reference during
+server module evaluation and the real `useLayoutEffect` in the browser —
+not a new library, not new infrastructure, exactly as the phase asked
+for ("keep implementation small").
+
+Live-confirmed (§17, test D): reloading `/operations/dispatch` with a
+stored "collapsed" preference produced `aside` width 64 immediately —
+no intermediate 256-width frame was ever observed in the captured
+screenshot or the immediate post-navigation measurement.
+
+
+7. TOGGLE IMPLEMENTATION
+-----------------------------
+A single control, in its own thin bordered row directly below the brand
+row (both only exist as a pair at the same width tier), built from the
+EXISTING `IconButton` primitive (`src/components/ui/IconButton.tsx` —
+already used elsewhere, e.g. AppHeader's Notifications/Help buttons; no
+new component created). `hidden lg:flex` — this row, and the ability to
+manually toggle at all, exists ONLY at lg+; tablet never sees it
+(§18/§20).
+
+  label / aria-label / title: "Collapse sidebar" (expanded) or
+    "Expand sidebar" (collapsed) — dynamically computed, IconButton's own
+    `label` prop is REQUIRED and becomes the button's `aria-label`.
+  icon: `CaretLeft` (expanded, "push it left/away") /
+    `CaretRight` (collapsed, "pull it back out") — both already-available
+    Phosphor icons (`@phosphor-icons/react/dist/ssr`), no new icon
+    package installed.
+  Real `<button type="button">` (IconButton's own implementation),
+    keyboard-focusable (`tabIndex` 0, confirmed live), visible focus
+    state via the codebase's existing GLOBAL `:focus-visible` rule in
+    globals.css (`outline: 2px solid var(--color-border-focus)`) — no
+    new focus styling needed, inherited automatically by any real
+    `<button>`.
+
+Placement rationale (§6 "near the sidebar's upper brand/navigation
+area," not necessarily inside the identical 64px-tall brand row): at the
+collapsed/tablet rail width (64px total, ~32px of interior space after
+padding), the logo mark alone already consumes nearly all of that width
+— there is no room left for a second interactive element beside it
+without visually cramming both into illegibility. A separate, dedicated
+thin row directly beneath the brand row avoids this entirely, at zero
+extra width cost (still exactly 64px wide when collapsed), and keeps the
+logo's own presentation completely unencumbered at every tier.
+
+
+8. BRAND-ASSET BEHAVIOR
+----------------------------
+  Expanded desktop (lg+, `!collapsed`): `/brand/nemryn-logo-inverse.svg`
+    (the full wordmark), rendered at `w-24` — unchanged from before this
+    phase.
+  Collapsed desktop AND tablet (both md–lg and lg+-while-collapsed):
+    `/brand/nemryn-symbol-inverse.svg` (viewBox 128×139, the approved
+    symbol-only master file), rendered at `h-8 w-auto`.
+
+Both are the exact approved master files from `public/brand/`, consumed
+directly via `next/image` with `width`/`height` matching each file's own
+real viewBox — never redrawn, retraced, or derived, and never stretched
+(no aspect-ratio-breaking CSS anywhere; only `h-auto`/`w-auto` paired
+with an explicit dimension, matching the SAME pattern already used for
+the wordmark before this phase).
+
+This is also a genuine, phase-mandated FIX, not merely new collapsed-
+state behavior: before this phase, TABLET already rendered the full
+434×127 wordmark squeezed down to `w-7` (28px wide, ~8px tall at its
+correct aspect ratio) — a barely-legible sliver, and arguably itself a
+violation of the brand rule against "stretch[ing]... alter[ing]
+proportions" in spirit if not in literal transform. `nemryn-symbol-
+inverse.svg` existed in `public/brand/` but was used NOWHERE in the
+codebase before this phase (confirmed via
+`grep -rn "nemryn-symbol" src/` returning zero results beforehand).
+Tablet now shows this properly-proportioned, legible symbol mark
+instead — see the `uxr2-tablet-820.png` screenshot in §13.
+
+
+9. NAVIGATION-LABEL BEHAVIOR
+---------------------------------
+Expanded: icon + visible label span (unchanged content/order/7 items —
+`Overview, Trips, Dispatch, Passengers, Facilities, Drivers, Fleet`,
+plus the conditional `Drive` item exactly as before). Collapsed/tablet:
+icon only — the label `<span>` keeps its `hidden` class with no `lg:`
+override added, so it is not rendered at all (not merely visually
+hidden while remaining in the accessible-name computation — `display:
+none` content contributes nothing to accessible name computation per
+the ARIA spec, which is why §9 below adds an explicit `aria-label`
+rather than relying on the hidden span alone).
+
+No item was added, removed, or reordered. Request Hub was not added, per
+explicit instruction.
+
+
+10. TOOLTIP/DISCOVERABILITY APPROACH
+-----------------------------------------
+No Tooltip component or pattern exists anywhere in this codebase
+(confirmed: `find src -iname "*tooltip*"` → zero results). Per the
+phase's own explicit fallback instruction ("use the smallest accessible
+solution... such as a native `title` plus existing aria-label/accessible-
+name behavior... do NOT build a new generalized tooltip design system"):
+
+  - `title={item.label}` was ALREADY present on every nav `<Link>`
+    before this phase — a real, working native browser hover tooltip,
+    unchanged.
+  - `aria-label={item.label}` was NEWLY added to every nav `<Link>` in
+    this phase — this is the one small, deliberate addition: it
+    guarantees a well-defined accessible name for every item regardless
+    of whether the visible label span is present, rather than relying on
+    `title`'s accessible-name fallback behavior (which exists per spec,
+    but is a weaker guarantee, and the phase's own §27 explicitly warns
+    "tooltip/title does not replace the accessible name").
+
+No new component was built. Live-confirmed (§23): every nav `<a>` in the
+collapsed rail reports the correct `aria-label` — "Overview", "Trips",
+"Dispatch", "Passengers", "Facilities", "Drivers", "Fleet".
+
+
+11. WORKSPACE IDENTITY
+---------------------------
+Preserved exactly, in both states. Expanded shows
+`{organizationName}` / `"Workspace"` (never a role) — unchanged from
+P1-UX-R1. Collapsed hides this row entirely, reusing the row's own
+PRE-EXISTING `hidden` treatment (it was already `hidden` at tablet width
+before this phase existed — no membership role was ever shown there
+before, and none is shown now). `Buildings` icon usage is completely
+unchanged — still the same icon, still only ever paired with the
+organization name, never a role.
+
+Live-confirmed (§22, multi-org fixture): expanded sidebar shows
+"Fictional Org A" / "Workspace" correctly; the collapsed rail shows
+neither the org name nor a role — only the compact avatar, exactly
+matching the pre-existing tablet behavior.
+
+
+12. USER/ACCOUNT BEHAVIOR
+------------------------------
+Expanded: Avatar + `{dispatcherName}` / `{dispatcherRole}` text — 100%
+unchanged. Collapsed: only the `Avatar` circle (initials badge) remains
+visible — this required ZERO new code, since the Avatar itself was
+ALREADY rendered unconditionally at every supported width (only the
+adjacent text block was breakpoint-gated); collapsing at lg+ simply
+extends that same pre-existing "always show the avatar, sometimes hide
+the text" behavior to lg+ too.
+
+The REAL account menu (person name, role, email-if-distinct, Switch
+Organization, Sign Out) lives entirely in `AppHeader`/`AccountMenu`, a
+completely separate component tree at the top-right of the persistent
+header — NOT inside OperationsSidebar at all. This phase touched neither
+file. The sidebar's own bottom-rail avatar has never been a clickable
+menu trigger (no `onClick`, no `role="button"`) — it is, and always was,
+a secondary at-a-glance identity display; the account menu opening
+correctly is therefore structurally guaranteed to be unaffected by
+sidebar collapse state, and this was independently confirmed live
+regardless (§22): opening the account menu with the sidebar collapsed
+produced the identical, correct P1-UX-R1/R1A popup content ("org-a-
+admin@example.test / Organization Admin / Sign Out").
+
+No workspace/user identity duplication was introduced anywhere.
+
+
+13. TABLET BEHAVIOR
+------------------------
+Live-tested at 820×1100 (org-a-admin@example.test): `aside` width
+measured 64px (the pre-existing compact rail, unchanged), and the manual
+toggle button was confirmed NOT present in the DOM's visible/focusable
+set at this width (`offsetParent === null`). Screenshot
+(`uxr2-tablet-820.png`) shows the improved symbol-mark logo (§8), the
+same icon-only nav, and no toggle exposed — the tablet experience is
+otherwise pixel-identical to before this phase, aside from that one
+brand-asset improvement.
+
+
+14. NARROW GUARD
+---------------------
+Live-tested at 390×844 (org-a-admin@example.test): `aside` element
+`offsetParent === null` (not rendered/visible), and the existing guard
+text ("This workspace is designed for tablet and desktop use.") was
+confirmed present via `document.body.innerText`. Screenshot
+(`uxr2-narrow-390.png`) matches the pre-existing guard exactly — no
+sidebar, no toggle, no collapse-related UI leaks into this layout at
+all, since OperationsShell.tsx (which owns this guard branch) was not
+touched.
+
+
+15. CONTENT REFLOW
+-----------------------
+No changes were needed to achieve this — `OperationsShell.tsx`'s content
+column already uses `flex min-w-0 flex-1`, meaning it naturally
+occupies "whatever horizontal space the sidebar isn't using," by
+ordinary CSS flexbox behavior, both before and after this phase. No
+overlay, no fixed pixel widths on any operational page were introduced
+or found. Live-confirmed across every tested route (§18/§20/§21/§24):
+collapsing the sidebar visibly and measurably returns real width to the
+Operations Brief cards, the Trips/Drivers tables, and the Dispatch
+timeline — see the before/after screenshots referenced throughout this
+report.
+
+
+16. TRANSITION BEHAVIOR
+----------------------------
+A restrained width transition was added to the `<aside>` element only:
+
+    transition-[width] duration-base ease-standard motion-reduce:transition-none
+
+`duration-base` (180ms) and `ease-standard` are pre-existing design
+tokens already defined in `globals.css` (`--duration-base`,
+`--ease-standard`) — reused, not invented. `motion-reduce:transition-none`
+is Tailwind's built-in `prefers-reduced-motion` variant (needs no
+project-specific setup) — it fully disables the width animation for a
+caller with that OS-level preference, satisfying "respect prefers-
+reduced-motion" with zero new infrastructure.
+
+No text-squeezing artifact was introduced: the labels/workspace/user
+text blocks are toggled via `hidden`↔visible (a `display` change, which
+is not animatable and therefore cannot visibly "squeeze") rather than
+via any width/opacity animation on the text itself — they simply appear
+or disappear instantly, while only the `<aside>` container's own width
+transitions smoothly.
+
+
+17. PREFERENCE TESTS
+-------------------------
+All performed live via headless Chrome + CDP against localhost:3000
+(org-a-admin@example.test), 1400×900, with `localStorage` explicitly
+cleared before test A:
+
+  A. No saved preference → desktop expanded.
+     Result: aside width 256px. PASS.
+  B. Click collapse → desktop rail becomes compact.
+     Result: aside width 64px immediately after the click;
+     `localStorage.getItem('nemryn.sidebar.collapsed')` === "true". PASS.
+  C. Navigate Overview → Trips → Dispatch → remains collapsed.
+     Result: aside width stayed 64px through both navigations; zero
+     page-level horizontal overflow on Dispatch while collapsed. PASS.
+  D. Reload → remains collapsed.
+     Result: aside width 64px immediately post-reload (no flash of
+     expanded observed — see §6). PASS.
+  E. Click expand → expanded.
+     Result: aside width 256px; toggle `aria-label` correctly updated to
+     "Collapse sidebar". PASS.
+  F. Reload → remains expanded.
+     Result: aside width 256px post-reload. PASS.
+  G. Delete local preference → returns to expanded default.
+     Result: collapsed first, then `localStorage.removeItem(...)`,
+     reload → aside width 256px (default). PASS.
+
+All 7 scenarios A–G pass exactly as specified.
+
+
+18. ROUTE REGRESSION
+-------------------------
+Tested Overview, Trips, Dispatch, Passengers, Facilities, Drivers,
+Fleet — every route from the phase's own required list — in BOTH
+expanded and collapsed states, 1400×900:
+
+  [collapsed=false] Overview     — asideWidth=256, overflow=false, loaded=true
+  [collapsed=false] Passengers   — asideWidth=256, overflow=false, loaded=true
+  [collapsed=false] Facilities   — asideWidth=256, overflow=false, loaded=true
+  [collapsed=false] Fleet        — asideWidth=256, overflow=false, loaded=true
+  [collapsed=true]  Overview     — asideWidth=64,  overflow=false, loaded=true
+  [collapsed=true]  Passengers   — asideWidth=64,  overflow=false, loaded=true
+  [collapsed=true]  Facilities   — asideWidth=64,  overflow=false, loaded=true
+  [collapsed=true]  Fleet        — asideWidth=64,  overflow=false, loaded=true
+
+Trips and Dispatch were separately validated with full screenshots (see
+§20/§21). Drivers was validated for overflow directly (§20) and via
+screenshot. `Drive` (the conditional owner-operator item) was not
+re-tested this pass since `hasLinkedDriverProfile` is false for every
+fixture used in this session and its rendering logic (conditionally
+appended to the same `navItems` array, iterated by the exact same
+`<Link>` JSX this report's changes apply to) was not touched — the same
+collapse/label logic applies to it identically to every other item.
+No destination was changed. All routes load correctly in both states.
+
+
+19. OPERATIONS BRIEF REGRESSION
+------------------------------------
+`/operations`, 1400×900, both states (screenshots `uxr2-A-expanded-
+overview.png` / `uxr2-B-collapsed-overview.png`):
+  - No clipping in either state.
+  - No horizontal page-level overflow in either state (confirmed via
+    `scrollWidth > clientWidth` checks throughout this report; also
+    visually confirmed in both screenshots).
+  - "Needs Attention" remains fully readable in both states — the
+    2-item list, badges, and Assign/Open Trip buttons are unchanged and
+    legible.
+  - "Active Now" / "Next Departures" two-column layout is preserved in
+    both states.
+  - Collapsing visibly returns real horizontal space to every Brief
+    card — directly visible comparing the two screenshots (the "Needs
+    Attention" card's right-hand badge/button column, and both
+    "Active Now"/"Next Departures" cards, are all measurably wider in
+    the collapsed screenshot).
+Operations Brief's own implementation (operations-brief.ts/
+operations-brief-core.ts/OperationsBrief.tsx) was not touched.
+
+
+20. TRIPS/DRIVERS TABLE REGRESSION
+----------------------------------------
+`/operations/trips` (screenshot `uxr2-E-collapsed-trips.png`): with the
+sidebar collapsed, the Route column now shows full, untruncated
+pickup/destination addresses ("1284 Glenwood Avenue SE, Atlanta, GA
+30316 → Fictional Clinic A") that were previously tighter against the
+right edge — the collapse genuinely increases usable table width rather
+than leaving empty margin; the table itself reflows to fill the gained
+space (no fixed table width anywhere).
+
+`/operations/drivers`: confirmed zero page-level horizontal overflow
+with the sidebar collapsed (`scrollWidth > clientWidth` = false),
+screenshot captured (`uxr2-drivers-collapsed.png`).
+
+
+21. DISPATCH REGRESSION
+----------------------------
+`/operations/dispatch`, 1400×900, both states (screenshots
+`uxr2-C-expanded-dispatch.png` / `uxr2-D-collapsed-dispatch.png`):
+  - No overlay in either state — the sidebar and content remain a plain
+    flex row throughout, exactly as before this phase.
+  - The Today's Assignments timeline remains usable in both states.
+  - The timeline's own internal horizontal-scroll containment
+    (`Panel className="overflow-x-auto p-0"` in `AssignmentGrid.tsx`,
+    confirmed unchanged/untouched by this phase) remains fully contained
+    — no page-level overflow was introduced in either state (explicitly
+    checked: `overflow=false` for both).
+  - Collapsing genuinely produces additional useful content width — the
+    "Today's Assignments" timeline visibly shows more hour columns
+    (6:00 AM–1:00 PM fully visible) in the collapsed screenshot versus
+    the expanded one (6:00 AM–10:00 AM, with a trip block clipped at the
+    panel's own internal scroll edge) — directly comparable in the two
+    screenshots.
+Dispatch's own implementation was not touched or redesigned.
+
+
+22. MULTI-ORG REGRESSION
+-----------------------------
+Live-tested end-to-end with multi-org-user@example.test (Fictional Org
+A — Organization Admin, Fictional Org B — Driver), on the running local
+database:
+
+  1. Signed in, selected "Fictional Org A" → landed on `/operations`.
+  2. Confirmed expanded sidebar text includes "Fictional Org A" AND
+     "Workspace" (workspace identity correct).
+  3. Collapsed the sidebar → width 64px, exactly as for a single-org
+     user — the collapse preference is a plain browser-level UI setting,
+     never confused with or scoped by organization context.
+  4. Opened AccountMenu (top-right, unaffected by sidebar state) —
+     "Switch Organization" link present (correct, since this fixture
+     genuinely has >1 active Membership).
+  5. Clicked "Switch Organization" → landed on
+     `/select-organization?switch=1` — the picker REMAINED VISIBLE (did
+     not bounce back), showing "Fictional Org A [Current] /
+     Organization Admin" and "Fictional Org B / Driver" — the P1-UX-R1A
+     explicit-switch mechanism is completely unaffected by this phase.
+  6. Selected "Fictional Org B" → context genuinely changed; landed on
+     `/driver` (cross-role routing preserved — NOT forced into
+     `/operations`; root `/`'s own pre-existing role-based redirect,
+     untouched by this phase, did all the routing work).
+
+Sidebar collapse preference was NOT scoped per organization — it is one
+single browser-level `localStorage` key, exactly as instructed (§22:
+"Do NOT scope sidebar preference per organization in v1").
+
+
+23. ACCESSIBILITY
+----------------------
+  - Toggle has an explicit, correct `aria-label` ("Collapse sidebar" /
+    "Expand sidebar", verified to update live on state change) — via
+    `IconButton`'s own required `label` prop.
+  - Toggle is a real `<button type="button">`, confirmed focusable
+    (`tabIndex` 0, `document.activeElement` correctly lands on it via
+    `.focus()`), with a visible focus outline via the codebase's
+    existing global `:focus-visible` rule (no new CSS needed).
+  - Nav icons have explicit, correct `aria-label`s when labels are
+    hidden (collapsed/tablet) — live-confirmed for all 7 items
+    ("Overview", "Trips", "Dispatch", "Passengers", "Facilities",
+    "Drivers", "Fleet"). `title` remains a real, additional hover
+    tooltip; the accessible name itself no longer depends on it.
+  - Tab order is unchanged/logical by construction: no `tabIndex`
+    override was added anywhere, and the toggle/nav/identity rows appear
+    in the same DOM order as their visual order (brand → toggle → nav →
+    workspace → user), so default browser tab order already matches
+    reading order.
+  - Active route continues to be represented via `aria-current="page"`
+    (unchanged) plus the existing background/icon-weight treatment,
+    independent of collapse state (confirmed: this treatment was never
+    gated by any `lg:` class even before this phase).
+  - AccountMenu's own trigger remains fully accessible and functional —
+    confirmed live with the sidebar collapsed (§12/§22); this phase
+    touched neither AppHeader.tsx nor AccountMenu.tsx.
+  - Focus does not disappear when the sidebar changes state: verified
+    via a genuine synthetic mouse click (`Input.dispatchMouseEvent` at
+    the toggle's real screen coordinates, simulating actual pointer
+    interaction) — `document.activeElement` correctly remained the
+    toggle button after the resulting re-render/width change.
+
+  Test-harness limitation, disclosed rather than glossed over: this
+  session's raw WebSocket CDP script could NOT be used to directly
+  demonstrate keyboard-Enter ACTIVATING the button (`Input.dispatchKeyEvent`
+  for Enter did not trigger a click even on a completely unrelated, bare
+  vanilla `<button onclick>` test page created purely to isolate this —
+  proving it is a limitation of this minimal hand-rolled harness's
+  synthetic-key fidelity, not a defect in this component or this
+  codebase). The toggle is a native, unmodified `<button type="button">`
+  with a plain `onClick` handler and no custom `onKeyDown`/
+  `preventDefault` anywhere — native browsers handle Enter/Space
+  activation for real `<button>` elements as built-in, unautomatable-
+  around-in-this-harness behavior; this was not fabricated as a live
+  PASS, and is called out explicitly here rather than silently assumed.
+
+
+24. PERFORMANCE
+--------------------
+Confirmed: the collapse/expand interaction requires zero database
+calls, zero server mutations, zero Next.js route refreshes, and zero
+Supabase requests — it is exclusively a client-side `useState` update
+plus a synchronous `localStorage` read/write, both of which are pure
+browser APIs with no network involved. No polling, no realtime
+subscription, and no service-role usage were introduced anywhere in
+this phase's one changed file. Confirmed via direct code reading (the
+entire diff is visible in §27) — there is no `fetch`, no Supabase client
+import, no `useEffect`-driven network call anywhere in the added code.
+
+
+25. TYPECHECK/LINT/BUILD/TESTS
+------------------------------------
+  npx tsc --noEmit    PASS (zero errors)
+  npm run lint         PASS (0 errors; 14 pre-existing warnings, all in
+                        unrelated .tmp-qa/*.mjs scratch scripts, not
+                        staged, not part of this phase's one changed
+                        file)
+  npm run build         PASS (compiled successfully; all 36 routes built,
+                        including every /operations/* route)
+  npm test               PASS (56/56 tests, 0 failures — the complete
+                        existing unit suite; no new test suite was
+                        needed or written, since this phase's own logic
+                        (a boolean toggle + a try/catch'd localStorage
+                        read/write) is exercised end-to-end by the live
+                        browser validation above, and has no pure-
+                        function business logic of the kind the existing
+                        `*-core.test.mjs` convention targets)
+
+
+26. DATABASE DIFF
+----------------------
+NONE. `git status --porcelain supabase/` returns empty — checked before
+this phase's edit and again at the end. No migration, RLS policy, GRANT,
+RPC, email code, driver-invitation code, or password-recovery code was
+touched. This phase's one changed file
+(`src/components/operations/OperationsSidebar.tsx`) contains no
+Supabase import, no database query, and no auth/session/organization-
+resolution logic of any kind.
+
+
+27. EXACT SOURCE DIFF
+--------------------------
+`git diff --stat`:
+  src/components/operations/OperationsSidebar.tsx | 154 ++++++++++++++++++++++--
+  1 file changed, 145 insertions(+), 9 deletions(-)
+
+Full diff summary (complete diff reviewed in full during this phase; see
+the file itself for the authoritative content):
+
+  - New imports: `useState`, `useEffect`, `useLayoutEffect` (react);
+    `CaretLeft`, `CaretRight` (phosphor); `IconButton` (existing ui
+    component).
+  - New module-scope constants: `SIDEBAR_COLLAPSED_STORAGE_KEY`,
+    `useIsomorphicLayoutEffect`.
+  - New component-scope state: `collapsed` (`useState(false)`), the
+    `useIsomorphicLayoutEffect` read, and `toggleCollapsed()`.
+  - `<aside>` className: conditionally includes `lg:w-64` only when
+    `!collapsed`; added a `transition-[width]` class.
+  - Brand row: added a second `<Image>` for the symbol mark
+    (conditionally hidden at lg+ unless collapsed); the existing
+    wordmark `<Image>`'s className changed from unconditional
+    `w-7 lg:w-24` to conditional `hidden` + `!collapsed && "lg:block"`.
+  - New toggle row: a `hidden lg:flex` div containing one `IconButton`.
+  - Nav `<Link>`: added `aria-label={item.label}`; the label `<span>`'s
+    className changed from unconditional `hidden lg:inline` to
+    conditional `hidden` + `!collapsed && "lg:inline"`.
+  - Workspace row and user-identity-text-block divs: both changed from
+    unconditional `hidden lg:flex`/`hidden lg:block` to
+    `collapsed ? "hidden" : "hidden lg:flex"` /
+    `collapsed ? "hidden" : "hidden lg:block"`.
+
+No other lines changed. No file besides this one was modified.
+
+
+28. PRODUCT QA ANSWERS
+---------------------------
+  Does collapsed mode materially increase usable workspace width?
+    YES — measured and visually confirmed: Operations Brief cards,
+    the Trips table's Route column (now shows full untruncated
+    addresses), and Dispatch's visible timeline hour-range all
+    genuinely gain real width when collapsed (§19/§20/§21).
+
+  Can an operator still identify every navigation destination?
+    YES — every icon retains its existing shape/meaning plus a native
+    hover `title` tooltip and an explicit `aria-label` accessible name
+    (§10/§23); nothing was renamed or reordered.
+
+  Is expanded mode still the default for a new browser?
+    YES — confirmed live, test A (§17): no saved preference → 256px
+    (expanded).
+
+  Does preference survive navigation and reload?
+    YES — confirmed live, tests C/D/F (§17).
+
+  Does tablet behavior remain automatically compact?
+    YES — confirmed live at 820×1100 (§13): 64px rail, no toggle
+    exposed, regardless of any stored desktop preference.
+
+  Does collapsed mode preserve workspace/user semantics?
+    YES — no role is ever shown beneath the workspace name in either
+    state; the role remains attached exclusively to the person, in both
+    the (collapsed-hidden) workspace row and the user row (§11/§12).
+
+  Does Switch Organization still work?
+    YES — confirmed live end-to-end with the multi-org fixture,
+    including while the sidebar was collapsed (§22): the picker still
+    opens via `?switch=1`, still shows "Current," and selecting a
+    different organization still changes context and routes by the new
+    membership's role.
+
+  Does the sidebar ever auto-expand on hover?
+    NO — there is no `:hover`-driven width or visibility change
+    anywhere in this diff; `collapsed` changes exclusively via the
+    explicit `toggleCollapsed()` click handler, never as a side effect
+    of pointer movement.
+
+  Does Dispatch benefit from the change without being redesigned?
+    YES — Dispatch's own implementation
+    (AssignmentGrid.tsx and everything under
+    src/components/operations/dispatch/ and src/app/operations/dispatch/)
+    was not touched; it simply receives more width from the same
+    pre-existing flex layout, and visibly shows more of its timeline as
+    a result (§21).
+
+All eight answers are YES — the phase is complete per its own §32
+criterion.
+
+
+29. READINESS FOR PRODUCTION RELEASE
+-----------------------------------------
+All automated checks pass (tsc/lint/build/tests, zero database diff).
+All required live validation scenarios pass, including the full A–G
+preference-persistence matrix, every listed route in both states,
+Operations Brief/Trips/Drivers/Dispatch regressions, the full multi-org
+Switch Organization flow while collapsed, and accessibility checks (with
+one CDP-harness-specific limitation transparently disclosed in §23
+rather than silently assumed). No auth/RLS/organization-resolution/
+AccountMenu logic was touched. The change is a single, small,
+self-contained file with no new dependencies.
+
+This report and the underlying implementation are ready for a future,
+separately-authorized release phase — this phase's own explicit
+instruction was local-implementation-only ("DO NOT COMMIT. DO NOT PUSH.
+DO NOT DEPLOY."), which was honored throughout; no staging, committing,
+or pushing was performed at any point.
+
+
+30. GIT STATUS
+-------------------
+  git status -sb:
+    ## main...origin/main
+    (no ahead/behind — fully aligned, nothing staged or committed)
+     M src/components/operations/OperationsSidebar.tsx
+    ?? .tmp-qa/auth-confirm-e2e.mjs
+    ?? .tmp-qa/join-auth-confirm-e2e.mjs
+    ?? .tmp-qa/n0-g0-audit-e2e.mjs
+    ?? docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    ?? docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    ?? docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    ?? docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    ?? docs/reports/n0-m1-a0-domain-migration-audit.txt
+    ?? docs/reports/n0-m1-a3-production-validation.txt
+    ?? docs/reports/n0-m2-a5-production-release.txt
+    ?? docs/reports/p0-s2a-closure.txt
+    ?? docs/reports/p0-s2a-d1-driver-invitation-production-release.txt
+    ?? docs/reports/p0-s2b-d1-password-recovery-production-release.txt
+    ?? docs/reports/p0-s2b-ux1-d1-password-visibility-production-release.txt
+    ?? docs/reports/p1-e1-s1d-operations-brief-production-release.txt
+    ?? docs/reports/p1-ux-r1-r1a-production-release.txt
+
+  This report itself
+  (docs/reports/p1-ux-r2-collapsible-operations-sidebar.txt) is
+  untracked, as required. All other untracked paths are pre-existing,
+  unrelated standing scratch/historical reports from earlier phases,
+  left untouched. No `git add`, `git commit`, or `git push` was
+  performed at any point in this phase, per the explicit GIT constraint.
