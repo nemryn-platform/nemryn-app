@@ -1,5 +1,6 @@
 import {
   SquaresFour,
+  Tray,
   Path,
   NavigationArrow,
   Users,
@@ -27,6 +28,7 @@ import type { Icon } from "@phosphor-icons/react";
  */
 export const navIcons: Record<string, Icon> = {
   overview: SquaresFour,
+  requests: Tray,
   trips: Path,
   dispatch: NavigationArrow,
   passengers: Users,

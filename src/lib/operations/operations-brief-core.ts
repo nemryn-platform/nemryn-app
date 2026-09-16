@@ -47,6 +47,23 @@ export interface OperationsBriefDriverSnapshot {
   driversCurrentlyOnTrip: number;
 }
 
+/**
+ * Requests awaiting review (P1-E1-S2G). The exact same "Pending queue"
+ * definition Request Hub itself uses (`transportation_requests` where
+ * `organization_id = <current org>` and `state = 'pending'` —
+ * requests-list.ts's own `getRequestsList` pendingCount query, never a
+ * second interpretation of what "pending" means). `pendingRequestCount`
+ * is the org's real total pending count, not merely "however many are on
+ * some page." `oldestPendingRequestCreatedAt` is the `created_at` of the
+ * single oldest pending Request (matches the Pending queue's own locked
+ * `created_at ASC` ordering, requests-list.ts §8) — null only when
+ * `pendingRequestCount === 0`, never fabricated.
+ */
+export interface OperationsBriefRequestSummary {
+  pendingRequestCount: number;
+  oldestPendingRequestCreatedAt: string | null;
+}
+
 export interface OperationsBriefData {
   dayState: OperationsBriefDayState;
   totalTripsToday: number;
@@ -59,6 +76,7 @@ export interface OperationsBriefData {
   /** Count only (P1-E1-S1A §11's own resolved ambiguity) — every unassigned trip already appears as its own row inside `attention` via the NEEDS_ASSIGNMENT assurance code; this is deliberately NOT a second row collection. */
   unassignedCount: number;
   driverSnapshot: OperationsBriefDriverSnapshot;
+  requestSummary: OperationsBriefRequestSummary;
 }
 
 /** See OperationsBriefDayState's own doc comment for the exact rule each branch implements. */
@@ -144,6 +162,7 @@ export function countDriversCurrentlyOnTrip(rows: DriverAssignmentStateRow[]): n
 export function deriveOperationsBrief(
   data: TodaysOperationsData,
   driverSnapshot: OperationsBriefDriverSnapshot,
+  requestSummary: OperationsBriefRequestSummary,
   now: Date,
 ): OperationsBriefData {
   const attentionTripIds = new Set(data.attentionItems.map((item) => item.trip.id));
@@ -156,5 +175,6 @@ export function deriveOperationsBrief(
     nextDepartures: deriveNextDepartures(data.todayTrips, attentionTripIds, now),
     unassignedCount: data.needsAssignmentTrips.length,
     driverSnapshot,
+    requestSummary,
   };
 }

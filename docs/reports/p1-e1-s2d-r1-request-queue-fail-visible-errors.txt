@@ -1,0 +1,389 @@
+P1-E1-S2D-R1 — REQUEST QUEUE FAIL-VISIBLE ERROR HANDLING
+=====================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete, live-validated
+                       (including a real, non-simulated failure
+                       reproduction) against the local dev stack. NOT
+                       staged, NOT committed, NOT pushed, NOT deployed,
+                       per explicit phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed, both before and after this phase's work —
+  origin/main had not advanced. The accumulated, uncommitted S2B + S2C
+  + S2D work was confirmed present and untouched before this narrow
+  hardening phase began.
+
+
+2. ORIGINAL FAILURE MODE
+-----------------------------
+Read `docs/reports/p1-e1-s2d-request-hub-queue.txt` §32 in full before
+starting. Original bug (already fixed in S2D itself, at the query
+level): `transportation_requests` carries two foreign keys to
+`passengers`, making the unqualified `passengers(...)` embed ambiguous
+to PostgREST (error PGRST201). Before that fix, and structurally still
+true of every OTHER query in the file even after that specific fix:
+`getRequestsList`'s error handling converted any query error into
+`rows: []` while independently-succeeding count queries kept reporting
+real numbers — producing a page that looked like a genuinely empty,
+caught-up queue when it was actually a failed data load. This phase
+closes that class of bug at the CONTRACT level, not just the one query
+that happened to trigger it once.
+
+
+3. QUERIES AUDITED
+-----------------------
+Read `requests-list.ts` and `page.tsx` in full and enumerated every
+query Request Hub depends on, confirming each one's PRE-R1 failure
+behavior first (§6-§9 of the phase spec explicitly warned against
+assuming only the main query can fail):
+
+  a. Main row query (`transportation_requests` select, embedded
+     Passenger relation, search filter, ordering, `.range()`) —
+     PRE-R1: `if (error || !data) return { rows: [], totalCount: 0,
+     ... }` — the exact bug already documented in S2D §32.
+
+  b. Pending count (`transportation_requests`, `state=pending`,
+     `head:true`) — PRE-R1: `const { count: pendingCount } = await
+     ...` — the `error` field was not even destructured. On failure,
+     Supabase returns `count: null`, so `pendingCount ?? 0` silently
+     became `0` — indistinguishable from a genuine zero-pending
+     organization.
+
+  c. Organization-total count (`transportation_requests`, no state
+     filter, `head:true`, powers `organizationHasAnyRequests`) —
+     PRE-R1: same pattern, error silently discarded.
+     `organizationTotalCount ?? 0` silently became `0` on failure,
+     which would have rendered empty-state A ("No requests yet") for
+     an organization whose real history is simply unknown — arguably
+     the most misleading of the four silent failures, since it
+     actively fabricates a specific, wrong claim rather than just an
+     empty table.
+
+  d. Passenger-id search-resolution query (`passengers`, only runs
+     when `?q=` is present) — PRE-R1: `const { data: matchingPassengers
+     } = await ...` — error not even destructured. On failure,
+     `matchingPassengers` is `null`, `(matchingPassengers ?? []).map
+     (...)` silently became `[]`, and the main query's `.or()` filter
+     was built WITHOUT the Passenger-linked branch — a search could
+     silently return an INCOMPLETE result set with no indication
+     anything was wrong. This is the case explicitly called out in
+     phase §7.
+
+There is no separate pagination/count query — `totalCount` comes from
+the SAME `count: "exact"` option on the main query (query a), so its
+failure mode is identical to (a), not a fifth independent case.
+
+
+4. FINAL RESULT / ERROR CONTRACT
+-------------------------------------
+Chosen approach: an explicit discriminated result type on
+`getRequestsList`'s own return value (the "smallest architecture
+consistent with existing code" instruction, §4) — scoped to Request
+Hub only, no repository-wide list-helper refactor, `trips-list.ts` and
+every other list helper untouched.
+
+    export interface RequestsListSuccess {
+      ok: true;
+      rows: RequestsListRow[];
+      totalCount: number;
+      page: number;
+      pageSize: number;
+      pendingCount: number;
+      organizationHasAnyRequests: boolean;
+    }
+
+    export type RequestsListErrorCode =
+      | "requests_query_failed"
+      | "pending_count_failed"
+      | "org_total_count_failed"
+      | "passenger_search_failed";
+
+    export interface RequestsListFailure {
+      ok: false;
+      errorCode: RequestsListErrorCode;
+    }
+
+    export type RequestsListResult = RequestsListSuccess | RequestsListFailure;
+
+Each of the 4 queries audited in §3 now has its own explicit `if
+(error) { ...; return { ok: false, errorCode: "..." } }` guard,
+placed immediately after that query executes, in call order: search-
+resolution (only when a search term is present) → main rows+count →
+pending count → organization-total count. The very first one to fail
+short-circuits the whole function — no partial result is ever
+assembled. TypeScript's discriminated-union narrowing means
+`page.tsx` cannot access `.rows`/`.pendingCount`/etc. without first
+checking `result.ok` — this was enforced by the compiler, not just by
+convention (confirmed by the clean `tsc --noEmit` pass, §12).
+
+No raw Supabase/PostgREST error object, message, or code is exposed
+anywhere in the returned type or in what `page.tsx` renders — the UI
+layer only ever sees `result.ok === false`, never `errorCode` (it
+exists purely for server-side diagnostic logging, §9).
+
+
+5. UI ERROR STATE
+----------------------
+No new component was built. Reused the EXISTING `AttentionState`
+component (`src/components/ui/AttentionState.tsx`) — already built,
+already documented in its own code as "distinct from EmptyState, which
+is neutral," already has a `critical` level (red/critical border+
+background, `WarningOctagon` icon) that no other Request Hub surface
+uses. This satisfies §4/§13 by construction: the "possibly one small
+error-state component" the phase spec anticipated turned out to be
+unnecessary.
+
+`page.tsx`, on `!result.ok`:
+  - Keeps `PageHeader` (title, description, "Log Request" action) —
+    Log Request is a functionally independent feature; an operator
+    can still record a request by phone even while the QUEUE READ is
+    failing, so it stays reachable.
+  - Renders NOTHING ELSE from the normal success layout (no
+    SummaryStrip, no status tabs, no search form, no table, no
+    pagination footer) — replaced entirely by one `AttentionState`:
+      level="critical"
+      title="Unable to load requests"
+      description="Request information could not be loaded. Try again."
+      action={<LinkButton href="/operations/requests" variant="outline">Retry</LinkButton>}
+
+"Retry" is a plain link back to the same URL — a fresh GET request,
+fresh server render, fresh query attempt — the same mechanism already
+used by `RequestsTable`'s own "Clear filters" empty-state action, no
+new client-side retry/polling logic invented.
+
+Live-confirmed (screenshot, §10): visually and texturally distinct
+from every EmptyState A/B/C — red-tinted bordered banner with a
+warning-octagon icon vs. EmptyState's neutral centered box — genuinely
+impossible to mistake for "no requests exist."
+
+
+6. PARTIAL-QUERY FAILURE BEHAVIOR
+--------------------------------------
+Per phase §6 ("prefer correctness over partial presentation"): ANY of
+the 4 queries failing is treated as a full page-level load failure —
+there is no degraded/partial render path. Concretely:
+  - Main query fails, pending count would have succeeded → FAILURE
+    shown, no "N pending" figure rendered at all (never partially
+    trusted).
+  - Pending count fails, main rows would have succeeded → FAILURE
+    shown — rows are never rendered without a trustworthy pending
+    figure alongside them, since the two are read together as one
+    page state.
+  - Organization-total-count fails → FAILURE shown, never silently
+    resolved to `organizationHasAnyRequests: false` (which would
+    incorrectly trigger empty-state A's specific "brand-new
+    organization" claim).
+This was live-verified for all 4 individual query-failure sources,
+not just asserted — see §10.
+
+
+7. SEARCH FAILURE BEHAVIOR
+-------------------------------
+The Passenger-id resolution query's error now short-circuits the
+ENTIRE function before the main query is even built — a failed search
+resolution can never silently fall back to "zero Passengers matched"
+and continue. Live-verified with an explicit combined case: a real
+search request (`?state=all&q=Marguerite`) with the search-resolution
+query forced to fail renders "Unable to load requests," not a
+(potentially incomplete) result table — confirmed the table is not
+rendered at all in this case (§10).
+
+
+8. COUNT / PAGINATION FAILURE BEHAVIOR
+---------------------------------------------
+`totalCount` is sourced from the same `count: "exact"` option as the
+main rows query — a single Supabase call, not two — so it shares that
+query's own error guard exactly; there is no separate path where rows
+could succeed while their own count silently reports 0/1-page/no-
+requests. Confirmed by direct code reading: `count` is only read from
+the SAME destructured `{ data, error, count }` that already gates on
+`error`.
+
+
+9. PII-SAFE LOGGING
+------------------------
+A single small logging helper:
+
+    function logRequestsListFailure(operation: string, error: { code?: string } | null): void {
+      console.error(`[requests-list] ${operation} failed`, { code: error?.code ?? "unknown" });
+    }
+
+Called at each of the 4 failure points with a static operation name
+("passenger_search" / "requests_query" / "pending_count" /
+"org_total_count") and ONLY `error.code` (a short Postgres/PostgREST
+SQLSTATE-style string, e.g. "42501") — never the full error object,
+never `error.message` (which can occasionally echo back filter
+values), never any row data, requester name, phone, email, address,
+or note. Confirmed by direct code reading — this is the entirety of
+what reaches the log on every one of the 4 failure paths, with no
+other logging statement added anywhere in this phase.
+
+
+10. FORCED-FAILURE VALIDATION
+-----------------------------------
+Two independent, fully reversible mechanisms were used, per §10's own
+menu of acceptable options — chosen to maximize confidence without
+touching the Supabase migration or leaving any permanent test-only
+code in the final source.
+
+REAL, NON-SIMULATED FAILURE (primary proof):
+Temporarily revoked `SELECT` on `passengers` from the `authenticated`
+role via a direct, reversible `REVOKE`/`GRANT` (NOT a migration file
+edit — confirmed via `git status --porcelain supabase/` unchanged
+throughout, §14):
+  A. Baseline (grant intact): queue rendered normally, real "N
+     pending" figure, real rows. PASS.
+  B. Grant revoked (genuinely breaks the main query's embedded-
+     Passenger relation, a real PGRST/permission error, not a mock):
+     navigated to `/operations/requests` — rendered "Unable to load
+     requests" / "Request information could not be loaded. Try
+     again." / a "Retry" action. Did NOT show any empty-state copy,
+     no fabricated pending count, no raw PostgREST/SQL wording. 7/7
+     checks passed.
+  C. Grant restored (`GRANT SELECT ON passengers TO authenticated`,
+     confirmed byte-identical to the pre-test grant via `\z
+     passengers`): queue rendered normally again. PASS.
+
+TEMPORARY, REVERSIBLE CODE-LEVEL HOOK (isolates the other 3 codes):
+A request-header-gated short-circuit (`x-zw-r1-test-force-failure`,
+read via `next/headers`) was added to `getRequestsList` for the
+duration of testing only — request-scoped (never a process-wide env
+var), so it could never leak into or affect any other concurrent
+request against the same dev server, and it reads no field a real
+browser/operator request ever sends. Used to independently exercise
+`pending_count_failed`, `org_total_count_failed`,
+`passenger_search_failed` (plus the combined search+failure case in
+§7) via CDP requests carrying that header. 20/20 checks passed — each
+scenario correctly rendered the identical "Unable to load requests"
+UI, with none of the forbidden copy, no fabricated pending count, and
+Retry present.
+
+The hook was FULLY REMOVED (import, guard, and comment) immediately
+after testing — confirmed by `grep` finding zero remaining references
+and by a clean `tsc --noEmit` re-run. It is not present in the final
+source at all, matching the phase's "restore the local environment
+afterward" instruction as literally as possible: nothing to restore
+because nothing permanent was left behind.
+
+Combined forced-failure evidence: 27/27 checks passed across both
+mechanisms, 0 failed.
+
+
+11. GENUINE-EMPTY VALIDATION
+----------------------------------
+Re-confirmed Org B (zero Requests, ever) still renders the correct,
+real empty-state A ("No requests yet", Log Request action, "0
+pending") after the R1 contract change — not a false failure state.
+Re-confirmed the filtered-no-match empty-state C still renders
+correctly for a genuine zero-match search. Both are UNAMBIGUOUSLY
+different renders from the failure state (§5) — a neutral centered
+box with no red border/warning icon, vs. the critical-toned banner.
+
+
+12. SUCCESSFUL QUEUE REGRESSION
+-------------------------------------
+Re-ran the full original S2D live E2E suite (45 checks: Pending/
+Accepted/Declined/Cancelled/All ordering and row sets, search by
+passenger name/phone and requester name/phone, filtered/genuine empty
+states, dispatcher access, driver rejection, Org B isolation, sidebar
+expanded/collapsed/active-route/persistence, tablet viewport, narrow-
+width guard) against the current code, AFTER the R1 contract change
+and AFTER the temporary test hook was fully removed. 45/45 passed, 0
+failed — confirming the success path (`result.ok === true`) is
+behaviorally identical to before this phase; only the previously-
+unreachable failure path changed.
+
+(Two initial re-runs showed 2 stale failures — both were a hardcoded
+"4 pending" assertion in the test script itself, made stale by a 5th
+pending fixture created during S2D's own earlier Log Request
+integration test in this same long-lived local database, not a
+product regression. Fixed the test script's assertion to check for
+"a real pending count" instead of a specific number, re-ran, 45/45.)
+
+
+13. APP TESTS
+------------------
+`npx tsc --noEmit`: clean, 0 errors.
+`npm run lint`: 0 errors (16 pre-existing warnings in unrelated
+`.tmp-qa/*.mjs` scratch scripts — one more than S2D's own report
+because a new scratch script was added this phase; same warning
+class, same files' existing pattern, nothing in product source).
+`npm run build`: succeeds; `/operations/requests` and
+`/operations/requests/new` both present in the route list.
+`npm test`: 66/66 passing — unchanged from S2D. No new pure helper
+was introduced in this phase (the branching added to `getRequestsList`
+is inline, sequential, and trivial — a single `if (error) return
+{ok:false, errorCode}` per query — so per §12's own conditional
+instruction, "Add focused unit tests for any pure result/error-
+normalization helper IF ONE IS INTRODUCED," none was required). The
+27/27 forced-failure live checks (§10) exercise this logic far more
+meaningfully than a unit test could, since the actual risk this phase
+addresses — does a REAL query error actually reach this branch and
+actually stop `rows: []` from happening in practice — is exactly what
+a unit test cannot prove and a live test can.
+
+
+14. SUPABASE DIFF
+----------------------
+`git status --porcelain supabase/` before, during (including through
+the real GRANT/REVOKE test), and after this phase shows exactly the
+same 5 pre-existing, untouched S2B files (the migration + 3 SQL test
+files + 1 concurrency script) — zero new or modified Supabase files.
+The `REVOKE`/`GRANT` used for §10's real-failure test was a live,
+temporary database privilege change made directly via `psql`, NOT a
+migration file edit, and was fully reversed and confirmed
+byte-identical to its pre-test state before this report was written.
+
+
+15. EXACT SOURCE DIFF
+--------------------------
+Modified (tracked-file diff):
+  src/app/operations/requests/page.tsx  — untracked directory (new in
+    S2D, never committed), so no tracked-file diff exists; the actual
+    change is: +1 import (`AttentionState`), +1 early-return branch
+    (~20 lines) immediately after computing `result`, rendering the
+    failure UI when `!result.ok`. No other line of the file changed.
+
+  src/lib/operations/requests-list.ts — same untracked-directory
+    situation; the actual change is: the `RequestsListResult` type
+    became a discriminated union (`RequestsListSuccess |
+    RequestsListFailure`), a new `RequestsListErrorCode` type, a new
+    `logRequestsListFailure` helper (~4 lines), and each of the 4
+    audited queries gained its own `if (error) {...; return {ok:
+    false, ...}}` guard immediately after it runs. The final success
+    return gained `ok: true`. No query's actual filter/order/range
+    logic changed at all — this phase is pure error-handling, zero
+    behavioral change to the happy path (confirmed by §12).
+
+Untouched, confirmed by `git status --porcelain` throughout: Supabase
+(migration/RPCs/RLS), `OperationsSidebar.tsx`, Operations Brief,
+organization resolution, `AccountMenu`, Trip behavior, S2C's
+`actions.ts`, `request-readiness-core.ts`, `RequestsTable.tsx`,
+`RequestStatusTabs.tsx`.
+
+
+16. READINESS FOR S2E
+--------------------------
+No change to S2E's readiness posture from S2D's own report. The
+`result.ok` check in `page.tsx` sits entirely above where S2E's own
+`onRowClick` addition to `RequestsTable` would go — S2E can proceed
+exactly as previously scoped, with the added guarantee that any future
+Request Detail navigation originating from this queue is now built on
+top of a queue that can never silently lie about its own state.
+
+
+17. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows only the same pre-existing tracked-file
+modifications from S2B/S2D (`OperationsSidebar.tsx`, `icons.ts`,
+`presentation.ts`, `database.types.ts`) plus the same untracked S2D
+directories/files (now further modified in-place by this phase) —
+exactly as required by this phase's explicit constraint.

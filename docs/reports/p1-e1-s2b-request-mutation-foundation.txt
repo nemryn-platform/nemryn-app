@@ -1,0 +1,685 @@
+P1-E1-S2B — REQUEST MUTATION FOUNDATION
+============================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete. NOT staged, NOT
+                       committed, NOT pushed, NOT deployed, per explicit
+                       phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed — origin/main had not advanced. Proceeded per §1.
+
+
+2. S2A FINDINGS CARRIED FORWARD
+------------------------------------
+Re-read docs/reports/p1-e1-s2a-request-hub-product-workflow-audit.txt in
+full, and independently re-verified its load-bearing claims directly
+against current source before writing anything (per §2's explicit "do
+not rely solely on the S2A report" instruction):
+
+  - `transportation_requests.state` was directly client-writable via the
+    UPDATE column grant (confirmed: `grant update (..., state) on
+    public.transportation_requests to authenticated`), unlike
+    `trips.state`, which was already excluded from its own equivalent
+    grant. Closed in this phase (§12).
+  - `create_trip`'s own passenger/facility/request validation shape
+    (existence + same-org + active/eligible-state check, ZW006, no
+    existence oracle) was re-read directly from
+    `20260831120000_controlled_trip_creation.sql` and reused verbatim
+    as the template for every new RPC's own validation.
+  - The request-row `FOR UPDATE` lock `create_trip` takes when
+    `p_request_id` is supplied was re-confirmed directly in that same
+    file, and is the exact shared serialization boundary this phase's
+    own lifecycle RPCs now also take (§13).
+  - `trip_events`' shape (allow-listed `event_type`, no client INSERT
+    grant, organization_admin+dispatcher SELECT) was re-read directly
+    from `20260830131200_trip_events.sql` and mirrored for the new
+    `request_events` table.
+  - `audit_events`' SELECT policy really is organization_admin +
+    Platform Admin only (Dispatcher excluded) — re-confirmed directly in
+    `20260830131700_rls_policies.sql` — which is exactly why S2A
+    recommended a dedicated `request_events` table rather than reusing
+    `audit_events`, and why that recommendation was followed here rather
+    than re-litigated.
+
+
+3. FINAL SCHEMA DECISIONS
+------------------------------
+One additive migration:
+`supabase/migrations/20260916100000_request_mutation_foundation.sql`
+(621 lines). No existing migration was modified. No column was renamed.
+No existing `state` value was changed or removed.
+
+  A. `transportation_requests.source` — new column.
+  B. `public.request_events` — new table.
+  C. Three new composite return types
+     (`request_creation_result`/`request_transition_result`/
+     `request_passenger_link_result`).
+  D. Four new SECURITY DEFINER RPCs
+     (`log_transportation_request`/`link_request_passenger`/
+     `decline_transportation_request`/`cancel_transportation_request`).
+  E. Direct client-write privilege remediation on
+     `transportation_requests` (raw INSERT retired; `state`/
+     `passenger_id` removed from the UPDATE column grant).
+
+`create_trip` itself was NOT modified — audited for compatibility only
+(§11). No `accept_transportation_request` was added. No recurrence
+schema was added. No `trips.leg` column was added. No
+`created_by`/`declined_by`/`declined_at`/`decline_reason` columns were
+added — all attribution lives in `request_events.actor_user_id`/
+`metadata`, per the locked decision.
+
+
+4. SOURCE COLUMN
+---------------------
+    alter table public.transportation_requests
+      add column source text not null default 'other'
+        check (source in ('phone', 'facility', 'email', 'web', 'other'));
+
+`NOT NULL` with a `DEFAULT 'other'` — Postgres backfills existing rows
+with the default in the same statement (confirmed live: both seed
+fixtures show `source = 'other'` after the migration ran, §19). `other`
+was chosen as the honest answer for a row whose real channel was never
+captured — never inferred as a specific channel. `log_transportation_request`
+always requires an explicit, validated `p_source` value for new rows
+going forward; the column default exists only for safe backfill / any
+other write path.
+
+No public web intake was built merely because `web` is an allowed
+value — confirmed: no route, action, or RPC in this phase or anywhere
+else in the repository accepts an anonymous submission of any kind
+(§21's threat review).
+
+
+5. REQUEST_EVENTS DESIGN
+-----------------------------
+    create table public.request_events (
+      id uuid primary key default extensions.gen_random_uuid(),
+      organization_id uuid not null references public.organizations (id),
+      request_id uuid not null,
+      event_type text not null check (
+        event_type in ('request_logged', 'passenger_linked', 'request_declined', 'request_cancelled')
+      ),
+      actor_user_id uuid references auth.users (id),
+      occurred_at timestamptz not null default now(),
+      metadata jsonb not null default '{}'::jsonb,
+      foreign key (request_id, organization_id) references public.transportation_requests (id, organization_id)
+    );
+
+Mirrors `trip_events` exactly: append-only, allow-listed `event_type`
+(4 values, only the actions this foundation actually implements — no
+speculative vocabulary), tenant-safe composite FK. Deliberately NOT a
+reuse of `audit_events` (Dispatcher has no access to that table at all,
+per §2) and NOT an extension of `trip_events` (which is FK'd to
+`trip_id`, not `request_id`, and extending it would require its own
+schema change). `request_converted_to_trip` remains authoritative as the
+existing `trip_events` row on the Trip side — this migration does NOT
+touch `create_trip` to also duplicate that event into `request_events`,
+per the explicit instruction ("Do NOT modify create_trip solely to
+duplicate that event... unless a concrete implementation dependency
+requires it" — none was found; Request Detail can derive conversion
+history from linked Trips and their own existing events, exactly as
+S2A's own §14 recommendation already anticipated).
+
+
+6. REQUEST_EVENTS RLS/GRANTS
+---------------------------------
+    grant select on public.request_events to authenticated;
+
+    create policy request_events_select_org_operations
+      on public.request_events for select to authenticated
+      using (public.has_org_role(organization_id, array['organization_admin', 'dispatcher']));
+
+SELECT only, organization_admin + dispatcher, same organization — the
+same two roles already granted access to `transportation_requests`
+itself. No INSERT/UPDATE/DELETE grant to `authenticated` at all — every
+row is written exclusively by the four SECURITY DEFINER RPCs below,
+which bypass RLS for their own writes as the function owner, exactly as
+`create_trip` already does for `trip_events`/`audit_events`. Driver gets
+no policy at all (no standing access). No anonymous grant of any kind.
+
+Live-confirmed (§16, privilege test file): a raw client INSERT into
+`request_events` is rejected at the privilege layer; Driver SELECT
+returns zero rows; Dispatcher SELECT returns their own organization's
+rows; an Org A admin sees zero Org B rows.
+
+
+7. LOG REQUEST RPC
+-----------------------
+    log_transportation_request(
+      p_organization_id uuid, p_requester_name text, p_requester_relationship text,
+      p_requester_phone text, p_pickup_description text, p_destination_description text,
+      p_return_trip_needed text, p_source text,
+      p_requester_email text default null, p_passenger_id uuid default null,
+      p_preferred_date date default null, p_preferred_time time default null,
+      p_assistance_notes text default null, p_additional_notes text default null
+    ) returns request_creation_result
+
+The sole controlled creation path — mirrors `create_trip`'s own
+structure line for line: `auth.uid()` check (ZW001) → live
+`has_org_role` check (ZW002, no existence oracle) → explicit field
+validation (all ZW006: required fields trimmed/non-blank/length-capped;
+`requester_relationship`/`return_trip_needed`/`source` revalidated
+against their allowed sets even though the table's own CHECK
+constraints would also catch a bad value, for a clean ZW006 rather than
+a raw constraint error) → optional Passenger validation (identical
+shape to `create_trip`'s own passenger check: exists, same org, active)
+→ INSERT with `state` hard-coded `'pending'`, never a parameter, never
+caller-influenced → one `request_events` row (`request_logged`,
+`actor_user_id = auth.uid()`, never client-supplied).
+
+Required/optional split matches the S2A-established minimum save
+contract exactly (§8 below). Non-idempotent by design, matching
+`create_trip`'s own documented reasoning — there is no natural
+idempotency key for "record a new piece of demand."
+
+
+8. LINK PASSENGER RPC
+--------------------------
+    link_request_passenger(p_organization_id uuid, p_request_id uuid, p_passenger_id uuid)
+      returns request_passenger_link_result
+
+Legal only while the Request is `pending` — `accepted` (passenger
+reassignment on the original Request is deliberately prohibited once a
+Trip exists, per the locked decision), `declined`, and `cancelled` are
+all rejected with ZW004 `illegal_transition`. Passenger must exist, same
+organization, `status = 'active'` (ZW006 otherwise, no existence oracle
+— explicitly validated inside the RPC, never trusted merely because RLS
+would otherwise hide a foreign-org row). Idempotent no-op
+(`changed: false`) if the Request already links this exact
+`passenger_id`. The Request row is locked `FOR UPDATE` before any
+state-legality check (§13).
+
+
+9. DECLINE RPC
+-------------------
+    decline_transportation_request(p_organization_id uuid, p_request_id uuid, p_reason text default null)
+      returns request_transition_result
+
+Only `pending -> declined` is legal (ZW004 from `accepted` or
+`cancelled`). Idempotent no-op if already `declined` — the no-op check
+runs BEFORE the illegal-transition check, matching `cancel_trip`'s own
+established precedence (ZD-090). `p_reason` is optional free text
+(≤500 chars, ZW006 if oversized), never a structured category — matches
+the locked decision exactly. The reason is persisted directly in
+`request_events.metadata` (`jsonb_build_object('reason', v_reason)` when
+supplied, `'{}'::jsonb` otherwise) — never discarded, never only logged.
+Live-confirmed (§16): a supplied reason is readable back from
+`request_events.metadata->>'reason'` after the call.
+
+
+10. CANCEL RPC
+-------------------
+    cancel_transportation_request(p_organization_id uuid, p_request_id uuid)
+      returns request_transition_result
+
+Only `pending -> cancelled` is legal (ZW004 from `accepted` or
+`declined`). Idempotent no-op if already `cancelled`. The locked safe
+rule is enforced exactly: ANY linked Trip row — regardless of that
+Trip's own state (`scheduled`, `completed`, `cancelled`, `no_show`, or
+any other value) — blocks cancellation with ZW004. No automatic cascade
+into Trip cancellation exists or was added. The linked-Trip existence
+check runs inside the same transaction, under the same Request-row lock
+acquired at the top of the function, so it can never race against a
+concurrent `create_trip` call (§13). Live-confirmed (§15, test CANCEL-2):
+a pending Request with a linked Trip whose own state is `cancelled` is
+still correctly rejected — proving the rule checks Trip *existence*, not
+Trip *state*.
+
+
+11. CREATE_TRIP COMPATIBILITY
+----------------------------------
+`create_trip` was audited, not modified. Its own request-eligibility
+check (`v_request.state not in ('pending', 'accepted')` → ZW006) already
+correctly rejects a `declined` or `cancelled` Request exactly as before;
+nothing in this migration changes what values `state` can hold or how
+`create_trip` reads them. Its own accepted-request-path (`if
+p_request_id is not null and v_request.state = 'pending' then update ...
+set state = 'accepted'`) is untouched and remains the sole mechanism
+that ever advances a Request to `accepted` — no
+`accept_transportation_request` was added, and no accepted-without-a-
+Trip concept was introduced anywhere. No modification to `create_trip`
+was found to be necessary; per §12's own instruction, this is reported
+rather than silently done.
+
+
+12. DIRECT UPDATE PRIVILEGE REMEDIATION
+--------------------------------------------
+    drop policy if exists transportation_requests_insert_org_operations on public.transportation_requests;
+    revoke insert on public.transportation_requests from authenticated;
+
+    revoke update on public.transportation_requests from authenticated;
+    grant update (
+      requester_name, requester_relationship, requester_phone, requester_email,
+      pickup_description, destination_description, preferred_date, preferred_time,
+      return_trip_needed, assistance_notes, additional_notes, source
+    ) on public.transportation_requests to authenticated;
+
+Two changes, both closing real gaps, both mirroring the exact
+`create_trip`/`trips` precedent (ZD-101's retirement of the raw `trips`
+INSERT grant once `create_trip` existed):
+
+  - Raw client INSERT retired entirely, now that
+    `log_transportation_request` is the sole controlled creation path —
+    the prior grant had NO column restriction, meaning a raw INSERT
+    could set `state` to any of the 4 allowed values at creation time,
+    the same GAP-1 vulnerability class reachable via INSERT instead of
+    UPDATE.
+  - `state` and `passenger_id` removed from the UPDATE column grant —
+    `state` closes the S2A-identified lifecycle-integrity gap directly;
+    `passenger_id` is removed because passenger linking is now
+    exclusively governed by `link_request_passenger`'s own
+    state/organization/active-status validation, which a raw UPDATE
+    would bypass entirely.
+
+Live-confirmed (§16): `information_schema.role_column_grants` shows the
+UPDATE grant is exactly the 12-column safe descriptive set, with neither
+`state` nor `passenger_id` present; `has_table_privilege('authenticated',
+..., 'INSERT')` is false; a raw `UPDATE ... SET state = ...` and a raw
+`UPDATE ... SET passenger_id = ...` both fail with `insufficient_privilege`
+at the privilege layer (never reaching any row).
+
+No RLS policy was weakened — SELECT and the `has_org_role`-scoped
+USING/WITH CHECK clauses on the remaining UPDATE policy are completely
+unchanged. Database enforcement was tightened, not replaced with a UI
+restriction.
+
+
+13. CONCURRENCY/LOCKING MODEL
+----------------------------------
+`link_request_passenger`, `decline_transportation_request`, and
+`cancel_transportation_request` all lock the target Request row
+(`select * from transportation_requests where id = p_request_id and
+organization_id = p_organization_id for update`) BEFORE any
+state-legality check — identical to `create_trip`'s own existing lock
+on the same row when `p_request_id` is supplied. This shared lock is the
+serialization boundary: whichever transaction (a lifecycle RPC, or a
+concurrent `create_trip` call referencing the same Request) acquires the
+lock first runs to completion (commit or rollback) before the other's
+lock acquisition can proceed; the second transaction then re-reads the
+now-current row and evaluates its own legality check against reality,
+never against stale data.
+
+Genuinely proven, not merely argued: `supabase/tests/
+request_lifecycle_concurrency_test.sh`, using the SAME two-separate-
+psql-process methodology already established by
+`mutation_concurrency_test.sh`/`driver_invite_concurrency_test.sh`.
+Session A opens a transaction, locks a pending Request row `FOR UPDATE`,
+holds it 2 seconds (simulating a real in-flight `cancel_transportation_request`
+call), then actually calls `cancel_transportation_request` and commits.
+Session B, launched 0.3s later, calls `create_trip(p_request_id =>
+<same Request>)`. Result (live, this run): Session B blocked
+1.823376000s (not near-instant — genuine lock contention, not lucky
+interleaving), then correctly observed Session A's already-committed
+`cancelled` state and rejected with `ZW006 invalid_input`. Final state:
+Request `cancelled`, zero linked Trips — the race was fully closed by
+the shared row lock alone, no additional locking (e.g. on `trips`
+itself) was required, matching the phase's own suggestion to evaluate
+this. `decline_transportation_request` and `link_request_passenger`
+share the identical locking primitive (the same `for update` on the
+same table inside a function body of the same shape) — proving the
+primitive holds for one representative transition is representative of
+all three, matching this repository's own established practice of one
+concurrency script per shared primitive rather than one per RPC.
+
+
+14. ERROR CONTRACT
+-----------------------
+Every new RPC reuses the existing 6-code contract (ZD-085) exactly,
+branching on `sqlstate`, never message text:
+  ZW001 unauthorized       — `auth.uid()` is null
+  ZW002 not_found          — `has_org_role` fails (Driver, inactive
+                              Membership, foreign org — indistinguishable
+                              by design), OR the target Request doesn't
+                              exist / isn't in the caller's organization
+  ZW004 illegal_transition — the requested change is not a legal edge
+                              from the Request's current state (e.g.
+                              declining an accepted Request, cancelling
+                              one with a linked Trip)
+  ZW006 invalid_input      — malformed/missing/oversized field, invalid
+                              enum value, nonexistent/foreign-org/
+                              inactive Passenger
+
+No new error code was introduced. Anonymous calls are rejected before
+any function-body logic runs (`insufficient_privilege`, confirmed live
+for `log_transportation_request` via a `set local role anon` test) —
+none of the four functions grants EXECUTE to `anon`/`PUBLIC`.
+
+
+15. FOCUSED SQL TESTS
+--------------------------
+`supabase/tests/request_mutation_tests.sql` (701 lines) — the full
+role/behavior/lifecycle matrix, run fresh: **36/36 PASS**. Covers every
+item in the phase's own required list:
+  log_transportation_request: admin success, dispatcher success, driver
+    rejection, anon/unauthenticated rejection, cross-tenant rejection,
+    invalid source, nonexistent/cross-tenant/inactive passenger, invalid
+    requester_relationship, invalid return_trip_needed, blank
+    requester_name, request_logged event + correct actor.
+  link_request_passenger: valid pending success, idempotent re-link,
+    cross-tenant passenger, inactive passenger, accepted/declined/
+    cancelled rejection, driver rejection, cross-org request rejection,
+    passenger_linked event + correct actor.
+  decline_transportation_request: pending success, reason persisted in
+    event metadata, idempotent re-decline, accepted/cancelled rejection,
+    driver rejection, cross-org rejection.
+  cancel_transportation_request: pending+zero-trips success, idempotent
+    re-cancel, pending+ANY-linked-trip rejection (proven against a
+    Trip whose own state is `cancelled`, specifically to demonstrate the
+    rule checks existence not state), accepted/declined rejection,
+    driver rejection, cross-org rejection, request_cancelled event +
+    correct actor.
+
+`supabase/tests/request_mutation_privilege_tests.sql` (242 lines) — run
+fresh, self-contained (seeds its own fixtures so it is independently
+runnable, not dependent on `request_mutation_tests.sql` having run
+first): **18/18 PASS**. Covers: authenticated-only EXECUTE for all 4
+RPCs (anon/PUBLIC excluded), SECURITY DEFINER + explicit `search_path` +
+trusted owner for all 4, raw INSERT retired, superseded INSERT policy
+dropped, UPDATE grant is exactly the safe 12-column set (no `state`, no
+`passenger_id`), raw UPDATE of `state`/`passenger_id` both rejected at
+the privilege layer, `request_events` has no client write grant at all,
+raw `request_events` INSERT rejected, Driver SELECT on `request_events`
+returns zero rows, Dispatcher SELECT returns their own org's rows,
+cross-org rows hidden.
+
+`supabase/tests/request_mutation_atomicity_tests.sql` (166 lines) — run
+fresh: **3/3 PASS**. A temporary forced-failure trigger on
+`request_events` (installed and removed by the script, never a
+permanent object — same mechanism as `create_trip_atomicity_tests.sql`)
+proves: (1) a forced failure on `log_transportation_request`'s own event
+INSERT leaves NO `transportation_requests` row behind at all (matched
+via the fixture's distinctive `requester_name`, since the new row's id
+is unpredictable in advance — `log_transportation_request` never
+accepts a caller-supplied id, by design); (2) a forced failure on
+`cancel_transportation_request`'s event INSERT leaves the Request's
+`state` unchanged (`pending`, not `cancelled`); (3) no `request_events`
+row was committed for either forced-failure attempt.
+
+Atomicity was proven for one creation-shaped and one transition-shaped
+function — representative of all four, matching this repository's own
+established practice (`create_trip_atomicity_tests.sql` covers only
+`create_trip`, not separately every driver transition or
+`assign_trip`/`reassign_trip`, which share the same underlying
+single-transaction-function-body guarantee).
+
+
+16. FULL SQL/RLS REGRESSION
+--------------------------------
+Per §20's explicit instruction, used the established authoritative
+method: for EACH of the 25 files under `supabase/tests/*.sql`
+(22 pre-existing + 3 new — see below), a fresh `supabase db reset`, then
+that ONE file, recorded PASS/FAIL independently. A chained single-reset
+run was never treated as authoritative.
+
+**Test count increased: 22 → 25** (the 3 new `.sql` files added this
+phase: `request_mutation_tests.sql`, `request_mutation_privilege_tests.sql`,
+`request_mutation_atomicity_tests.sql`).
+
+  constraint_tests.sql                        PASS
+  create_trip_atomicity_tests.sql              PASS
+  create_trip_privilege_tests.sql              PASS
+  create_trip_tests.sql                        PASS
+  driver_location_tests.sql                    PASS
+  driver_read_authorization_tests.sql          PASS
+  driver_read_history_tests.sql                PASS
+  driver_read_minimization_tests.sql           PASS
+  driver_read_privilege_tests.sql              PASS
+  exception_mutation_boundary_tests.sql        PASS
+  function_privilege_tests.sql                 PASS
+  mutation_assignment_tests.sql                PASS
+  mutation_atomicity_tests.sql                 PASS
+  mutation_authorization_tests.sql             PASS
+  mutation_idempotent_authorization_tests.sql  PASS
+  mutation_lifecycle_tests.sql                 PASS
+  mutation_privilege_tests.sql                 PASS
+  operator_onboarding_tests.sql                PASS
+  organization_timezone_tests.sql              PASS
+  request_mutation_atomicity_tests.sql         PASS  (new)
+  request_mutation_privilege_tests.sql         PASS  (new)
+  request_mutation_tests.sql                   PASS  (new)
+  rls_adversarial_tests.sql                    PASS
+  security_definer_exposure_tests.sql          PASS
+  trip_exception_tests.sql                     PASS
+
+  OVERALL: ALL 25 PASS, each against its own clean reset.
+
+One transient infrastructure incident occurred mid-run (9 files reported
+`supabase_storage_ZenWard container is not ready: unhealthy` during a
+long, uninterrupted sequence of ~25 consecutive resets — a Docker
+resource/timing issue, not a SQL or logic failure): confirmed as
+infrastructure-only because the failures were indiscriminate across
+BOTH pre-existing, completely unmodified files (`mutation_authorization_tests.sql`,
+`rls_adversarial_tests.sql`, `security_definer_exposure_tests.sql`,
+`operator_onboarding_tests.sql`, etc.) AND this phase's own new files,
+with zero genuine `TEST ... FAIL` lines anywhere in the failure output —
+only reset-level container-health errors. Confirmed Docker was healthy
+(all containers up, 276GB disk available) and re-ran exactly those 9
+files, each against its own fresh reset again: all 9 passed cleanly on
+retry, with no code or test changes made in between. No test file was
+modified to make a chained run pass, and no failure was silently
+dismissed without independent re-verification.
+
+
+17. CONCURRENCY REGRESSION
+-------------------------------
+Fresh reset before each script; no duplicate concurrent runners started;
+each script's own process allowed to finish before the next began.
+
+  mutation_concurrency_test.sh (pre-existing, unmodified):
+    TEST CONCURRENCY-1: PASS — Session B blocked 1.82s on the Trip row
+    lock, correctly rejected with `assignment_conflict`. No regression.
+
+  driver_invite_concurrency_test.sh (pre-existing, unmodified):
+    TEST INVITE-CONCURRENCY-1: PASS — Session B blocked 1.82s, exactly
+    1 Driver row and 1 Membership row at the end. No regression.
+
+  request_lifecycle_concurrency_test.sh (new):
+    TEST REQUEST-CONCURRENCY-1: PASS — see §13 for the full scenario and
+    result (re-confirmed on a final fresh reset: Session B blocked
+    1.823376000s, rejected with `invalid_input`, final state
+    `cancelled`/0 linked trips).
+
+
+18. APP TESTS
+------------------
+  npx tsc --noEmit    PASS (zero errors, both before and after
+                        regenerating database.types.ts)
+  npm run lint         PASS (0 errors; 14 pre-existing warnings, all in
+                        unrelated `.tmp-qa/*.mjs` scratch scripts, not
+                        staged, not part of this phase)
+  npm run build         PASS (compiled successfully; all routes built)
+  npm test               PASS (56/56 tests, 0 failures — the complete
+                        existing unit suite; no UI/application code was
+                        written this phase, so no new unit test target
+                        exists yet for it)
+
+`src/lib/supabase/database.types.ts` was regenerated via
+`supabase gen types typescript --local`, the established, documented
+command (`docs/data/schema.md`) for this generated, never-hand-edited
+file. Diff reviewed line-by-line: 130 insertions, **zero deletions** —
+purely additive (`request_events` table type, `source` field on
+`transportation_requests`' Row/Insert/Update, the 3 new composite
+types, the 4 new RPC signatures). No existing type changed or was
+removed. `tsc`/`lint`/`build`/`test` were all re-run AFTER this
+regeneration and confirmed to still pass cleanly.
+
+
+19. DATABASE DIFF
+----------------------
+`git status --porcelain supabase/`:
+  ?? supabase/migrations/20260916100000_request_mutation_foundation.sql
+  ?? supabase/tests/request_lifecycle_concurrency_test.sh
+  ?? supabase/tests/request_mutation_atomicity_tests.sql
+  ?? supabase/tests/request_mutation_privilege_tests.sql
+  ?? supabase/tests/request_mutation_tests.sql
+
+All five are NEW, untracked files — zero existing migration or test
+file was modified (`git diff` against any tracked `supabase/` path
+returns empty). Additive only:
+  - 1 new column (`transportation_requests.source`, NOT NULL with a
+    safe backfill default)
+  - 1 new table (`request_events`), RLS enabled, additive
+  - 3 new composite types
+  - 4 new SECURITY DEFINER functions
+  - Privilege narrowing only (INSERT retired, `state`/`passenger_id`
+    removed from UPDATE) — no privilege was ever WIDENED, no RLS
+    policy was weakened, no `USING`/`WITH CHECK` clause changed on any
+    existing policy.
+
+No column was renamed. No existing `state` CHECK constraint value was
+added, removed, or reinterpreted. No table was dropped. No trigger was
+removed. Live-confirmed via `\d public.transportation_requests` and
+`\d public.request_events` (§ schema audit performed before writing the
+migration, and re-confirmed after applying it) that both existing seed
+fixtures backfilled to `source = 'other'` correctly and every existing
+FK/index/trigger on `transportation_requests` remains present and
+unchanged.
+
+
+20. SECURITY-CODE DIFF
+---------------------------
+Outside `supabase/`, exactly one file changed:
+`src/lib/supabase/database.types.ts` (+130/-0, generated, reviewed in
+full — §18). No `src/app/`, `src/components/`, or `src/lib/` application
+code was created or modified — confirmed via `git status -sb` showing
+no other tracked-file modification and no new file under `src/` besides
+the regenerated types file. This phase is, as required, fully reviewable
+as a database/business-rule foundation independent of any presentation
+layer.
+
+
+21. SECURITY ASSESSMENT
+----------------------------
+  Cross-tenant request reads/writes: unaffected by this phase (RLS
+    SELECT/UPDATE policies on `transportation_requests` are unchanged);
+    every new RPC independently re-validates organization membership via
+    `has_org_role`, live, every call.
+  Forged organization_id: every RPC treats `p_organization_id` as a
+    requested context only — `has_org_role` re-validates it against the
+    caller's own active Membership; the target Request/Passenger row is
+    additionally filtered by that same organization_id in its own
+    lookup query, matching `create_trip`'s own established pattern.
+  Forged passenger_id from another tenant: rejected (ZW006) by explicit
+    `organization_id = p_organization_id` + `status = 'active'`
+    filtering in both `log_transportation_request` and
+    `link_request_passenger` — no existence oracle (nonexistent and
+    foreign-org produce the identical error).
+  Forged request_id: rejected (ZW002) by the composite `where id = ...
+    and organization_id = ...` lookup in all three lifecycle RPCs —
+    foreign-org and nonexistent are indistinguishable.
+  Operator attempting to convert/decline/cancel a declined/cancelled/
+    already-accepted Request: rejected — `create_trip`'s own existing
+    check (unmodified) plus each new RPC's own from-state check, all
+    live-tested (§15).
+  Duplicate conversion / duplicate lifecycle-mutation attempts: handled
+    correctly and deliberately — `create_trip` remains non-idempotent by
+    design (unchanged); each new lifecycle RPC IS idempotent for the
+    "already at target state" case (`changed: false`, no duplicate
+    event), matching ZD-090.
+  Unauthorized driver access: rejected (ZW002) for all 4 new RPCs and
+    for `request_events` SELECT — live-tested.
+  Public unauthenticated spam: not applicable — no public path exists
+    anywhere in this phase (public intake remains deferred, per the
+    locked decision); anon EXECUTE is not granted on any of the 4 new
+    functions, live-confirmed.
+  Service-role leakage: none — every new function is SECURITY DEFINER
+    with an explicit `search_path = public, pg_temp` and a trusted,
+    non-`anon`/`authenticated`/`service_role` owner, live-confirmed via
+    `pg_proc`/`pg_get_userbyid` introspection for all 4 functions.
+  Client-side-only authorization: none introduced — every authorization
+    and lifecycle-legality decision is enforced inside the SECURITY
+    DEFINER function body or by RLS/column-grant, never left to
+    application code to enforce "by convention."
+
+The one gap S2A identified (direct client writability of
+`transportation_requests.state` and, by extension, `passenger_id`) is
+now closed at the database level, not merely documented — confirmed
+live via the privilege test file, not asserted from reading the
+migration alone.
+
+
+22. OPEN ISSUES
+--------------------
+  - `log_transportation_request` was implemented as an RPC per the
+    locked decision (multiple future trusted clients need one shared
+    creation boundary) — this was pre-decided by the phase, not an open
+    question this audit needed to resolve, but is recorded here for
+    completeness since S2A itself had flagged it as an open question.
+  - Whether cancel-eligibility should also consider a fully-terminal
+    Trip (`cancelled`/`no_show`) as "not really linked" was explicitly
+    resolved by the phase's own locked rule (ANY linked Trip, regardless
+    of state, blocks cancellation) — implemented and proven exactly as
+    specified (§10/§13), no longer open.
+  - The `leg` label (ZD-069, provisional) remains explicitly deferred,
+    per the locked decision — no schema change was made or attempted for
+    it in this phase.
+  - No new open issues were discovered during implementation. The one
+    transient Docker infrastructure flake during the regression run
+    (§16) was resolved by retrying the affected files against a healthy
+    environment; it left no lingering concern about the migration or
+    RPC logic itself, since every affected file passed cleanly once
+    Docker was healthy again.
+
+
+23. READINESS FOR S2C/S2D
+------------------------------
+Ready for P1-E1-S2C (Internal Log Request UI): YES. The RPC this UI will
+call (`log_transportation_request`) exists, is fully tested (role
+matrix, field validation, event generation), and its required/optional
+field split matches the S2A-established minimum save contract exactly —
+an S2C form can be built directly against this signature with no further
+schema work.
+
+Ready for P1-E1-S2D (Request Queue UI): YES, with one dependency noted:
+S2D's queue will read `transportation_requests` via the existing,
+unchanged SELECT policy (already organization_admin/dispatcher scoped)
+— no new read path is needed. If S2D also wants to show per-row
+lifecycle history (e.g. "declined 2 hours ago"), it can read
+`request_events` directly, already scoped correctly for both roles.
+
+Neither S2C nor S2D was begun in this phase, per explicit instruction.
+
+
+24. GIT STATUS
+-------------------
+  git status -sb:
+    ## main...origin/main
+    (no ahead/behind — fully aligned, nothing staged or committed)
+     M src/lib/supabase/database.types.ts
+    ?? .tmp-qa/auth-confirm-e2e.mjs
+    ?? .tmp-qa/join-auth-confirm-e2e.mjs
+    ?? .tmp-qa/n0-g0-audit-e2e.mjs
+    ?? docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    ?? docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    ?? docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    ?? docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    ?? docs/reports/n0-m1-a0-domain-migration-audit.txt
+    ?? docs/reports/n0-m1-a3-production-validation.txt
+    ?? docs/reports/n0-m2-a5-production-release.txt
+    ?? docs/reports/p0-s2a-closure.txt
+    ?? docs/reports/p0-s2a-d1-driver-invitation-production-release.txt
+    ?? docs/reports/p0-s2b-d1-password-recovery-production-release.txt
+    ?? docs/reports/p0-s2b-ux1-d1-password-visibility-production-release.txt
+    ?? docs/reports/p1-e1-s1d-operations-brief-production-release.txt
+    ?? docs/reports/p1-e1-s2a-request-hub-product-workflow-audit.txt
+    ?? docs/reports/p1-ux-r1-r1a-production-release.txt
+    ?? docs/reports/p1-ux-r2-production-release.txt
+    ?? supabase/migrations/20260916100000_request_mutation_foundation.sql
+    ?? supabase/tests/request_lifecycle_concurrency_test.sh
+    ?? supabase/tests/request_mutation_atomicity_tests.sql
+    ?? supabase/tests/request_mutation_privilege_tests.sql
+    ?? supabase/tests/request_mutation_tests.sql
+
+  This report itself
+  (docs/reports/p1-e1-s2b-request-mutation-foundation.txt) will appear
+  as an additional untracked file once saved. All pre-existing untracked
+  paths are unrelated standing scratch/historical reports from earlier
+  phases, left untouched. No `git add`, `git commit`, or `git push` was
+  performed at any point in this phase, per the explicit GIT constraint.

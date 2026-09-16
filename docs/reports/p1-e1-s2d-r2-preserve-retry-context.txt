@@ -1,0 +1,275 @@
+P1-E1-S2D-R2 — PRESERVE REQUEST HUB RETRY CONTEXT
+=====================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete, live-validated
+                       (including a real, non-simulated failure
+                       reproduction) against the local dev stack. NOT
+                       staged, NOT committed, NOT pushed, NOT deployed,
+                       per explicit phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed, both before and after this phase's work —
+  origin/main had not advanced. The accumulated, uncommitted S2B + S2C
+  + S2D + S2D-R1 work was confirmed present and untouched before this
+  narrow correction began.
+
+
+2. ORIGINAL RETRY BEHAVIOR
+-------------------------------
+Read `docs/reports/p1-e1-s2d-r1-request-queue-fail-visible-errors.txt`
+in full before starting. R1's failure-state Retry action was a
+hardcoded, unconditional link:
+
+    <LinkButton href="/operations/requests" variant="outline">Retry</LinkButton>
+
+Any failure occurring under a non-default view — `?state=accepted`,
+`?state=declined&page=2`, `?state=all&q=Marguerite` — would have its
+Retry action silently discard that context and reset the operator to
+default Pending, page 1, no search. This is a real UX regression for
+an operator who was deliberately working a specific status view or
+search when the failure occurred.
+
+
+3. SUPPORTED QUERY STATE
+-----------------------------
+Read `page.tsx` and `requests-list.ts` to confirm the page's actual
+supported URL surface — exactly three query parameters, no others:
+
+  - `q`      — free-text search, read as `typeof params.q === "string"
+               ? params.q : ""`. No allow-list of values; passed
+               through to `getRequestsList`, which internally trims
+               and caps it at 200 chars before querying.
+  - `state`  — status view, validated via the existing
+               `parseRequestsListStateFilter`, which returns one of
+               `"pending"|"accepted"|"declined"|"cancelled"|"all"` and
+               falls back to `"pending"` for anything else (including
+               missing/malformed values) — this validation already
+               existed, unchanged by this phase.
+  - `page`   — pagination cursor, parsed via `Number.parseInt(params
+               .page, 10) || 1`.
+
+No other query parameter is read anywhere in `page.tsx` or
+`requests-list.ts`. Per phase §2's explicit instruction, no other
+parameter is preserved — an arbitrary/unrelated query-string value
+present on the failing URL (there is no legitimate case for one today,
+but the mechanism guarantees it structurally) is simply never written
+into a Request Hub URL this page constructs.
+
+
+4. FINAL RETRY URL CONSTRUCTION
+------------------------------------
+A pre-existing helper already did exactly this job for pagination's
+Previous/Next links, but was scoped inside the success-path branch
+(defined AFTER the `if (!result.ok) return ...` early return),
+so it was unreachable from the failure branch. Hoisted it above the
+`!result.ok` check, generalized its name
+(`buildPageHref` → `buildRequestHubHref`), and reused it, unchanged in
+logic, for both:
+
+    const buildRequestHubHref = (targetPage: number) => {
+      const qp = new URLSearchParams();
+      if (search) qp.set("q", search);
+      if (state !== "pending") qp.set("state", state);
+      if (targetPage > 1) qp.set("page", String(targetPage));
+      const qs = qp.toString();
+      return qs ? `/operations/requests?${qs}` : "/operations/requests";
+    };
+
+Retry now reads:
+
+    <LinkButton href={buildRequestHubHref(page)} variant="outline">Retry</LinkButton>
+
+where `search`, `state`, and `page` are the exact validated values
+computed at the top of the component — BEFORE `getRequestsList` is
+even called — so they represent precisely the Request Hub view this
+failed render actually attempted, not a re-derivation or a guess.
+Pagination's own Previous/Next links (`buildRequestHubHref(result.page
+- 1)` / `buildRequestHubHref(result.page + 1)`) now share this exact
+same function — one URL-construction implementation for the whole
+page, not two.
+
+No new Request Hub URL/query helper file was introduced; the existing
+one was hoisted and reused, per §10's own "possibly one existing
+helper if already appropriate."
+
+
+5. VALIDATION / NORMALIZATION BEHAVIOR
+---------------------------------------------
+`state` and `page` were already normalized BEFORE this phase (`state`
+via the pre-existing `parseRequestsListStateFilter`; `page` via the
+pre-existing `Number.parseInt(...) || 1` fallback) — Retry inherits
+this normalization for free, since it now reads the same top-level
+`state`/`page` variables rather than raw `params.state`/`params.page`.
+
+One small correctness fix was made to `page`'s own normalization,
+directly in service of §4's "use the normalized positive page value
+already used by the queue": the pre-existing fallback
+(`Number.parseInt(params.page, 10) || 1`) does not clamp a negative
+value (`Number.parseInt("-5", 10)` is `-5`, which is truthy, so `|| 1`
+never fires) — `getRequestsList` itself already defensively re-clamps
+via `Math.max(1, filters.page ?? 1)`, but `page.tsx`'s own top-level
+`page` variable did not match that clamp, so a hypothetical
+`?page=-5` URL could have produced a Retry/pagination link that didn't
+reflect what the query actually used. Added the identical
+`Math.max(1, ...)` clamp to `page.tsx`'s own computation so the value
+used for both Retry and pagination is now provably identical to what
+`getRequestsList` itself will use. This is the only behavioral change
+in this phase beyond the Retry destination itself — confirmed narrow
+in scope (one `Math.max` wrapper) and directly required by §4's own
+instruction, not an unrelated addition.
+
+`?state=bogus` (§4's own example): live-confirmed the resulting Retry
+href is exactly `/operations/requests` (no `state` param at all) —
+`parseRequestsListStateFilter("bogus")` already resolves to
+`"pending"`, and the builder omits `state` from the query string
+whenever it equals `"pending"` (the default), so an invalid state is
+never echoed back, per §4.
+
+
+6. URL ENCODING
+--------------------
+`buildRequestHubHref` uses `URLSearchParams.set(...)` exclusively — no
+manual string concatenation of user-supplied search text anywhere.
+Live-verified with a deliberately adversarial search string containing
+a space, an ampersand, an apostrophe, and a question mark
+(`"O'Brien & Sons?"`): the Retry href round-tripped to exactly
+`/operations/requests?q=O%27Brien+%26+Sons%3F` (space encoded as `+`,
+`&` and `?` and `'` percent-encoded) — provably safe, matching
+`URLSearchParams`'s own standard encoding, never a hand-built string
+that could break the URL or inject an unintended query parameter.
+
+
+7. LIVE FAILURE VALIDATION
+--------------------------------
+Used the same real, non-simulated, fully reversible mechanism already
+established and validated in R1 (§10 of that report): temporarily
+revoked `SELECT` on `passengers` from the `authenticated` role via a
+direct `REVOKE` (not a migration file edit), which genuinely breaks
+the main query's embedded-Passenger relation — a real permission
+error, not a mock. Ran all 6 required scenarios against this real
+failure, then restored the grant and confirmed it byte-identical to
+its pre-test state (`authenticated=arDxtm/postgres`) via `\z
+passengers`.
+
+  A. Pending failure (`/operations/requests`)
+     → Retry href: `/operations/requests`. PASS.
+
+  B. Accepted failure (`/operations/requests?state=accepted`)
+     → Retry href: `/operations/requests?state=accepted`. PASS.
+
+  C. Search failure (`/operations/requests?state=all&q=Marguerite
+     Holloway`)
+     → Retry href: `/operations/requests?q=Marguerite+Holloway&state=all`
+     — both `state=all` and `q=Marguerite Holloway` preserved. PASS.
+
+  D. Page context (`/operations/requests?state=declined&page=2`)
+     → Retry href: `/operations/requests?state=declined&page=2`. PASS.
+
+  E. Invalid state (`/operations/requests?state=bogus`)
+     → Retry href: `/operations/requests` — normalized to Pending,
+     `state=bogus` NOT preserved. PASS.
+
+  Bonus: special-character search (`"O'Brien & Sons?"`)
+     → Retry href correctly percent-encoded (§6). PASS.
+
+For every scenario, the test additionally FOLLOWED the Retry href with
+a real navigation (not a client-side check) and confirmed: (1) the
+browser actually landed on the exact expected URL, and (2) the
+destination still returned a genuine, fresh server response (the
+failure UI again, since the grant was still revoked at that point in
+the sequence) — proving Retry performs a real fresh GET that re-runs
+the server queries, not a client-side no-op or cached view. No client
+polling was used anywhere in this test or in the implementation
+itself.
+
+24/24 checks passed across all 6 scenarios, 0 failed.
+
+
+8. SUCCESSFUL QUEUE REGRESSION
+-------------------------------------
+After restoring the `passengers` grant, re-ran the full original S2D
+live E2E suite (45 checks: Pending/Accepted/Declined/Cancelled/All
+ordering and row sets, search by passenger name/phone and requester
+name/phone, filtered/genuine empty states, dispatcher access, driver
+rejection, Org B isolation, sidebar expanded/collapsed/active-route/
+persistence, tablet viewport, narrow-width guard, and the existing
+pagination Previous/Next links which now route through the renamed
+`buildRequestHubHref`). 45/45 passed, 0 failed — confirming zero
+behavioral change to the success path; only the previously-broken
+Retry destination and the `page` clamp (§5) changed.
+
+
+9. TESTS
+-------------
+`npx tsc --noEmit`: clean, 0 errors.
+`npm run lint`: 0 errors (16 pre-existing warnings, all in unrelated
+`.tmp-qa/*.mjs` scratch scripts, same as R1's own report — nothing in
+product source).
+`npm run build`: succeeds; `/operations/requests` and `/operations/
+requests/new` both present in the route list.
+`npm test`: 66/66 passing, unchanged — no new pure helper was
+introduced in this phase (the change is a URL-string builder already
+covered by the live scenario matrix in §7, not a standalone pure
+function warranting a dedicated unit test file).
+
+
+10. SUPABASE DIFF
+----------------------
+`git status --porcelain supabase/` before, during (including through
+the real GRANT/REVOKE test), and after this phase shows exactly the
+same 5 pre-existing, untouched S2B files — zero new or modified
+Supabase files. The `REVOKE`/`GRANT` used for §7's live test was a
+temporary database privilege change made directly via `psql`, NOT a
+migration file edit, fully reversed and confirmed byte-identical to
+its pre-test state before this report was written.
+
+
+11. EXACT SOURCE DIFF
+--------------------------
+Modified:
+  src/app/operations/requests/page.tsx — untracked directory (new in
+    S2D, never committed), so no tracked-file diff exists. The actual
+    change: `page`'s computation gained a `Math.max(1, ...)` clamp
+    (§5); the pre-existing `buildPageHref` closure was hoisted above
+    the `!result.ok` early return and renamed `buildRequestHubHref`
+    (identical internal logic, unchanged); the failure branch's Retry
+    `href` changed from the hardcoded string `"/operations/requests"`
+    to `buildRequestHubHref(page)`; the two pagination Previous/Next
+    links were updated to call the renamed function (no behavior
+    change — same arguments, same logic). No other line changed.
+
+Untouched, confirmed by `git status --porcelain` throughout:
+  `src/lib/operations/requests-list.ts` — zero changes; this phase is
+    presentation-layer only, exactly as scoped by §10's "expected
+    modification: page.tsx" instruction.
+  Supabase (migration/RPCs/RLS), `OperationsSidebar.tsx`, Operations
+    Brief, organization resolution, `AccountMenu`, Trip behavior,
+    S2C's `actions.ts`, `request-readiness-core.ts`,
+    `RequestsTable.tsx`, `RequestStatusTabs.tsx`, `AttentionState.tsx`
+    (the failure UI's own copy/treatment is byte-identical to R1 — only
+    its Retry `href` value changed, per §6 of this phase's spec).
+
+
+12. READINESS FOR S2E
+--------------------------
+No change to S2E's readiness posture from S2D/R1's own reports. This
+phase touched only the failure-state Retry destination and pagination
+URL construction — both sit entirely above where S2E's own
+`onRowClick` addition to `RequestsTable` would go.
+
+
+13. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows only the same pre-existing tracked-file
+modifications from S2B/S2D (`OperationsSidebar.tsx`, `icons.ts`,
+`presentation.ts`, `database.types.ts`) plus the same untracked S2D
+directories/files (now further modified in-place by this phase) —
+exactly as required by this phase's explicit constraint.

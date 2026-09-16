@@ -35,6 +35,10 @@ export interface NewTripFormProps {
   facilities: NewTripFacilityOption[];
   requests: NewTripRequestOption[];
   organizationTimezone: string;
+  /** P1-E1-S2F-B1 §14 — a validated, already-eligible Request id reached via `?requestId=`, or null for ordinary direct-Trip mode. */
+  preselectedRequestId: string | null;
+  /** P1-E1-S2F-B1 §13 — true when `?requestId=` was supplied but did not resolve to an eligible Request in this organization (malformed, nonexistent, foreign-org, or currently ineligible — never distinguished). */
+  requestUnavailable: boolean;
 }
 
 /**
@@ -42,14 +46,31 @@ export interface NewTripFormProps {
  * component (not several independently-uncontrolled sections) because two
  * real, backend-grounded interactions require programmatic cross-field
  * updates: selecting a Facility populates that side's address snapshot
- * (work item §18), and "Import request details" populates Passenger/
+ * (work item §18), and "Import request details" populates
  * pickup/destination/schedule/assistance from a selected TransportationRequest
  * (the real fields the reference's own "Import request details" affordance
  * implies — requester_name/phone/email and a fabricated reference code are
  * NOT imported, since create_trip has no parameter for them — see the data
  * map). All of it still submits as one real `<form>` + Server Action.
+ *
+ * P1-E1-S2F-B1 §4/§7: when a Request is selected (manually, or via
+ * `preselectedRequestId`), the Passenger is DERIVED from that Request,
+ * never independently editable — `effectivePassengerId` below is the
+ * SINGLE source of truth actually submitted, computed fresh on every
+ * render from whichever mode is active, so it can never drift from a
+ * selected Request's own resolved Passenger. Clearing the Request
+ * (§8) deliberately resets the manual Passenger selection back to
+ * empty, rather than silently retaining the Request-derived Passenger
+ * as though the operator had chosen them directly.
  */
-export function NewTripForm({ passengers: initialPassengers, facilities, requests, organizationTimezone }: NewTripFormProps) {
+export function NewTripForm({
+  passengers: initialPassengers,
+  facilities,
+  requests,
+  organizationTimezone,
+  preselectedRequestId,
+  requestUnavailable,
+}: NewTripFormProps) {
   const [state, formAction, pending] = useActionState(createTripAction, INITIAL_STATE);
   const router = useRouter();
 
@@ -60,25 +81,57 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
   // merely assumed away.
   const submittedRef = useRef(false);
 
+  // P1-E1-S2F-B1 §14: a preselected, already-eligible Request (Request
+  // Detail's own "Create Trip"/"Create Another Trip" action) should
+  // automatically initialize the form from that Request's own details —
+  // the SAME field mapping "Import request details" already supports,
+  // never a new/invented mapping. Resolved once, here, as a plain
+  // value (not a hook) so every initial-state lazy initializer below
+  // can read it without an effect — calling several setState functions
+  // synchronously inside a mount effect is exactly what the "populate
+  // from a prop once" pattern is for lazy useState initializers, not
+  // useEffect (react-hooks/set-state-in-effect).
+  const preselectedRequest = preselectedRequestId ? (requests.find((r) => r.id === preselectedRequestId) ?? null) : null;
+
   const [passengerOptions, setPassengerOptions] = useState(initialPassengers);
-  const [passengerId, setPassengerId] = useState("");
+  // Used ONLY in direct-Trip mode (no Request selected) — while a
+  // Request is selected, this is never read for submission (§7); it is
+  // still reset (never left stale) on deselection (§8).
+  const [manualPassengerId, setManualPassengerId] = useState("");
   const [addPassengerOpen, setAddPassengerOpen] = useState(false);
 
-  const [pickupDate, setPickupDate] = useState("");
-  const [pickupTime, setPickupTime] = useState("");
+  const [pickupDate, setPickupDate] = useState(() => preselectedRequest?.preferredDate ?? "");
+  const [pickupTime, setPickupTime] = useState(() => preselectedRequest?.preferredTime?.slice(0, 5) ?? "");
   const [appointmentDate, setAppointmentDate] = useState("");
   const [appointmentTime, setAppointmentTime] = useState("");
 
   const [pickupFacilityId, setPickupFacilityId] = useState("");
-  const [pickupDescription, setPickupDescription] = useState("");
+  const [pickupDescription, setPickupDescription] = useState(() => preselectedRequest?.pickupDescription ?? "");
   const [destinationFacilityId, setDestinationFacilityId] = useState("");
-  const [destinationDescription, setDestinationDescription] = useState("");
+  const [destinationDescription, setDestinationDescription] = useState(() => preselectedRequest?.destinationDescription ?? "");
 
   const [instructions, setInstructions] = useState("");
-  const [assistanceNotes, setAssistanceNotes] = useState("");
+  const [assistanceNotes, setAssistanceNotes] = useState(() => preselectedRequest?.assistanceNotes ?? "");
 
-  const [requestId, setRequestId] = useState("");
+  const [requestId, setRequestId] = useState(preselectedRequestId ?? "");
   const selectedRequest = requests.find((r) => r.id === requestId) ?? null;
+  // The ONE value ever actually submitted for passengerId — always
+  // derived fresh from whichever mode is active, never a separately
+  // maintained piece of state that could fall out of sync (§7).
+  const effectivePassengerId = selectedRequest ? selectedRequest.passengerId : manualPassengerId;
+
+  // Still used by the MANUAL "Import request details" button (§9) —
+  // preserved unchanged as a real click-time state update, never
+  // attempting any local→UTC schedule conversion here (the real
+  // organization-timezone conversion happens once, server-side, in
+  // createTripAction, unchanged).
+  function importRequestDetails(request: NewTripRequestOption) {
+    setPickupDescription(request.pickupDescription);
+    setDestinationDescription(request.destinationDescription);
+    if (request.preferredDate) setPickupDate(request.preferredDate);
+    if (request.preferredTime) setPickupTime(request.preferredTime.slice(0, 5));
+    if (request.assistanceNotes) setAssistanceNotes(request.assistanceNotes);
+  }
 
   useEffect(() => {
     if (state.status === "success" && state.tripId) {
@@ -111,19 +164,26 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
     if (facility) setDestinationDescription(formatFacilityAddress(facility));
   }
 
-  function handleImportRequest() {
-    if (!selectedRequest) return;
-    setPickupDescription(selectedRequest.pickupDescription);
-    setDestinationDescription(selectedRequest.destinationDescription);
-    if (selectedRequest.preferredDate) setPickupDate(selectedRequest.preferredDate);
-    if (selectedRequest.preferredTime) setPickupTime(selectedRequest.preferredTime.slice(0, 5));
-    if (selectedRequest.assistanceNotes) setAssistanceNotes(selectedRequest.assistanceNotes);
-    if (selectedRequest.passengerId && passengerOptions.some((p) => p.id === selectedRequest.passengerId)) {
-      setPassengerId(selectedRequest.passengerId);
+  // P1-E1-S2F-B1 §9: manual Request selection preserves the EXISTING
+  // two-step "select, then click Import request details" behavior
+  // unchanged (only §14's preselection route auto-imports) — this
+  // handler's own job is solely the Passenger-binding side: clearing
+  // the Request (§8) deliberately resets manualPassengerId back to
+  // empty, so a Request-derived Passenger is never silently retained
+  // as though manually chosen.
+  function handleRequestChange(id: string) {
+    setRequestId(id);
+    if (id === "") {
+      setManualPassengerId("");
     }
   }
 
-  const selectedPassenger = passengerOptions.find((p) => p.id === passengerId) ?? null;
+  function handleImportRequest() {
+    if (!selectedRequest) return;
+    importRequestDetails(selectedRequest);
+  }
+
+  const selectedManualPassenger = passengerOptions.find((p) => p.id === manualPassengerId) ?? null;
   const passengerComboboxOptions = passengerOptions.map((p) => ({
     value: p.id,
     label: p.displayName,
@@ -174,33 +234,56 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
         </p>
       )}
 
+      {requestUnavailable && (
+        <AttentionState
+          level="warning"
+          title="Selected request is unavailable for trip creation."
+          description="Continue below to create this trip directly, or choose a different request."
+        />
+      )}
+
       <form id="new-trip-form" action={formAction} onSubmit={handleSubmit} className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex flex-col gap-zw-lg">
           <FormSection
             icon={<User className="size-5" aria-hidden />}
             title="Passenger"
             action={
-              <Button type="button" variant="outline" size="sm" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setAddPassengerOpen(true)}>
-                Add New Passenger
-              </Button>
+              // P1-E1-S2F-B1 §7: Add New Passenger is never offered while
+              // a Request is selected — the Passenger is derived from
+              // that Request, not something this screen resolves.
+              !selectedRequest && (
+                <Button type="button" variant="outline" size="sm" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setAddPassengerOpen(true)}>
+                  Add New Passenger
+                </Button>
+              )
             }
           >
-            <input type="hidden" name="passengerId" value={passengerId} />
-            {selectedPassenger ? (
-              <div className="flex items-center gap-3 rounded-sm border border-selection-border bg-brand-calm-mist/40 px-3 py-2.5">
-                <Avatar name={selectedPassenger.displayName} size="sm" />
+            <input type="hidden" name="passengerId" value={effectivePassengerId} />
+            {selectedRequest ? (
+              <div className="flex items-center gap-3 rounded-sm border border-border-subtle bg-surface-secondary px-3 py-2.5">
+                <Avatar name={selectedRequest.passengerDisplayName} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
-                    {selectedPassenger.displayName}
+                    {selectedRequest.passengerDisplayName}
                   </p>
-                  {selectedPassenger.phone && (
-                    <p className={cn(typography.metadata, "text-text-muted")}>{selectedPassenger.phone}</p>
+                  <p className={cn(typography.metadata, "text-text-muted")}>Linked from transportation request</p>
+                </div>
+              </div>
+            ) : selectedManualPassenger ? (
+              <div className="flex items-center gap-3 rounded-sm border border-selection-border bg-brand-calm-mist/40 px-3 py-2.5">
+                <Avatar name={selectedManualPassenger.displayName} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
+                    {selectedManualPassenger.displayName}
+                  </p>
+                  {selectedManualPassenger.phone && (
+                    <p className={cn(typography.metadata, "text-text-muted")}>{selectedManualPassenger.phone}</p>
                   )}
                 </div>
                 <IconButton
                   label="Remove selected passenger"
                   icon={<X className="size-4" aria-hidden />}
-                  onClick={() => setPassengerId("")}
+                  onClick={() => setManualPassengerId("")}
                 />
               </div>
             ) : (
@@ -211,7 +294,7 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
                 noResultsText="No passenger matches that search."
                 disabled={passengerOptions.length === 0}
                 options={passengerComboboxOptions}
-                onSelect={(option) => setPassengerId(option.value)}
+                onSelect={(option) => setManualPassengerId(option.value)}
               />
             )}
           </FormSection>
@@ -304,10 +387,10 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
               label="Transportation Request"
               name="requestId"
               placeholder="No linked request"
-              helpText="Optional. Linking an existing request marks it accepted."
+              helpText="Optional. Linking an existing request marks it accepted and binds its Passenger — this list only shows requests with a resolved, active Passenger."
               options={requestSelectOptions}
               value={requestId}
-              onChange={(e) => setRequestId(e.target.value)}
+              onChange={(e) => handleRequestChange(e.target.value)}
             />
             <Button
               type="button"
@@ -334,7 +417,7 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
           onClose={() => setAddPassengerOpen(false)}
           onCreated={(passenger) => {
             setPassengerOptions((prev) => [...prev, passenger]);
-            setPassengerId(passenger.id);
+            setManualPassengerId(passenger.id);
           }}
         />
       )}

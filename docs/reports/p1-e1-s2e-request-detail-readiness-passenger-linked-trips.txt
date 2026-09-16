@@ -1,0 +1,631 @@
+P1-E1-S2E — REQUEST DETAIL + READINESS + PASSENGER RESOLUTION + LINKED TRIPS
+=====================================================================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete, live-validated
+                       (including a real, non-simulated failure
+                       reproduction, a real end-to-end passenger-linking
+                       flow, and a real Add-New-Passenger-then-auto-link
+                       flow) against the local dev stack. NOT staged,
+                       NOT committed, NOT pushed, NOT deployed, per
+                       explicit phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed, both before and after this phase's work — origin/main
+  had not advanced. The accumulated, uncommitted S2B through S2D-R2 work
+  was confirmed present and untouched before this phase began.
+
+
+2. DEPENDENCY VERIFICATION
+-------------------------------
+Read all six required prior reports in full (S2A, S2B, S2C, S2D, S2D-R1,
+S2D-R2) before writing anything. Re-verified the load-bearing claim
+this phase depends on most directly by reading the actual migration
+source, not the S2B report's prose alone:
+`link_request_passenger(p_organization_id uuid, p_request_id uuid,
+p_passenger_id uuid) returns request_passenger_link_result` — legal
+only while `pending`, passenger must exist/same-org/active (ZW006
+otherwise, no existence oracle), idempotent no-op if already linked to
+that exact passenger, row locked `FOR UPDATE` before the state check,
+raises ZW001/ZW002/ZW004/ZW006 and no other code. Confirmed `p_passenger_id
+is null` also raises ZW006 — the RPC itself provides no unlink path,
+matching §19's own "no unlink/reassign" instruction by construction, not
+merely by UI convention.
+
+
+3. EXISTING-DETAIL-PATTERN AUDIT
+-------------------------------------
+Read Trip Detail's route (`src/app/operations/trips/[tripId]/page.tsx`),
+its data helper (`src/lib/operations/trip-detail.ts`), its panel
+components, `Panel.tsx`, `DefinitionList.tsx`, `FormSection.tsx`, and
+`AddPassengerDialog.tsx` in full before writing anything. Findings that
+directly shaped this phase's architecture:
+  - Trip Detail's own not-found handling is a discriminated
+    `{status:"ok"|"unavailable"|"error"}` result + `EmptyState` — the
+    ONLY existing precedent for a single-record Operations detail page
+    in this codebase (`grep -rn "notFound("` across `src/app/operations/`
+    returns zero matches anywhere). Mirrored directly for
+    `getRequestDetail` (§6).
+  - Trip Detail panels are bare `Panel` + hand-rolled `<h3>` headers, NOT
+    `FormSection` (which is form-only, used by New Trip/Log Request, and
+    renders an `<h2>` — a level mismatch with Trip Detail's own `<h3>`
+    convention). Every new read-only Request Detail panel follows Trip
+    Detail's bare-`Panel`+`<h3>` convention, not `FormSection`.
+  - Trip Detail's related-record compact-list idiom (`TripExceptionsPanel`/
+    `TripNotesPanel`: `EmptyState`-or-`<ul>` of bordered `<li>` rows) is
+    the direct template for `RequestLinkedTripsPanel`.
+  - `DataTable`'s `onRowClick` is used exactly once elsewhere
+    (`PassengersTable.tsx`), to open an edit DIALOG — not page
+    navigation. The actual established pattern for row → DETAIL-PAGE
+    navigation is Trips list's own `<Link href={...}>` wrapping the
+    primary column's rendered value (`src/app/operations/trips/page.tsx`).
+    Reused directly for Request Hub → Request Detail (§23) — per §4's
+    own explicit instruction to check which pattern is actually
+    keyboard-accessible and already used for this purpose before
+    choosing.
+  - `AddPassengerDialog` already returns the created Passenger's real
+    `{id, displayName, phone}` via its existing `onCreated` callback —
+    confirmed by reading the component in full BEFORE assuming any
+    extension was needed. No shared-component change was required at
+    all (§16).
+  - `trip-detail-errors.ts`'s 5-code ZW-mapping pattern
+    (UNAUTHORIZED/NOT_FOUND/ILLEGAL_STATE/INVALID_INPUT/UNKNOWN) is the
+    closest existing precedent for a mutation RPC that can raise
+    ZW001/ZW002/ZW004/ZW006 — mirrored directly for
+    `link-passenger-errors.ts` (§15).
+
+
+4. FILES CHANGED
+---------------------
+New:
+  src/lib/operations/request-detail.ts
+  src/lib/operations/link-passenger-errors.ts
+  src/app/operations/requests/[requestId]/page.tsx
+  src/app/operations/requests/[requestId]/actions.ts
+  src/components/operations/requests/RequestPassengerPanel.tsx
+  src/components/operations/requests/RequestTransportationPanel.tsx
+  src/components/operations/requests/RequestRequesterPanel.tsx
+  src/components/operations/requests/RequestDetailsPanel.tsx
+  src/components/operations/requests/RequestLinkedTripsPanel.tsx
+
+Modified:
+  src/components/operations/requests/RequestsTable.tsx (row → Request
+    Detail navigation; doc comment updated to reflect the actual chosen
+    pattern instead of S2D's own forward-looking placeholder comment)
+  src/lib/operations/log-request-options.ts (+1 small generic
+    `selectOptionLabel` lookup helper — reuses the EXISTING
+    `REQUESTER_RELATIONSHIP_OPTIONS`/`RETURN_TRIP_OPTIONS`/
+    `SOURCE_OPTIONS` lists for Request Detail's own read-only display,
+    rather than declaring a second, parallel value→label mapping that
+    could drift out of sync — see §11/§23/§24)
+
+Explicitly NOT touched, confirmed via `git status --porcelain
+supabase/` unchanged throughout (§37) and via `git diff --stat` showing
+no tracked-file diff for any of these: Supabase migration/RPCs/RLS,
+`create_trip`, Operations Brief, organization resolution, `AccountMenu`,
+`OperationsSidebar.tsx` (its existing `pathname.startsWith(item.href)`
+logic already correctly covers `/operations/requests/[requestId]` —
+live-confirmed, §26 — no edit was needed), `request-readiness-core.ts`
+(reused unmodified), `AddPassengerDialog.tsx`/`addPassengerAction`
+(reused unmodified, §16).
+
+
+5. ROUTE
+------------
+`/operations/requests/[requestId]`, gated by the existing
+`requireOperationsAccess` — no new authorization logic. Live-confirmed
+Driver is redirected to `/driver` before the page ever renders.
+
+
+6. DETAIL LOAD CONTRACT
+----------------------------
+`src/lib/operations/request-detail.ts`, `getRequestDetail(requestId,
+organizationId)`:
+
+    export type RequestDetailResult =
+      | { status: "ok"; request: RequestDetailData }
+      | { status: "unavailable" }
+      | { status: "error" };
+
+Mirrors `trip-detail.ts` exactly: a malformed `requestId` (fails a UUID
+regex) is rejected BEFORE any query — never lets a raw Postgres
+"invalid input syntax for type uuid" error escape as a distinguishable
+signal. A well-formed but nonexistent or foreign-org id and a genuinely
+nonexistent one both resolve to the SAME `unavailable` result — no
+existence oracle. A real query error (on the Request row itself OR on
+the Linked Trips query — both treated as equally authoritative, §19/
+§27.E) resolves to `error`, never silently downgraded to `unavailable`
+or an empty/zero-row `ok` result.
+
+
+7. AUTHORIZATION / TENANT SCOPING
+--------------------------------------
+`organization_id` is the server-validated current workspace only
+(`requireOperationsAccess`, never a route/query-string/hidden-form
+value) — applied as an explicit `.eq("organization_id", ...)` on BOTH
+the Request row query and the Linked Trips query independently, never
+relying on RLS alone (matching every other data-access module in this
+codebase). Live-confirmed (§26): Org B viewing an Org A request id
+gets the byte-identical "Request unavailable" copy a genuinely
+nonexistent id produces — no "belongs to another organization" leak,
+no distinguishable signal of any kind.
+
+
+8. INFORMATION ARCHITECTURE
+--------------------------------
+Breadcrumb (`Requests › {identity}`) → header (`<h2>Request</h2>` +
+StatusBadge + `{identity} · Logged {long date}` subtext) → Readiness
+(inline warning banner only for `needs_passenger`; a restrained plain-
+text line otherwise) → two-column grid
+(`xl:grid-cols-[minmax(0,1fr)_340px]`, collapsing to one column below
+`xl`, matching Trip Detail's own exact breakpoint): main column =
+Passenger → Transportation → Linked Trips; side column = Requester →
+Request Details (source + notes). No KPI-grid dashboard anywhere.
+
+
+9. STATUS
+-------------
+Reuses `StatusBadge` + the existing `requestStatusLabel`/
+`requestStatusCategory` from `presentation.ts` (S2D) unmodified — no new
+stored state, no "converted"/"approved"/"scheduled request" invented.
+`accepted` + a real linked Trip IS the conversion, exactly as locked;
+this phase adds no separate "converted" concept on top of it.
+
+
+10. READINESS
+------------------
+Reuses `deriveRequestReadiness` (`request-readiness-core.ts`)
+completely unmodified — computed in `getRequestDetail` from the SAME
+real linked-Passenger `status` field the query already fetches
+(`passenger?.status === "active"`), never merely `passenger_id !==
+null`. Live-verified with a purpose-built edge case: a Pending request
+linked to an INACTIVE passenger correctly shows "Passenger needed," not
+"Ready" — the exact scenario this rule exists to prevent from being
+silently wrong (same edge case S2D itself proved for the queue row;
+now also proven for Detail).
+
+
+11. TRANSPORTATION / REQUESTER DETAILS
+-------------------------------------------
+`RequestTransportationPanel`: Pickup/Destination/Preferred Service
+(`formatRequestServiceDate`, reused from S2D unmodified — "No date
+given" is calm information, never a readiness blocker, per §11's own
+explicit instruction)/Return Transportation
+(`selectOptionLabel(RETURN_TRIP_OPTIONS, ...)`). `RequestRequesterPanel`:
+Name/Relationship/Phone/Email, visually and structurally separate from
+the Passenger panel — never implying the requester IS the passenger
+(S2D §14's rule, carried through to Detail as two distinct panels, not
+merged fields).
+
+
+12. PASSENGER — LINKED STATE
+---------------------------------
+A read-only card: Avatar, display name, phone, assistance notes (shown
+inline when present), and a `StatusBadge` (Active/Inactive) showing the
+Passenger's REAL current status. No unlink/reassign control anywhere
+(§19) — confirmed absent by direct inspection and by every live check
+against a linked-request fixture. An inactive linked Passenger still
+renders here as current linkage (never auto-unlinked) with its Inactive
+status visibly flagged via the badge — live-verified (§27).
+
+
+13. PASSENGER — UNRESOLVED STATE
+-------------------------------------
+Rendered ONLY when `state === "pending" && passenger === null` (§16 —
+a UI convenience; the RPC itself remains the real enforcement
+boundary). Two explicit actions: "Search existing Passenger"
+(Combobox) and "Add New Passenger" (`AddPassengerDialog`, reused
+unmodified). No fuzzy/auto-matching by name/phone/email anywhere —
+confirmed by direct code inspection (the Combobox's own filter is a
+plain substring match the operator explicitly types, never triggered
+automatically from Request fields).
+
+
+14. EXISTING PASSENGER SEARCH
+----------------------------------
+Reuses `getLogRequestFormData` (S2C, unmodified) directly for the
+active-Passenger candidate list — org-scoped, `status = 'active'` only,
+fetched ONLY when the link UI would actually render (skipped entirely
+for resolved/non-pending requests, both to avoid an unnecessary query
+and because this list is not part of the Request's own authoritative
+data — its own failure degrades only the search sub-feature, never the
+whole page, a deliberate and documented distinction from the Linked
+Trips query's own stricter treatment, §6/§19). Selection via
+`Combobox`'s `onSelect` sets LOCAL state only — never mutates the
+Request by itself (live-verified, §27: selecting "Priscilla Vance"
+showed the not-yet-linked preview card while "No passenger linked"
+remained visible above it, proving selection alone never links).
+
+
+15. LINK PASSENGER SERVER ACTION
+-------------------------------------
+`src/app/operations/requests/[requestId]/actions.ts`,
+`linkPassengerAction` — calls `link_request_passenger` ONLY, via
+`supabase.rpc(...)`, never a raw `.update({ passenger_id: ... })`.
+`requestId`/`passengerId` are the only client-supplied identifiers;
+`organizationId` is re-derived fresh from `requireOperationsAccess` on
+every call, never read from the client. On success:
+`revalidatePath(`/operations/requests/${requestId}`)` AND
+`revalidatePath("/operations/requests")` — both the Detail page itself
+and the Request Hub queue's own Readiness column need fresh data on the
+very next navigation (live-confirmed, §27).
+
+
+16. ADD PASSENGER REUSE
+----------------------------
+Zero changes to `AddPassengerDialog.tsx` or `addPassengerAction` —
+both already returned exactly what was needed
+(`{id, displayName, phone}` via the existing `onCreated` callback), so
+no "smallest reusable extension" was required at all (§17's own
+conditional instruction). `RequestPassengerPanel`'s `onCreated` handler
+appends the new Passenger to its local candidate list AND immediately
+auto-submits the SAME real `linkPassengerAction` form (via a
+`useEffect` watching the newly-set `selectedCandidateId`, which only
+fires after the hidden input's value has actually committed to the DOM
+— avoiding a React-state-batching race that an immediate rAF-based
+submit would have risked). This is a real, distinct, authoritative RPC
+call — not an implicit side effect folded into Passenger creation
+itself — chained automatically because a SEPARATE manual confirm click
+immediately after a deliberate multi-step create-a-passenger dialog
+flow would add friction without adding safety (unlike a bare Combobox
+selection, which §14 explicitly warns against auto-linking on).
+Live-verified end to end (§28): New Passenger created → dialog closes →
+passenger card shows the new Passenger as LINKED → readiness flips to
+Ready, all in one continuous flow, then confirmed genuinely present in
+the correct organization via direct database query.
+
+Regression-tested both other existing `AddPassengerDialog` consumers
+after this phase's changes (neither of which were touched): New Trip's
+own inline "Add New Passenger" (created Passenger correctly appears in
+the form's own Passenger field, in-progress form state undisturbed) and
+the standalone Passengers page's "Add Passenger" button (created
+Passenger correctly appears in the list via its own `router.refresh()`
+path). Both PASS.
+
+
+17. LINK ELIGIBILITY
+-------------------------
+Search/Add UI renders only when `state === "pending" && passenger ===
+null`; ONCE any passenger_id is set, the link UI never renders again
+regardless of that Passenger's active/inactive status (§19 — no
+relink/reassign UI, even though the RPC itself would technically permit
+relinking a different passenger while still pending; deliberately not
+exposed this phase, exactly as instructed). Live-verified across all 8
+fixture states (pending+unlinked, pending+linked-active,
+pending+linked-inactive, accepted×3, declined, cancelled) — the link
+UI renders in exactly the one case it should and nowhere else. The RPC
+itself remains the authoritative enforcement independent of the UI —
+already re-confirmed this phase via a fresh, isolated SQL regression
+run of `request_mutation_tests.sql`'s own LINK-4/5/6 (accepted/
+declined/cancelled rejection) and LINK-2/3 (cross-tenant/inactive
+passenger rejection) cases (§35).
+
+
+18. ERROR MAPPING
+----------------------
+`link-passenger-errors.ts` — ZW001→UNAUTHORIZED, ZW002→NOT_FOUND,
+ZW004→ILLEGAL_STATE ("This request can no longer be changed in this
+way" — the exact restrained copy §18's own example specifies),
+ZW006→INVALID_INPUT ("Selected passenger is unavailable" — also the
+exact example copy), default→UNKNOWN. No ZW code ever reaches the UI.
+Double-submit guard (`submittedRef`, mirroring `LogRequestForm`'s own
+established pattern) + `disabled={pending}`/`loading={pending}` on the
+Link Passenger button — prevents duplicate submissions during the
+in-flight request.
+
+
+19. LINKED TRIPS QUERY
+---------------------------
+`trips` filtered by `request_id = requestId AND organization_id =
+organizationId`, ordered `created_at ascending`, embedding only
+`passengers!trips_passenger_id_organization_id_fkey(display_name)` (a
+SINGLE, unambiguous FK on `trips` — unlike `transportation_requests`'s
+own dual-FK situation, S2D §32 — the explicit hint is added anyway for
+defensive consistency with Trip Detail's own style, though not
+strictly required here). Deliberately does NOT query
+`trip_assignments` (driver/vehicle) — kept cheap and focused per §20's
+own explicit instruction; each linked Trip's own Detail page (one click
+away) always has the complete picture. This query's own failure is
+treated as a full page-level load failure (§6/§27.E), never silently
+downgraded to "No trips yet."
+
+
+20. 1:N BEHAVIOR
+---------------------
+Correctly handles zero (EmptyState), one, and multiple linked Trips —
+never assumes a 1:1 relationship anywhere in the query, the DTO
+(`linkedTrips: RequestDetailLinkedTrip[]`), or the rendering (a plain
+`.map()` over the array). Live-verified against all three cases with
+purpose-built fixtures (an accepted request with exactly one linked
+Trip, another with exactly two).
+
+
+21. RETURN-INTENT HANDLING
+-------------------------------
+`return_trip_needed` displayed as plain Yes/No/Not sure via the
+existing `RETURN_TRIP_OPTIONS` list — no return-Trip creation UI, no
+`trips.leg` concept, no inference of which linked Trip is outbound vs.
+return anywhere in this phase. When a request has 2 linked Trips (the
+return-transportation scenario), both are listed as independent, equal
+rows — confirmed by direct code inspection and live screenshot.
+
+
+22. REQUEST-EVENTS DECISION
+--------------------------------
+NOT displayed in this phase. `request_events` was audited (read the
+S2B migration's own table definition) but deliberately excluded, per
+§26's own explicit permission not to build a timeline this phase —
+current authoritative detail state (Request state, `updated_at`,
+Passenger linkage, linked Trips) is sufficient without it, and S2F's
+own future lifecycle actions (Decline/Cancel/Convert) will make an
+event history genuinely more valuable than it would be today, where
+only two event types (`request_logged`/`passenger_linked`) could ever
+appear for a still-pending Request. No event-schema change of any kind
+was made or considered.
+
+
+23. QUEUE ROW NAVIGATION
+-----------------------------
+`RequestsTable.tsx`'s Passenger column now wraps its rendered value
+(linked Passenger name, or requester name when unlinked) in a plain
+`<Link href={`/operations/requests/${row.id}`}>` — the exact pattern
+already established by Trips list for this exact purpose (§3), not
+`DataTable`'s `onRowClick` (whose only existing use elsewhere opens a
+dialog, a different interaction entirely). A real `<a>` tag: no
+`tabIndex`/`onKeyDown` needed, no client-component boundary introduced,
+no redundant "View" button. Live-verified: keyboard `.focus()` reaches
+the row link natively, and activating it (native click on the focused
+element) navigates correctly.
+
+
+24. DETAIL FAILURE HANDLING
+--------------------------------
+A genuine query error renders `AttentionState` (`level="critical"`,
+"Unable to load request" / "Request information could not be loaded.
+Try again." / a real "Retry" link back to the same URL) — deliberately
+the MORE rigorous, R1-established convention (§10 of this report),
+rather than copying Trip Detail's own older, pre-R1 `EmptyState`-based
+error copy verbatim. This is a documented, deliberate improvement on
+the literal Trip Detail precedent, justified because Request Detail is
+being built AFTER the R1 lesson was learned specifically about this
+failure class. Live-verified with a REAL (non-simulated) failure:
+temporarily revoked `SELECT` on `passengers` (breaks the Request row's
+own embedded-Passenger relation — a genuine PostgREST/permission
+error, not a mock), confirmed the critical-toned failure UI rendered
+with none of the forbidden copy ("Request unavailable," "No linked
+trips," "No passenger linked," any raw error code/SQL wording), then
+restored the grant and confirmed byte-identical to its pre-test state
+and normal operation resumed. 6/6 checks passed.
+
+
+25. NONEXISTENT / CROSS-TENANT HANDLING
+--------------------------------------------
+Both render the identical `EmptyState` ("Request unavailable" / "This
+request doesn't exist, or you don't have access to it." / "Back to
+Requests") — no existence oracle. Live-verified for: a genuinely
+nonexistent (all-zero) UUID, a syntactically malformed id (never a raw
+Postgres "invalid input syntax" error), and an Org A request id
+accessed by an Org B admin (§26).
+
+
+26. MULTI-ORG VALIDATION
+-----------------------------
+Live-verified: Org A admin can view an Org A request normally; Org B
+admin accessing the SAME Org A request id by direct URL sees the
+byte-identical not-found copy, with the linked Passenger's real name
+("Bartholomew Cruz") never appearing anywhere on the page — no partial
+leak, no distinguishing copy of any kind. 4/4 checks passed.
+`OperationsSidebar.tsx`'s existing `pathname.startsWith(item.href)`
+active-route logic was confirmed (not assumed) to already correctly
+mark "Requests" active from `/operations/requests/[requestId]` — no
+edit to that file was needed, matching §29's own "do not change it
+unless testing proves otherwise" instruction.
+
+
+27. PASSENGER-LINK VALIDATION
+----------------------------------
+Full live matrix, driven through the real browser UI (genuine
+`mousedown` dispatch on the Combobox option — `.click()` alone would
+not fire its `onMouseDown` handler):
+  A. Pending + no Passenger → "Passenger needed" banner, Search/Add UI
+     present. PASS.
+  B. Search "Priscilla" → filtered result → select via mousedown →
+     not-yet-linked preview card shown (selection alone did not link)
+     → click "Link Passenger" → passenger card updates to linked,
+     "No passenger linked" gone, readiness flips to Ready, search/add
+     UI disappears → navigated to the Request Hub queue on a SINGLE
+     fresh navigation and confirmed the SAME row now shows the linked
+     Passenger's name AND "Ready" readiness (revalidation proven, not
+     assumed). 17/17 checks passed.
+  C/D. Inactive-Passenger and cross-tenant-Passenger rejection at the
+     RPC boundary are proven authoritatively by the fresh, isolated
+     SQL regression of `request_mutation_tests.sql`'s own LINK-2/LINK-3
+     cases (§35) — a more rigorous proof than a UI-level forgery
+     attempt could provide, and the reason a redundant curl-based RPC-
+     forgery test was deliberately not built for this phase.
+  E/F/G. Accepted/Declined/Cancelled requests render no link UI at all
+     (live-verified for all 3, plus 2 additional accepted variants —
+     one and two linked Trips); the RPC's own LINK-4/5/6 rejections for
+     a direct forged attempt against a non-pending Request are likewise
+     proven by the SQL regression (§35), not re-derived here.
+All required scenarios PASS.
+
+
+28. ADD-PASSENGER VALIDATION
+---------------------------------
+Live end-to-end: pending unlinked Request → "Add New Passenger" →
+dialog opens → filled and submitted → dialog closes, new Passenger
+name appears as the (about-to-be-linked) selection → real
+`link_request_passenger` auto-submits → passenger card updates to
+LINKED → readiness flips to Ready. 8/8 checks passed. Confirmed via
+direct database query that the created Passenger exists in the correct
+organization with `status = 'active'`. New Trip's own Add Passenger and
+the standalone Passengers page's Add Passenger were both independently
+regression-tested afterward and both PASS (§16) — confirming the
+shared component's other two consumers are unaffected.
+
+
+29. LINKED TRIPS VALIDATION
+--------------------------------
+Live-verified: zero linked Trips (both the ordinary "No trips yet" case
+for a still-pending request, and the deliberate `state=accepted`+
+zero-Trips inconsistency fixture, which correctly renders the DISTINCT
+"No linked trips found" message rather than crashing, fabricating a
+Trip, or altering Request state — §22's own explicit "document if
+encountered" instruction, recorded here as a crafted test fixture, not
+an organically-occurring bug); one linked Trip (correct row content,
+correct link to that Trip's own Detail page); two linked Trips
+(confirmed exactly 2 distinct Trip-Detail-linking rows rendered, no
+cross-tenant Trip possible since the query is independently org-scoped).
+All PASS.
+
+
+30. DESKTOP
+----------------
+1440×900: no horizontal overflow; two-column grid (main content +
+340px side rail, matching Trip Detail's own exact breakpoint) renders
+correctly across every fixture state tested. Screenshots captured for
+every scenario in §27's own matrix plus the failure/not-found/multi-org
+cases.
+
+
+31. TABLET
+---------------
+820×1100: no horizontal overflow; all sections (Transportation,
+Passenger, Requester, Request Details, Linked Trips) render and remain
+usable with the compact sidebar. PASS.
+
+
+32. NARROW GUARD
+---------------------
+390×844: the existing Operations unsupported-width guard renders
+unmodified — confirmed the page does NOT render "Linked Trips" or any
+Request-Detail-specific content at this width, and no special mobile
+Request Detail was built. PASS.
+
+
+33. ACCESSIBILITY
+----------------------
+Every interactive navigation surface added this phase is a real,
+native element — no synthetic click-only rows anywhere:
+  - Queue row → Detail: a real `<a href>` (§23) — live-confirmed
+    `.focus()` reaches it directly (no `tabIndex` needed) and
+    activating the focused element navigates correctly.
+  - Breadcrumb "Requests" link: confirmed focusable.
+  - Linked Trip rows → Trip Detail: real `<a href>`, same pattern.
+  - The Combobox itself is the pre-existing, already-accessibility-
+    audited primitive (full ARIA combobox/listbox pattern, keyboard
+    Up/Down/Home/End/Enter/Escape) — unmodified, reused as-is.
+All accessibility checks PASS.
+
+
+34. READINESS TEST REGRESSION
+----------------------------------
+`request-readiness-core.test.mjs` re-run standalone: 10/10 PASS, no
+changes needed or made — the module is reused completely unmodified by
+this phase. No new pure formatting/derivation helper was introduced
+(the one candidate — a return-trip/source label lookup — was
+deliberately NOT built as a new helper once it was discovered that
+`RETURN_TRIP_OPTIONS`/`SOURCE_OPTIONS`/`REQUESTER_RELATIONSHIP_OPTIONS`
+already existed with the exact same labels; a single small, genuinely
+generic `selectOptionLabel(options, value)` lookup was added instead,
+reusing those existing lists rather than duplicating their values — see
+§4/§11/§23/§24), so per §37's own conditional instruction no dedicated
+new unit-test file was required for it either.
+
+
+35. FOCUSED SQL REGRESSION
+-------------------------------
+Per §40: re-ran `request_mutation_tests.sql` and
+`request_mutation_privilege_tests.sql`, EACH against its own fresh
+`supabase db reset`, exactly as required.
+  - `request_mutation_tests.sql`: 38 distinct `TEST ... PASS` lines, 0
+    FAIL. (An initial run showed apparent failures because the file was
+    mistakenly run a second time against an already-mutated database
+    without a fresh reset in between — a test-orchestration mistake on
+    this session's part, corrected immediately; the CORRECT
+    single-run-against-a-fresh-reset result is the one reported here
+    and is unambiguous: every LOG/LINK/DECLINE/CANCEL test case passes,
+    including all 4 states' worth of link-eligibility rejection and the
+    inactive/cross-tenant passenger rejections this phase's own UI
+    depends on being real.)
+  - `request_mutation_privilege_tests.sql`: 18/18 PASS, matching the
+    original S2B report's own count exactly.
+`request_mutation_atomicity_tests.sql` was NOT re-run — optional per
+§40's own explicit condition ("unless implementation or testing
+uncovers a reason to rerun it"), and none was found: this phase added
+no Supabase source change of any kind, so the atomicity guarantee
+proven in S2B is unaffected.
+
+
+36. APP TESTS
+------------------
+  npx tsc --noEmit    PASS (0 errors)
+  npm run lint         PASS (0 errors; 18 pre-existing warnings, all in
+                        unrelated `.tmp-qa/*.mjs` scratch scripts — 2
+                        more than S2D-R2's own count because 2 new
+                        scratch test scripts were added this phase,
+                        same warning class, nothing in product source)
+  npm run build         PASS; `/operations/requests/[requestId]` present
+                        in the route list
+  npm test               PASS (66/66 — unchanged from S2D-R2; no new
+                        unit-test target was needed, per §34 above)
+
+
+37. SUPABASE DIFF
+----------------------
+`git status --porcelain supabase/` before, during (including through
+the real GRANT/REVOKE fail-visible test, §24), and after this phase
+shows exactly the same 5 pre-existing, untouched S2B files — zero new
+or modified Supabase files. No migration, RPC, or RLS change of any
+kind. `link_request_passenger` is invoked exactly as S2B defined it,
+with no schema-level assumption this phase required that S2B did not
+already provide.
+
+
+38. EXACT SOURCE DIFF
+--------------------------
+See §4 for the full file list. Every new file is untracked (the whole
+Request Hub feature area remains uncommitted from S2D onward, so no
+tracked-file diff exists for any of it — confirmed via `git diff
+--stat` returning empty for `RequestsTable.tsx`, the one file this
+phase modified that happens to live in that same untracked directory).
+`log-request-options.ts` gained exactly one small function
+(`selectOptionLabel`, ~3 lines) — its own tracked-file status is
+unaffected since it too was already untracked from S2C. No other file
+outside the list in §4 changed in any way this phase — confirmed via
+`git status --porcelain` showing only the same 4 pre-existing tracked
+modifications from S2B/S2D (`OperationsSidebar.tsx`, `icons.ts`,
+`presentation.ts`, `database.types.ts`) with no new tracked-file
+modification added by this phase.
+
+
+39. READINESS FOR S2F
+--------------------------
+Ready. `linkPassengerAction`'s revalidation already covers both surfaces
+S2F's own lifecycle actions (Decline/Cancel/Convert) will need to
+revalidate identically. The Linked Trips panel's existing "what came
+from this request" framing needs no structural change to accommodate a
+future Convert action — it will simply start showing a Trip sooner.
+`RequestPassengerPanel`'s `canShowLinkUi` gate is already
+state-conditional and will naturally stop rendering once S2F transitions
+a Request out of `pending`, with no additional work. No half-built
+Convert/Decline/Cancel affordance of any kind exists anywhere in this
+phase's code — confirmed by direct review of every new file.
+
+
+40. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows only the same pre-existing tracked-file
+modifications from S2B/S2D plus the same untracked Request Hub
+directories/files (now further extended by this phase) — exactly as
+required by this phase's explicit constraint. HEAD and origin/main
+remain at 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f, confirmed both
+before and after this phase's work.

@@ -4,7 +4,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTodaysOperations, type TodaysOperationsTrip, type TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { getOnboardingChecklist } from "@/lib/operations/onboarding-checklist";
-import { getDriverSnapshot } from "@/lib/operations/operations-brief";
+import { getDriverSnapshot, getRequestSummary } from "@/lib/operations/operations-brief";
 import { deriveOperationsBrief } from "@/lib/operations/operations-brief-core";
 import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
@@ -43,11 +43,12 @@ export default async function OperationsOverviewPage() {
   // `data` — never a second getTodaysOperations() call. Only the driver
   // snapshot (S1B's one genuinely new query) needs its own fetch, run in
   // parallel with the onboarding checklist below.
-  const [checklist, driverSnapshot] = await Promise.all([
+  const [checklist, driverSnapshot, requestSummary] = await Promise.all([
     getOnboardingChecklist(organization.organizationId),
     getDriverSnapshot(organization.organizationId),
+    getRequestSummary(organization.organizationId),
   ]);
-  const brief = deriveOperationsBrief(data, driverSnapshot, new Date());
+  const brief = deriveOperationsBrief(data, driverSnapshot, requestSummary, new Date());
   const timezone = organization.organizationTimezone;
 
   const attentionColumns: DataTableColumn<TodaysOperationsAttentionItem>[] = [

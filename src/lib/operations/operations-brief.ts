@@ -3,9 +3,14 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getTodaysOperations } from "./todays-operations";
 import { isActiveTripState } from "./presentation";
 import { deriveOperationsBrief, countDriversCurrentlyOnTrip, type DriverAssignmentStateRow } from "./operations-brief-core";
-import type { OperationsBriefData, OperationsBriefDriverSnapshot } from "./operations-brief-core";
+import type { OperationsBriefData, OperationsBriefDriverSnapshot, OperationsBriefRequestSummary } from "./operations-brief-core";
 
-export type { OperationsBriefData, OperationsBriefDayState, OperationsBriefDriverSnapshot } from "./operations-brief-core";
+export type {
+  OperationsBriefData,
+  OperationsBriefDayState,
+  OperationsBriefDriverSnapshot,
+  OperationsBriefRequestSummary,
+} from "./operations-brief-core";
 
 /**
  * Server-side data COMPOSITION layer for Operations Brief (P1-E1-S1B,
@@ -111,6 +116,52 @@ export async function getDriverSnapshot(organizationId: string): Promise<Operati
 }
 
 /**
+ * Requests awaiting review (P1-E1-S2G). Exported separately from
+ * `getOperationsBrief`, exactly like `getDriverSnapshot` above, so
+ * /operations' own page can compose it alongside its already-fetched
+ * `TodaysOperationsData` without a second, redundant Brief fetch.
+ *
+ * Reuses the EXACT SAME Pending queue definition Request Hub's own
+ * `getRequestsList` (requests-list.ts) already established —
+ * `organization_id = <current org>` AND `state = 'pending'` — never a
+ * second interpretation. `organization_id` is explicitly filtered here
+ * as defense in depth, on top of RLS, matching every other query in this
+ * module. Uses the normal RLS-respecting server client, never the
+ * service role.
+ *
+ * One narrow query does both jobs at once: `count: "exact"` returns the
+ * organization's real total pending count regardless of `.limit()`
+ * (PostgREST computes the count from the full filtered set, not the
+ * returned page), while `.order("created_at", { ascending: true
+ * }).limit(1)` returns only the single oldest pending row — the same
+ * `created_at ASC` ordering requests-list.ts's own Pending queue already
+ * uses. This avoids ever fetching Request rows individually when only a
+ * count and a single timestamp are actually needed. No score, no SLA, no
+ * urgency model, no fake priority, no AI classification — just the two
+ * plain facts the Brief needs.
+ */
+export async function getRequestSummary(organizationId: string): Promise<OperationsBriefRequestSummary> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error, count } = await supabase
+    .from("transportation_requests")
+    .select("created_at", { count: "exact" })
+    .eq("organization_id", organizationId)
+    .eq("state", "pending")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (error) {
+    throw new Error(`Failed to load pending request summary: ${error.message}`);
+  }
+
+  return {
+    pendingRequestCount: count ?? 0,
+    oldestPendingRequestCreatedAt: data?.[0]?.created_at ?? null,
+  };
+}
+
+/**
  * The one Operations Brief entry point. `organizationId`/`timezone` follow
  * the exact same caller-resolves-context convention getTodaysOperations()
  * already established. `now` defaults to the real current instant but is
@@ -123,10 +174,11 @@ export async function getOperationsBrief(
   timezone: string,
   now: Date = new Date(),
 ): Promise<OperationsBriefData> {
-  const [todaysOperations, driverSnapshot] = await Promise.all([
+  const [todaysOperations, driverSnapshot, requestSummary] = await Promise.all([
     getTodaysOperations(organizationId, timezone),
     getDriverSnapshot(organizationId),
+    getRequestSummary(organizationId),
   ]);
 
-  return deriveOperationsBrief(todaysOperations, driverSnapshot, now);
+  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, now);
 }

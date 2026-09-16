@@ -1,0 +1,531 @@
+P1-E1-S2F-B1 — REQUEST→TRIP CONVERSION UX
+=================================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete, live-validated
+                       end to end (a real first conversion, a real
+                       second/1:N conversion, a real forged-mismatch
+                       defense proof, multi-org isolation, and full
+                       accessibility checks) against the local dev
+                       stack. NOT staged, NOT committed, NOT pushed,
+                       NOT deployed, per explicit phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed, both before and after this phase's work —
+  origin/main had not advanced. The accumulated, uncommitted S2B
+  through S2F-A work was confirmed present and untouched before this
+  phase began.
+
+
+2. DEPENDENCY / INVARIANT VERIFICATION
+-------------------------------------------
+Read the CURRENT `create_trip` definition directly, including S2F-A's
+hardening migration (`20260916110000_request_trip_passenger_
+integrity.sql`), before writing any application code. Confirmed
+directly from source (not from report prose alone):
+  - No-Request Trip creation is byte-identical to before — the entire
+    passenger/request cross-check sits inside `if p_request_id is not
+    null then ... end if;` and never runs when `p_request_id` is null.
+  - Request-linked Trip creation requires exact Passenger match:
+    `if v_request.passenger_id is distinct from p_passenger_id then
+    raise ZW006`.
+  - A pending Request becomes accepted on first Trip
+    (`if p_request_id is not null and v_request.state = 'pending' then
+    update ... set state = 'accepted'`).
+  - An accepted Request stays accepted (the update above only fires
+    from `'pending'`).
+  - An accepted Request may create another Trip (`v_request.state not
+    in ('pending', 'accepted')` is the only state rejection).
+  - Declined/cancelled Requests are rejected (caught by that same
+    state check).
+  - The linked Passenger must remain active — the pre-existing
+    Passenger validation (`status = 'active'`) runs BEFORE the Request
+    block and is unaffected.
+This is the authoritative contract every UI decision below was built
+against.
+
+
+3. EXISTING NEW TRIP AUDIT (BEFORE ANY CHANGE)
+---------------------------------------------------
+Read `src/app/operations/trips/new/page.tsx`,
+`src/app/operations/trips/new/actions.ts`,
+`src/components/operations/new-trip/NewTripForm.tsx`,
+`src/lib/operations/new-trip.ts`, and
+`src/lib/operations/new-trip-options.ts` in full. Findings:
+  - Passenger picker: a `Combobox` (search-select) over active,
+    same-org Passengers, or a selected-Passenger card with a clear
+    (X) control.
+  - Request picker: a plain `<Select>` over `pending`/`accepted`
+    Requests — NOT filtered by `passenger_id`/linked-Passenger status
+    at all before this phase.
+  - "Import request details": a manual, explicit button
+    (`handleImportRequest`) that copies `pickupDescription`/
+    `destinationDescription`/`preferredDate`→`pickupDate`/
+    `preferredTime`→`pickupTime`/`assistanceNotes`, AND (before this
+    phase) also opportunistically set `passengerId` from the Request's
+    own `passengerId` if that Passenger happened to already be in the
+    loaded active-Passenger list.
+  - Initial values: everything blank; no query-param handling of any
+    kind existed.
+  - Submission flow: one real `<form>` + `createTripAction` (Server
+    Action) → `create_trip` RPC → on success, `router.push` to the new
+    Trip's own Detail page.
+  - `create_trip` argument mapping: `passengerId` and `requestId` were
+    both read directly from client-submitted `FormData` with no
+    server-side cross-check between them.
+  - Add Passenger: `AddPassengerDialog`/`addPassengerAction` (shared,
+    unmodified elsewhere in the app), `onCreated` appended the new
+    Passenger to the in-memory list and selected it.
+  - Query-param conventions: none — this route had never read
+    `searchParams` before this phase.
+This is the exact baseline every change below was measured against —
+nothing was rewritten from scratch.
+
+
+4. FILES CHANGED
+---------------------
+Modified (tracked, real `git diff` — 267 insertions, 69 deletions
+across 5 files):
+  src/app/operations/trips/new/page.tsx
+  src/app/operations/trips/new/actions.ts
+  src/components/operations/new-trip/NewTripForm.tsx
+  src/lib/operations/new-trip.ts
+  src/lib/operations/new-trip-options.ts
+
+Modified (untracked directory, no tracked diff exists but a real
+change was made):
+  src/app/operations/requests/[requestId]/page.tsx (added the Create
+    Trip / Create Another Trip action only — no other line changed)
+
+Explicitly NOT touched, confirmed via `git status --porcelain
+supabase/` unchanged and via direct inspection: Supabase (migration/
+RPCs/RLS), `create_trip` itself, `request-readiness-core.ts`,
+`RequestPassengerPanel.tsx`, `RequestLinkedTripsPanel.tsx`,
+`OperationsSidebar.tsx`, Operations Brief, organization resolution,
+`AccountMenu`, `AddPassengerDialog.tsx`/`addPassengerAction` (reused
+unmodified), `linkPassengerAction`/`link-passenger-errors.ts` (reused
+unmodified — this phase adds no second mutation RPC of any kind).
+
+
+5. ELIGIBLE REQUEST DEFINITION
+------------------------------------
+`getNewTripFormData`'s request query (§5 of the phase spec) now
+requires, in addition to the pre-existing `state in ('pending',
+'accepted')`: `passenger_id IS NOT NULL` AND the linked Passenger's
+own `status = 'active'`. Implemented by embedding
+`passengers!transportation_requests_passenger_id_organization_id_fkey
+(display_name, status)` (the explicit FK-name hint is required — this
+table carries two foreign keys to `passengers`, P1-E1-S2D §32 — an
+unqualified embed is ambiguous to PostgREST) and filtering in
+application code after fetch (`passenger_id !== null && passenger
+.status === "active"`), not via a PostgREST `!inner`-embed filter —
+this list is small and org-bounded, so a plain post-fetch filter
+avoids relying on embedded-relation filter syntax for something this
+simple; documented as a deliberate choice, not an oversight. Excludes
+exactly the four cases §5 lists: unresolved pending, inactive-
+Passenger pending, inactive-Passenger accepted, declined, cancelled.
+No Request row is ever mutated merely to make it eligible — this is a
+read-side filter only.
+
+
+6. NEW TRIP REQUEST DTO / QUERY
+------------------------------------
+`NewTripRequestOption` was narrowed: `requesterName`/
+`requesterRelationship` were REMOVED (§6's own explicit "do not expose
+unnecessary requester PII" instruction — once eligibility guarantees a
+resolved Passenger, the requester's identity added no value this form
+actually uses), and `passengerId`/`passengerDisplayName` were ADDED
+(now guaranteed non-null by the eligibility filter in §5). Final
+shape: `id, passengerId, passengerDisplayName, pickupDescription,
+destinationDescription, preferredDate, preferredTime,
+assistanceNotes`. `formatRequestOptionLabel` was updated to show the
+Passenger's own name as the dropdown option's primary identity
+("Mary Johnson — preferred Aug 29") instead of the requester's name —
+a small, deliberate, documented improvement (not scope creep): now
+that every option in this list has a resolved Passenger, that identity
+is the authoritative one for the Trip the option would create,
+matching Request Hub's own established "linked Passenger is the
+primary identity" convention (S2D §14).
+
+
+7. REQUEST/PASSENGER BINDING
+---------------------------------
+`NewTripForm`'s state model changed from one `passengerId` state
+variable to two: `manualPassengerId` (used only in direct-Trip mode)
+and a derived, ALWAYS-fresh `effectivePassengerId = selectedRequest ?
+selectedRequest.passengerId : manualPassengerId` — the ONE value ever
+actually submitted (the hidden `passengerId` input always renders
+`effectivePassengerId`). This structurally guarantees the Passenger
+can never diverge from a selected Request's own resolved Passenger —
+there is no code path where the two could be set independently while
+a Request is selected. When `selectedRequest` is truthy: the Passenger
+section renders a read-only card ("{name} / Linked from transportation
+request"), no `Combobox`, no "Add New Passenger" button (the
+`FormSection`'s `action` prop itself is conditionally omitted, not
+merely visually hidden) — live-verified the operator cannot reach an
+editable Passenger control of any kind while request-linked.
+
+
+8. REQUEST DESELECTION BEHAVIOR
+------------------------------------
+Clearing the Request (choosing the Select's own blank/placeholder
+option — no new "clear" UI was needed, the existing Select already
+supports this) explicitly resets `manualPassengerId` back to `""` via
+`handleRequestChange`. The least-surprising choice, documented: a
+Request-derived Passenger is NEVER silently retained as though the
+operator had manually chosen them — clearing genuinely returns to a
+blank direct-Trip Passenger selection, requiring a real, explicit
+re-choice. Live-verified (§25 G): after clearing, the Combobox is
+editable again, "Linked from transportation request" is gone, and the
+hidden `passengerId` input is empty, not stale.
+
+
+9. REQUESTID QUERY PARAM
+-----------------------------
+`/operations/trips/new?requestId=<uuid>` is resolved with ZERO
+additional queries: `requestedId ? requests.find(r => r.id ===
+requestedId) ?? null : null` against the SAME already-fetched,
+already org-scoped, already eligibility-filtered `requests` array the
+page renders its own dropdown from. A malformed id, a nonexistent id,
+a foreign-org id, and a currently-ineligible id all produce the
+IDENTICAL "not found in this list" outcome — never distinguished from
+one another, no existence oracle of any kind, and no raw UUID-cast
+error risk (the malformed string is never sent into a new Supabase
+query at all). `requestUnavailable` (true only when a requestId was
+supplied but not found) renders the restrained, exact copy specified:
+"Selected request is unavailable for trip creation." — followed by
+"Continue below to create this trip directly, or choose a different
+request." — never explaining why.
+
+
+10. PRESELECTION
+---------------------
+A valid, eligible `requestId` preselects that Request (`useState(() =>
+preselectedRequestId ?? "")` for `requestId`), binds its Passenger
+(automatic via §7's derivation), and shows it read-only. Because this
+route originates from Request Detail, the form ALSO auto-initializes
+from the Request's own pickup/destination/preferred-date/preferred-
+time/assistance-notes — reusing the EXACT SAME field mapping the
+existing "Import request details" button already used (factored into
+one shared `importRequestDetails` function, called both by the manual
+button and, via lazy `useState` initializers, at first render for the
+preselected route). No new field mapping was invented. No local→UTC
+timestamp conversion happens here — `preferredDate`/`preferredTime`
+are copied as plain strings into the form's own local date/time
+inputs exactly as "Import request details" already did; the real
+organization-timezone conversion remains the one existing boundary in
+`createTripAction`, untouched. (Implementation note: the FIRST attempt
+used a `useEffect` calling several `setState` functions on mount,
+which `eslint-plugin-react-hooks`'s `set-state-in-effect` rule
+correctly flagged as a real anti-pattern — fixed by switching to lazy
+`useState(() => ...)` initializers instead, the idiomatic React fix
+for "initialize from a prop once," with zero behavioral difference.)
+
+
+11. REQUEST DETAIL: CREATE TRIP ACTION
+-------------------------------------------
+Added to `page.tsx`'s existing header row (the same `flex flex-wrap
+items-start justify-between` layout Trip Detail's own action bar
+already uses): `canCreateTrip = request.state === "pending" &&
+readiness === "ready"` shows a `LinkButton` labeled "Create Trip",
+targeting `/operations/trips/new?${new URLSearchParams({ requestId:
+request.id }).toString()}` (safe URL construction — `request.id` is
+always a UUID, and `URLSearchParams` handles encoding regardless). No
+Trip is ever created from Request Detail directly — the operator is
+always routed through New Trip to review scheduling/facility/
+instructions first, per explicit instruction.
+
+
+12. REQUEST DETAIL: CREATE ANOTHER TRIP ACTION
+-----------------------------------------------------
+`canCreateAnotherTrip = request.state === "accepted" &&
+request.passenger !== null && request.passenger.status === "active"`
+shows the same `LinkButton`, labeled "Create Another Trip" instead,
+targeting the identical URL pattern. Deliberately checks
+`request.passenger.status` DIRECTLY rather than relying on
+`readiness` alone — `deriveRequestReadiness` always returns
+`"accepted"` for an accepted Request regardless of the linked
+Passenger's current status (S2E-R1 §10), so readiness alone cannot
+distinguish "accepted + active" from "accepted + inactive"; this was
+identified during design, not discovered as a bug afterward. No
+`trip.leg`/return-leg/outbound-leg concept was introduced — both
+actions route to the exact same New Trip flow.
+
+
+13. BLOCKED ACTION STATES
+------------------------------
+`canCreateTrip`/`canCreateAnotherTrip` are `false`, and neither button
+renders, for every case §12 of the phase spec lists: pending+no
+Passenger, pending+inactive Passenger, accepted+inactive Passenger,
+declined, cancelled. Live-verified against 5 dedicated fixtures (one
+per case) — zero false positives. An accepted Request with an inactive
+Passenger stays genuinely read-only; no reassignment path was invented
+(S2E-R1's own locked rule, respected, not re-litigated).
+
+
+14. PREFILL / IMPORT BEHAVIOR
+----------------------------------
+Manual Request selection (via the dropdown, not the `?requestId=`
+route) preserves the EXISTING two-step "select, then click Import
+request details" behavior completely unchanged — only the Passenger-
+binding side of manual selection changed (now derived/read-only,
+never independently editable); §9's own instruction that a "small
+improvement" to import behavior was optional, not required, was
+honored by leaving it alone. Only the `?requestId=` preselection route
+gets automatic full import, per §14's own explicit distinction.
+
+
+15. DIRECT TRIP REGRESSION
+-------------------------------
+Live-verified (§25 A): `/operations/trips/new` with no `requestId`
+loads exactly as before — Passenger Combobox editable, Add Passenger
+available, no Request required, Trip creation succeeds with no linked
+Request. Confirmed via `.disabled` inspection on the real `<input
+role="combobox">` element (not a text-content heuristic, which proved
+unreliable — see §24).
+
+
+16. SUBMISSION / SERVER-ACTION BEHAVIOR
+--------------------------------------------
+`createTripAction` still calls `create_trip` ONLY — no second Trip
+RPC of any kind exists anywhere in this phase's diff. When a Request
+is present, `p_passenger_id` is now the SERVER-DERIVED value (§17),
+never the raw client-submitted one.
+
+
+17. FORGED-MISMATCH PROTECTION (EXACT DEFENSE LAYERS)
+-------------------------------------------------------------
+Two independent layers, both confirmed live, not merely asserted:
+  Layer 1 (application, new this phase): when `requestId` is present
+    in the submitted FormData, `createTripAction` performs one small,
+    org-scoped lookup (`select passenger_id from
+    transportation_requests where id = requestId and organization_id
+    = organization.organizationId`) and uses THAT Request's own
+    `passenger_id` as `p_passenger_id` — the client's own submitted
+    `passengerId` field is IGNORED whenever this lookup succeeds. If
+    the lookup finds nothing (malformed/nonexistent/foreign-org/stale
+    requestId), no override is applied and the original client value
+    passes through — `create_trip`'s own existing `not found` check on
+    `p_request_id` still authoritatively rejects the whole call
+    regardless, so the final security posture is unchanged either way;
+    this lookup only ever narrows what reaches the RPC, never widens
+    it. No new query architecture — one `.select()` call.
+  Layer 2 (database, S2F-A, unchanged): `create_trip`'s own hardened
+    `is distinct from` check remains the final, mandatory enforcement
+    boundary regardless of what the application layer does.
+Live-verified end to end with a REAL forged submission (not a
+simulated/mocked one): navigated to the preselected New Trip route,
+then used a genuine DOM property-setter to overwrite the hidden
+`passengerId` input's value to a DIFFERENT, valid, same-org, active
+Passenger than the selected Request's own — simulating a tampered
+client exactly as a malicious browser extension or modified request
+might. Submitted the form. Result: Trip creation SUCCEEDED (proving
+Layer 1 silently and correctly ignored the forged value, rather than
+the whole submission failing), and the created Trip's own Detail page
+confirmed the Passenger was the REQUEST's real, correct Passenger —
+the forged one never reached the database at all. This is the
+strongest possible proof of Layer 1's real effect, not just its
+presence in the source.
+
+
+18. REVALIDATION
+---------------------
+`createTripAction`'s existing revalidation set (`/operations`,
+`/operations/dispatch`, the new Trip's own Detail path) is completely
+preserved, unchanged. Added: when `requestId` was submitted, also
+`revalidatePath("/operations/requests")` and
+`revalidatePath(`/operations/requests/${requestId}`)` — live-verified
+(§19/§25 I): after conversion, both the Request Hub queue and the
+converted Request's own Detail page showed fresh data on the very
+next navigation, with no manual refresh.
+
+
+19. FIRST CONVERSION (LIVE, END TO END)
+--------------------------------------------
+Validated the complete real flow against a genuinely pending, Ready
+Request: Create Trip → New Trip (preselected/bound/prefilled) → forged
+submission (§17) → Trip created → Request Detail now shows Accepted →
+Linked Trips contains the new Trip → primary action becomes "Create
+Another Trip" → Request Hub queue shows the Request moved from Pending
+to Accepted. No application code ever wrote `state = 'accepted'`
+directly — `create_trip` remains the sole author of that transition,
+confirmed by code inspection (no `.update()` of `transportation_
+requests` anywhere in this phase's diff).
+
+
+20. SECOND TRIP / 1:N
+--------------------------
+From the now-accepted Request: "Create Another Trip" → New Trip
+(preselected, SAME Passenger bound automatically) → submitted → second
+Trip created → Request Detail confirmed still `Accepted` (no new
+state) → Linked Trips panel confirmed BOTH Trips present (exactly 2
+distinct Trip-Detail links, verified by count, excluding the page's
+own "Create Another Trip" link which incidentally shares a URL
+substring — see §24 for how this was caught and corrected in the test
+script itself). Proves the 1:N Request→Trip model survives the UX
+changes completely intact.
+
+
+21. REQUEST HUB EFFECTS
+----------------------------
+Live-verified: after first conversion, the Pending view no longer
+shows the converted Request; the Accepted view and the All view both
+show it with `Accepted` status; the linked Passenger's identity is
+unchanged throughout. No new "converted" Request state was introduced
+anywhere — `accepted` + a real linked Trip IS the conversion, exactly
+as the existing product model already defines it.
+
+
+22. MULTI-ORG
+------------------
+Live-verified (§25 O), 5/5 checks: an Org A admin navigating to
+`?requestId=<Org A's own eligible request>` sees it correctly
+preselected; the SAME Org A admin navigating to `?requestId=<a real
+Org B request>` sees NO preselection, NO leak of the Org B Passenger's
+name or any other Org B data anywhere on the page, and the restrained
+unavailable notice with no distinguishing reason; ordinary New Trip
+mode remains fully usable in that fallback state; an Org B admin
+navigating to that SAME Org B request id correctly sees it preselected
+as their own. A Trip created via this flow is Org-scoped exactly as
+`create_trip` already guarantees (unchanged, not re-tested here since
+S2F-A's own SQL regression already covers this exhaustively at the RPC
+layer).
+
+
+23. ACCESSIBILITY
+----------------------
+4/4 checks: "Create Trip"/"Create Another Trip" are real, natively-
+focusable `<a>` links (via `LinkButton`) — confirmed via `.focus()`,
+not merely visual inspection. The "Transportation Request" `<select>`
+is properly `<label for>`-associated and natively keyboard-focusable
+(no custom widget, no mouse-only interaction was introduced anywhere
+in this phase). The derived Passenger identity ("Linked from
+transportation request") is real, always-rendered text — never a
+color- or icon-only signal. No new click-only interaction of any kind
+exists in this phase's diff.
+
+
+24. LIVE TEST MATRIX
+-------------------------
+All 25 required scenarios (A-O, §25 of the phase spec) validated with
+purpose-built fixtures covering every state/eligibility combination:
+37 checks in the main conversion-flow suite + 9 checks in the multi-
+org/accessibility suite = 46 checks, 0 failures on the final runs.
+
+Four live-test-SCRIPT bugs were found and fixed during this phase's
+own testing (all confirmed as test-script issues via direct DOM/value
+inspection before being corrected — none was a product defect):
+  1. Checking `document.body.innerText` for a `<textarea>`/`<input>`'s
+     VALUE (auto-import verification) — `innerText` never reflects
+     form-control values; fixed by reading `.value` directly.
+  2. Checking `document.body.innerText` for a `<Combobox>`'s
+     `placeholder` attribute — placeholders are not part of
+     `innerText`; fixed by inspecting the real DOM element and its
+     `.disabled` property.
+  3. An overly broad regex (`/organization|.../i`) flagged this
+     phase's own genuine "unavailable" notice as a suspected leak,
+     because the SAME page separately, legitimately, and unrelatedly
+     contains the word "organization" in pre-existing Trip Schedule
+     copy ("times are in the organization's timezone") — fixed by
+     scoping the check to the notice's own DOM subtree.
+  4. Returning a raw DOM element reference from a CDP `Runtime.
+     evaluate` call with `returnByValue: true` produced a genuine CDP
+     protocol error ("Object reference chain is too long" — DOM nodes
+     carry large circular object graphs that don't serialize safely)
+     — fixed by coercing to a boolean inside the evaluated expression
+     itself.
+  5. (Regression suite) Two of S2E's OWN pre-existing test assertions
+     used `a.href.includes('/operations/trips/')` to find a linked
+     Trip's row link — this phase's new "Create Trip"/"Create Another
+     Trip" link (`/operations/trips/new?requestId=...`) also contains
+     that substring and, appearing earlier in the DOM (header, before
+     the Linked Trips panel), was matched first — fixed by excluding
+     `/operations/trips/new` from those two pre-existing selectors.
+Every one of these was independently confirmed as a test-script issue
+(via targeted debug scripts reading real DOM state) BEFORE being
+"fixed" — no product behavior was ever changed to make a test pass.
+
+
+25. FOCUSED SQL REGRESSION
+-------------------------------
+Per §27's own explicit instruction (no Supabase source changed this
+phase, no regression failed, no security/data-integrity concern
+surfaced during testing — so the full 26-file suite was correctly NOT
+re-run): ran exactly the two specified files, each against its own
+fresh `supabase db reset`:
+  request_trip_passenger_integrity_tests.sql   10/10 PASS
+  create_trip_tests.sql                        19/19 PASS (all NOTICE
+                                                lines PASS, 0 FAIL)
+
+
+26. APPLICATION TESTS
+--------------------------
+  npx tsc --noEmit    PASS (0 errors)
+  npm run lint         PASS (0 errors; 23 pre-existing warnings, all in
+                        unrelated `.tmp-qa/*.mjs` scratch scripts — more
+                        than S2F-A's own count because several new
+                        scratch test scripts were added this phase,
+                        same warning class, nothing in product source)
+  npm run build         PASS; `/operations/trips/new` and `/operations/
+                        requests/[requestId]` both present in the route
+                        list
+  npm test               PASS (66/66 — unchanged; no new pure helper
+                        was introduced this phase)
+
+
+27. SUPABASE DIFF
+----------------------
+`git status --porcelain supabase/` before, during, and after this
+phase shows exactly the same 7 pre-existing files from S2B + S2F-A —
+zero new or modified Supabase files. No migration, RPC, or RLS change
+of any kind — this phase is application-layer UX only, exactly as
+scoped.
+
+
+28. EXACT SOURCE DIFF
+--------------------------
+5 tracked files changed (real `git diff --stat`): +267/-69 across
+`src/app/operations/trips/new/page.tsx`,
+`src/app/operations/trips/new/actions.ts`,
+`src/components/operations/new-trip/NewTripForm.tsx`,
+`src/lib/operations/new-trip.ts`,
+`src/lib/operations/new-trip-options.ts`. One untracked-directory file
+also changed with a real, small, isolated diff:
+`src/app/operations/requests/[requestId]/page.tsx` (added the header
+action block only — every other line byte-identical to its S2E-R1
+state, confirmed by direct review). No other file changed — confirmed
+via `git status --porcelain` showing only the same 4 pre-existing
+tracked modifications from S2B/S2D (`OperationsSidebar.tsx`,
+`icons.ts`, `presentation.ts`, `database.types.ts`, none touched this
+phase) plus this phase's own 5 newly-modified tracked files.
+
+
+29. READINESS FOR S2F-B2
+------------------------------
+Ready. Request→Trip conversion is now fully wired end to end — first
+conversion and 1:N additional Trips both proven live. Decline/Cancel
+UI, the Request event timeline, return-leg schema, public intake, and
+the Operations Brief request count remain untouched and unaffected by
+anything in this phase's diff, exactly as scoped. The
+`canCreateTrip`/`canCreateAnotherTrip` boolean pair in Request Detail's
+`page.tsx` is a clean, well-isolated extension point if S2F-B2 needs
+to reason about the same state/readiness/Passenger-status combination
+for a Decline or Cancel action's own eligibility.
+
+
+30. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows only the same 4 pre-existing tracked
+modifications from S2B/S2D plus this phase's own 5 newly-modified
+tracked New Trip files, plus the same untracked Request Hub
+directories/files from prior phases (now further modified in-place by
+this phase's one Request Detail change). HEAD and origin/main remain
+at 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f, confirmed both before and
+after this phase's work.

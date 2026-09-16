@@ -1,0 +1,482 @@
+P1-E1-S2F-B2 — DECLINE + CANCEL REQUEST LIFECYCLE ACTIONS
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-16
+STATUS: COMPLETE — all locked requirements implemented and live-verified.
+
+1. SCOPE SUMMARY
+-----------------
+Built Decline and Cancel lifecycle actions for Operations Request Detail,
+plus a restrained, read-only Request Activity panel. Both mutations call
+ONLY the existing P1-E1-S2B RPCs (`decline_transportation_request`,
+`cancel_transportation_request`) — no raw `.update()` on
+`transportation_requests.state`, no raw `request_events` INSERT, no
+Supabase source file changed. Public intake, Operations Brief counts, the
+recurring-care engine, `trip.leg`, request reopening, accepted-Request
+cancellation, Trip cancellation, Passenger reassignment, and notification
+infrastructure were all explicitly out of scope and were not touched.
+
+2. PRODUCT SEMANTICS PRESERVED
+-------------------------------
+DECLINE = operator decision the Request will not be fulfilled.
+CANCEL = Request withdrawn before conversion.
+These are not interchangeable in copy, eligibility, or code path. Trip
+cancellation remains a completely separate Trip-lifecycle action, never
+touched or referenced destructively by this phase's UI (Cancel's own
+dialog copy explicitly says "This does not cancel any trip.").
+
+3. ACTION ELIGIBILITY (AS IMPLEMENTED)
+----------------------------------------
+- PENDING: Decline available for ANY pending Request (resolved or not).
+  Cancel available ONLY when linkedTrips.length === 0. Create Trip
+  available separately when readiness === "ready" — all three can
+  coexist independently per the exact rules given.
+- ACCEPTED: no Decline, no Cancel; Create Another Trip unchanged
+  (S2F-B1 behavior untouched).
+- DECLINED / CANCELLED: no lifecycle actions of any kind.
+- No Reopen / Undo path exists anywhere in this phase.
+- A rare legacy edge case (pending + already has a linked Trip) shows a
+  restrained note ("This request has linked trips and cannot be
+  cancelled here.") instead of an enabled Cancel button — Decline
+  remains available in that same state, since Decline eligibility never
+  depends on linked Trips.
+
+4. ACTION HIERARCHY
+--------------------
+`RequestActionBar` mirrors `TripDetailActionBar`'s exact convention: one
+flat row, no dropdown/overflow menu. Create Trip / Create Another Trip
+keeps its existing default (filled, primary) `LinkButton` styling as the
+sole productive action. Decline Request / Cancel Request both use
+`variant="outline"` as TRIGGER buttons — same secondary weight as Cancel
+Trip's own trigger in `TripDetailActionBar`. Destructive weight is
+expressed only once, inside each action's own confirmation dialog
+(`variant="destructive"` on the confirm button), exactly matching
+`CancelTripDialog`.
+
+5. DECLINE FLOW (UI)
+----------------------
+Dialog title: "Decline request".
+Dialog description (verbatim, confirmed live): "Decline this
+transportation request? It will remain in Request Hub history and
+cannot be converted into a trip."
+Optional free-text Reason `Textarea` — no category taxonomy — `maxLength=
+500` matching the RPC's exact limit, `helpText="Optional. Up to 500
+characters."` shown via the existing `Textarea` primitive's own
+`helpText` support (no new pattern invented).
+
+6. DECLINE MUTATION (SERVER ACTION)
+--------------------------------------
+`declineRequestAction` (src/app/operations/requests/[requestId]/
+actions.ts) calls `decline_transportation_request` ONLY.
+`requireOperationsAccess()` re-derives `organizationId` fresh from the
+validated session on every call — never read from the client. `requestId`
+is the only client-supplied identifier. The optional `reason` is
+normalized: empty/whitespace-only → `undefined` (never an empty string
+sent over the wire). `actor_user_id` is never accepted from the client —
+the RPC derives it itself from `auth.uid()`. Errors branch on `error.code`
+via `mapRequestLifecycleError`; no raw DB error text is ever rendered to
+the user.
+
+7. DECLINE SUCCESS BEHAVIOR (LIVE-VERIFIED)
+----------------------------------------------
+- State transitions pending → declined.
+- Request Detail refreshes to reflect the new state; Create Trip /
+  Decline / Cancel all disappear.
+- Request Hub: removed from Pending, visible under Declined and All.
+- `request_declined` event row confirmed in `request_events`, with
+  `metadata.reason` populated when a reason was supplied, and absent
+  (null) when it was not.
+- `revalidatePath` called for both `/operations/requests/${requestId}`
+  and `/operations/requests` on success — confirmed via live navigation
+  showing fresh data with no manual reload needed.
+- App code never manually sets `state` anywhere — confirmed by source
+  inspection of `actions.ts`.
+
+8. CANCEL FLOW (UI)
+---------------------
+Dialog title: "Cancel request".
+Dialog description (verbatim, confirmed live): "Cancel this
+transportation request? This does not cancel any trip." — deliberately
+distinct copy from any Trip-cancellation surface.
+NO reason field — confirmed by live DOM inspection
+(`!document.querySelector('dialog[open] textarea')` === true).
+
+9. CANCEL ELIGIBILITY LOGIC
+------------------------------
+`canCancel = request.state === "pending" && request.linkedTrips.length
+=== 0` (src/app/operations/requests/[requestId]/page.tsx). When pending
+but linkedTrips.length > 0, Cancel is not offered and the restrained note
+renders instead — never a cascade into Trip cancellation, and Decline
+remains independently available in that state.
+
+10. CANCEL MUTATION (SERVER ACTION)
+--------------------------------------
+`cancelRequestAction` calls `cancel_transportation_request` ONLY, same
+discipline as Decline (org re-derived server-side, no actor id from
+client, error-code branching, no raw error exposure). Deliberately does
+NOT perform a client-side linked-Trip check as authority before calling
+the RPC — the RPC's own "ANY linked Trip row blocks cancellation
+regardless of that Trip's own state" rule (S2B, locked) remains sole
+authority. This was proven live (see §25, Cancel-D).
+
+11. CANCEL SUCCESS BEHAVIOR (LIVE-VERIFIED)
+----------------------------------------------
+- State transitions pending → cancelled; Request leaves Pending, appears
+  under Cancelled and All.
+- No Trip row is created, changed, or cancelled as a side effect —
+  confirmed by inspecting the linked-Trips-with-cancelled-Trip fixture
+  (R_CANCEL_LINKED): its already-cancelled Trip's own state was
+  unaffected by this phase's code (that Trip was seeded pre-cancelled
+  and never touched by any Cancel Request call, since Cancel Request was
+  correctly never enabled for that Request).
+- `request_cancelled` event confirmed in `request_events` for the live
+  Cancel-B test fixture.
+- Lifecycle actions disappear after cancellation.
+
+12. CONCURRENCY / STALE-PAGE HANDLING
+-----------------------------------------
+`mapRequestLifecycleError` maps RPC code `ZW004` (illegal_transition) to
+calm copy: "This request has changed and can no longer be updated this
+way." Verified directly: forged direct RPC calls against an
+already-accepted Request (both decline and cancel) both raised
+`illegal_transition` from the RPC itself, and the shared error mapper
+translates that code to the required calm copy — never exposing "ZW004"
+or raw Postgres error text anywhere in the UI. `router.refresh()` runs on
+ANY settled action state (not just success), so the page behind an error
+also reflects the current DB reality. No client-side optimistic lifecycle
+locking exists anywhere in this implementation.
+
+13. IDEMPOTENT RESPONSES
+---------------------------
+Verified directly via SQL: calling `cancel_transportation_request`
+against an already-cancelled Request (R_G) returns `changed=false`,
+`previous_state=cancelled`, `current_state=cancelled` — no error raised,
+and confirmed zero duplicate `request_events` rows were written. The app
+code treats this as an ordinary success branch (no special-casing
+needed, since the RPC's own contract already makes idempotent re-calls
+safe) — the page simply refreshes into the current (already-terminal)
+lifecycle state.
+
+14. REQUEST ACTIVITY PANEL
+-----------------------------
+`RequestActivityPanel` (src/components/operations/requests/
+RequestActivityPanel.tsx) is a small, read-only, `request_events`-only
+list — not a complex audit console. Query in `getRequestActivity`
+(src/lib/operations/request-detail.ts) is scoped to `organization_id` +
+`request_id`, ordered `occurred_at ASC`. Human labels come from
+`requestEventLabel` (src/lib/operations/presentation.ts): "Request
+logged", "Passenger linked", "Request declined", "Request cancelled".
+Each row shows the label + a full date+time (composed from the existing
+`formatOperationsLongDate` + `formatOperationsTime` helpers — no new
+formatter). For `request_declined` only, the reason is shown when
+`metadata.reason` exists. Raw `actor_user_id` is never rendered, no
+`auth.users` join exists anywhere in this code, and no raw JSON metadata
+is ever shown — all confirmed by source inspection and by a live check
+that the seeded actor UUID never appears in the rendered page text.
+
+15. CONVERSION ACTIVITY DECISION (DOCUMENTED PER §17)
+---------------------------------------------------------
+`create_trip`'s own `request_converted_to_trip` event remains
+exclusively on `trip_events` and was NOT duplicated into
+`request_events`; `create_trip` itself was not modified in any way
+(confirmed via `git status --porcelain supabase/`, §31). This decision
+is documented directly in `getRequestActivity`'s own doc comment: Request
+conversion is already visible through Request state (Accepted) and the
+Linked Trips panel, so Request Activity is deliberately
+`request_events`-only, never a fabricated unified cross-table timeline.
+
+16. ACTIVITY QUERY FAILURE HANDLING (LIVE-VERIFIED)
+--------------------------------------------------------
+`getRequestActivity` throws on a genuine query failure; `page.tsx`
+catches it and sets `activityEvents = null`, which `RequestActivityPanel`
+renders as "Activity unavailable" — scoped to the panel only. Live-forced
+via the established reversible technique: `REVOKE SELECT ON
+request_events FROM authenticated;` via direct `docker exec ... psql`
+(never a migration edit), confirmed the Request Detail page remained
+fully visible (Requester/Transportation/Passenger panels all rendered
+normally, no "Request unavailable" page-level failure), the Activity
+panel alone showed "Activity unavailable", and no raw PostgREST error
+text (e.g. "permission denied", "42501", "PGRST...") appeared anywhere on
+the page. `GRANT SELECT ON request_events TO authenticated;` was then
+run immediately, and `\z request_events` confirmed byte-identical
+restoration of the original ACL (`authenticated=rDxtm/postgres`,
+`request_events_select_org_operations` policy unchanged).
+
+17. EMPTY ACTIVITY (LIVE-VERIFIED)
+---------------------------------------
+A genuine zero-event legacy Request fixture (R_EMPTY_ACTIVITY) correctly
+shows "No request activity recorded" — never a fabricated `request_logged`
+row.
+
+18. REQUEST DETAIL LOAD CONTRACT (UNCHANGED, VERIFIED)
+------------------------------------------------------------
+Confirmed by source inspection of `request-detail.ts` and `page.tsx`:
+Request row failure and Linked Trips query failure both still produce the
+page-level "Unable to load request" `AttentionState` (the `status:
+"error"` branch of `RequestDetailResult`, untouched by this phase).
+`request_events` failure produces ONLY the supplementary "Activity
+unavailable" panel state — the three distinctions remain explicit and
+were never weakened or merged.
+
+19. ERROR MAPPING
+--------------------
+`src/lib/operations/request-lifecycle-errors.ts` is one shared mapper
+used by both `declineRequestAction` and `cancelRequestAction`, following
+the exact precedent of `link-passenger-errors.ts`. Confirmed directly
+from the S2B migration source that both RPCs raise the identical
+ZW001/ZW002/ZW004/ZW006 code set, justifying a single shared map rather
+than two near-duplicates:
+  ZW001 → UNAUTHORIZED ("Your session is no longer valid. Sign in
+          again.")
+  ZW002 → NOT_FOUND ("This request is no longer available.")
+  ZW004 → ILLEGAL_STATE ("This request has changed and can no longer be
+          updated this way.")
+  ZW006 → INVALID_INPUT ("Please check the information provided and try
+          again.")
+  default → UNKNOWN ("Something went wrong. Try again.")
+
+20. DOUBLE SUBMISSION / LOADING STATE
+------------------------------------------
+Both dialogs use `useActionState` + a real `<form>` mounted only while
+open. The confirm button is `disabled={pending}` with `loading={pending}`
+(which itself sets `aria-busy` and disables the button — confirmed by
+reading `Button.tsx`), and the "Keep Request" trigger is also disabled
+while pending. RPC idempotency semantics were not modified in any way.
+
+21. ACCESSIBILITY (LIVE-VERIFIED, 9/9 CHECKS PASS)
+--------------------------------------------------------
+- Decline Request trigger is a real, focusable `<button>`.
+- Dialog opens on click; is a real `<dialog>` element (native
+  `showModal()` primitive, confirmed via `Dialog.tsx`).
+- `aria-labelledby` on the dialog points to an element whose text
+  exactly matches "Decline request".
+- Reason `Textarea` has a real associated `<label for="...">` — confirmed
+  programmatically, not just visually.
+- Dialog responds to the native `cancel` event path (Escape / native
+  close button), handled entirely by the existing `Dialog` primitive —
+  no bespoke keyboard handling was written for this phase.
+- No click-only `div`/`span` controls exist inside either dialog
+  (confirmed: zero elements with an `onclick` handler that aren't real
+  `<button>`s).
+- "Keep Request" cancel-trigger is a real, focusable `<button>`.
+- Pending-state communication verified via `Button.tsx`'s own
+  `aria-busy={loading || undefined}` + `disabled={isDisabled}`.
+- Destructive meaning is never color-only: both dialogs' confirm buttons
+  carry the text "Decline Request" / "Cancel Request" (pending:
+  "Declining…" / "Cancelling…"), not just a color change.
+- Error banners use `role="alert"` (confirmed by source inspection of
+  both dialog components).
+
+22. MULTI-ORG / SECURITY (LIVE-VERIFIED)
+---------------------------------------------
+- Org A admin/dispatcher: eligible Decline/Cancel actions succeed as
+  documented in §7/§11.
+- Org B caller navigating directly to an Org A `requestId`: Request
+  Detail renders "Request unavailable" (same indistinguishable-from-
+  nonexistent treatment as every other Request Detail failure mode, no
+  existence oracle) — no Org A identity (requester name, passenger name)
+  leaked anywhere in the response.
+- Forged cross-tenant RPC call: an Org B `auth.uid()` calling
+  `decline_transportation_request('<Org A org id>', '<Org A request
+  id>', 'forged cross-tenant')` directly via `SET LOCAL request.jwt.
+  claims` was rejected with `not_found` — the Request's `state` remained
+  unchanged (`pending`) afterward, confirming no mutation and no leak.
+- Driver account (`org-a-driver-a@example.test`) attempting to load
+  Request Detail was redirected away from `/operations/requests/...`
+  (confirmed landing on `/driver`) via the existing Operations
+  authorization boundary — this phase added no new boundary and relied
+  entirely on `requireOperationsAccess`, already exercised by every
+  other Operations page.
+- `organization_id` is never trusted from the browser anywhere in this
+  phase's code — confirmed by source inspection: both server actions
+  call `requireOperationsAccess` fresh on every invocation.
+
+23. FORGED-RPC REJECTION MATRIX (DIRECT SQL, AUTHORITATIVE)
+------------------------------------------------------------------
+Run via `docker exec ... psql` with `SET LOCAL ROLE authenticated;` +
+`SET LOCAL request.jwt.claims` to simulate each caller's session:
+  - `decline_transportation_request` against an ACCEPTED Request (Org A
+    admin) → `illegal_transition` (ZW004). Rejected.
+  - `cancel_transportation_request` against the same ACCEPTED Request
+    (Org A admin) → `illegal_transition` (ZW004). Rejected.
+  - `cancel_transportation_request` against a PENDING Request with one
+    linked Trip whose own state is `cancelled` (Org A admin) →
+    `illegal_transition` (ZW004). Rejected — confirms the RPC's "ANY
+    linked Trip blocks regardless of that Trip's own state" invariant is
+    preserved and is not merely enforced client-side. Request state
+    confirmed unchanged (`pending`) and zero new `request_events` rows
+    afterward.
+  - `decline_transportation_request` against a PENDING Org A Request,
+    called as an Org B `auth.uid()` with Org A's `organization_id`
+    argument → `not_found` (ZW002). Rejected, no leak, no mutation.
+  - `cancel_transportation_request` against an already-CANCELLED
+    Request (Org A admin) → succeeds with `changed=false` (idempotent
+    no-op), zero new `request_events` rows. Not an error.
+
+24. LIVE DECLINE TEST MATRIX RESULTS (A–I)
+------------------------------------------------
+A. Pending Ready Request shows both Create Trip and Decline Request —
+   PASS.
+B. Pending unresolved Request shows Decline Request; declined without a
+   reason — PASS (dialog copy verified verbatim; confirm succeeded;
+   state → declined; all lifecycle actions disappeared).
+C. (folded into B) Declining without a reason produced no
+   `metadata.reason` requirement — confirmed via SQL: the resulting
+   `request_declined` event's reason column is null.
+D. Pending unresolved Request declined WITH a reason — PASS (reason
+   textarea fillable, confirm succeeded, state → declined, and the exact
+   reason text was confirmed persisted via direct SQL query against
+   `request_events.metadata->>'reason'`).
+E. Accepted Request shows no Decline/Cancel UI (Create Another Trip
+   still shown) — PASS. Forged direct RPC call against the same Request
+   rejected with `illegal_transition` (§23).
+F. Already-declined Request shows no lifecycle actions of any kind —
+   PASS.
+G. Already-cancelled Request shows no lifecycle actions of any kind —
+   PASS.
+H. Org B caller with an Org A `requestId` sees "Request unavailable",
+   with zero Org A identity leaked — PASS. Forged direct RPC decline
+   attempt separately rejected with `not_found` (§23).
+I. Driver account blocked from Request Detail via the existing
+   Operations authorization boundary; no lifecycle UI reachable — PASS.
+
+25. LIVE CANCEL TEST MATRIX RESULTS (A–G)
+------------------------------------------------
+A. Pending Request with zero linked Trips shows Cancel Request — PASS.
+   Dialog copy verified verbatim, distinct from Trip cancellation. No
+   reason field present (symmetry requirement) — PASS.
+B. Confirm succeeds; state → cancelled; `request_cancelled` event
+   confirmed via direct SQL; Request leaves Pending, appears under
+   Cancelled and All (§26) — PASS.
+C. Pending Request with ONE linked Trip whose own state is `cancelled`
+   does NOT show an enabled Cancel button; the restrained
+   "cannot be cancelled here" note renders instead; Decline remains
+   available on the same Request — PASS.
+D. Direct forged `cancel_transportation_request` call against that same
+   fixture (bypassing the UI entirely) is rejected by the RPC itself
+   with `illegal_transition` — confirming the RPC, not the UI gate, is
+   the actual authority (§23) — PASS.
+E. Accepted Request shows no Cancel UI; forged direct RPC call rejected
+   with `illegal_transition` (§23) — PASS.
+F. Declined Request shows no Cancel UI — PASS.
+G. Already-cancelled Request: direct RPC re-call returns `changed=false`
+   safely, with zero duplicate `request_events` rows — confirmed
+   idempotent and non-destructive (§23) — PASS.
+
+26. EXISTING CONVERSION REGRESSION (S2F-B1)
+------------------------------------------------
+- Pending + Ready Create Trip link still present and correctly wired on
+  the untouched Ready fixture.
+- Accepted + active-Passenger Create Another Trip link still present,
+  correctly wired to `?requestId=<id>` — confirmed via live DOM
+  inspection of the link's own `href` attribute. No destructive-action
+  code touched `NewTripForm`, `new-trip.ts`, `new-trip-options.ts`, or
+  any S2F-B1 file.
+
+27. REQUEST HUB REGRESSION
+-------------------------------
+Using the corrected `?state=` query parameter (the Hub's actual filter
+contract, confirmed by reading `page.tsx`'s `parseRequestsListStateFilter`
+usage):
+- Pending view correctly excludes the now-declined R_B requester — PASS.
+- Declined view correctly includes it — PASS.
+- Cancelled view correctly includes the now-cancelled R_CANCEL_A
+  requester — PASS.
+- All view correctly includes both — PASS.
+- Search correctly locates the historical declined Request by requester
+  name under the All view — PASS.
+Pending count and search behavior were not modified by this phase's code
+and were confirmed still functioning correctly through the same live
+checks.
+
+28. ACTIVITY VALIDATION END-TO-END
+---------------------------------------
+A fixture (R_ACTIVITY) was seeded with two synthetic-but-realistic
+historical `request_events` rows (`request_logged`, `passenger_linked`),
+then LIVE declined through the real UI with a reason, producing a third,
+genuine `request_declined` event. Results:
+- "Request logged" and "Passenger linked" labels rendered correctly from
+  the seeded rows.
+- No raw `event_type` strings (`request_logged`, `passenger_linked`)
+  ever appeared in the rendered page text — only their human labels.
+- No raw actor UUID appeared anywhere on the page.
+- After the live decline, "Request declined" appeared with the exact
+  reason text ("Live activity validation reason") shown beneath it.
+- Chronological order was verified programmatically: "Request logged"
+  index < "Passenger linked" index < "Request declined" index within the
+  rendered `<ul>`, confirming `occurred_at ASC` ordering end-to-end.
+A separate zero-event legacy fixture correctly showed "No request
+activity recorded" (§17). The forced-failure case is covered in §16.
+
+29. TESTS — TSC / LINT / BUILD / UNIT
+-------------------------------------------
+- `npx tsc --noEmit`: clean, 0 errors.
+- `npm run lint`: 0 errors, 27 pre-existing warnings, all confined to
+  `.tmp-qa/*.mjs` scratch scripts (unused vars in this phase's own test
+  scripts, and pre-existing expression-statement warnings unrelated to
+  this phase's shipped code).
+- `npm run build`: succeeded; all expected routes present, including
+  `/operations/requests/[requestId]`.
+- `npm test`: 66/66 passing, unchanged from before this phase.
+
+30. TESTS — SQL REGRESSION SUITES (FRESH RESET, SINGLE RUN EACH)
+------------------------------------------------------------------------
+Because this phase's app code now calls the existing decline/cancel RPCs
+directly from the UI for the first time, the three most directly
+relevant SQL suites were re-run, each against a freshly-reset database,
+each run exactly once (the earlier in-session mistake of running a file
+twice against a non-reset database — which produces false failures on
+idempotency-sensitive assertions — was caught and corrected before
+recording final results; see the equivalent lesson documented in the
+S2F-A report):
+- `request_mutation_tests.sql`: 38/38 real PASS lines, 0 real failures.
+- `request_mutation_privilege_tests.sql`: 18/18 real PASS lines (19 total
+  grep matches including the harmless summary line), 0 failures.
+- `request_mutation_atomicity_tests.sql`: 3/3 PASS (ATOMIC-1, ATOMIC-2,
+  ATOMIC-3), 0 failures.
+The full 26-file suite was not required and was not run, since Supabase
+source did not change, no regression was found, and no security/data-
+integrity concern arose during this phase.
+
+31. SUPABASE SOURCE — UNCHANGED
+-------------------------------------
+`git status --porcelain supabase/` shows exactly the same untracked file
+set present before this phase began (the pre-existing S2B migration
+`20260916100000_request_mutation_foundation.sql`, the S2F-A migration
+`20260916110000_request_trip_passenger_integrity.sql`, and their
+associated test/tooling files under `supabase/tests/`). Zero new or
+modified Supabase files. No migration, RPC, or RLS change was made or
+found necessary during this phase.
+
+32. FILES CREATED
+----------------------
+- src/lib/operations/request-lifecycle-errors.ts
+- src/components/operations/requests/DeclineRequestDialog.tsx
+- src/components/operations/requests/CancelRequestDialog.tsx
+- src/components/operations/requests/RequestActionBar.tsx
+- src/components/operations/requests/RequestActivityPanel.tsx
+
+33. FILES MODIFIED
+-----------------------
+- src/lib/operations/presentation.ts (added `requestEventLabel`)
+- src/lib/operations/request-detail.ts (added `RequestActivityEvent` +
+  `getRequestActivity`)
+- src/app/operations/requests/[requestId]/actions.ts (added
+  `RequestLifecycleActionState`, `declineRequestAction`,
+  `cancelRequestAction`)
+- src/app/operations/requests/[requestId]/page.tsx (wired
+  `RequestActionBar`, `RequestActivityPanel`, activity fetch,
+  `canDecline`/`canCancel`/`hasUncancellableLinkedTrips` derivation)
+No file outside `src/app/operations/requests/[requestId]/`,
+`src/components/operations/requests/`, and the two shared
+`src/lib/operations/*.ts` modules listed above was touched.
+`create_trip`, New Trip conversion behavior, `request-readiness-core.ts`,
+Operations Brief, sidebar architecture, and organization resolution were
+all confirmed unmodified by this phase.
+
+34. GIT STATE
+-----------------
+Nothing was staged, committed, pushed, or deployed at any point during
+this phase, per the explicit standing instruction. All new/modified
+files listed in §32/§33 remain as local, untracked/unstaged working-tree
+changes, verifiable via `git status --porcelain`.

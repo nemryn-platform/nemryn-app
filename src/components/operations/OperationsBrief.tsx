@@ -4,7 +4,7 @@ import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LinkButton } from "@/components/ui/LinkButton";
-import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
+import { formatOperationsTime, formatOperationsLongDate, assuranceStatusCategory } from "@/lib/operations/presentation";
 import type { OperationsBriefData } from "@/lib/operations/operations-brief-core";
 import type { TodaysOperationsTrip, TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { typography } from "@/design/typography";
@@ -40,10 +40,13 @@ export interface OperationsBriefProps {
  *     positive "All caught up" panel.
  *   - ACTIVE_DAY (default): the full 3-block grid, each with its own
  *     real content or its own calm empty state.
- * Driver Snapshot renders in every mode — it is not trip-scoped.
+ * Driver Snapshot and Requests Awaiting Review both render in every
+ * mode — neither is trip-scoped (P1-E1-S2G: a pending Request is
+ * inbound demand, never a Trip operational failure, so it never joins
+ * the day-state-gated Trip sections above).
  */
 export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
-  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot } = brief;
+  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot, requestSummary } = brief;
 
   const isQuiet = dayState === "NO_TRIPS" && activeNow.length === 0 && attention.length === 0;
   const isAllComplete = dayState === "ALL_COMPLETE";
@@ -84,6 +87,7 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
       )}
 
       <DriverSnapshotBlock snapshot={driverSnapshot} />
+      <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
     </div>
   );
 }
@@ -273,6 +277,49 @@ function DriverSnapshotBlock({ snapshot }: { snapshot: OperationsBriefData["driv
       </div>
       <LinkButton href={hasDrivers ? "/operations/dispatch" : "/operations/drivers"} variant="outline" size="sm">
         {hasDrivers ? "View Dispatch" : "Set up drivers"}
+      </LinkButton>
+    </Panel>
+  );
+}
+
+/**
+ * Requests awaiting review (P1-E1-S2G) — answers "is there inbound
+ * transportation demand I have not reviewed yet?" Mirrors
+ * DriverSnapshotBlock's own compact single-row shape exactly (same Panel
+ * layout, same label/value/action structure) rather than inventing a new
+ * visual pattern. Deliberately calm: no WarningCircle icon, no
+ * StatusBadge, no warning color — a pending Request is inbound demand,
+ * never a Trip operational failure, so this block never competes
+ * visually with Needs Attention above. "Review requests" always routes
+ * to Request Hub's own actual Pending filter contract
+ * (`?state=pending`, requests-list.ts's own query parameter — no new
+ * parameter invented here).
+ */
+function RequestsAwaitingReviewBlock({
+  summary,
+  timezone,
+}: {
+  summary: OperationsBriefData["requestSummary"];
+  timezone: string;
+}) {
+  const { pendingRequestCount, oldestPendingRequestCreatedAt } = summary;
+  const hasPending = pendingRequestCount > 0;
+
+  return (
+    <Panel className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Requests awaiting review</h3>
+        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
+          {hasPending ? `${pendingRequestCount} ${pendingRequestCount === 1 ? "request" : "requests"}` : "No requests awaiting review"}
+        </p>
+        {hasPending && oldestPendingRequestCreatedAt && (
+          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+            Oldest request received {formatOperationsLongDate(new Date(oldestPendingRequestCreatedAt), timezone)}
+          </p>
+        )}
+      </div>
+      <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm">
+        Review requests
       </LinkButton>
     </Panel>
   );

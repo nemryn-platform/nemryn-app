@@ -28,6 +28,17 @@ export interface NewTripFormData {
 
 const REQUEST_ELIGIBLE_STATES = ["pending", "accepted"];
 
+interface RequestPassengerEmbed {
+  display_name: string;
+  status: string;
+}
+type RequestPassengerRelation = RequestPassengerEmbed | RequestPassengerEmbed[] | null;
+
+function unwrapOne<T>(relation: T | T[] | null | undefined): T | null {
+  if (!relation) return null;
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation;
+}
+
 export async function getNewTripFormData(organizationId: string): Promise<NewTripFormData> {
   const supabase = await createServerSupabaseClient();
 
@@ -44,21 +55,47 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
       .eq("organization_id", organizationId)
       .eq("status", "active")
       .order("name", { ascending: true }),
-    // Eligible candidates only (work item §14) — the exact same states
-    // create_trip's own p_request_id validation accepts
-    // (20260831120000_controlled_trip_creation.sql); declined/cancelled
-    // requests are excluded here as a UX convenience, not the authority —
-    // the RPC re-validates regardless of what this list ever contained.
-    // Oldest first, matching the table's own "ops queue" index intent
+    // Eligible candidates only (P1-E3-S7 §14, tightened by P1-E1-S2F-B1
+    // §5): state pending/accepted — the exact same states create_trip's
+    // own p_request_id validation accepts — AND passenger_id IS NOT
+    // NULL AND the linked Passenger is active. Request Hub/Request
+    // Detail is where Passenger resolution happens (S2E/S2E-R1); New
+    // Trip must not become a second Passenger-resolution surface, so an
+    // unresolved or inactive-Passenger Request is excluded here, not
+    // merely left to fail at submission. This list is a UX convenience,
+    // not the authority — create_trip (hardened P1-E1-S2F-A) re-
+    // validates the exact same invariant regardless of what this list
+    // ever contained. The Passenger embed uses the explicit FK-name
+    // hint because transportation_requests carries TWO foreign keys to
+    // passengers (P1-E1-S2D §32) — an unqualified embed is ambiguous to
+    // PostgREST. The active-Passenger filter is applied in application
+    // code after fetch (not pushed into the query as a `!inner` embed
+    // filter) — this list is small and org-bounded, and a plain
+    // application-level filter avoids relying on PostgREST's embedded-
+    // relation filter syntax for something this simple. Oldest first,
+    // matching the table's own "ops queue" index intent
     // (transportation_requests_org_state_created_idx).
     supabase
       .from("transportation_requests")
       .select(
-        "id, requester_name, requester_relationship, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, assistance_notes",
+        "id, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, assistance_notes, " +
+          "passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status)",
       )
       .eq("organization_id", organizationId)
       .in("state", REQUEST_ELIGIBLE_STATES)
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })
+      .returns<
+        {
+          id: string;
+          passenger_id: string | null;
+          pickup_description: string;
+          destination_description: string;
+          preferred_date: string | null;
+          preferred_time: string | null;
+          assistance_notes: string | null;
+          passengers: RequestPassengerRelation;
+        }[]
+      >(),
   ]);
 
   if (passengersResult.error) {
@@ -87,17 +124,19 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
     postalCode: f.postal_code,
   }));
 
-  const requests: NewTripRequestOption[] = (requestsResult.data ?? []).map((r) => ({
-    id: r.id,
-    requesterName: r.requester_name,
-    requesterRelationship: r.requester_relationship,
-    passengerId: r.passenger_id,
-    pickupDescription: r.pickup_description,
-    destinationDescription: r.destination_description,
-    preferredDate: r.preferred_date,
-    preferredTime: r.preferred_time,
-    assistanceNotes: r.assistance_notes,
-  }));
+  const requests: NewTripRequestOption[] = (requestsResult.data ?? [])
+    .map((r) => ({ ...r, passenger: unwrapOne(r.passengers) }))
+    .filter((r): r is typeof r & { passenger_id: string; passenger: RequestPassengerEmbed } => r.passenger_id !== null && r.passenger?.status === "active")
+    .map((r) => ({
+      id: r.id,
+      passengerId: r.passenger_id,
+      passengerDisplayName: r.passenger.display_name,
+      pickupDescription: r.pickup_description,
+      destinationDescription: r.destination_description,
+      preferredDate: r.preferred_date,
+      preferredTime: r.preferred_time,
+      assistanceNotes: r.assistance_notes,
+    }));
 
   return { passengers, facilities, requests };
 }

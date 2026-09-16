@@ -429,6 +429,51 @@ export type Database = {
         }
         Relationships: []
       }
+      request_events: {
+        Row: {
+          actor_user_id: string | null
+          event_type: string
+          id: string
+          metadata: Json
+          occurred_at: string
+          organization_id: string
+          request_id: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          event_type: string
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          organization_id: string
+          request_id: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          event_type?: string
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          organization_id?: string
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "request_events_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "request_events_request_id_organization_id_fkey"
+            columns: ["request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       transportation_requests: {
         Row: {
           additional_notes: string | null
@@ -447,6 +492,7 @@ export type Database = {
           requester_relationship: string
           requester_user_id: string | null
           return_trip_needed: string
+          source: string
           state: string
           updated_at: string
         }
@@ -467,6 +513,7 @@ export type Database = {
           requester_relationship: string
           requester_user_id?: string | null
           return_trip_needed: string
+          source?: string
           state?: string
           updated_at?: string
         }
@@ -487,6 +534,7 @@ export type Database = {
           requester_relationship?: string
           requester_user_id?: string | null
           return_trip_needed?: string
+          source?: string
           state?: string
           updated_at?: string
         }
@@ -947,6 +995,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      cancel_transportation_request: {
+        Args: { p_organization_id: string; p_request_id: string }
+        Returns: Database["public"]["CompositeTypes"]["request_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       cancel_trip: {
         Args: { p_reason: string; p_trip_id: string }
         Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
@@ -1015,6 +1073,20 @@ export type Database = {
         }
       }
       current_driver_id: { Args: { p_org_id: string }; Returns: string }
+      decline_transportation_request: {
+        Args: {
+          p_organization_id: string
+          p_reason?: string
+          p_request_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["request_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       driver_arrive_at_destination: {
         Args: { p_expected_current_state: string; p_trip_id: string }
         Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
@@ -1151,6 +1223,20 @@ export type Database = {
       is_org_member: { Args: { p_org_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
       is_valid_iana_timezone: { Args: { p_timezone: string }; Returns: boolean }
+      link_request_passenger: {
+        Args: {
+          p_organization_id: string
+          p_passenger_id: string
+          p_request_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["request_passenger_link_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_passenger_link_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       link_self_as_driver: {
         Args: {
           p_display_name: string
@@ -1161,6 +1247,31 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "owner_driver_link_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      log_transportation_request: {
+        Args: {
+          p_additional_notes?: string
+          p_assistance_notes?: string
+          p_destination_description: string
+          p_organization_id: string
+          p_passenger_id?: string
+          p_pickup_description: string
+          p_preferred_date?: string
+          p_preferred_time?: string
+          p_requester_email?: string
+          p_requester_name: string
+          p_requester_phone: string
+          p_requester_relationship: string
+          p_return_trip_needed: string
+          p_source: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["request_creation_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_creation_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1325,6 +1436,25 @@ export type Database = {
         driver_id: string | null
         organization_id: string | null
         linked: boolean | null
+      }
+      request_creation_result: {
+        request_id: string | null
+        organization_id: string | null
+        state: string | null
+        created: boolean | null
+      }
+      request_passenger_link_result: {
+        request_id: string | null
+        organization_id: string | null
+        passenger_id: string | null
+        changed: boolean | null
+      }
+      request_transition_result: {
+        request_id: string | null
+        organization_id: string | null
+        previous_state: string | null
+        current_state: string | null
+        changed: boolean | null
       }
       trip_assignment_result: {
         trip_id: string | null

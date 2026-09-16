@@ -1,0 +1,487 @@
+P1-E1-S2D — REQUEST HUB QUEUE
+=====================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete, live-validated
+                       against the local dev stack. NOT staged, NOT
+                       committed, NOT pushed, NOT deployed, per explicit
+                       phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed — origin/main had not advanced since the last
+  production release. The working tree contained the full,
+  uncommitted P1-E1-S2C (Internal Log Request) implementation exactly
+  as its own report described, untouched, before any S2D work began.
+
+
+2. S2B / S2C DEPENDENCY VERIFICATION
+-----------------------------------------
+Confirmed `log_transportation_request` (S2B) and `/operations/requests/
+new` (S2C) both present, working, and unmodified in substance before
+starting. S2D's only edit to S2C's files is the single
+`revalidatePath("/operations/requests")` call described in §20 — no
+other line of S2C's action, form, or success panel was touched.
+
+Re-confirmed `transportation_requests`'s actual schema directly from
+the local database (not from memory of the S2B migration) before
+building the queue query — including the state check constraint
+(`pending|accepted|declined|cancelled`), the `(organization_id, state,
+created_at)` index, and — critically — that the table carries TWO
+foreign keys to `passengers` (see §32 for why this mattered).
+
+
+3. ARCHITECTURE / LIST-PATTERN AUDIT
+-----------------------------------------
+Read `/operations/trips` (`src/app/operations/trips/page.tsx`) and its
+data helper (`src/lib/operations/trips-list.ts`) in full before writing
+anything, and mirrored their established shape directly rather than
+inventing a second list-page architecture:
+  - server-rendered, GET-query-param-driven filtering (no client fetch)
+  - bounded pagination via `.range()`, page/pageSize/totalCount
+  - two-phase search (resolve matching Passenger ids first, then fold
+    into one `.or()` filter alongside the primary table's own columns)
+  - `DataTable`/`PageHeader`/`SearchInput`/`EmptyState`/`SummaryStrip`
+    UI primitives reused as-is, no new primitive created.
+
+
+4. FILES CHANGED
+---------------------
+New:
+  src/app/operations/requests/page.tsx
+  src/components/operations/requests/RequestStatusTabs.tsx
+  src/components/operations/requests/RequestsTable.tsx
+  src/lib/operations/requests-list.ts
+  src/lib/operations/request-readiness-core.ts
+  src/lib/operations/request-readiness-core.test.mjs
+
+Modified:
+  src/design/icons.ts                         (+2  — Tray icon mapping)
+  src/components/operations/OperationsSidebar.tsx (+9 — Requests nav item)
+  src/lib/operations/presentation.ts           (+116 — request-facing
+                                                 label/format helpers)
+  src/app/operations/requests/new/actions.ts   (+6  — revalidatePath;
+                                                 S2C file, untracked in
+                                                 git, so this shows as
+                                                 part of the untracked
+                                                 directory, not a tracked
+                                                 diff — see §33)
+
+Explicitly NOT touched (confirmed via `git status --porcelain
+supabase/` before and after): S2B's migration, RPCs, RLS, the 4 S2B SQL
+test/concurrency files, `create_trip`, `AccountMenu`, organization
+resolution, Operations Brief.
+
+
+5. ROUTE
+------------
+`/operations/requests`, gated by the existing `requireOperationsAccess`
+(no new authorization logic — §24). Title "Request Hub", description
+"Review transportation requests and move them into trip planning." —
+both live-confirmed verbatim on screen (§29 screenshot 01).
+
+
+6. SIDEBAR PLACEMENT
+-------------------------
+"Requests" inserted at the exact locked position — immediately after
+Overview, before Trips — in `OperationsSidebar.tsx`'s `NAV_ITEMS`
+array. Uses the existing Phosphor `Tray` icon (chosen over
+ClipboardText/Envelope/Phone as the closest literal "intake" glyph
+already available in the package; no new icon dependency added).
+Live-confirmed final order: Overview, Requests, Trips, Dispatch,
+Passengers, Facilities, Drivers, Fleet (§29 screenshot 01/08).
+
+
+7. DATA QUERY / DTO
+------------------------
+`getRequestsList(organizationId, filters)` in `requests-list.ts`.
+`organizationId` is always the server-validated current workspace
+(never client-supplied), applied as an explicit `.eq("organization_id",
+...)` on every query — RLS provides defense-in-depth, never the sole
+scoping mechanism, matching every other list helper in this codebase.
+Returns a narrow, UI-safe DTO (`RequestsListRow`) — no raw Supabase row
+shape leaks past this file.
+
+
+8. STATUS VIEWS
+--------------------
+Five views via `?state=`: Pending (default, no query param needed for
+the cleanest URL), Accepted, Declined, Cancelled, All. Unknown/missing
+values fall back to Pending via `parseRequestsListStateFilter`. No
+separate History page. Live-verified all 5 views plus an explicit
+`?state=bogus` fallback case (§29/§31).
+
+
+9. PENDING SUMMARY
+-----------------------
+A single "N pending" figure via `SummaryStrip`'s existing `inline`
+mode — reused, not a new KPI-tile pattern. Always the organization's
+TRUE total pending count (a dedicated `pendingCount` query,
+independent of whatever filter/page is currently open), never
+"however many pending rows are on this page." Live-verified this stays
+correct across every status tab, search, and page (§29), and that it
+increments immediately after a Log Request submission (§20/§28).
+
+
+10. ORDERING
+----------------
+Locked rule implemented as a single conditional in `getRequestsList`:
+Pending → `created_at ascending`; every other view (Accepted/
+Declined/Cancelled/All) → `updated_at descending`. No user-selectable
+sort control exists. Live-verified with a purpose-built fixture set
+(ages: 3 days / 3 hr / 1 hr / ~now for Pending; updated_at spread of
+3 hr / 1 day / 5 days for the historical views) — both orderings
+render correctly (§29/§31).
+
+
+11. SEARCH
+---------------
+One box, `?q=` param, matches the Request's own `requester_name`/
+`requester_phone` OR the linked Passenger's `display_name`/`phone` via
+the same two-phase resolve-then-`.or()` technique as `trips-list.ts`.
+Trimmed and length-capped (200 chars) before use. No fuzzy matching.
+Live-verified: match by linked-passenger name, match by requester
+phone, match by requester name, and a true no-match case that renders
+empty state C rather than A/B (§29/§30).
+
+
+12. FILTERS SCOPE
+----------------------
+Only status (tabs) and person search (one box) ship in this release.
+Source, readiness, facility, driver, and date-range filters were
+deliberately NOT built, per explicit phase scope.
+
+
+13. ROW INFORMATION ARCHITECTURE
+-------------------------------------
+Six columns: Passenger, Route, Service, Waiting, Readiness, Status.
+Full phone/email, assistance/additional notes, event history, linked
+trips, and a source column are deliberately absent from the queue row
+— all confirmed absent by direct inspection of `RequestsTable.tsx` and
+by screenshot (§29).
+
+
+14. REQUESTER VS. PASSENGER DISTINCTION
+--------------------------------------------
+When a Request has a linked Passenger, the Passenger's own
+`display_name` renders as the primary identity; `requester_name` is
+never shown in that case (the two can legitimately differ — a family
+member calling in on a patient's behalf). When unlinked, the
+`requester_name` renders with an explicit "Passenger not linked"
+muted subtext directly beneath it — never implying the requester IS
+the passenger. Live-verified against both a linked fixture
+(Marguerite Holloway) and an unlinked one (Beatrice Langford, §29
+screenshot 01).
+
+
+15. READINESS MODEL
+------------------------
+`request-readiness-core.ts` — pure, zero runtime imports (`export type
+RequestReadiness = "ready" | "needs_passenger" | "not_convertible" |
+"accepted"`; `deriveRequestReadiness(input)`), no DB access, callable
+by S2E without modification. Rules exactly as locked: state gates
+first (declined/cancelled → not_convertible, accepted → accepted,
+regardless of passenger linkage); otherwise pending-like states need
+an actual active linked Passenger (`passengerId !== null &&
+passengerActive`) → ready, else → needs_passenger. No numeric score,
+no AI framing anywhere in the label set.
+
+Active-passenger validity is checked against the linked Passenger's
+REAL `status === "active"` — never inferred from `passenger_id IS NOT
+NULL` alone. This was live-verified with a purpose-built edge-case
+fixture: a Pending request linked to an `inactive` Passenger (Desmond
+Okri) correctly renders "Passenger needed," not "Ready" (§29 screenshot
+01, row 2) — the exact scenario this rule exists to prevent from being
+silently wrong.
+
+
+16. STATUS / READINESS VISUAL DISTINCTION
+----------------------------------------------
+Status renders as the existing `StatusBadge` pill (the established
+lifecycle-state visual language, reused unmodified — no new
+`StatusCategory` value added). Readiness renders as plain colored text
+with no pill/background, using only existing semantic text-color
+tokens (`text-success-text`, `text-warning-text`, `text-text-muted`) —
+no new color introduced. Confirmed visually distinct by direct
+screenshot inspection (§29 screenshot 01): the two concepts never read
+as the same kind of UI element even though they sit in adjacent
+columns.
+
+
+17. ROW ACTION
+------------------
+`DataTable` is rendered WITHOUT its optional `onRowClick` prop — rows
+are plain, non-interactive table rows (no cursor-pointer, no keyboard
+trap, no dead "Review"/"View" button, no link to a nonexistent
+detail route). Live-confirmed via a DOM query for any row-level link
+matching a request-detail-shaped href — none exist (§29). This is the
+one deliberate seam S2E fills in.
+
+
+18. AGE FORMATTING
+-----------------------
+`formatRequestAge(createdAt, now)` in `presentation.ts` — deterministic,
+explicit-`now`-parameter pure function (same discipline as
+`location-freshness.ts`), server-rendered, no client-side ticking
+timer. Granularity: "Just now" / "N min" / "N hr" / "1 day" / "N days".
+Live-verified across the full fixture range: "3 days" (Beatrice, ~3
+days old), "3 hr" (Desmond, ~2 hr old — see note below), "1 hr"
+(Marguerite/seed, ~10 min and ~now respectively, both correctly
+rounding into the "1 hr" or "min" bucket depending on exact elapsed
+time at test run).
+
+
+19. SERVICE-DATE FORMATTING
+--------------------------------
+`formatRequestServiceDate(preferredDate, preferredTime)`: date-only
+when only a date is set ("Sep 20"), date+time when both are set
+("Sep 17 · 9:30 AM"), "No date given" when neither is set — never
+substitutes `created_at` for a missing service date. Live-verified all
+three cases against dedicated fixtures (§29 screenshot 01).
+
+A real bug was found and fixed during implementation (before any live
+testing): the function originally formatted a `Date.UTC(...)`-
+constructed date with `Intl.DateTimeFormat` but omitted `timeZone:
+"UTC"` in the options, which would have made the displayed date/time
+silently drift depending on the SERVER's own local timezone (the
+underlying columns are plain `date`/`time`, not `timestamptz`, so this
+would have been a real, environment-dependent rendering bug in
+production). Fixed by adding `timeZone: "UTC"` explicitly to both
+`Intl.DateTimeFormat` calls, with a code comment clarifying this is a
+neutral formatting anchor, not a real timezone conversion.
+
+
+20. LOG REQUEST INTEGRATION
+--------------------------------
+Added exactly one line to S2C's `logRequestAction` (`src/app/
+operations/requests/new/actions.ts`): `revalidatePath("/operations/
+requests")`, placed immediately before the success return, after the
+RPC call succeeds. No other line of S2C's action, validation, or
+success-panel UI was touched.
+
+Live end-to-end integration test performed (separate from the main
+45-check suite): signed in, recorded the Pending count (4), submitted
+a brand-new Log Request through the real `/operations/requests/new`
+form (native `<select>` fields set via a proper value-setter + change
+event, matching React-controlled-input requirements), confirmed the
+real S2C success panel rendered ("Request logged... has been recorded
+and is ready for review"), then navigated to `/operations/requests`
+in the SAME browser session with a single fresh navigation (no manual
+refresh, no polling) and confirmed: pending count was now 5 (exactly
++1), and the new request's requester name appeared in the queue
+immediately. 4/4 checks passed, 0 failures.
+
+
+21. REVALIDATION
+---------------------
+Covered directly by §20's live test — `revalidatePath` is confirmed to
+actually cause the Next.js cache to serve fresh data on the very next
+navigation, not just to compile without error.
+
+
+22. AUTHORIZATION
+----------------------
+Only the existing `requireOperationsAccess` is used — no new
+authorization logic was written. Live-verified: `org-a-admin` and
+`org-a-dispatcher` both reach `/operations/requests` and see identical
+Org A data; `org-a-driver-a` is redirected away from
+`/operations/requests` entirely (never rendering the page) to
+`/driver`.
+
+
+23. MULTI-ORG ISOLATION
+----------------------------
+Live-verified with a second organization (Org B, zero Requests of its
+own): `org-b-admin` sees ZERO of Org A's fixture data (no name overlap
+across any of the six Org A fixture identities), a correct "0 pending"
+summary, and the genuine empty-state-A ("No requests yet") rather than
+any Org A leakage. Isolation is enforced by RLS + the server-resolved
+`organization.organizationId` context — never a client-side filter.
+
+
+24. SIDEBAR REGRESSION — EXPANDED
+--------------------------------------
+Live-verified expanded state: "Requests" label visible, icon present,
+`aria-current="page"` set while on `/operations/requests`, and STILL
+set while on the S2C sub-route `/operations/requests/new` (confirming
+the pre-existing `pathname.startsWith(item.href)` active-route logic
+correctly treats the sub-route as part of the same section, with no
+collision against any other nav item's href).
+
+
+25. SIDEBAR REGRESSION — COLLAPSED
+-----------------------------------------
+Live-verified: collapse toggle found and actuated, "Requests" icon
+still renders correctly in the collapsed rail, and a reload of
+`/operations/requests` after collapsing confirms the collapsed width
+(64px sidebar) persists — genuinely giving the Request Hub table more
+horizontal room (screenshot comparison, §29 screenshots 07 vs. 08).
+
+
+26. DESKTOP VALIDATION
+---------------------------
+Full desktop (1440×900) walkthrough screenshotted at every major state:
+Pending default, Accepted tab, Declined tab, Cancelled tab, filtered-
+empty-state, Org B empty-state-A, sidebar expanded, sidebar collapsed.
+All visually consistent with the calm/dense/scannable/premium/
+restrained direction — no KPI tiles, gradients, glassmorphism,
+decorative charts, AI messaging, or CRM-pipeline aesthetic present
+anywhere on the page.
+
+
+27. TABLET VALIDATION
+--------------------------
+Live-verified at 820×1100: no horizontal overflow
+(`scrollWidth <= clientWidth`), full Request Hub content renders and
+remains usable, screenshot captured.
+
+
+28. NARROW-WIDTH GUARD
+---------------------------
+Live-verified at 390×844: the pre-existing "This workspace is designed
+for tablet and desktop use" unsupported-width guard renders instead of
+the queue — confirmed byte-for-byte unmodified, no Request-Hub-specific
+mobile treatment was added anywhere.
+
+
+29. LIVE VALIDATION DATA (FIXTURES)
+----------------------------------------
+Ran `supabase db reset` for a clean baseline, then inserted a
+purpose-built fixture set directly into the local database for Org A
+(`10000000-0000-0000-0000-0000000000a1`) via SQL, covering every case
+the phase's own test matrix calls for:
+  - Pending, unlinked, ~3 days old (Beatrice Langford)
+  - Pending, linked to an ACTIVE passenger, preferred-date-only,
+    ~10 min old (Marguerite Holloway)
+  - Pending, linked to an INACTIVE passenger, preferred-date+time,
+    ~2 hr old (Desmond Okri) — the NEEDS_PASSENGER edge case (§15)
+  - Pending, linked to an active passenger, no preferred date (the
+    pre-existing S2B seed fixture)
+  - Accepted, updated ~1 day ago
+  - Declined, updated ~3 hr ago
+  - Cancelled, updated ~5 days ago
+Org B was left with its pre-existing zero Requests, used as the true
+empty-state-A / tenant-isolation fixture (§23).
+
+
+30. SEARCH VALIDATION
+--------------------------
+Live-verified: search by linked-passenger name ("Marguerite") matches
+and excludes non-matching fixtures; search by requester phone
+("555-0177") matches; search by requester name ("Chukwu") matches; a
+deliberately non-matching term renders empty-state C, not A/B; a
+combined state+search filter with no match also correctly renders
+empty-state C. Isolation held throughout (all searches scoped to
+Org A's own data).
+
+
+31. STATUS FILTER VALIDATION
+---------------------------------
+Live-verified row SETS and ORDERING directly (not visual impression
+alone) for all 5 views: Pending (4 rows, `created_at` ascending —
+Beatrice → Desmond → Marguerite → seed, confirmed by index
+comparison), Accepted (1 row), Declined (1 row), Cancelled (1 row),
+All (7 rows, `updated_at` descending — Declined [~3 hr] before
+Accepted [~1 day] before Cancelled [~5 days], confirmed by index
+comparison). An explicit `?state=bogus` request was also verified to
+fall back to the Pending view rather than erroring or showing
+unfiltered data.
+
+
+32. A REAL BUG FOUND AND FIXED DURING LIVE TESTING
+--------------------------------------------------------
+The first live test run returned a correct `pendingCount` (from an
+independent count-only query) but ZERO rows in the main list query —
+a real correctness bug, not a test-script artifact. Root cause:
+`transportation_requests` carries TWO foreign keys to `passengers` (a
+plain `passenger_id` FK and the composite, tenant-safe
+`(passenger_id, organization_id)` FK), which makes the unqualified
+embedded-relation syntax `passengers(display_name, status)` genuinely
+ambiguous to PostgREST (error PGRST201 — "Could not embed because more
+than one relationship was found"). The query errors, and
+`getRequestsList`'s existing (pre-existing, matches `trips-list.ts`'s
+own convention) `if (error || !data) return { rows: [], ... }` swallow
+silently returned empty rows while the independent count queries kept
+succeeding — exactly the confusing symptom observed.
+
+Confirmed directly against the local PostgREST endpoint via curl
+(reproduced the PGRST201 error, then confirmed the FK-qualified hint
+resolves it). Fixed in `requests-list.ts` by qualifying the embed as
+`passengers!transportation_requests_passenger_id_organization_id_fkey(
+display_name, status)` — the same composite-FK-hint convention already
+used by `dispatch-board.ts`, `todays-operations.ts`, and
+`trip-detail.ts` for the analogous `trips` → `passengers` embed. This
+is a query-layer fix only, in a file created by this phase — no
+Supabase migration, RPC, or RLS policy was touched (§34 confirms zero
+Supabase diff both before and after this fix). Re-ran the full
+typecheck/build/live-test suite after the fix; all green.
+
+This bug would have shipped invisibly: every static check
+(typecheck/lint/build/unit tests) passed cleanly both before and after
+this fix, because none of them execute a real query against a database
+with the actual dual-FK schema. It was caught only by live-testing
+against the real local database, which is exactly why this phase
+requires it.
+
+
+33. APP TEST SUITE
+-----------------------
+`npm test`: 66/66 passing (56 pre-existing + 10 new
+`request-readiness-core.test.mjs` tests, covering every state/passenger
+combination in the locked readiness rule, including the
+state-gates-before-passenger-check ordering and a closed-set type
+check).
+
+
+34. SUPABASE DIFF
+----------------------
+`git status --porcelain supabase/` before AND after this phase's work
+(including after the §32 bug fix) shows exactly the same 5
+pre-existing, untouched S2B files (the migration + 3 SQL test files +
+1 concurrency script) — zero new or modified Supabase files at any
+point. The phase's explicit "if ANY Supabase file changes: STOP"
+condition was never triggered; no SQL regression re-run was necessary.
+
+
+35. READINESS FOR S2E
+--------------------------
+`request-readiness-core.ts` is ready to be imported by S2E unmodified
+— pure, no DB access, no changes needed. `RequestsTable.tsx` has one
+explicit, commented seam: `DataTable` is called without `onRowClick`,
+and adding it is the only change S2E needs to make this file
+interactive. No other file in this phase anticipates or half-builds
+any part of Request Detail.
+
+
+36. LIVE TEST SUMMARY
+--------------------------
+Two independent CDP-driven browser test suites run against the local
+dev server + local Supabase stack (Chrome headless, 1440×900 desktop
+plus dedicated 820×1100 tablet and 390×844 narrow sessions):
+  - Main suite (`s2d-request-hub-e2e.mjs`): 45/45 checks passed, 0
+    failed — covering rendering, ordering, readiness, search, status
+    tabs, empty states, authorization, multi-org isolation, sidebar
+    (expanded/collapsed), tablet, and narrow-width guard.
+  - Log Request integration suite
+    (`s2d-log-request-integration.mjs`): 4/4 checks passed, 0 failed —
+    covering the real Log Request → revalidatePath → Request Hub flow
+    end to end.
+  Combined: 49/49 live checks passed, 0 failed, after fixing one real
+  product bug (§32) and several test-script assertion bugs discovered
+  along the way (documented for completeness, not reported as product
+  defects — see conversation history).
+10 screenshots captured locally (not committed) at
+/tmp/s2d-qa-shots/ for visual reference during this session.
+
+
+37. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows S2D's new/modified files as untracked/
+modified working-tree changes only, exactly as required by this
+phase's explicit constraint.

@@ -1,0 +1,527 @@
+P1-E1-S2F-A — REQUEST→TRIP PASSENGER INTEGRITY HARDENING
+=================================================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete. Gap confirmed both
+                       from source and via live SQL reproduction, closed
+                       with one additive hardening migration, full
+                       26-file SQL/RLS regression + 3 concurrency
+                       scripts + full application test suite all
+                       passing. NOT staged, NOT committed, NOT pushed,
+                       NOT deployed, per explicit phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed, both before and after this phase's work — origin/main
+  had not advanced. The accumulated, uncommitted S2B through S2E-R1 work
+  was confirmed present and untouched before this phase began.
+
+
+2. SUSPECTED GAP
+---------------------
+Read all four required prior reports in full (S2A, S2B, S2E, S2E-R1)
+before starting. S2E/S2E-R1 established that a pending Request is
+ready for conversion only with a linked ACTIVE Passenger, resolved
+explicitly via `link_request_passenger` — never inferred or auto-
+matched. The suspected gap: `create_trip` (which predates Request Hub
+entirely — P1-E3-S0A) was never updated to cross-check its own
+`p_passenger_id` parameter against the Request it's converting, so
+nothing in the database actually enforced that a Trip created "from" a
+Request carries the SAME Passenger the Request itself resolved to.
+
+
+3. DEFINITIVE SOURCE FINDING
+---------------------------------
+Read `create_trip` directly from
+`supabase/migrations/20260831120000_controlled_trip_creation.sql`
+(lines 138-151, the entire `if p_request_id is not null then ... end
+if;` block) — confirmed no later migration replaces or modifies it
+before this phase (`grep -rl "create or replace function public.
+create_trip"` across all migrations returns exactly that one file).
+The ONLY checks performed against the locked Request row are:
+  - `not found` (the Request doesn't exist in this organization)
+  - `v_request.state not in ('pending', 'accepted')`
+There is NO comparison anywhere between `v_request.passenger_id` and
+`p_passenger_id`, and NO check that `v_request.passenger_id is not
+null`. `p_passenger_id` is validated ONLY against the `passengers`
+table directly (exists, same org, active) — never cross-referenced
+against the Request at all. Definitively confirmed from source, not
+inferred: YES, an authenticated organization_admin/dispatcher could
+call `create_trip(p_passenger_id => Passenger B, p_request_id =>
+<Request linked to Passenger A>)` (both same-org/active) and succeed.
+YES, a Request with `passenger_id IS NULL` could be converted directly
+by supplying any valid active Passenger.
+
+
+4. LIVE REPRODUCTION BEFORE FIX
+------------------------------------
+Reproduced both cases live against a fresh `supabase db reset`, BEFORE
+writing the migration, using the same `set local role authenticated;
+set local request.jwt.claim.sub = ...` methodology every SQL test file
+in this repository already uses:
+
+  TEST 1 (mismatch): `create_trip` called as Org A admin with
+  `p_request_id` = the seed pending Request (linked to Passenger A1)
+  but `p_passenger_id` = a newly-inserted, distinct, active, same-org
+  "Repro Passenger B" — SUCCEEDED. Result: `trip_id=..., state=
+  scheduled, created=t`. After: the Request's own `passenger_id` still
+  showed A1 (untouched, since `create_trip` never writes it), the
+  Request's `state` flipped to `accepted`, and the new Trip row's
+  `passenger_id` was Passenger B — Request Passenger and linked Trip
+  Passenger visibly diverged, live, in the database.
+
+  TEST 2 (null-passenger Request): `create_trip` called against a
+  freshly-inserted pending Request with `passenger_id IS NULL`
+  (never touched by `link_request_passenger`), supplying the same
+  valid active Repro Passenger B directly — SUCCEEDED. Result:
+  `trip_id=..., state=scheduled, created=t`, Request flipped to
+  `accepted` despite never having been resolved.
+
+Both reproductions used real function calls through the real RPC, not
+a raw table write — confirming this is exploitable through the actual
+application surface (New Trip's own Server Action calls `create_trip`
+with exactly these two parameters). §3's STOP condition (gap already
+enforced) does NOT apply — proceeded to build the hardening migration.
+
+
+5. LOCKED INVARIANT
+------------------------
+Implemented exactly as specified. When `p_request_id is null`:
+`create_trip` behavior is byte-identical to before (confirmed by diff
+inspection, §19). When `p_request_id is not null`: the Request's own
+`passenger_id` is now authoritative — it must be non-null AND must
+equal `p_passenger_id`, evaluated as `v_request.passenger_id is
+distinct from p_passenger_id` (one comparison covering both failure
+shapes — the same idiom `link_request_passenger`'s own idempotency
+check already uses elsewhere in this codebase). Any failure rejects
+Trip creation atomically (§15).
+
+
+6. MIGRATION
+-----------------
+One new, additive migration:
+`supabase/migrations/20260916110000_request_trip_passenger_integrity.sql`.
+The prior migration file
+(`20260831120000_controlled_trip_creation.sql`) was NOT edited in
+place — confirmed via `git diff` showing zero changes to it. Used
+`CREATE OR REPLACE FUNCTION` for the identical existing 11-parameter
+signature (same order, same types, same default values, same return
+type `trip_creation_result`) — no `DROP FUNCTION` was needed, since
+(unlike `20260901120000_reassignment_concurrency_hardening.sql`, which
+added a new parameter and therefore required a drop to avoid a second
+competing overload) this hardening adds no parameter of any kind, only
+one new internal guard clause. This matches the repository's own
+established convention for hardening an existing SECURITY DEFINER
+function in a later migration — confirmed by reading that exact prior
+precedent before writing this one.
+
+
+7. CREATE_TRIP EXACT CHANGE
+--------------------------------
+Exactly three new lines inside the pre-existing `if p_request_id is
+not null then ... end if;` block, immediately after the pre-existing
+state check and before the block's own closing `end if;`:
+
+    if v_request.passenger_id is distinct from p_passenger_id then
+      raise exception 'invalid_input' using errcode = 'ZW006';
+    end if;
+
+Everything else in the function body is byte-for-byte identical to the
+original migration — confirmed by direct comparison while writing the
+file (copied the original body verbatim and inserted only this one
+guard). Preserved without any change: the function signature, return
+type, `SECURITY DEFINER`, `set search_path = public, pg_temp`, the
+`auth.uid()` check, `has_org_role` check, address validation, schedule
+validation, Passenger validation (still runs first, so `p_passenger_id`
+is already confirmed to exist/same-org/active before this new check
+ever runs), Facility validation, the Trip INSERT, the pending→accepted
+transition, `trip_events` INSERT, `audit_events` INSERT, the return
+value construction, the function comment (extended with one sentence
+describing the new rule, not rewritten), and both `revoke`/`grant`
+statements (re-asserted verbatim at the end, matching the established
+hardening-migration convention).
+
+
+8. ERROR SEMANTICS
+-----------------------
+`ZW006 invalid_input` — the same code every other Request/Passenger/
+Facility validation failure in this exact function already uses, per
+explicit instruction ("Prefer ZW006 unless an established existing
+code is more semantically correct" — no other code fit better: ZW004
+`illegal_transition` describes an illegal STATE change, not a
+mismatched identifier, and this is categorically the same kind of
+failure as "nonexistent/foreign-org/inactive Passenger," which is
+already ZW006). No new error code was introduced. The existing
+application-layer mapping (`new-trip-errors.ts`'s `mapNewTripError`)
+already maps ZW006 to `INVALID_INPUT` with its existing generic
+message — no application code needed to change for this phase (and
+none was changed, per explicit "no UI work" instruction) — a rejected
+mismatched submission through New Trip today surfaces as that existing
+generic error banner, not a crash or a silent success. S2F-B will need
+to decide whether more specific guidance is warranted; not addressed
+here.
+
+
+9. PENDING REQUEST BEHAVIOR
+--------------------------------
+Live-verified via the new focused test file (§14, TEST B/C/D/E):
+matching Passenger → Trip created, Request advances pending→accepted
+(unchanged from before). Mismatched Passenger → rejected, Request
+remains pending, zero new Trip/TripEvent/AuditEvent rows. NULL Request
+Passenger → rejected regardless of how valid the supplied Passenger is,
+Request remains pending — aligning database behavior with Request
+Hub's own "Passenger needed → resolve → Ready → Create Trip" model,
+exactly as intended. Inactive linked Passenger, supplying that exact
+Passenger → rejected (the pre-existing active-Passenger check already
+covers this on its own; confirmed explicitly, not merely assumed, per
+the phase's own request).
+
+
+10. ACCEPTED MULTI-TRIP BEHAVIOR
+-------------------------------------
+Live-verified (TEST F/G): an already-accepted Request can still
+legitimately produce an additional Trip (return-transportation/multi-
+Trip preserved, unchanged) — but only for the SAME Passenger the
+Request resolved to. A second Trip for a different Passenger against
+the same accepted Request is rejected identically to the pending case.
+This is the exact distinction §9 asked for, proven with dedicated
+fixtures, not merely reasoned about.
+
+
+11. NO-REQUEST TRIP REGRESSION
+-----------------------------------
+Live-verified (TEST A, plus the full `create_trip_tests.sql` regression
+run, §18/§19): direct Trip creation with `p_request_id` omitted is
+completely unaffected — the new guard clause sits entirely inside the
+`if p_request_id is not null` block and is never reached when no
+Request is supplied. `create_trip_tests.sql`'s own full role/
+validation/cross-tenant matrix, none of which supplies a mismatched
+Request/Passenger pair, passed with zero changes needed to that file.
+
+
+12. NEW TRIP UI AUDIT (READ-ONLY, NOT MODIFIED)
+------------------------------------------------------
+Read `src/app/operations/trips/new/page.tsx`,
+`src/components/operations/new-trip/NewTripForm.tsx`, and
+`src/lib/operations/new-trip.ts` in full. Findings, recorded for
+S2F-B, no code changed:
+  - The "Passenger" Combobox and the "Related Request" Select are
+    completely INDEPENDENT controls with no live validation binding
+    them together. An operator can select a Request AND independently
+    select/keep a different Passenger with nothing in the UI
+    preventing that combination today.
+  - "Import request details" DOES attempt a one-time convenience
+    auto-fill of `passengerId` from the selected Request's own
+    `passengerId` (`NewTripForm.tsx` `handleImportRequest`,
+    lines 114-124) — but ONLY if the operator clicks that button, and
+    ONLY if the Request actually has a linked Passenger in the first
+    place (a null-passenger Request's import silently leaves whatever
+    Passenger selection already existed, with no warning). The
+    operator remains free to change the Passenger selection afterward
+    with zero re-validation before submission.
+  - `getNewTripFormData`'s own request-option query
+    (`src/lib/operations/new-trip.ts` lines 54-61) filters candidate
+    Requests ONLY by `state in ('pending', 'accepted')` — it does NOT
+    filter out Requests with `passenger_id IS NULL`. An unresolved
+    Request (Request Hub would still show "Passenger needed") is
+    fully selectable in New Trip's "Transportation Request" dropdown
+    today.
+  - Net effect: before this phase, selecting an unresolved Request +
+    any valid Passenger, or selecting a Request + a DIFFERENT
+    Passenger than the one it's linked to, would have silently
+    succeeded at the database layer. After this phase's migration, the
+    exact same UI actions now correctly fail (ZW006, surfaced as New
+    Trip's existing generic error banner) rather than silently
+    corrupting the Request↔Trip Passenger relationship. This is a
+    real, live-reachable UI path, not merely a theoretical RPC-level
+    concern — exactly why S2F-B needs to adapt New Trip's own behavior
+    to this hardened invariant (e.g., locking/deriving Passenger from
+    a selected Request, or filtering unresolved Requests out of the
+    dropdown) — deliberately NOT attempted in this phase.
+
+
+13. EXISTING FIXTURE/DATA AUDIT
+------------------------------------
+Queried the CURRENT `seed.sql` baseline (fresh reset, before any of
+this phase's own test fixtures were inserted) for both risk shapes:
+  - Pending/accepted Requests with `passenger_id IS NULL`: ZERO rows.
+  - Trips whose `request_id` points to a Request with a DIFFERENT
+    `passenger_id` (`t.passenger_id is distinct from tr.passenger_id`):
+    ZERO rows.
+Clean audit — no legacy/inconsistent fixture exists in current seed
+data that the new invariant exposes, and no legitimate domain use case
+for mismatched Passengers was found. §13's own STOP condition ("if
+actual existing schema/seed data reveals a legitimate domain use case
+for mismatched passengers") was NOT triggered. No historical row was
+rewritten (none needed to be).
+
+
+14. FOCUSED INVARIANT TESTS
+--------------------------------
+New file: `supabase/tests/request_trip_passenger_integrity_tests.sql`
+(dedicated `99000000-...` fixture namespace, confirmed collision-free
+against every other test file's own namespace). Covers all 9 required
+scenarios (A-I, with I split into two sub-cases for declined AND
+cancelled):
+  A. Direct Trip, no request, active Passenger — PASS (success
+     unchanged).
+  B. Pending + linked active Passenger A + Trip Passenger A — PASS
+     (success, Request becomes accepted).
+  C. Pending + linked active Passenger A + Trip Passenger B — PASS
+     (rejected ZW006; Request still pending; zero new Trip/TripEvent/
+     AuditEvent rows, verified via explicit before/after row counts
+     scoped to this Request's own id).
+  D. Pending + passenger_id NULL + supply active Passenger A — PASS
+     (rejected ZW006; Request still pending).
+  E. Pending + linked INACTIVE Passenger A + supply that Passenger A —
+     PASS (rejected ZW006).
+  F. Accepted + linked active Passenger A + second Trip Passenger A —
+     PASS (success).
+  G. Accepted + linked active Passenger A + second Trip Passenger B —
+     PASS (rejected ZW006; no new Trip row, verified via count).
+  H. Cross-tenant Passenger (regression) — PASS (rejected ZW006,
+     unaffected by this phase).
+  I. Declined (I-1) and Cancelled (I-2) Requests, even with a MATCHING
+     Passenger supplied — PASS (rejected ZW006 by the pre-existing
+     state check; proves the new passenger check never runs before,
+     or interferes with, that check).
+10/10 individual test cases PASS, run against a fresh `supabase db
+reset`, 0 real failures, 0 SQL errors (a spurious first attempt with a
+dead placeholder code block and a bare `raise notice` outside a `do`
+block were both caught and fixed before the final run — neither was a
+logic defect, both were caught immediately via `\set ON_ERROR_STOP
+off` making the syntax error visible rather than silently swallowed).
+
+
+15. ATOMICITY
+------------------
+Proven directly within TEST C and TEST G's own before/after counts:
+`trips`, `trip_events` (matched via `metadata->>'request_id'`), and
+`audit_events` (matched via `after_data->>'request_id'`) row counts
+for the specific Request under test are IDENTICAL before and after a
+rejected mismatched-Passenger call — a passenger mismatch produces
+literally zero side effects, not a partial write later rolled back.
+This follows directly from the guard clause's position: `raise
+exception` executes BEFORE the `insert into trips` statement is ever
+reached in the function body, and Postgres's own function-level
+transaction semantics (unchanged, not modified by this migration) roll
+back anything already attempted within the same statement on any
+exception. No existing atomicity test needed to be extended —
+`create_trip_atomicity_tests.sql` (re-run clean, §18) already proves
+the function's overall single-transaction guarantee at a mechanism
+level (a forced trigger failure leaves no partial Trip/event rows);
+this phase's own TEST C/G prove the SAME guarantee specifically for
+the new rejection path, using the more direct method of simply
+counting rows around a real (not forced) rejection.
+
+
+16. CONCURRENCY
+--------------------
+The Request row lock (`for update`) already fully covers this new
+check — no new race is introduced and no new concurrency test was
+needed, documented here rather than assumed:
+`v_request.passenger_id` is read from the SAME row locked
+`for update` in the SAME statement immediately above the new guard —
+not a separate query, not client-supplied data, not re-read later.
+Postgres's row-level locking guarantees whichever transaction (this
+`create_trip` call, or a concurrent `link_request_passenger` call on
+the identical Request) acquires the lock first fully commits or rolls
+back before the other's lock acquisition can proceed; the second
+transaction then evaluates its own check against the NOW-current
+committed row, never a stale value. This is the exact same guarantee
+`request_lifecycle_concurrency_test.sh` already proves for the
+pre-existing state check immediately above the new guard clause — re-
+run this phase (§20) and still PASS, with Session B's rejection now
+literally executing one function (line-shifted only by this phase's
+own added comments) after the check that guarantee was originally
+written to prove. No new concurrency script was added.
+
+
+17. PRIVILEGES / SECURITY
+------------------------------
+No grant was widened — `revoke all ... from public` +
+`grant execute ... to authenticated` are re-asserted verbatim,
+identical to the original migration. No RLS policy was touched (this
+migration contains no `create policy`/`alter policy` statement of any
+kind). No service-role credential is referenced anywhere in the new
+migration or test file. `create_trip`'s EXECUTE exposure was directly
+re-confirmed via `function_privilege_tests.sql` and
+`security_definer_exposure_tests.sql`, both re-run fresh this phase
+and both PASS — `authenticated`-only EXECUTE, `SECURITY DEFINER` with
+explicit `search_path`, trusted owner, all unchanged. Driver rejection
+was re-confirmed both via `create_trip_tests.sql`'s own ROLE-3 case
+and via this phase's `request_trip_passenger_integrity_tests.sql`
+using the same `has_org_role` authorization check, entirely untouched
+by this migration.
+
+
+18. FOCUSED CREATE_TRIP REGRESSIONS
+------------------------------------------
+Each against its own fresh `supabase db reset`, per instruction:
+  create_trip_tests.sql             PASS
+  create_trip_privilege_tests.sql   PASS
+  create_trip_atomicity_tests.sql   PASS
+
+
+19. REQUEST MUTATION REGRESSIONS
+-------------------------------------
+Each against its own fresh `supabase db reset`:
+  request_mutation_tests.sql             PASS
+  request_mutation_privilege_tests.sql   PASS
+Since this migration modifies a SECURITY DEFINER function, also
+re-ran (each against its own fresh reset):
+  security_definer_exposure_tests.sql    PASS
+  function_privilege_tests.sql           PASS
+
+
+20. FULL SQL/RLS SUITE
+---------------------------
+Authoritative method used exactly as required: for EACH of the 26
+current `supabase/tests/*.sql` files (25 pre-existing + this phase's
+own new `request_trip_passenger_integrity_tests.sql`), a fresh
+`supabase db reset`, then that ONE file, recorded independently. No
+chained run against one shared database was ever treated as
+authoritative.
+
+  constraint_tests.sql                          PASS
+  create_trip_atomicity_tests.sql               PASS
+  create_trip_privilege_tests.sql               PASS
+  create_trip_tests.sql                         PASS
+  driver_location_tests.sql                     PASS
+  driver_read_authorization_tests.sql           PASS
+  driver_read_history_tests.sql                 PASS
+  driver_read_minimization_tests.sql            PASS
+  driver_read_privilege_tests.sql               PASS
+  exception_mutation_boundary_tests.sql         PASS
+  function_privilege_tests.sql                  PASS
+  mutation_assignment_tests.sql                 PASS
+  mutation_atomicity_tests.sql                  PASS
+  mutation_authorization_tests.sql              PASS
+  mutation_idempotent_authorization_tests.sql   PASS
+  mutation_lifecycle_tests.sql                  PASS
+  mutation_privilege_tests.sql                  PASS
+  operator_onboarding_tests.sql                 PASS
+  organization_timezone_tests.sql               PASS
+  request_mutation_atomicity_tests.sql          PASS
+  request_mutation_privilege_tests.sql          PASS
+  request_mutation_tests.sql                    PASS
+  request_trip_passenger_integrity_tests.sql    PASS  (new)
+  rls_adversarial_tests.sql                     PASS
+  security_definer_exposure_tests.sql           PASS
+  trip_exception_tests.sql                      PASS
+
+  OVERALL: ALL 26 PASS, each against its own clean reset. Test-file
+  count: 26 (25 pre-existing + 1 new this phase).
+
+
+21. CONCURRENCY REGRESSION
+-------------------------------
+All three, each against its own fresh `supabase db reset`, per
+instruction ("prefer running all three because this is a central data
+mutation phase"):
+  mutation_concurrency_test.sh:
+    TEST CONCURRENCY-1: PASS — Session B blocked 1.87s on the Trip row
+    lock, correctly rejected with `assignment_conflict`. Unrelated to
+    this phase's own change but confirmed unaffected.
+  driver_invite_concurrency_test.sh:
+    TEST INVITE-CONCURRENCY-1: PASS — Session B blocked 1.91s, exactly
+    1 Driver row and 1 Membership row at the end. Unrelated to this
+    phase's own change but confirmed unaffected.
+  request_lifecycle_concurrency_test.sh:
+    TEST REQUEST-CONCURRENCY-1: PASS — Session B blocked 1.89s on the
+    SAME Request row lock the new passenger-integrity guard also
+    depends on, then correctly observed Session A's already-committed
+    cancellation and rejected with `invalid_input` — the most directly
+    relevant of the three, since it exercises `create_trip` racing a
+    concurrent Request-row mutation under the identical lock (§16).
+
+
+22. APPLICATION TESTS
+--------------------------
+`database.types.ts` regeneration: attempted anyway (not merely
+assumed unnecessary) — `supabase gen types typescript --local`,
+diffed byte-for-byte against the current file (filtering only the
+CLI's own "Connecting to db" stdout status line): IDENTICAL, zero
+type-level diff. Confirms the signature is genuinely unchanged; the
+file was NOT touched by this phase (its own "M" status in `git
+status` predates this phase, from S2B).
+
+  npx tsc --noEmit    PASS (0 errors)
+  npm run lint         PASS (0 errors; 19 pre-existing warnings, all in
+                        unrelated `.tmp-qa/*.mjs` scratch scripts,
+                        unchanged from S2E-R1's own count — no new
+                        scratch script was added this phase)
+  npm run build         PASS; full route list unchanged
+  npm test               PASS (66/66 — unchanged; no application code
+                        of any kind was touched this phase)
+
+
+23. DATABASE DIFF
+----------------------
+`git status --porcelain supabase/` shows exactly:
+  ?? supabase/migrations/20260916100000_request_mutation_foundation.sql   (pre-existing, S2B)
+  ?? supabase/migrations/20260916110000_request_trip_passenger_integrity.sql   (NEW, this phase)
+  ?? supabase/tests/request_lifecycle_concurrency_test.sh                (pre-existing, S2B)
+  ?? supabase/tests/request_mutation_atomicity_tests.sql                 (pre-existing, S2B)
+  ?? supabase/tests/request_mutation_privilege_tests.sql                 (pre-existing, S2B)
+  ?? supabase/tests/request_mutation_tests.sql                          (pre-existing, S2B)
+  ?? supabase/tests/request_trip_passenger_integrity_tests.sql          (NEW, this phase)
+
+Exactly one new hardening migration + one new focused test file, per
+§23's own explicit requirement — nothing else. No unrelated schema
+addition. No Request/Passenger/Trip TABLE schema change of any kind
+(only a function body change). No new role. `git diff` against the
+original `20260831120000_controlled_trip_creation.sql` migration
+confirms zero modification to that file.
+
+
+24. SECURITY ASSESSMENT
+----------------------------
+Closes a genuine tenant-internal data-integrity gap: before this
+phase, an authenticated organization_admin/dispatcher (not a privilege
+escalation — same role already trusted to create Trips) could cause a
+Request's OWN recorded Passenger and its linked Trip's Passenger to
+silently diverge, or convert a Request that Request Hub's own
+readiness model would still show as "Passenger needed." Neither was a
+cross-tenant or cross-role exposure — both were reachable only by a
+legitimately-authorized user misusing (accidentally or otherwise) the
+existing New Trip form's independent Passenger/Request controls (§12).
+The fix closes this at the one layer that actually matters (the
+database), not merely as a future UI convention, per the phase's own
+explicit instruction. No new attack surface was introduced: the new
+guard clause is a pure read-then-compare against data already being
+safely loaded under the pre-existing row lock; no new query, no new
+grant, no new role, no relaxed check anywhere.
+
+
+25. READINESS FOR S2F-B
+----------------------------
+Ready. The hardening is complete, proven correct (source + live
+reproduction + focused tests + full regression), and the New Trip UI
+audit (§12) gives S2F-B a concrete, already-diagnosed starting point:
+New Trip's Passenger/Request controls need to either derive Passenger
+read-only from a selected Request, or filter out unresolved Requests,
+or otherwise prevent submitting a combination the database will now
+correctly reject — a UX problem, not a data-integrity one, exactly the
+boundary this phase was scoped to establish. No Convert/Decline/Cancel
+UI, no Request Detail presentation change, and no New Trip UI change
+were made — confirmed by `git status` showing zero modification to any
+`src/` file this phase touched.
+
+
+26. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows only the same 4 pre-existing tracked
+modifications from S2B/S2D (`OperationsSidebar.tsx`, `icons.ts`,
+`presentation.ts`, `database.types.ts` — none touched by this phase)
+plus the same untracked Request Hub directories/files from prior
+phases, plus this phase's own 2 new untracked Supabase files (§23).
+HEAD and origin/main remain at
+4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f, confirmed both before and
+after this phase's work.

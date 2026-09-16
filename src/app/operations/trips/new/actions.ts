@@ -78,6 +78,38 @@ export async function createTripAction(
 
   const pathname = await getCurrentPathname("/operations/trips/new");
   const organization = await requireOperationsAccess(pathname);
+  const supabase = await createServerSupabaseClient();
+
+  // P1-E1-S2F-B1 §17 — defense-in-depth beyond create_trip's own
+  // hardened (P1-E1-S2F-A) rejection: when a Request is submitted, the
+  // Passenger actually sent to the RPC is derived HERE, server-side,
+  // from that Request's own row — never trusted from the browser's own
+  // `passengerId` field. The New Trip UI already makes Passenger
+  // read-only/derived whenever a Request is selected (§7), so this
+  // lookup should normally just confirm what the client already sent;
+  // its real purpose is closing the gap for a forged or stale
+  // submission (`requestId` = Request A, `passengerId` = Passenger B)
+  // BEFORE it ever reaches the RPC, not merely relying on the
+  // database's own final rejection. A single small, org-scoped lookup
+  // — no new query architecture. If the Request cannot be found in
+  // this organization (malformed/nonexistent/foreign-org/stale), no
+  // override is applied here — `create_trip` itself still authoritatively
+  // rejects the whole call regardless (its own existing `not found`
+  // check on `p_request_id`), so the final security posture is
+  // unchanged either way; this lookup only ever narrows what reaches
+  // the RPC, never widens it.
+  let effectivePassengerId = passengerId;
+  if (requestId) {
+    const { data: requestRow } = await supabase
+      .from("transportation_requests")
+      .select("passenger_id")
+      .eq("id", requestId)
+      .eq("organization_id", organization.organizationId)
+      .maybeSingle();
+    if (requestRow?.passenger_id) {
+      effectivePassengerId = requestRow.passenger_id;
+    }
+  }
 
   const pickupConversion = organizationLocalToUtc(
     { date: pickupDate, time: pickupTime },
@@ -111,10 +143,9 @@ export async function createTripAction(
     return { status: "error", errorCode: "INVALID_INPUT" };
   }
 
-  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.rpc("create_trip", {
     p_organization_id: organization.organizationId,
-    p_passenger_id: passengerId,
+    p_passenger_id: effectivePassengerId,
     p_pickup_description: pickupDescription,
     p_destination_description: destinationDescription,
     p_scheduled_pickup_at: pickupConversion.utc.toISOString(),
@@ -137,6 +168,16 @@ export async function createTripAction(
   revalidatePath("/operations/dispatch");
   if (data?.trip_id) {
     revalidatePath(`/operations/trips/${data.trip_id}`);
+  }
+  // P1-E1-S2F-B1 §18 — a Request-linked conversion changes the
+  // Request's own state (pending -> accepted), its Linked Trips list,
+  // and Request Hub's queue status/readiness for that row — all real,
+  // observable changes create_trip itself just made, so both surfaces
+  // need fresh data on the very next navigation, same as every other
+  // Request-mutating action in this codebase already does.
+  if (requestId) {
+    revalidatePath("/operations/requests");
+    revalidatePath(`/operations/requests/${requestId}`);
   }
 
   return { status: "success", tripId: data?.trip_id ?? undefined };

@@ -1,0 +1,637 @@
+P1-E1-S2H — REQUEST HUB PRODUCTION RELEASE
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-16
+STATUS: LOCAL VALIDATION COMPLETE AND CLEAN. RELEASE HALTED BEFORE ANY
+REMOTE/PRODUCTION ACTION — production Supabase/Vercel target could not
+be independently verified from this environment (§9). Nothing was
+staged, committed, pushed, deployed, or migrated in production. This is
+a genuine blocker requiring the user's input, not a failed gate.
+
+------------------------------------------------------------------------
+1. PREFLIGHT — WORKTREE CLASSIFICATION
+------------------------------------------------------------------------
+Ran and reviewed in full: `git status --short`, `git diff --stat`,
+`git diff` (file-by-file), `git log --oneline -10`.
+
+Every changed/untracked file was classified:
+
+A. Request Hub release files (the entire S2B–S2G accumulated change
+   set) — confirmed by reading the FULL diff of every modified file,
+   not just the stat summary:
+   - 14 modified src/ files: src/app/operations/page.tsx,
+     src/app/operations/trips/new/actions.ts,
+     src/app/operations/trips/new/page.tsx,
+     src/components/operations/OperationsBrief.tsx,
+     src/components/operations/OperationsSidebar.tsx,
+     src/components/operations/new-trip/NewTripForm.tsx,
+     src/design/icons.ts, src/lib/operations/new-trip-options.ts,
+     src/lib/operations/new-trip.ts,
+     src/lib/operations/operations-brief-core.test.mjs,
+     src/lib/operations/operations-brief-core.ts,
+     src/lib/operations/operations-brief.ts,
+     src/lib/operations/presentation.ts,
+     src/lib/supabase/database.types.ts (auto-generated types reflecting
+     the S2B/S2F-A migrations — request_events table, transportation_
+     requests.source column, decline/cancel/link/log RPCs and their
+     composite return types; confirmed by direct diff inspection, not
+     assumed).
+   - New src/app/operations/requests/** (5 files: page.tsx,
+     [requestId]/actions.ts, [requestId]/page.tsx, new/actions.ts,
+     new/page.tsx) and src/components/operations/requests/** (12
+     files) — the full Request Hub feature surface.
+   - New src/lib/operations/*.ts(.test.mjs) (9 files): link-passenger-
+     errors.ts, log-request-errors.ts, log-request-options.ts,
+     log-request.ts, request-detail.ts, request-lifecycle-errors.ts,
+     request-readiness-core.ts(+.test.mjs), requests-list.ts.
+   - supabase/migrations/20260916100000_request_mutation_foundation.sql
+     and .../20260916110000_request_trip_passenger_integrity.sql.
+   - supabase/tests/request_lifecycle_concurrency_test.sh,
+     request_mutation_atomicity_tests.sql,
+     request_mutation_privilege_tests.sql, request_mutation_tests.sql,
+     request_trip_passenger_integrity_tests.sql.
+B. Documentation (in scope for this release): the 12 S2B–S2G phase
+   reports under docs/reports/p1-e1-s2[a-g]*.txt.
+C. QA scratch artifacts: 31+ files under .tmp-qa/ (this phase added
+   several more: s2h-*.sh/.mjs) — NOT staged, NOT part of the release.
+D. Unrelated changes: 14 pre-existing, uncommitted docs/reports/*.txt
+   files documenting OTHER, already-shipped features from earlier
+   sessions (driver invitation email, Nemryn brand foundation, domain
+   migration, password recovery, password visibility, auth fix
+   deployment, the S1D Operations Brief release, P1-UX-R1/R2) — their
+   corresponding CODE is already committed per `git log` (d517ec3,
+   a077d81, 0919e2a, 95cb329, 2c5018e, etc.); only their report files
+   were never committed in a prior session. These are explicitly OUT of
+   scope for this release and must NOT be staged alongside it, per this
+   phase's own §1/§10 instruction to stage only the classified S2B–S2G
+   set.
+E. Secret/environment risk: NONE found (§2 below).
+
+No unexplained or unrelated PRODUCT change exists anywhere in the
+working tree — every src/ diff traces cleanly to a specific, already-
+documented S2B–S2G phase, confirmed by direct diff review, not by
+trusting file names alone.
+
+WORKTREE CLASSIFICATION: PASS
+
+------------------------------------------------------------------------
+2. SECRET / CREDENTIAL SAFETY
+------------------------------------------------------------------------
+`git ls-files | grep -E '(^|/)\.env'` → only `.env.example` (the
+deliberate, intentional exception per .gitignore's own comment) — its
+full content was read and contains variable NAMES ONLY, every value
+blank (`NEXT_PUBLIC_SUPABASE_URL=`, `RESEND_API_KEY=`, etc.), no real
+value of any kind.
+
+Pattern-scanned every changed/untracked file for service-role keys,
+API keys, SMTP credentials, Resend keys, database passwords/connection
+strings with embedded credentials, AWS-style keys, and private key
+blocks. Seven files matched a broad pattern; each was individually
+opened and confirmed a false positive — either the literal word
+"service_role" appearing as a POSTGRES ROLE NAME inside a security
+verification query/comment (never a value), or an explicitly fabricated
+invalid test key (`re_invalid_test_key_...`, used deliberately to
+trigger a controlled 401 in an existing test) or a placeholder
+instruction (`<the re_... key>`) in setup documentation. No real secret
+value exists anywhere in the working tree.
+
+No dedicated secret-scanning tool (gitleaks/trufflehog/detect-secrets)
+is installed in this repository or on this machine — the manual
+pattern scan above is the available method and was applied exhaustively
+across every changed and untracked file, not merely the release-scope
+subset.
+
+No real passenger/customer data exists in any fixture or source file —
+all Request Hub live-test fixtures across every phase (S2C–S2H) use
+explicitly fictional names (e.g. "Fictional Requester", "E2E Requester
+Cancel") and synthetic UUID namespaces reserved for testing.
+
+SECRET SCAN: PASS
+
+------------------------------------------------------------------------
+3. RELEASE DIFF REVIEW — INVARIANTS CONFIRMED AGAINST CURRENT SOURCE
+------------------------------------------------------------------------
+Every invariant below was verified by reading the actual current
+migration source (not by trusting prior phase reports alone) — full
+text of both accumulated migrations was read in this phase.
+
+REQUEST MODEL: organization_id is the tenancy root on every table and
+RPC (transportation_requests, request_events, trips all carry it and
+every RPC re-validates it via has_org_role). Request and Trip remain
+distinct entities; a Request may produce multiple Trips (accepted
+Requests may legitimately receive a second/return-leg Trip — confirmed
+unchanged in create_trip's own comment and logic, P1-E1-S2F-A migration
+line ~179). `trips.request_id` remains nullable (p_request_id uuid
+DEFAULT NULL, unchanged signature). No implicit return-trip schema
+exists — no `trip.leg` column, no recurring-care table, confirmed by
+migration content inspection.
+
+REQUEST STATES: exactly pending/accepted/declined/cancelled — the
+migration's own CHECK-constraint-matching vocabulary. No
+reopen/undo path exists anywhere in the RPCs or application code
+(confirmed: decline/cancel both reject every non-pending starting
+state except their own idempotent already-terminal case; no `pending`-
+restoring RPC exists at all).
+
+REQUEST MUTATIONS: state changes ONLY through
+log_transportation_request / link_request_passenger /
+decline_transportation_request / cancel_transportation_request — all
+four are the sole SECURITY DEFINER entry points; the raw client
+`.update()`/`.insert()` grants on transportation_requests.state and
+.passenger_id were explicitly revoked in the same migration that
+introduced the controlled replacements (§G of the S2B migration).
+request_events has NO INSERT/UPDATE/DELETE grant to `authenticated` at
+all — only these four SECURITY DEFINER functions (running as owner)
+ever write a row. organization_id is never trusted from the client
+alone — every RPC re-validates it via `has_org_role` against the
+caller's live Membership. actor_user_id is always `auth.uid()`,
+derived server-side inside the RPC, never a parameter.
+
+PASSENGER RESOLUTION: Request.requester_name/phone/email remain
+entirely separate columns from the linked Passenger row.
+link_request_passenger validates the Passenger is same-organization AND
+active before linking (ZW006 otherwise) — cross-org Passenger linking
+is impossible by construction (the `where ... organization_id =
+p_organization_id` clause). No unsafe reassignment path exists:
+link_request_passenger is legal only while state='pending' (ZW004 once
+accepted), matching the locked S2B decision that Passenger
+reassignment on an already-converted Request is out of scope.
+
+CONVERSION: pending+ready → Create Trip (create_trip, hardened by
+P1-E1-S2F-A to require the Request's OWN linked passenger_id to be
+non-null AND equal the Trip's own p_passenger_id — verified directly
+in the current migration source, lines ~198-215). accepted → Create
+Another Trip remains available (the function's own `state in
+('pending','accepted')` check, unchanged). Request→Trip remains 1:N
+(no uniqueness constraint forces one Trip per Request). Conversion
+event behavior is unchanged: `request_converted_to_trip` is written to
+trip_events only (never duplicated into request_events) — confirmed by
+reading create_trip's own TripEvent insert and by request-detail.ts's
+own doc comment explaining this is deliberate, not an oversight.
+
+DECLINE: legal only from pending (ZW004 otherwise), optional free-text
+reason (<=500 chars, ZW006 above that), terminal (no un-decline path),
+remains visible in Request Hub's Declined/All views permanently — none
+of this was touched this phase.
+
+CANCEL: legal only from pending AND zero linked Trip rows (confirmed
+directly in cancel_transportation_request's own body, lines ~554-567:
+`select exists(select 1 from trips where request_id = ...)` — ANY
+linked Trip blocks cancellation regardless of that Trip's own state,
+never cascades into Trip cancellation). Idempotent already-cancelled
+behavior returns `changed=false` with no new event (confirmed by the
+function's own early-return branch before the state-legality check,
+matching cancel_trip's established precedence).
+
+ACTIVITY: request_events-only (RequestActivityPanel/getRequestActivity
+never join trip_events or auth.users), human labels via
+requestEventLabel (never a raw event_type string), chronological
+(`order by occurred_at asc`), no actor UUID rendered, no raw JSON
+metadata rendered, and a query failure degrades only the Activity panel
+(never the whole Request Detail page) — all confirmed by source
+re-inspection this phase, unchanged from S2F-B2.
+
+OPERATIONS BRIEF: pending request count uses the IDENTICAL Pending
+queue definition as Request Hub (`organization_id = <current> AND
+state = 'pending'`, getRequestSummary in operations-brief.ts) — no
+second interpretation of "pending" was ever created. Tenant-scoped
+(organization_id explicitly filtered, on top of RLS). No warning/Trip-
+exception visual semantics (no WarningCircle, no StatusBadge, no
+warning color on the Requests-awaiting-review block — confirmed by
+source inspection of OperationsBrief.tsx). "Review requests" links to
+`/operations/requests?state=pending`, Request Hub's own real filter
+contract.
+
+All invariants: CONFIRMED HOLDING, no drift found.
+
+------------------------------------------------------------------------
+4. MIGRATION ORDER / DATABASE SOURCE
+------------------------------------------------------------------------
+Exactly two uncommitted migrations exist in the working tree (confirmed
+via `find supabase/migrations -newer <last-committed-migration>` style
+inspection and by the exhaustive `git status --porcelain supabase/`
+check repeated at every phase boundary this session):
+  20260916100000_request_mutation_foundation.sql (P1-E1-S2B)
+  20260916110000_request_trip_passenger_integrity.sql (P1-E1-S2F-A)
+Filename timestamps order them correctly (100000 < 110000) and the
+fresh-reset regression battery (§5) applies them in that exact order
+successfully 26 times over, across every test file, with zero
+migration-application failures.
+
+Both migrations were read in FULL this phase (not sampled):
+- Deterministic: no `random()`, no wall-clock-dependent branching
+  beyond `now()`/`gen_random_uuid()` (the same pattern every other
+  migration in this repository already uses for timestamps/ids).
+- No destructive data reset: both are purely additive (ALTER TABLE ADD
+  COLUMN with a safe backfill default, CREATE TABLE, CREATE TYPE,
+  CREATE OR REPLACE FUNCTION, REVOKE/GRANT). Zero DROP TABLE, DROP
+  COLUMN, or TRUNCATE statements in either file.
+- No hidden manual-dashboard dependency: both are self-contained SQL,
+  applied entirely through the normal `supabase db reset`/migration
+  pipeline — confirmed by the 26-file regression battery succeeding
+  from a bare `db reset` every single time.
+- No service-role exposure: every GRANT EXECUTE targets `authenticated`
+  only; `service_role` never appears as a grantee anywhere in either
+  file.
+- SECURITY DEFINER search_path discipline: all 5 functions touched or
+  added by these two migrations (log_transportation_request,
+  link_request_passenger, decline_transportation_request,
+  cancel_transportation_request, create_trip) declare `set search_path
+  = public, pg_temp` — confirmed present on every one by direct
+  inspection, matching the established repository-wide convention.
+- EXECUTE grants minimal: every function is `revoke all ... from
+  public;` immediately followed by `grant execute ... to
+  authenticated;` only — no broader grant exists.
+- RLS remains deny-by-default: request_events has RLS enabled with
+  exactly one SELECT policy (organization_admin/dispatcher, same-org)
+  and no INSERT/UPDATE/DELETE grant to `authenticated` at all; no
+  existing RLS policy on any other table was altered by either
+  migration.
+- No authenticated raw mutation grant weakens state integrity: the S2B
+  migration's own §G explicitly NARROWS the pre-existing
+  transportation_requests UPDATE grant (removing `state` and
+  `passenger_id` from the client-writable column list) and RETIRES the
+  raw INSERT grant entirely — a strict tightening, not a weakening.
+
+MIGRATION REVIEW: PASS
+
+------------------------------------------------------------------------
+5. FRESH DATABASE FULL REGRESSION
+------------------------------------------------------------------------
+Ran the FULL maintained SQL suite — all 26 files under supabase/tests/
+— not merely the Request-focused subset. Each file was run exactly
+once against its own independently fresh `supabase db reset` (never a
+stateful re-run against a dirty database — the discipline this phase
+explicitly requires). Several individual reset attempts hung on a
+benign, self-recoverable "pg-delta migrations-catalog caching" npm-
+registry warning (an optional analytics/catalog-caching sidecar, NOT
+the actual Postgres reset — confirmed directly by querying the database
+mid-hang and finding it already fully migrated and seeded); a small
+number of these were manually re-run after confirming the underlying
+Postgres reset had genuinely completed, and — where a database
+carried stray state from an interrupted prior attempt — was explicitly
+re-reset and reverified empty of the relevant fixture ids before the
+affected file was re-run, to guarantee every single one of the 26
+results reported below reflects a genuinely fresh, single run.
+
+Per-file results (all clean):
+  constraint_tests.sql: 13/13
+  create_trip_atomicity_tests.sql: 2/2
+  create_trip_privilege_tests.sql: 5/5
+  create_trip_tests.sql: 20/20
+  driver_location_tests.sql: 20/20
+  driver_read_authorization_tests.sql: 17/17
+  driver_read_history_tests.sql: 8/8
+  driver_read_minimization_tests.sql: 13/13
+  driver_read_privilege_tests.sql: 8/8
+  exception_mutation_boundary_tests.sql: 20/20
+  function_privilege_tests.sql: 7/7
+  mutation_assignment_tests.sql: 19/19
+  mutation_atomicity_tests.sql: 2/2
+  mutation_authorization_tests.sql: 4/4
+  mutation_idempotent_authorization_tests.sql: 6/6
+  mutation_lifecycle_tests.sql: 24/24
+  mutation_privilege_tests.sql: 7/7
+  operator_onboarding_tests.sql: 40/40
+  organization_timezone_tests.sql: 14/14
+  request_mutation_atomicity_tests.sql: 3/3
+  request_mutation_privilege_tests.sql: 18/18
+  request_mutation_tests.sql: 38/38
+  request_trip_passenger_integrity_tests.sql: 10/10
+  rls_adversarial_tests.sql: 32/32
+  security_definer_exposure_tests.sql: 20/20
+  trip_exception_tests.sql: 16/16
+
+TOTAL: 26/26 files, 386/386 PASS, 0 FAIL, 0 fatal psql ERROR lines.
+
+Named suites requested explicitly by this phase:
+  RLS suite (rls_adversarial_tests.sql): 32/32
+  Request mutation suite (request_mutation_tests.sql): 38/38
+  Request mutation privilege suite
+    (request_mutation_privilege_tests.sql): 18/18
+  Request atomicity suite (request_mutation_atomicity_tests.sql): 3/3
+  Request/Trip/Passenger integrity suite
+    (request_trip_passenger_integrity_tests.sql): 10/10
+  Driver invite suite: no standalone "driver_invite_tests.sql" file
+    exists in this repository — driver-invite coverage lives inside
+    operator_onboarding_tests.sql (40/40, includes invite-redemption
+    assertions) and function_privilege_tests.sql (7/7, includes
+    redeem_driver_invite's own privilege checks) — both clean.
+  Existing Trip mutation/lifecycle suites (mutation_lifecycle_tests.sql,
+    mutation_assignment_tests.sql, mutation_atomicity_tests.sql,
+    create_trip_tests.sql, create_trip_atomicity_tests.sql,
+    create_trip_privilege_tests.sql, exception_mutation_boundary_tests.sql,
+    trip_exception_tests.sql): all clean, all listed above.
+  All other maintained suites: all clean, all listed above.
+
+FULL SQL: 386/386
+
+STOP-RELEASE CONDITION: not triggered — zero failures found at any
+point in the full battery.
+
+------------------------------------------------------------------------
+6. CONCURRENCY
+------------------------------------------------------------------------
+Ran every maintained concurrency test, each exactly once, each proving
+genuine two-process row-lock contention by wall-clock timing (not mere
+sequential-script inspection):
+
+- mutation_concurrency_test.sh: PASS — Session B blocked 1.82s on the
+  Trip row lock, then correctly rejected with `assignment_conflict`
+  after observing Session A's already-committed assignment; exactly 1
+  active trip_assignments row at the end.
+- driver_invite_concurrency_test.sh: PASS — genuine lock contention
+  (Session B's own call took 1.83s), zero errors from either session,
+  exactly 1 Driver row and exactly 1 Membership row regardless of which
+  session's transaction actually completed the redemption first
+  (order-independent by design, matching the test's own documented
+  pass criterion).
+- request_lifecycle_concurrency_test.sh: PASS — Session B blocked
+  1.81s on the SAME Request row lock create_trip and
+  cancel_transportation_request share, then correctly saw Session A's
+  already-committed cancellation and rejected with `invalid_input`;
+  final state confirmed `cancelled` with 0 linked Trips — proving the
+  shared FOR UPDATE lock genuinely serializes a lifecycle mutation
+  against a concurrent conversion attempt on the same Request, not
+  merely a documented claim.
+
+No duplicate Organization, Membership, Driver, Trip, or Request-
+lifecycle-event was produced by any of the three tests.
+
+CONCURRENCY: PASS
+
+------------------------------------------------------------------------
+7. APPLICATION REGRESSION
+------------------------------------------------------------------------
+- `npx tsc --noEmit`: 0 errors.
+- `npm run lint`: 0 errors, 28 warnings, all confined to `.tmp-qa/*.mjs`
+  QA scratch scripts (this phase's own and prior phases' test tooling);
+  no new warning appeared in any shipped `src/` file.
+- `npm run build`: succeeded; all expected routes present, including
+  `/operations`, `/operations/requests`,
+  `/operations/requests/[requestId]`, `/operations/requests/new`.
+- `npm test`: 71/71 passing — UNCHANGED from the count reported
+  entering this phase (S2G's own final state). No new test file was
+  added and no existing test was modified during S2H (this phase adds
+  no new application code, per its own explicit "no new product
+  features" scope), so an unchanged count is the expected, correct
+  outcome, not an oversight.
+
+No application code was modified at any point during this phase — all
+work in S2H was validation (SQL tests, concurrency tests, browser
+tests, source review) against the ALREADY-COMPLETE S2B–S2G change set.
+
+TSC: PASS
+LINT: PASS
+BUILD: PASS
+UNIT: 71/71
+
+------------------------------------------------------------------------
+8. LOCAL END-TO-END RELEASE REHEARSAL
+------------------------------------------------------------------------
+Using realistic synthetic organizations/fixtures only (fictional names,
+reserved synthetic UUID namespace), exercised the full accumulated
+Request Hub workflow live in a real browser (headless Chrome via CDP)
+against a freshly-reset, freshly-seeded local database:
+
+A. Log Request — a genuine live form submission (all 3 required select
+   fields correctly set) succeeded and created a real Request row via
+   log_transportation_request — PASS.
+B. Pending Request Hub shows the live-logged request and pre-seeded
+   pending fixtures — PASS.
+C. Search/filter — confirmed the Hub's actual query parameter (`q`,
+   not an assumed `search`) correctly scopes results to the matching
+   requester name and excludes non-matching rows, verified against
+   both `state=pending` (a mid-test state change moved the original
+   target row before verification, correctly excluding it — expected
+   behavior, not a defect) and `state=all` (target still present,
+   confirmed found and correctly scoped) — PASS.
+D. Request Detail loads — PASS.
+E. Unresolved Passenger shows "Passenger needed" — PASS.
+F. Resolve/link Passenger flow reachable and attempted live via the
+   Passenger-search combobox — PASS.
+G. Readiness reflects the linkage ("Ready" / linked Passenger name
+   shown) — PASS.
+H. Create Trip flow reachable and submitted live — PASS.
+I. Request becomes Accepted after conversion — PASS.
+J. Linked Trip visible on Request Detail after conversion — PASS.
+K. Create Another Trip available on the pre-seeded accepted+active-
+   Passenger fixture — PASS.
+L. Decline a pending Request without a reason — PASS (state → Declined,
+   no forced reason).
+M. Decline a pending Request WITH a reason (separate fixture) — PASS;
+   reason text confirmed visible in Request Activity.
+N. Cancel an eligible pending Request (zero linked Trips) — PASS
+   (state → Cancelled).
+O. A pending Request with a linked Trip shows no Cancel button and the
+   restrained "cannot be cancelled here" note instead — PASS.
+P. An accepted Request shows no Decline/Cancel UI — PASS.
+Q. Declined and cancelled (terminal) Requests show no lifecycle actions
+   of any kind — PASS (both checked).
+R. Request Activity: the live-created Log Request row shows a genuine
+   "Request logged" event (real RPC-created row, never a SQL-fixture
+   artifact) with no raw `request_logged` string exposed anywhere;
+   separately, the live-declined-with-reason fixture shows the human-
+   readable "Request declined" label with its reason — PASS (both
+   checked).
+S. Activity query-failure isolation — NOT re-forced via a live
+   REVOKE/GRANT this phase (deliberately, to avoid redundant privilege
+   manipulation during a release rehearsal where no Supabase source
+   changed at all); this exact behavior was already exhaustively live-
+   proven in P1-E1-S2F-B2 using the same reversible technique, and
+   since request_events' grants/RLS are byte-identical to that phase
+   (confirmed via §4), the behavior is unchanged — carried forward, not
+   re-derived.
+T. Operations Brief shows "Requests awaiting review" with a live count
+   — PASS.
+U. "Review requests" link points to exactly `/operations/requests?
+   state=pending` — PASS.
+V. Org A / Org B isolation — Org B cannot view an Org A Request
+   (indistinguishable "Request unavailable"), and correctly sees its
+   own Org B Request — PASS (both checked).
+W. Driver blocked from the Operations Request Hub via the existing
+   authorization boundary — PASS.
+
+32/32 real-behavior checks pass (one initial script-authoring mistake —
+an incorrect assumed query-parameter name — was found, fixed, and
+independently reverified; it was never a product defect).
+
+Core existing application regression (also live-verified this phase):
+Trips, Dispatch, Passengers, Facilities, Fleet, and Drivers pages all
+load without error; the full Operations sidebar shows all 8 expected
+nav items including Requests in its locked position; an existing Trip
+Detail page (lifecycle/notes/exceptions surface) loads correctly; sign
+out (via the Account menu) correctly redirects to sign-in and signing
+back in succeeds; the Driver app (both its home screen and Trips view)
+loads correctly for a Driver-role account. 21/21 checks pass.
+
+LOCAL REQUEST HUB E2E: PASS
+ORG ISOLATION: PASS
+
+------------------------------------------------------------------------
+9. RELEASE DATA SAFETY — PRODUCTION TARGET COULD NOT BE VERIFIED
+------------------------------------------------------------------------
+This section's own explicit instruction is: "Do NOT infer from old
+documentation. Verify using current deployment/environment
+configuration without printing secrets... If unexpected migration
+drift exists: STOP." Every avenue available in this sandboxed
+environment was exhausted, and none could positively confirm which
+Supabase project/environment the live `app.nemryn.com` deployment
+actually uses:
+
+- The LOCALLY LINKED Supabase CLI project (supabase/.temp/linked-
+  project.json) is named "ZenwardApp Staging" (ref
+  wyocbivzgrbekuyqdfts, organization fjjnlyfplwequnzzqaki) — its name
+  alone does NOT confirm or deny that it is (or is not) what
+  app.nemryn.com's Vercel deployment actually points to; assuming
+  either way from the name would be exactly the "infer from old
+  documentation/assumption" this phase explicitly forbids.
+- No `.vercel/project.json` exists in this repository (never linked
+  locally in this environment).
+- The `vercel` CLI is not installed, and `npx vercel@latest whoami`
+  failed with a local npm cache error (EEXIST/EACCES on
+  ~/.npm/_cacache) unrelated to network reachability; even if it had
+  succeeded, `vercel env ls`/`vercel project ls` would still require an
+  interactive OAuth login this non-interactive session cannot complete.
+- The live production site (https://app.nemryn.com) was fetched
+  directly (safe: confirmed reachable, HTTP 200 on /sign-in, served by
+  Vercel per its own response headers) and its full sign-in page HTML
+  plus all 10 referenced JS chunks (610KB combined) were fetched and
+  searched for any embedded `*.supabase.co` URL or Supabase project
+  reference — none was found. This is architecturally consistent with
+  this codebase's own heavy server-action-driven design (every data
+  access this session has read goes through `createServerSupabaseClient`
+  server-side, never a client-side Supabase SDK call on the pages
+  reachable without authentication) — NEXT_PUBLIC_SUPABASE_URL may
+  simply never be embedded in the client bundle for these routes, which
+  means this approach's negative result does not by itself confirm
+  anything either way.
+
+Given no positive confirmation was obtainable, this phase HALTS here,
+before section 10 (release commit onward). Proceeding to stage, commit,
+push, deploy, or apply ANY production database migration without first
+confirming the correct target would risk applying schema changes to the
+wrong Supabase project, or deploying against unverified assumptions
+about which environment is live — exactly the class of mistake this
+phase's own §9 instruction exists to prevent, and independently the
+kind of irreversible, shared/production-system action that warrants an
+explicit pause regardless.
+
+Sections 10–16 (release commit, push, deploy, production database
+migration, production smoke test, production security validation,
+production data check, rollback documentation) were NOT performed.
+
+WHAT IS NEEDED FROM THE USER before this release can continue:
+Confirmation of the exact Supabase project ref/URL and Vercel project
+that back the live app.nemryn.com deployment — e.g. by running `vercel
+env ls production` or `vercel project inspect` themselves (this
+session cannot complete the Vercel OAuth login), or by directly stating
+whether "ZenwardApp Staging" (wyocbivzgrbekuyqdfts) is in fact the
+production database, or naming the correct one.
+
+------------------------------------------------------------------------
+10-16. NOT PERFORMED (BLOCKED ON §9)
+------------------------------------------------------------------------
+Release commit, push + deploy, production database migrations,
+production smoke test, production security validation, production data
+check, and rollback-readiness documentation all require the production
+target to be known first. None were attempted. No git add, no git
+commit, no git push, no `supabase db push`, no production database
+access of any kind occurred at any point in this phase.
+
+------------------------------------------------------------------------
+17. DOCUMENTATION
+------------------------------------------------------------------------
+This report itself is the required documentation update for this
+phase. No unrelated historical report was rewritten. Product/
+implementation documentation beyond this report was not updated, since
+Request Hub has not yet actually been production-released (the release
+itself did not occur — see §9).
+
+============================================================
+WORKTREE CLASSIFICATION:
+PASS
+
+SECRET SCAN:
+PASS
+
+MIGRATION REVIEW:
+PASS
+
+FULL SQL:
+386/386
+
+RLS:
+32/32
+
+REQUEST MUTATION:
+38/38
+
+REQUEST PRIVILEGE:
+18/18
+
+REQUEST ATOMICITY:
+3/3
+
+CONCURRENCY:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+71/71
+
+LOCAL REQUEST HUB E2E:
+PASS
+
+ORG ISOLATION:
+PASS
+
+RELEASE COMMIT:
+NOT CREATED
+
+REMOTE MIGRATIONS:
+NOT RUN
+
+VERCEL DEPLOYMENT:
+NOT RUN
+
+PRODUCTION REQUEST HUB:
+NOT RUN
+
+PRODUCTION OPERATIONS BRIEF:
+NOT RUN
+
+PRODUCTION SECURITY:
+NOT RUN
+
+ROLLBACK PLAN:
+MISSING (blocked on §9 — cannot document a rollback for a release that
+has not been targeted at a confirmed environment)
+
+REQUEST HUB RELEASE:
+NOT READY
+
+BLOCKERS:
+Production Supabase project/Vercel deployment target for
+app.nemryn.com could not be independently verified from this sandboxed
+environment (§9) — every available local avenue (linked Supabase CLI
+project name, .vercel/project.json, Vercel CLI, live production client-
+bundle inspection) was exhausted without a positive, trustworthy
+confirmation. This is the ONLY blocker; every local gate (worktree
+classification, secrets, migration review, full 26-file SQL regression,
+concurrency, application regression, local E2E rehearsal, org
+isolation) passed cleanly with zero failures.
+
+NEXT:
+Pilot Readiness Validation — pending the user's confirmation of the
+production Supabase/Vercel target named in §9, after which sections
+10-16 of this same runbook can resume from exactly where they were
+halted.

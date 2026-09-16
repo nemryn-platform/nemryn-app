@@ -1,0 +1,610 @@
+P1-E1-S2C — INTERNAL LOG REQUEST
+=====================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete. NOT staged, NOT
+                       committed, NOT pushed, NOT deployed, per explicit
+                       phase constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed — origin/main had not advanced. The working tree
+  contained the uncommitted P1-E1-S2B foundation exactly as reported
+  (confirmed present, unmodified, before any S2C work began — §2).
+
+
+2. S2B DEPENDENCY VERIFICATION
+-----------------------------------
+Re-read the actual current signature directly from
+`supabase/migrations/20260916100000_request_mutation_foundation.sql`
+(not from memory or the S2B report's prose alone):
+
+    log_transportation_request(
+      p_organization_id uuid, p_requester_name text, p_requester_relationship text,
+      p_requester_phone text, p_pickup_description text, p_destination_description text,
+      p_return_trip_needed text, p_source text,
+      p_requester_email text default null, p_passenger_id uuid default null,
+      p_preferred_date date default null, p_preferred_time time default null,
+      p_assistance_notes text default null, p_additional_notes text default null
+    ) returns request_creation_result
+
+Cross-checked against the regenerated `src/lib/supabase/database.types.ts`
+(both the `Args` shape and the `request_creation_result` composite —
+`{ request_id, organization_id, state, created }`) — confirmed identical
+to the migration. Confirmed the 3 error codes this function raises
+(ZW001/ZW002/ZW006 — no others), the 5 allowed `source` values
+(phone/facility/email/web/other), and the passenger-validation behavior
+(exists + same organization + `status = 'active'`, ZW006 otherwise, no
+existence oracle) directly from the function body before building
+anything against it.
+
+All 4 S2B files (migration + 3 focused SQL test files + concurrency
+script) confirmed present and untouched throughout this phase (§26/§27).
+
+
+3. PRODUCT FLOW
+--------------------
+An authenticated organization_admin/dispatcher navigates to
+`/operations/requests/new`, fills a short form (requester + pickup/
+destination + return-trip intent + source, with everything else
+optional), and submits. On success, a calm confirmation replaces the
+form and offers either "Log another request" (resets the form in place,
+supporting rapid back-to-back phone-call capture) or "Back to Overview."
+No Trip is created, no Passenger is required, and no other Request Hub
+surface (queue, detail, decline/cancel actions, Operations Brief count)
+is touched — this phase is creation only, exactly as scoped.
+
+
+4. FILES CHANGED
+---------------------
+All new files (615 lines total across application code); zero existing
+file was modified except the already-uncommitted-from-S2B
+`database.types.ts` (untouched by S2C itself — confirmed via
+`git diff --name-only` against it returning empty for this phase's own
+work):
+
+  src/app/operations/requests/new/page.tsx        (27 lines)
+  src/app/operations/requests/new/actions.ts       (103 lines)
+  src/components/operations/requests/LogRequestForm.tsx  (349 lines)
+  src/lib/operations/log-request.ts                (45 lines)
+  src/lib/operations/log-request-options.ts        (47 lines)
+  src/lib/operations/log-request-errors.ts         (44 lines)
+
+No file outside `src/app/operations/requests/`,
+`src/components/operations/requests/`, and `src/lib/operations/
+log-request*.ts` was created or modified. Scope stayed exactly within
+the phase's own "expected new/changed application areas" list — no STOP
+was needed.
+
+
+5. ROUTE
+------------
+`/operations/requests/new` — confirmed via `find src/app/operations` (S2A)
+this path was free; confirmed via this phase's own build output that it
+now compiles as a real dynamic route. Reachable only by direct
+navigation, as instructed — no sidebar entry, no link from any existing
+page points here yet (Request Hub's queue, which will eventually host
+the "Log Request" primary action button, is explicitly deferred to
+S2D). `requireOperationsAccess` gates it exactly like every other
+Operations route — confirmed live (§20/§21).
+
+
+6. FORM ARCHITECTURE
+-------------------------
+Single controlled client component (`LogRequestForm`), one real
+`<form>` + Server Action, mirroring `NewTripForm`'s own established
+structure (P1-E3-S7) at a deliberately smaller scale — no Facility/
+Request pickers (Log Request has neither), single-column layout bounded
+to `max-w-3xl` (this form is meant to read as visibly simpler/faster
+than New Trip, not a second copy of it), and a "log another" reset loop
+instead of a redirect into a Trip.
+
+Sections, exactly as recommended, each a `FormSection` (imported
+directly from `new-trip/FormSection.tsx` — a generic, already-reusable
+`Panel`-based header component, not duplicated):
+  REQUESTER — Name, Relationship, Phone, Email
+  TRANSPORTATION — Pickup, Destination, Preferred date, Preferred time,
+    Return transportation
+  PASSENGER — optional explicit link/create (§9)
+  DETAILS — Source
+  NOTES — Assistance notes, Additional notes (split from DETAILS into
+    its own section since notes and the single Source field read as
+    different concerns; kept both restrained rather than forcing them
+    into one crowded section)
+
+Every field control is the existing, already-accessible primitive:
+`Input`, `Textarea`, `Select` (for the three closed enums —
+`requester_relationship`, `return_trip_needed`, `source` — matching
+exactly how `NewTripForm` already uses `Select` for its own Facility/
+Request pickers, rather than introducing radio groups with no
+established precedent in this form style), `Combobox`+`Avatar`
+(passenger search/selection), `Button`/`LinkButton`. No new UI
+primitive was created.
+
+
+7. REQUIRED/OPTIONAL FIELDS
+--------------------------------
+Required (matches the S2B/S2A minimum-save contract exactly — no
+schedule, facility, driver, or vehicle required):
+  requesterName, requesterRelationship, requesterPhone,
+  pickupDescription, destinationDescription, returnTripNeeded, source
+
+Optional: requesterEmail, passengerId, preferredDate, preferredTime,
+assistanceNotes, additionalNotes.
+
+Live-confirmed (§18): a request saves successfully with every optional
+field empty. Live-confirmed (§23): `form.checkValidity()` is false with
+any required field missing and becomes true the instant the last
+required field is filled, independent of any optional field's state.
+
+
+8. SOURCE HANDLING
+-----------------------
+`SOURCE_OPTIONS` (`log-request-options.ts`) mirrors the exact 5-value
+CHECK constraint added in S2B. Default value is `"phone"`
+(`DEFAULT_SOURCE`), matching the phase's own recommendation for an
+internal capture form — never `"web"`. Live-confirmed the Select's
+initial value is `phone` and the operator can change it to any of the
+other 4 values (all 5 rendered as real `<option>`s). No new source
+category was invented.
+
+
+9. PASSENGER-LINK CHOICE/REUSE
+-----------------------------------
+Audited existing Add-Passenger reuse before deciding, per the phase's
+own explicit instruction (§12): `AddPassengerDialog`
+(`src/components/operations/new-trip/AddPassengerDialog.tsx`) wraps
+`addPassengerAction` (`src/app/operations/trips/new/actions.ts`) — a
+real, `requireOperationsAccess`-gated, org-scoped `passengers` INSERT
+(Passenger has no lifecycle machine to protect, unlike Trip/Request —
+an established prior decision, not reconsidered here). This exact pair
+is ALREADY reused twice (New Trip's own inline dialog, and the
+standalone Passengers page's "Add Passenger" button via
+`AddPassengerButton.tsx`). Given this proven, small, clean reuse
+surface, this phase imports both directly a THIRD time — no
+reimplementation of passenger-creation logic, no duplicated action, no
+duplicated dialog markup.
+
+Passenger search reuses the `Combobox` primitive with a freshly-loaded,
+org-scoped, `status = 'active'`-filtered list (`getLogRequestFormData`,
+mirroring `new-trip.ts`'s own passenger query shape exactly — same
+columns, same filter, same ordering) rather than the standalone
+Passengers directory's own query-param-driven `getPassengersList`
+server search — the Combobox pattern was judged the more directly
+analogous precedent (an inline picker inside a broader form, exactly
+like New Trip's own Passenger field already is) rather than a dedicated
+directory page's search-as-you-type-against-the-server pattern. No
+fuzzy/automatic matching exists anywhere — the operator explicitly
+searches (client-side filtering of an already-authorized list, matching
+name or phone) and explicitly clicks to select; an unresolved/no-match
+case simply leaves `passenger_id` unset, a fully valid, non-blocking
+save state.
+
+`NewTripPassengerOption`'s type (`id`/`displayName`/`phone`) is imported
+directly from `new-trip-options.ts` rather than re-declared — a
+deliberate, minimal cross-feature type reuse (that module's own header
+comment already frames it as a shared, client-safe types module), not a
+duplicated shape.
+
+
+10. SERVER ACTION
+----------------------
+`logRequestAction` (`src/app/operations/requests/new/actions.ts`)
+mirrors `createTripAction`'s own established shape exactly:
+  - Cheap, client-catchable required-field validation first (never the
+    authority).
+  - `getCurrentPathname` + `requireOperationsAccess` — fresh
+    authorization on every call, never assumed from how the page
+    happened to render.
+  - `supabase.rpc("log_transportation_request", {...})` — the ONLY
+    write this action performs. No `.from("transportation_requests")`
+    call of any kind exists anywhere in this phase's code (confirmed:
+    `grep -rn "from(\"transportation_requests\")" src/app/operations/requests/
+    src/lib/operations/log-request*.ts` returns zero matches) — the raw
+    INSERT S2B retired stays retired; no attempt was made to restore it
+    or work around its absence.
+  - Branches on `error.code` (`mapLogRequestError`), never message-string
+    matching.
+  - Returns `{status, errorCode?, requestId?}` for `useActionState`.
+
+No `revalidatePath` call was added — unlike `createTripAction` (which
+revalidates `/operations`/`/operations/dispatch`/the new Trip's own
+detail page, all of which show the created Trip), there is currently no
+page anywhere in the product that lists or displays a Request (S2D/S2E
+don't exist yet), so there is nothing to revalidate yet. This is
+recorded here explicitly so S2D adds the appropriate `revalidatePath`
+call(s) once the queue page exists, rather than this being a silently
+missing behavior.
+
+
+11. ORG-CONTEXT HANDLING
+-----------------------------
+`organization.organizationId` — the value `requireOperationsAccess`
+itself resolves from the validated, live session (never a hidden form
+input, never read from any client-supplied value) — is the sole source
+of `p_organization_id`. Confirmed by direct code read: the form contains
+no `organizationId` field of any kind, hidden or otherwise. Live-confirmed
+(§22): a multi-org user who selected "Fictional Org A" logs a request
+that lands in Org A (`organization_id = 10000000-0000-0000-0000-0000000000a1`,
+confirmed via direct database query), and that same row is confirmed
+invisible to an Org B admin session (RLS-scoped query returns 0 rows).
+
+
+12. RPC INTEGRATION
+------------------------
+Every field maps 1:1 to its `p_*` parameter; optional empty values are
+sent as `undefined` (never empty string), matching `createTripAction`'s
+own established convention for optional RPC parameters. `state` is
+never a parameter anywhere in this form or action — the RPC itself
+hard-codes `'pending'`, exactly as designed; there is no way for this
+UI to request any other initial state.
+
+
+13. VALIDATION/ERROR MAPPING
+---------------------------------
+`log-request-errors.ts` mirrors `new-trip-errors.ts`'s established
+pattern exactly: `UNAUTHORIZED` (ZW001), `ACCESS_UNAVAILABLE` (ZW002),
+`INVALID_INPUT` (ZW006 — one bucket, since the RPC itself collapses
+every validation failure into this single code, matching the "use
+actual RPC errors, don't invent finer granularity" discipline), and
+`UNKNOWN` as the catch-all. No ZW code, SQLSTATE, or raw PostgREST
+error text is ever rendered to the user — confirmed by reading the
+component's own error-display JSX, which only ever renders
+`logRequestErrorMessage(state.errorCode ?? "UNKNOWN")`.
+
+
+14. DOUBLE-SUBMIT PROTECTION
+---------------------------------
+Two layers, mirroring `NewTripForm`'s own established double-submit
+guard exactly: `disabled={pending}`/`loading={pending}` on the submit
+button (React's own `useActionState` pending flag), plus a
+`submittedRef` ref checked in the form's own `onSubmit` handler that
+calls `event.preventDefault()` on any second submit attempt while the
+first is still in flight — a defense-in-depth guard beyond the
+disabled-button state alone, since `log_transportation_request` is
+deliberately non-idempotent (mirrors `create_trip`/ZD-102's own
+reasoning: two legitimate Requests can share every field). The RPC
+itself was NOT modified to add any idempotency mechanism, per explicit
+instruction.
+
+
+15. SUCCESS BEHAVIOR
+-------------------------
+Chose: remain on the Log Request page, replace the form with a
+restrained success panel ("Request logged" + the requester's name +
+"has been recorded and is ready for review"), offering "Log another
+request" (resets every field and remounts the form via a `key` bump,
+which also resets `useActionState`'s own internal state back to idle)
+and "Back to Overview" (`LinkButton` to `/operations`).
+
+Reasoning: Log Request's own stated purpose (§3, phase brief) is FAST
+DEMAND CAPTURE — an operator taking a phone call is a very plausible
+scenario for logging several requests back-to-back, and staying on the
+page avoids re-navigating to `/operations/requests/new` each time.
+Neither option redirects into a Request Hub/Detail experience that
+doesn't exist yet (S2D/S2E) — this is the explicit, documented
+temporary behavior; when S2D/S2E ship, the natural replacement is
+changing the success branch to redirect to the real Request Detail page
+(the code comment directly above `handleLogAnother` in
+`LogRequestForm.tsx` states this explicitly, pointing future
+implementers at exactly this spot).
+
+
+16. DESKTOP VALIDATION
+---------------------------
+1400×900, org-a-admin@example.test: page renders correctly (screenshot
+`s2c-A-expanded-empty-form.png`) — restrained title/copy, no AI/CRM/
+marketing language anywhere in the rendered text, sidebar/header chrome
+identical to every other Operations page, all Nemryn design tokens
+(no gradients, no glass, no KPI tiles, no new color introduced — the
+success panel reuses the EXISTING `--color-success-*` tokens already
+used by `StatusBadge`'s `positive`/`completed` categories, not a new
+color). Success confirmation screenshot
+(`s2c-A-success.png`) confirmed calm and on-brand.
+
+
+17. TABLET VALIDATION
+--------------------------
+820×1100: `scrollWidth > clientWidth` check = false (no page-level
+horizontal overflow); form fully present and usable (screenshot
+`s2c-tablet-820.png`) — compact icon-only sidebar rail (P1-UX-R2's own
+existing, unmodified behavior) preserved automatically; two-column
+sub-grids inside each FormSection reflow correctly within the
+`max-w-3xl` container at this width.
+
+
+18. MINIMAL-REQUEST TEST
+-----------------------------
+Live (org-a-admin@example.test): logged a request with ONLY the 7
+required fields filled — no email, no passenger, no preferred date/time,
+no notes. Success confirmation shown. Database verification (direct
+`psql` query, not assumed from the UI alone):
+
+    requester_name: Fictional Minimal Requester
+    passenger_id:   NULL
+    state:          pending
+    source:         phone
+    organization_id: 10000000-...-a1 (Org A)
+
+`request_events`: exactly 1 row, `event_type = 'request_logged'`,
+`actor_user_id = 20000000-...-a1` (the signed-in admin), `metadata =
+{"source": "phone"}`. All correct.
+
+
+19. PASSENGER-LINKED TEST
+------------------------------
+Live (org-a-admin@example.test): searched "Fictional Passenger A1" in
+the Combobox, selected it via a genuine synthetic mouse interaction
+(see §24 for why a plain `.click()` initially failed to reproduce real
+user behavior — resolved, not silently worked around), submitted.
+Database verification:
+
+    passenger_id: 40000000-...-a1 (the selected Passenger, same org)
+    state:        pending
+    organization_id: 10000000-...-a1
+
+`request_events`: exactly 1 row, `event_type = 'request_logged'`,
+correct actor. Confirms `link` happens at creation time via
+`p_passenger_id`, not a separate call to `link_request_passenger` (that
+RPC remains for LATER linking on an already-existing Request — S2E's
+own future scope, per S2B's own design — logging WITH a passenger
+already known is the `log_transportation_request`-only path, which is
+what this phase's own UI correctly uses).
+
+
+20. DISPATCHER TEST
+------------------------
+Live (org-a-dispatcher@example.test): navigated directly to
+`/operations/requests/new` — page loaded, form present, a full
+submission (all required fields, no passenger) succeeded ("Request
+logged" shown). Confirms `has_org_role`'s
+`['organization_admin', 'dispatcher']` set is correctly honored end to
+end through this new UI/action, not just at the RPC layer alone.
+
+
+21. DRIVER REJECTION
+-------------------------
+Live (org-a-driver-a@example.test): navigated directly to
+`/operations/requests/new` — landed on `/driver` instead (existing,
+unmodified `requireOperationsAccess` redirect behavior; a Driver
+Membership is redirected before the Log Request page component ever
+runs), confirmed the Log Request form was never rendered
+(`document.getElementById('log-request-form')` → null). No new
+authorization logic was written for this phase — the existing route
+guard already fully covers it.
+
+
+22. MULTI-ORG ISOLATION
+----------------------------
+Live (multi-org-user@example.test): selected "Fictional Org A" at
+sign-in, navigated to `/operations/requests/new`, logged a request —
+confirmed via direct database query that the resulting row's
+`organization_id` is Org A's id. Then, in a separate live-simulated Org
+B admin session (`set local role authenticated; set local
+request.jwt.claim.sub = <org-b-admin>`), queried
+`transportation_requests` for that exact requester name — 0 rows
+returned, confirming RLS correctly scopes the new row away from Org B
+regardless of which organization the browser session that created it
+is currently switched to. (Switching to Org B and re-querying from the
+browser itself was not separately re-tested beyond this direct RLS
+verification, since RLS — not client-side filtering — is what this
+phase relies on for isolation, and RLS was verified directly.)
+
+
+23. DATABASE/EVENT VERIFICATION
+------------------------------------
+Every live UI test above was cross-checked directly against the
+database (`psql`), never assumed correct merely because the UI showed a
+success message — see §18/§19/§22 for the exact query results. Required-
+field validation was also verified via direct `checkValidity()`
+introspection (§ below) rather than only observing that the browser
+"seemed to" block submission.
+
+Required-field validation, tested by omitting each field group:
+  - Completely empty form: `checkValidity()` false, first invalid field
+    correctly identified as `requesterName` (DOM/tab order).
+  - All required fields filled except `destinationDescription`:
+    `checkValidity()` false, correctly identifies exactly that field as
+    invalid.
+  - All 7 required fields filled, zero optional fields: `checkValidity()`
+    true — confirms the optional fields are genuinely optional, not
+    silently required by some other mechanism.
+
+Passenger safety (§25 of the phase): the UI can structurally never
+submit an inactive or foreign-org passenger id, since
+`getLogRequestFormData` only ever loads `status = 'active'` Passengers
+scoped to the caller's own `organization_id` (§9) — there is no code
+path in this UI that could present an invalid option for selection.
+The RPC's own independent re-validation of `passenger_id` (exists, same
+org, active — ZW006 otherwise) remains the actual authority regardless,
+exactly as already proven end-to-end in S2B's own focused test suite
+(`request_mutation_tests.sql` TEST LOG-VAL-2/3/4) — re-run fresh in this
+phase (§26) to confirm it still holds against the current migration
+state, not re-invented here.
+
+
+24. ACCESSIBILITY
+----------------------
+  - Every real user-facing field (`requesterName`, `requesterRelationship`,
+    `requesterPhone`, `requesterEmail`, `pickupDescription`,
+    `destinationDescription`, `preferredDate`, `preferredTime`,
+    `returnTripNeeded`, the Passenger Combobox, `source`,
+    `assistanceNotes`, `additionalNotes`) has a real, associated
+    `<label>` — confirmed programmatically (`element.labels`/`label[for]`
+    lookup), not merely visually.
+  - All 7 required fields are accessibly marked (`required` attribute +
+    a visible `*` with `aria-hidden` on the asterisk itself, matching
+    `Input`/`Select`/`Textarea`'s own established pattern — not
+    duplicated here, inherited for free).
+  - Keyboard navigation: every control has `tabIndex 0` (no keyboard
+    traps), confirmed for the full field set.
+  - The Combobox follows the established WAI-ARIA combobox pattern
+    (already built into the shared primitive, not something this phase
+    added) — full keyboard support inherited for free.
+  - Submit button: confirmed real focus-visible outline
+    (`outlineStyle: solid`) via the codebase's existing global
+    `:focus-visible` rule — no new focus styling needed.
+  - "Add New Passenger" button: confirmed its accessible name comes from
+    real, visible text content ("Add New Passenger"), not merely
+    color/icon.
+  - Error messages: the form-level error banner uses `role="alert"`
+    (mirrors `NewTripForm`'s own pattern exactly), so a screen reader
+    announces it immediately on submission failure.
+
+One test-harness-only finding, disclosed rather than silently worked
+around: a first attempt to select a passenger via a synthetic
+`element.click()` on the option row did NOT register — traced to the
+`Combobox` component's OWN correct, deliberate implementation choice
+(binding selection to `onMouseDown`, not `onClick`, specifically to win
+a race against the input's own blur-close timeout, per that component's
+own code comment) combined with `element.click()` not reliably
+dispatching a genuine `mousedown` event (the same class of harness
+limitation already documented in this session's P1-UX-R2 phase for
+keyboard-Enter activation). Resolved by using genuine synthetic mouse
+events (`Input.dispatchMouseEvent` mousePressed/mouseReleased at the
+option's real screen coordinates, after scrolling it into view) — not a
+defect in the Combobox or this phase's own code, and real users clicking
+with an actual mouse are unaffected.
+
+
+25. APP TESTS
+------------------
+  npx tsc --noEmit    PASS (zero errors, clean on first attempt)
+  npm run lint         PASS (0 errors; 14 pre-existing warnings, all in
+                        unrelated `.tmp-qa/*.mjs` scratch scripts, not
+                        staged, not part of this phase)
+  npm run build         PASS (compiled successfully; `/operations/
+                        requests/new` appears correctly in the route
+                        list alongside every other route)
+  npm test               PASS (56/56 tests, 0 failures — the complete
+                        existing unit suite; no new pure-function logic
+                        was written this phase warranting a new unit
+                        test target of its own)
+
+
+26. FOCUSED REQUEST SQL REGRESSION
+---------------------------------------
+Per §27's explicit instruction — this phase calls the S2B mutation
+foundation but does not modify database security itself, so the full
+25-file suite was NOT re-run; only the 3 focused S2B request test files
+were re-run, each against its own fresh `supabase db reset`:
+
+  request_mutation_tests.sql             PASS (39 PASS-bearing notices,
+                                          zero genuine `TEST ...: FAIL`
+                                          lines)
+  request_mutation_privilege_tests.sql   PASS (18/18)
+  request_mutation_atomicity_tests.sql   PASS (3/3, forced-failure
+                                          rollback still holds)
+
+No Supabase file changed during S2C (`git status --porcelain supabase/`
+shows exactly the 5 pre-existing S2B files, nothing new — confirmed
+below, §27) — no auth/security boundary was touched, so re-running the
+full 25-file suite was correctly unnecessary per the phase's own
+stated condition.
+
+
+27. SUPABASE DIFF
+----------------------
+    git status --porcelain supabase/:
+      ?? supabase/migrations/20260916100000_request_mutation_foundation.sql
+      ?? supabase/tests/request_lifecycle_concurrency_test.sh
+      ?? supabase/tests/request_mutation_atomicity_tests.sql
+      ?? supabase/tests/request_mutation_privilege_tests.sql
+      ?? supabase/tests/request_mutation_tests.sql
+
+Exactly the 5 files S2B already introduced — identical set, byte-
+identical content (none of them was touched during S2C). No new
+migration was created. No RLS policy, grant, or function was modified.
+
+
+28. EXACT SOURCE DIFF
+--------------------------
+All new files (§4). Full list, `git status --porcelain` for the
+application-code portion of this phase:
+
+    ?? src/app/operations/requests/
+    ?? src/components/operations/requests/
+    ?? src/lib/operations/log-request-errors.ts
+    ?? src/lib/operations/log-request-options.ts
+    ?? src/lib/operations/log-request.ts
+
+`src/lib/supabase/database.types.ts` shows as modified in `git status`
+but that diff is entirely S2B's own prior work (regenerating types for
+the new migration) — confirmed via `git diff --name-only` scoped to
+this phase's own working session showing no NEW change to that file
+during S2C itself (S2C's RPC call uses the types S2B already generated,
+unmodified).
+
+No existing file was edited. `OperationsSidebar.tsx`, `OperationsBrief.tsx`,
+the request lifecycle migration, `create_trip`, any RLS policy, and
+`AccountMenu.tsx` were all confirmed untouched (§ scope check, run
+explicitly before writing this report).
+
+
+29. READINESS FOR S2D REQUEST QUEUE
+----------------------------------------
+YES. S2D can now:
+  - Build `/operations/requests` reading `transportation_requests` via
+    the existing, unchanged SELECT policy (already
+    organization_admin/dispatcher scoped) — no new read path needed.
+  - Link its own "Log Request" primary action directly to
+    `/operations/requests/new`, which already exists, is already fully
+    functional, and needs no changes to be linked to.
+  - Add the appropriate `revalidatePath("/operations/requests")` (or
+    equivalent) call to `logRequestAction` once that queue page exists
+    — the exact missing piece flagged in §10.
+  - Replace this phase's own temporary "Log another request / Back to
+    Overview" success behavior with a redirect to the real Request
+    Detail page once S2E exists — the exact spot is already commented
+    in `LogRequestForm.tsx` (§15).
+
+Nothing in this phase needs to be reworked or reverted for S2D to
+proceed — it is a purely additive next step.
+
+
+30. GIT STATUS
+-------------------
+  git status -sb:
+    ## main...origin/main
+    (no ahead/behind — fully aligned, nothing staged or committed)
+     M src/lib/supabase/database.types.ts
+    ?? .tmp-qa/auth-confirm-e2e.mjs
+    ?? .tmp-qa/join-auth-confirm-e2e.mjs
+    ?? .tmp-qa/n0-g0-audit-e2e.mjs
+    ?? docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    ?? docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    ?? docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    ?? docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    ?? docs/reports/n0-m1-a0-domain-migration-audit.txt
+    ?? docs/reports/n0-m1-a3-production-validation.txt
+    ?? docs/reports/n0-m2-a5-production-release.txt
+    ?? docs/reports/p0-s2a-closure.txt
+    ?? docs/reports/p0-s2a-d1-driver-invitation-production-release.txt
+    ?? docs/reports/p0-s2b-d1-password-recovery-production-release.txt
+    ?? docs/reports/p0-s2b-ux1-d1-password-visibility-production-release.txt
+    ?? docs/reports/p1-e1-s1d-operations-brief-production-release.txt
+    ?? docs/reports/p1-e1-s2a-request-hub-product-workflow-audit.txt
+    ?? docs/reports/p1-e1-s2b-request-mutation-foundation.txt
+    ?? docs/reports/p1-ux-r1-r1a-production-release.txt
+    ?? docs/reports/p1-ux-r2-production-release.txt
+    ?? src/app/operations/requests/
+    ?? src/components/operations/requests/
+    ?? src/lib/operations/log-request-errors.ts
+    ?? src/lib/operations/log-request-options.ts
+    ?? src/lib/operations/log-request.ts
+    ?? supabase/migrations/20260916100000_request_mutation_foundation.sql
+    ?? supabase/tests/request_lifecycle_concurrency_test.sh
+    ?? supabase/tests/request_mutation_atomicity_tests.sql
+    ?? supabase/tests/request_mutation_privilege_tests.sql
+    ?? supabase/tests/request_mutation_tests.sql
+
+  This report itself
+  (docs/reports/p1-e1-s2c-internal-log-request.txt) will appear as an
+  additional untracked file once saved. No `git add`, `git commit`, or
+  `git push` was performed at any point in this phase, per the explicit
+  GIT constraint.

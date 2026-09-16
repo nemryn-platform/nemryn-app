@@ -1,0 +1,1489 @@
+P1-E1-S2A — REQUEST HUB PRODUCT + WORKFLOW AUDIT
+====================================================
+Project:             /Users/datamatics/ZenWard
+Production base:     4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                2026-09-16
+Status:              AUDIT ONLY. No application code, migrations, or
+                      database state were modified. Nothing staged,
+                      committed, or pushed.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed — origin/main had not advanced. `git status -sb`
+  showed only pre-existing, unrelated untracked scratch/historical-
+  report files (unchanged throughout this phase) — confirmed again at
+  the end of this audit (§34).
+
+
+2. EXECUTIVE SUMMARY
+-------------------------
+`transportation_requests` is a real, already-migrated, already-RLS-
+protected table with a working `create_trip` conversion path — but it
+has NO live capture mechanism anywhere in the product today. The public
+`/request-transportation` route is a bare, one-paragraph static
+placeholder (no form, no fields, no submission). No authenticated
+"Log Request" UI exists. The only two rows in the entire system are
+`supabase/seed.sql` fixtures. `NewTripForm` can *read* pending/accepted
+requests and *link* one to a new Trip, but nothing in the application
+can *create* one.
+
+The good news: the foundation this phase inherited is more solid than
+the phase's own "known existing foundation" section assumed in a few
+specific, important ways — and slightly different in others (the status
+column is actually named `state`, not `status`; the current lifecycle
+CHECK constraint permits only 4 values with no separate "converted"
+state, exactly as described, but there is a real, documented,
+**already-CONFIRMED product decision (ZD-069)** that return
+transportation is a second Trip row sharing `request_id` — this phase
+does not need to invent that design, only confirm it's still correct
+and note one field it left provisional). One genuine security-relevant
+asymmetry was found and is flagged in §8/§29: `transportation_requests.state`
+is currently a **directly client-writable column** (unlike `trips.state`,
+which was deliberately locked down behind `create_trip` in a dedicated,
+documented security fix). This is not a cross-tenant leak — RLS still
+scopes every row to the caller's own organization — but it does mean
+today, nothing stops a raw client `UPDATE ... SET state = 'accepted'`
+from bypassing whatever business rules a future Accept/Decline/Cancel
+flow would want to enforce. This must be closed as part of S2's
+mutation foundation, not left as-is.
+
+Recommendation in brief: build S2 as an **internal-only** Request Hub
+first (Log Request, queue, detail, convert/decline/cancel via new
+narrow RPCs, linked-trip visibility). Defer public intake to its own
+later subphase — not because it's unimportant, but because it is a
+genuinely different security surface (anonymous write path) than
+anything this phase should mix with the first internal release, and
+because the one existing decision that already governs it (ZD-050) was
+explicitly written for a "single operator at MVP" world that the
+product has since outgrown (real multi-tenant switching, per P1-UX-R1A,
+is already in production) — its own stated review trigger
+("multi-organization expansion") has now been met and it needs
+re-evaluation before anyone builds against it.
+
+
+3. EXISTING REQUEST SCHEMA
+-------------------------------
+Source: `supabase/migrations/20260830130900_transportation_requests.sql`
+(unmodified since 2026-08-30; the base table has never been altered by
+any later migration).
+
+    create table public.transportation_requests (
+      id uuid primary key default extensions.gen_random_uuid(),
+      organization_id uuid not null references public.organizations (id),
+      passenger_id uuid references public.passengers (id),                 -- NULLABLE
+      requester_name text not null,
+      requester_relationship text not null
+        check (requester_relationship in
+          ('self', 'family', 'caregiver', 'facility_coordinator', 'other')),
+      requester_phone text not null,
+      requester_email text,
+      requester_user_id uuid references auth.users (id),                   -- NULLABLE, unused today
+      pickup_description text not null,
+      destination_description text not null,
+      preferred_date date,                                                 -- NULLABLE
+      preferred_time time,                                                 -- NULLABLE
+      return_trip_needed text not null
+        check (return_trip_needed in ('yes', 'no', 'not_sure')),
+      assistance_notes text,
+      additional_notes text,
+      state text not null default 'pending'
+        check (state in ('pending', 'accepted', 'declined', 'cancelled')),
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique (id, organization_id),
+      foreign key (passenger_id, organization_id)
+        references public.passengers (id, organization_id)
+    );
+
+Correction to the phase's own assumed schema: the status column is
+named **`state`**, not `status` (the phase brief's §2 checklist item
+list used "status" generically — verified against the actual DDL, which
+is authoritative). There is no separate `source` column (see §20), no
+`created_by`/`updated_by` column (attribution for who logged a request
+is NOT currently captured anywhere on this table — only `updated_at`
+via a trigger, and `requester_user_id`, which is for a self-serve
+*requester's own* account, not the *operator* who logged it on their
+behalf; this is a genuine gap flagged in §26/§28 if operator
+attribution is wanted). No assignment/conversion column exists on this
+table at all — conversion is represented entirely by (a) `trips.request_id`
+foreign key rows pointing back at it, and (b) the `state` value itself
+advancing to `accepted` (see §4/§17).
+
+Two supporting indexes exist, already shaped exactly for a work-queue
+read pattern:
+  `transportation_requests_organization_id_idx (organization_id)`
+  `transportation_requests_org_state_created_idx (organization_id, state, created_at)`
+    — the migration's own comment: "Ops queue: pending requests for my
+    org, oldest first." This is a strong, pre-existing signal that
+    "oldest pending first" was always the intended default ordering
+    (see §12) — not a new recommendation invented in this audit.
+
+Two triggers: `set_updated_at` (standard), and
+`prevent_organization_id_change` (a BEFORE UPDATE guard used
+consistently across every tenant-owned table in this schema — blocks
+any UPDATE from changing `organization_id` after the row exists,
+independent of RLS).
+
+
+4. EXISTING REQUEST LIFECYCLE
+----------------------------------
+Audited every read/write site (migrations, RPCs, RLS grants, and
+`grep -rn "transportation_requests" src/`).
+
+  What creates `pending`? Only the table's own `default 'pending'` on
+    INSERT — nothing in application code inserts a row today (§5), so in
+    practice the ONLY rows with `state = 'pending'` in any real
+    environment are `supabase/seed.sql` fixtures (2 rows).
+
+  What turns pending → accepted? Exactly one path exists:
+    `create_trip(p_request_id => <id>)`, when the referenced request's
+    current state is `pending` — it is unconditionally advanced to
+    `accepted` in the same transaction as the Trip INSERT. This is a
+    real, working, transactional, RPC-enforced transition (see §6).
+
+  Can accepted return to pending? No RPC does this. Nothing in the
+    schema prevents it at the CHECK-constraint level (the CHECK only
+    restricts the *set* of valid values, not valid *transitions*
+    between them) — a raw client UPDATE with the currently-granted
+    `state` column privilege (see below) COULD set an already-accepted
+    row back to `pending` today, since nothing stops it. No legitimate
+    application path does this.
+
+  Can accepted be declined? Same answer: no RPC exists for this at all
+    today. A raw client UPDATE with the current column grant could do
+    it, unguarded.
+
+  Can accepted be cancelled? Same answer: no RPC exists. Same raw-UPDATE
+    exposure.
+
+  What does cancellation mean after trip creation? Completely
+    undefined today — no code path or documented decision addresses
+    this. This audit's own recommendation is in §16.
+
+  Is status constrained by CHECK/enum/application logic? A CHECK
+    constraint restricts `state` to exactly the 4 named values
+    (`pending`, `accepted`, `declined`, `cancelled`) — no enum type, no
+    application-level state-machine validation exists anywhere for this
+    column specifically (contrast with `trips.state`, which similarly
+    has a CHECK constraint AND is never directly client-writable at
+    all — see §8).
+
+  Which transitions exist only implicitly today? pending → accepted is
+    the only one with ANY enforcement (inside `create_trip`, and only
+    in that one direction, only from that one starting state). Every
+    other transition (→ declined, → cancelled, accepted → anything) is
+    "possible" only in the sense that raw UPDATE privilege currently
+    permits writing any of the 4 values, with zero business-rule
+    enforcement of source/target legality.
+
+  Which transitions are impossible today? None are structurally
+    *impossible* at the database level (the CHECK constraint alone
+    doesn't restrict transitions) — but `create_trip` itself DOES
+    enforce one real business rule at the conversion boundary: it
+    explicitly rejects `p_request_id` values whose current
+    `state not in ('pending', 'accepted')` (i.e., a `declined` or
+    `cancelled` request cannot be used to create a Trip — ZW006
+    `invalid_input`). This is the one place real business-rule
+    enforcement already exists in this domain.
+
+  Is there a request state equivalent to completed/converted? No.
+    There is no `converted` value in the CHECK constraint. A "converted"
+    request is represented entirely by state remaining `accepted` PLUS
+    the existence of one or more `trips` rows with matching `request_id`
+    — conversion is a derived fact, not a stored one (see §5/§10).
+
+  Is conversion represented by status, linked trips, events, or both?
+    Both, but asymmetrically: `state = 'accepted'` is the status signal
+    (set once, on first conversion, never re-set on subsequent
+    conversions of the same request); the linked `trips` rows are the
+    authoritative record of *how many* trips exist and their individual
+    states; and exactly one `trip_events` row per Trip
+    (`request_converted_to_trip`, on the `trips` side, carrying
+    `request_id` in its JSON metadata) records the historical fact that
+    a specific Trip came from a specific Request — there is no event
+    recorded *on the request itself*.
+
+
+5. REQUEST CREATION PATHS
+------------------------------
+`grep -rln "transportation_requests" src/` → exactly 4 files, none of
+which contain an INSERT:
+
+  src/lib/operations/new-trip.ts — READ ONLY. Selects
+    `pending`/`accepted` requests (`REQUEST_ELIGIBLE_STATES`) for the
+    New Trip form's "Related Request" picker. Category: **PARTIAL** (a
+    real, working read/link path — not a creation path).
+
+  src/lib/operations/trip-detail.ts — READ ONLY. Joins
+    `transportation_requests` to show the original requester's
+    name/relationship/phone/email on an existing Trip's detail page
+    (via the FK `trips_request_id_organization_id_fkey`). Category:
+    **PARTIAL** (display only).
+
+  src/components/operations/trip-detail/PassengerInfoPanel.tsx —
+    consumes the same requester data for display. Category: **PARTIAL**
+    (display only).
+
+  src/lib/supabase/database.types.ts — generated TypeScript types only.
+    Category: N/A (tooling artifact, not a code path).
+
+Full-repository search for the actual public route:
+  `src/app/(public)/request-transportation/page.tsx` — a client-
+    component-free, 18-line static page:
+
+      export default function RequestTransportationPage() {
+        return (
+          <SectionContainer>
+            <h1 ...>Request Transportation</h1>
+            <p ...>This route is a structural placeholder — the
+               canonical request flow is built in a later phase.</p>
+          </SectionContainer>
+        );
+      }
+
+  No form, no input, no server action, no submission handler of any
+  kind. Category: **PARTIAL/PLACEHOLDER** — this confirms, rather than
+  merely assumes, the phase context's own claim.
+
+Also checked and confirmed absent:
+  - No server action anywhere (`grep -rn "insert.*transportation_requests\|from(\"transportation_requests\").insert"` → zero matches in `src/`).
+  - No API route under `src/app/api/` references this table (no such
+    directory exists with request-handling code for this domain).
+  - No legacy Zenward path — `docs/product/public-marketing-separation.md`
+    confirms `/request-transportation` is *planned* to eventually move
+    to a fully separate marketing repository (not yet done; still lives
+    in this repo today) — there is no OTHER, hidden legacy path.
+  - Seed/test fixtures: `supabase/seed.sql` contains exactly 2
+    `insert into public.transportation_requests` statements (both
+    `state = 'pending'`, one family-requester, one
+    `facility_coordinator` — the "Cascade Dialysis Center" fixture,
+    relevant to §18). Category: **TEST ONLY**.
+
+Definitive answers:
+  Can an operator currently log a real request through the app?
+    **NO.** No UI, no form, no action exists.
+  Can a passenger/family/provider currently submit a real request
+  through the public site? **NO.** The public route is a static
+    placeholder with no form.
+
+
+6. REQUEST→TRIP CONVERSION
+-------------------------------
+Source: `supabase/migrations/20260831120000_controlled_trip_creation.sql`
+(function `public.create_trip`), confirmed CONFIRMED/implemented per
+decision-register.md ZD-101/ZD-102, and cross-checked against the
+actual function body (not merely the decision-register summary).
+
+  Signature (11 params):
+    p_organization_id uuid,               -- required
+    p_passenger_id uuid,                  -- required
+    p_pickup_description text,            -- required
+    p_destination_description text,       -- required
+    p_scheduled_pickup_at timestamptz,     -- optional, default null
+    p_appointment_at timestamptz,          -- optional, default null
+    p_pickup_facility_id uuid,             -- optional, default null
+    p_destination_facility_id uuid,        -- optional, default null
+    p_assistance_notes text,               -- optional, default null
+    p_instructions text,                   -- optional, default null
+    p_request_id uuid                      -- optional, default null
+
+  Validation, in order:
+    1. `auth.uid() is null` → ZW001 unauthorized.
+    2. `has_org_role(p_organization_id, ['organization_admin','dispatcher'])`
+       → else ZW002 not_found (a Driver, an inactive Membership, and a
+       cross-tenant caller are all indistinguishable — no existence
+       oracle, by design).
+    3. Pickup/destination: trimmed, must be non-empty, ≤2000 chars each
+       → else ZW006 invalid_input.
+    4. If both scheduling timestamps given, appointment must not precede
+       pickup → else ZW006.
+    5. Passenger: required, must exist, same `organization_id`,
+       `status = 'active'` → else ZW006.
+    6. Pickup/destination facility (if supplied): must exist, same org,
+       `status = 'active'` → else ZW006.
+    7. Request (if `p_request_id` supplied): row locked `FOR UPDATE`,
+       must exist in the same organization, and
+       `state IN ('pending', 'accepted')` → else ZW006. **This is the
+       one real transition-legality check that exists anywhere in this
+       domain today.**
+
+  Transaction boundary: everything below is inside the single PL/pgSQL
+  function body — one Postgres transaction, verified atomic by an
+  existing dedicated test (`create_trip_atomicity_tests.sql`, per
+  ZD-102: "forced-failure rollback of Trip+TripEvent+AuditEvent+
+  conditional Request update").
+
+  Effects, atomically:
+    - INSERT into `trips` — `state` hard-coded `'scheduled'`, never a
+      parameter (closes the exact class of bug this function replaced —
+      ZD-101/ZD-102).
+    - IF a request was supplied AND its state was `'pending'`: UPDATE
+      it to `'accepted'`. (An already-`'accepted'` request is left
+      untouched — this is precisely what allows a second, third, etc.
+      Trip to be created against the same Request without any special
+      casing.)
+    - INSERT one `trip_events` row: `request_converted_to_trip` if a
+      request was linked, else `trip_scheduled`.
+    - INSERT one `audit_events` row: `action = 'trip_created'`, minimal
+      metadata (state/passenger_id/request_id only — no PII, no
+      free-text address).
+
+  Failure modes: any of the ZW001/ZW002/ZW006 raises above abort the
+  whole transaction (nothing partially applied — Postgres function-body
+  exceptions roll back the entire invocation).
+
+  Can the same accepted request legitimately create more than one
+  trip? **YES — this is explicit, tested, and the entire mechanism
+  §17's return-transportation recommendation depends on.**
+
+  How is duplicate conversion prevented or allowed? **It is
+  deliberately ALLOWED, not prevented** (ZD-102: "create_trip is
+  deliberately non-idempotent... the `created` field... is always
+  `true`... preventing accidental double-submission is left to
+  application code"). Calling `create_trip` twice with the same
+  `p_request_id` produces two Trips, both legitimately linked to the
+  same Request. This is a considered decision, not an oversight — two
+  real, distinct Trips (e.g. outbound + return) legitimately share
+  every input field.
+
+  What must Request Hub collect before a request is "ready to
+  convert"? Per the validation list above, the ONLY hard, RPC-enforced
+  requirement beyond what a saved Request already guarantees
+  (pickup/destination are already `NOT NULL` on the table itself) is a
+  **linked, active Passenger** (`passenger_id`). Everything else
+  (schedule, facility, notes) is optional at the RPC layer — see §10
+  for why this matters for the Readiness model.
+
+
+7. LINKED-TRIP ARCHITECTURE
+--------------------------------
+  Exact FK structure: `public.trips.request_id uuid` (nullable, no
+  default) with a composite FK
+  `foreign key (request_id, organization_id) references
+   public.transportation_requests (id, organization_id)` — the same
+  "composite FK trivially satisfied while NULL" pattern used for every
+  optional tenant-scoped reference in this schema.
+
+  1:N behavior: confirmed structurally — no unique constraint on
+  `trips.request_id` anywhere (only `trips_request_id_idx
+  (request_id) where request_id is not null`, a plain non-unique
+  partial index for query performance). Any number of Trips may share
+  one `request_id`.
+
+  Querying all trips for one request: a single indexed query,
+  `select * from trips where request_id = $1` (RLS-scoped as normal) —
+  no join gymnastics needed; the existing `trip-detail.ts` file already
+  demonstrates the reverse direction (Trip → its Request) via
+  PostgREST's embedded-resource syntax, and the forward direction
+  (Request → its Trips) is the same pattern mirrored.
+
+  Trip deletion/cancellation effect on the request: NONE today — no
+  trigger, no cascade, no application code reacts to a Trip's state
+  changing by touching its parent Request's `state`. (There is also no
+  `ON DELETE` behavior specified on the `request_id` FK at all, meaning
+  Postgres defaults to `NO ACTION` — a Request cannot currently be
+  deleted while a linked Trip exists, though nothing in this schema
+  ever DELETEs a Request in the first place; only UPDATE is granted.)
+
+  Are linked trips exposed anywhere in UI today? Only the REVERSE
+  direction: an existing Trip's detail page shows its originating
+  Request's requester info (§5). There is no existing UI that, given a
+  Request, lists its linked Trips — this is new UI Request Hub's detail
+  view must build (§13), using an already-available query shape.
+
+  Can return trips be naturally represented as two linked trips? YES —
+  this is EXACTLY decision **ZD-069** (CONFIRMED, `docs/product/
+  decision-register.md`): "Return transportation is a second, ordinary
+  Trip row sharing `request_id` with the outbound Trip — no new
+  relational entity." An optional `leg` label
+  (`outbound`/`return`/`unspecified`) was recommended in that decision
+  but is marked **PROVISIONAL** and does **not exist** in the current
+  `trips` table (confirmed: no `leg` column in
+  `20260830131000_trips.sql`, and no later migration adds one). See
+  §17/§28.
+
+  Can recurring care naturally produce multiple linked trips from one
+  request? Structurally, yes, in the same mechanical sense as return
+  trips (nothing stops calling `create_trip` N times against one
+  accepted Request) — but there is no product decision, no schema
+  field, and no UI concept distinguishing "this is occurrence #4 of a
+  recurring series" from "this is an unrelated second trip that
+  happens to share a request." Using the bare 1:N mechanism for
+  recurring care today would work in the narrowest technical sense but
+  would not scale or read correctly as a recurring series — see §18.
+
+  Is additional schema actually necessary for S2's own scope? **NO** for
+  the core linked-trips concept (1:N already works); **POSSIBLY, small,
+  optional** for the `leg` label if Request Hub's detail view wants to
+  visually distinguish outbound/return trips rather than just listing
+  them in creation order (see §28).
+
+
+8. REQUEST RLS/SECURITY
+----------------------------
+Source: `supabase/migrations/20260830131700_rls_policies.sql`
+(section "transportation_requests", verified against the current file,
+not assumed).
+
+    grant select, insert, update on public.transportation_requests to authenticated;
+
+    create policy transportation_requests_select_org_operations
+      on public.transportation_requests for select to authenticated
+      using (public.has_org_role(organization_id, array['organization_admin', 'dispatcher']));
+
+    create policy transportation_requests_insert_org_operations
+      on public.transportation_requests for insert to authenticated
+      with check (public.has_org_role(organization_id, array['organization_admin', 'dispatcher']));
+
+    create policy transportation_requests_update_org_operations
+      on public.transportation_requests for update to authenticated
+      using (public.has_org_role(organization_id, array['organization_admin', 'dispatcher']))
+      with check (public.has_org_role(organization_id, array['organization_admin', 'dispatcher']));
+
+    revoke update on public.transportation_requests from authenticated;
+    grant update (
+      passenger_id, requester_name, requester_relationship, requester_phone, requester_email,
+      pickup_description, destination_description, preferred_date, preferred_time,
+      return_trip_needed, assistance_notes, additional_notes, state
+    ) on public.transportation_requests to authenticated;
+
+  SELECT: organization_admin or dispatcher only, live-checked via
+    `has_org_role` (built on `auth.uid()` + an ACTIVE `memberships` row
+    — never a client-suppliable identity or role claim). No DELETE
+    policy exists at all (DELETE is not even granted) — a Request can
+    never be deleted through the API, only its `state` changed.
+
+  INSERT: same `has_org_role` check, same two roles. `organization_id`
+    is NOT independently validated inside a trigger the way `create_trip`
+    validates it for Trips — RLS's `WITH CHECK` is the sole enforcement,
+    but that enforcement is exactly the database-enforced tenant-
+    isolation pattern this codebase requires: a caller cannot INSERT a
+    row claiming an `organization_id` they don't hold an active
+    Membership in, full stop, regardless of what the client sends.
+
+  UPDATE: same two roles, PLUS a column-level grant restricting WHICH
+    columns can be touched — but **`state` is included in that grant**.
+    This is the one asymmetry flagged in §2/§29: `trips.state` was
+    deliberately EXCLUDED from the equivalent column grant on `trips`
+    (confirmed in the same migration file, and reaffirmed by the later
+    dedicated `20260831120000_controlled_trip_creation.sql` /
+    `20260831120100_retire_direct_trip_insert.sql` migrations and
+    ZD-101/ZD-102) specifically because letting a client set lifecycle
+    state directly was identified as a real, exploitable gap for Trips.
+    The exact same category of column — a lifecycle-state field — is
+    currently still directly writable on `transportation_requests`.
+
+  Driver access: NONE. No policy of any kind references Driver-role
+    logic for this table; `has_org_role(organization_id,
+    ['organization_admin', 'dispatcher'])` returns false for a Driver
+    Membership, so RLS blocks every operation. Confirmed correct and
+    matches the phase's "driver role can access requests?" question:
+    **NO.**
+
+  Operator/admin/dispatcher access: **YES**, both roles, symmetrically,
+    for SELECT/INSERT/UPDATE (not DELETE).
+
+  Public unauthenticated request creation: **DOES NOT EXIST.** No
+    `anon`/public grant of any kind on this table — confirmed by the
+    absence of any policy targeting a role other than `authenticated`,
+    and the migration's own header comment stating this explicitly
+    ("No anonymous SELECT/UPDATE/DELETE policy is created for this
+    table in this phase, and no anonymous INSERT policy either").
+
+  Service-role assumptions: none found — no function or policy in this
+    domain uses or assumes a service-role key; every check is a live,
+    session-scoped `has_org_role`/`auth.uid()` call, matching this
+    codebase's stated non-negotiable rule that tenant isolation is
+    database-enforced, not client-side.
+
+  Can any client supply `organization_id` directly without
+  authoritative validation? For INSERT: the client DOES supply
+    `organization_id` in the row it inserts, but RLS's `WITH CHECK`
+    clause independently re-validates that value against the caller's
+    own live Membership before the write is allowed to commit — this is
+    the correct pattern (the same one used everywhere else in this
+    schema), not a gap. For conversion via `create_trip`: the RPC treats
+    its own `p_organization_id` parameter as a "requested context,"
+    never authority on its own (per its own top comment) — every
+    downstream check re-validates against `has_org_role` and explicit
+    `organization_id = p_organization_id` filters on every referenced
+    row. This is correct and matches the project's established pattern.
+
+  **Net conclusion:** RLS/tenant isolation for `transportation_requests`
+  is sound and database-enforced. The one real gap is not a tenant-
+  isolation gap — it's a **lifecycle-integrity** gap: the `state`
+  column's direct client-writability means any future Accept/Decline/
+  Cancel UI, if implemented as a plain client-side `.update({state:...})`
+  call (which current grants already permit), would have zero
+  protection against illegal transitions (e.g., "decline" a request
+  that already has trips, or silently revert `declined` back to
+  `pending`). This must be closed via new narrow RPCs in S2's mutation
+  foundation (see §27/§29), mirroring exactly how `create_trip` closed
+  the equivalent gap for `trips`.
+
+
+9. PASSENGER MATCHING
+--------------------------
+Existing passenger model (`supabase/migrations/20260830130600_passengers.sql`):
+`id, organization_id, display_name, phone, assistance_notes, status
+('active'|'inactive'), created_at, updated_at`. No structured
+first/last name, no DOB, no address — a deliberately minimal model.
+**Critical, non-negotiable existing rule (ZD-080):** Driver receives NO
+direct SELECT on this table under any RLS policy shape, ever — not
+relevant to Request Hub's own access model (Request Hub is
+organization_admin/dispatcher scope, same as `transportation_requests`
+itself), but important context for anyone extending this table later.
+
+`transportation_requests.passenger_id` is **already nullable** — a
+Request can be saved today with only free-form `requester_name`/
+`requester_phone`/etc. and no linked Passenger at all. This is the
+correct existing foundation for the "don't require every field to
+capture demand" principle in §8.
+
+Existing, reusable search capability: `getPassengersList(organizationId,
+search)` (`src/lib/operations/passengers-list.ts`) — a real, working,
+org-scoped `ILIKE` search across `display_name` and `phone`, already
+powering the standalone Passengers directory page's `?q=` search box.
+This should be reused as-is for "operator explicitly searches existing
+passengers" — no new search logic is needed.
+
+Existing, reusable creation capability: `addPassengerAction`
+(`src/app/operations/trips/new/actions.ts`), a real server action —
+`requireOperationsAccess` gate, explicit `organization_id` from the
+validated session context (never client-supplied), plain
+`passengers` INSERT (RLS-protected regardless) — already used in TWO
+places (New Trip's own inline "Add Passenger" dialog, and the
+standalone Passengers page's "Add Passenger" button, via
+`AddPassengerButton.tsx`'s own documented reuse). This is the correct,
+already-established pattern to reuse a THIRD time for Request Hub's
+"create a new passenger" affordance — not a new implementation.
+
+Recommended design (no fuzzy matching, per explicit non-negotiable
+instruction):
+  1. A Request always stores the supplied requester identity/details as
+     free-form snapshot fields on the Request itself (as it already
+     does: `requester_name`, `requester_phone`, `requester_relationship`,
+     etc.) — this is never silently treated as a Passenger record.
+  2. `passenger_id` starts NULL on a newly logged Request unless the
+     operator explicitly links one at logging time.
+  3. In Request detail (or at logging time), the operator may explicitly
+     search existing Passengers (reusing `getPassengersList`) and click
+     to link one (`UPDATE transportation_requests SET passenger_id = ...`
+     — already grantable per §8's column list).
+  4. Or the operator may explicitly create a new Passenger (reusing
+     `addPassengerAction`'s pattern) and the newly created id becomes
+     the link.
+  5. An ambiguous/uncertain match is left `passenger_id IS NULL`
+     indefinitely — this is a valid, stable, non-blocking state for a
+     Request to sit in (see §10) — never auto-resolved.
+
+No schema change is required for this — `passenger_id` already exists
+and is already nullable.
+
+
+10. READINESS REQUIREMENTS
+-------------------------------
+Defined deterministically from `create_trip`'s own actual validation
+(§6) — not invented:
+
+  HARD BLOCKER (prevents conversion, enforced by the RPC itself):
+    - No linked, active Passenger (`passenger_id IS NULL`, or it points
+      at a Passenger that is not `status = 'active'` in this
+      organization). This is the ONLY hard, RPC-enforced blocker beyond
+      what a saved Request already structurally guarantees.
+    - Request `state` is `declined` or `cancelled` (the RPC explicitly
+      rejects these — "not ready" in a different, terminal sense: not
+      "missing information," but "no longer eligible at all").
+
+  NOT a hard blocker at the RPC layer, but worth surfacing as an
+  operational signal (soft, non-blocking):
+    - No `preferred_date`/`preferred_time` supplied — `create_trip`'s
+      own `p_scheduled_pickup_at`/`p_appointment_at` are both optional;
+      nothing prevents converting a Request with no preferred schedule
+      into a Trip with no `scheduled_pickup_at` either. An operator
+      would usually want to fill this in, but the system does not
+      require it.
+    - No linked Facility for pickup/destination — also fully optional
+      at the RPC layer (plain text pickup/destination is a first-class,
+      supported case throughout this schema — ZD-047).
+
+  Recommendation: a small, closed, deterministic readiness value
+  (something like `ready` / `missing_passenger` / `not_convertible`)
+  computed purely from `passenger_id IS NULL` and `state`, NOT a score,
+  NOT a weighted/AI-style signal. "Missing schedule" or "missing
+  facility" should be presented as informational hints in the detail
+  view (§13), never as something that blocks the Convert action,
+  because they genuinely don't block it today. Exact label wording is a
+  later implementation-phase decision, not this audit's to fix.
+
+
+11. INTERNAL LOG REQUEST RECOMMENDATION
+--------------------------------------------
+Minimum viable fields, split exactly as instructed:
+
+  REQUIRED TO SAVE A REQUEST (mirrors the table's own NOT NULL columns
+  — nothing stricter than what the schema already requires):
+    - requester_name
+    - requester_relationship (one of the 5 existing enum values)
+    - requester_phone
+    - pickup_description (free text — no Facility required)
+    - destination_description (free text — no Facility required)
+    - return_trip_needed (yes/no/not_sure — already a required column)
+
+  OPTIONAL AT SAVE TIME (all already-nullable columns):
+    - requester_email
+    - passenger_id (explicit link/create, per §9 — may be deferred)
+    - preferred_date / preferred_time
+    - assistance_notes / additional_notes
+
+  REQUIRED ONLY TO CONVERT TO TRIP (per §6/§10):
+    - A linked, active passenger_id.
+    (Everything else optional-at-save remains optional-at-convert too,
+    per the RPC's own actual validation.)
+
+This lets an operator log a phone call in under a minute with only
+requester contact info + a rough pickup/destination + return-trip
+intent — and come back later (or hand it to someone else) to attach a
+Passenger and schedule before converting. This directly matches the
+phase's own instruction: "A request should be allowed to exist while
+incomplete if operationally appropriate."
+
+Source field is deliberately NOT in the required list — see §20.
+
+
+12. QUEUE INFORMATION ARCHITECTURE
+---------------------------------------
+Recommended route: `/operations/requests`. Confirmed via
+`find src/app/operations -maxdepth 1 -type d` that no route currently
+exists at this path — no conflict.
+
+Recommended hierarchy:
+
+  PAGE HEADER: "Request Hub"
+  PRIMARY ACTION: "Log Request" (opens the internal capture flow, §11)
+  QUEUE SUMMARY: a simple count — "N pending" (or "N need review" if a
+    readiness-aware subset is preferred, see §21) — not a KPI tile grid
+    (§32).
+  REQUEST ROW — recommended columns, deliberately NOT overloaded:
+    - Passenger (linked display_name if present, else requester_name
+      with a visual "unlinked" indicator — never fabricate a passenger
+      name)
+    - Origin → Destination (pickup_description → destination_description,
+      truncated/ellipsized as the existing Trips table already does for
+      long addresses)
+    - Requested service date/time (preferred_date/preferred_time, or an
+      explicit "No date given" — never blank)
+    - Request age (relative time since created_at — "2 days ago" — this
+      is the queue's primary sort signal, see §13, so it deserves a
+      visible column)
+    - Readiness (the small closed state from §10 — a semantic badge,
+      not a color-graded score)
+    - Status (pending/accepted/declined/cancelled — a StatusBadge,
+      reusing the existing status-badge visual language, never a new
+      color system)
+    - Primary next action (context-dependent single button — "Review",
+      "Convert", or similar — never a whole toolbar per row)
+
+  Deliberately NOT at queue-row level: source (useful in detail/filter,
+  not worth a column at MVP — see §20/§24), full requester
+  phone/email (detail only), assistance/additional notes (detail only),
+  linked-trip list (detail only, §7/§13).
+
+
+13. ORDERING
+----------------
+Recommended default: **oldest pending first** (`created_at ascending`,
+filtered to `state = 'pending'`, or more precisely to the still-actionable
+subset of the queue). This is not merely "logical" — it is the literal,
+documented intent of the table's own pre-existing composite index,
+`transportation_requests_org_state_created_idx (organization_id, state,
+created_at)`, whose own migration comment reads: "Ops queue: pending
+requests for my org, oldest first." No new index work is required; the
+recommendation matches infrastructure that has existed since the
+table's creation.
+
+Service-time urgency (e.g., a preferred_date of "today" should not sit
+behind a `preferred_date` of "three weeks from now" logged five minutes
+earlier) is a real, separate signal — but introducing it as a second,
+competing sort dimension in the FIRST release risks exactly the
+"complicated priority algorithm" the phase explicitly warns against.
+Recommendation: ship oldest-pending-first only in the first release;
+if/when service-date urgency needs separate visibility, surface it as
+an explicit, separate filter or a secondary badge ("Needed today") —
+never blend it into a single ranked ordering without a very deliberate,
+separately-reviewed design.
+
+
+14. REQUEST DETAIL PATTERN
+-------------------------------
+Recommended: a **dedicated detail page** (`/operations/requests/[id]`),
+not a drawer/side-panel. Reasoning, grounded in the existing codebase's
+own precedent: Trip Detail — the closest analogous "queue row → rich
+record" pattern already in this product — is a dedicated page
+(`/operations/trips/[tripId]`), not a drawer, and already establishes
+the visual/structural conventions (FormSection-style grouping, a
+PageHeader, panel-based layout) Request Detail should reuse rather than
+inventing a second interaction pattern for a conceptually similar
+screen. A drawer would also awkwardly compete for width with the very
+sidebar-collapse work (P1-UX-R2) just shipped to give Operations more
+breathing room — a full page benefits from that width directly.
+
+Request detail should expose (per the phase's own list, all confirmed
+buildable from existing/planned data):
+  - Full request data (all snapshot fields)
+  - Passenger linkage (linked Passenger card, or an explicit
+    "not linked" state with search/create actions, §9)
+  - Readiness blockers (§10, plainly stated — e.g. "No passenger linked
+    yet")
+  - Notes (assistance_notes / additional_notes)
+  - Request status (state, with the timestamp of last change if
+    captured — see §26 for why this may need a small additive event
+    table)
+  - Linked trips (§7's query, rendered as a simple list — trip
+    date/state/destination, linking into existing Trip Detail)
+  - Lifecycle events IF available (see §26 — not fully available today
+    for request-level actions; the ONE available signal is that a
+    linked Trip's own `trip_events` row of type
+    `request_converted_to_trip` exists)
+  - Available operator actions: Convert to Trip, Decline, Cancel
+    (where valid), Link/Create Passenger — not built in this phase.
+
+
+15. ACCEPT SEMANTICS
+-------------------------
+Current `create_trip` already performs an implicit pending → accepted
+transition as a side effect of trip creation (§4/§6) — this is real,
+tested, in production.
+
+Recommendation: **Option B — "Create Trip" (Convert) IS the actual
+acceptance action; no separate, earlier "Accept Request" step.**
+
+Reasoning: NEMT operational reality (and this schema's own design) does
+not distinguish "we've decided to help this person" from "we've
+scheduled a specific trip for them" as two meaningfully different
+operator decisions — accepting a request with no concrete trip attached
+yet is not a real operational state anyone needs to represent
+separately; it would be state for its own sake, exactly the kind of
+CRM-shaped ceremony the phase explicitly warns against adding "just
+because typical CRMs have one." The existing schema, the existing RPC,
+and the existing (CONFIRMED) product decisions all already converge on
+"accepted" meaning "has at least one Trip," which is precisely what
+Option B represents. Introducing a separate accept step would also
+require a NEW `state` value (`accepted-not-yet-scheduled` or similar) —
+a real, material schema change this audit's own findings do not
+otherwise justify (see §28).
+
+
+16. DECLINE SEMANTICS
+--------------------------
+Current mechanism: **NONE.** No RPC, no UI, no server action currently
+implements decline at all — only the raw `state` column-update grant
+makes it theoretically possible from a client (§8).
+
+Recommendation for eventual implementation (not built in this phase):
+a small, new, narrow RPC — `decline_transportation_request(p_organization_id,
+p_request_id, p_reason)` — mirroring `create_trip`'s own security
+conventions exactly (live `has_org_role` check, row locked `FOR UPDATE`,
+reject if `state` is not `pending` — an already-`accepted`/`declined`/
+`cancelled` request cannot be (re-)declined). This closes the raw-UPDATE
+gap identified in §8 for this specific transition.
+
+Decline reason: recommend **optional free text** for the first release,
+not a structured category taxonomy. A structured category enum is
+exactly the kind of "excessive CRM metadata" the phase's own §20
+guidance warns against introducing without a demonstrated reporting
+need; free text captures the operationally useful information (why)
+without inventing a taxonomy nobody has validated yet. This can evolve
+to structured categories later if reporting demand justifies it — that
+evolution is additive, not a rearchitecture.
+
+A declined request must not remain convertible: this is ALREADY true
+today at the `create_trip` layer (§4/§6 — declined/cancelled are
+explicitly rejected) — a new `decline_transportation_request` RPC only
+needs to correctly set `state = 'declined'`; it does not need to add
+any NEW protection against later conversion, since that protection
+already exists and is already tested.
+
+
+17. CANCEL SEMANTICS
+-------------------------
+Request cancellation and Trip cancellation are **already structurally
+distinct** in this schema (`transportation_requests.state = 'cancelled'`
+vs. `trips.state = 'cancelled'` — two entirely separate columns on two
+entirely separate tables, with no cascade trigger connecting them in
+either direction).
+
+If a request already has linked trips, what should cancelling the
+request mean? Recommendation: **cancelling a Request should be
+prohibited (or at minimum, strongly discouraged with an explicit
+warning) once it has ANY linked Trip that is not itself already
+`cancelled`.** Reasoning: a Request with active linked Trips represents
+demand that has ALREADY been acted on — "cancelling" it at that point is
+semantically ambiguous (does it mean the Trips should also be
+cancelled? Historically it clearly should not automatically cascade,
+per the explicit instruction against "dangerous automatic cascade
+behavior unless explicitly supported by existing domain logic" — no
+such supporting logic exists here). The clean, safe rule: Request
+cancellation should only be legal while the Request represents **pure,
+unconverted demand** — i.e., while `state = 'pending'` and it has zero
+linked Trips (the same "eligible to convert" precondition, in reverse:
+if it's still eligible to become a Trip, it's also eligible to be
+cancelled instead; once it has become one, cancelling *Trips*
+individually — an operation that already exists and is already
+protected elsewhere in this codebase — is the correct tool, not
+cancelling the Request retroactively).
+
+This, too, argues for a new narrow RPC —
+`cancel_transportation_request(p_organization_id, p_request_id)` —
+rejecting (ZW006) if `state != 'pending'` OR if any linked Trip exists,
+rather than a raw client UPDATE.
+
+
+18. RETURN TRANSPORTATION
+------------------------------
+Fully covered by CONFIRMED decision ZD-069 (§7): return transportation
+is a second, ordinary `trips` row sharing `request_id` with the
+outbound Trip — no new relational entity, no new required schema. The
+existing `transportation_requests.return_trip_needed` column
+(`yes`/`no`/`not_sure`, already `NOT NULL`) is exactly the field Request
+Hub needs to capture "I need transportation there and back" at logging
+time — it already exists and requires no change.
+
+What Request Hub needs, concretely: when `return_trip_needed = 'yes'`
+(or the operator later decides it's needed even if originally
+"not_sure"), the Convert action should support creating a second Trip
+against the same, now-`accepted` Request — mechanically identical to
+the first conversion call (`create_trip` already permits this, per §6),
+just invoked a second time with different scheduling. This is a UI/flow
+recommendation for a later phase, not a schema change.
+
+The one PROVISIONAL, not-yet-implemented piece from ZD-069 is the
+optional `leg` label (`outbound`/`return`/`unspecified`) on `trips` —
+recommended for display clarity in the linked-trips list (§7/§14), but
+explicitly marked provisional in the decision register itself, meaning
+it should be confirmed as wanted (or not) during the mutation-
+foundation phase, not assumed necessary by this audit. See §28.
+
+
+19. RECURRING-CARE BOUNDARY
+--------------------------------
+No existing schema, decision, or code addresses recurring care at all
+(confirmed: no hits for "recurring" in `docs/product/decision-register.md`
+beyond an unrelated idempotency discussion). The one relevant fixture —
+`supabase/seed.sql`'s "Cascade Dialysis Center" facility-coordinator
+request — demonstrates the REAL use case (a facility calling in
+transportation for a recurring-care patient) without any recurring-
+specific modeling; it is seeded as a single, ordinary Request.
+
+What current schema supports: nothing beyond the same bare 1:N
+Request→Trip mechanism used for return trips (§18) — an operator COULD
+technically call `create_trip` repeatedly against one accepted Request
+to represent multiple dialysis visits, but nothing distinguishes "this
+is occurrence #7 of an ongoing series" from an unrelated second trip,
+there is no recurrence rule, no series identity, and no way to
+generate future occurrences without manual, one-by-one operator action
+each time.
+
+What S2 should support: **only the ability to flag/note that a request
+represents recurring need** (e.g., reusing `additional_notes`, or at
+most a simple boolean/enum if truly justified — NOT a schema change
+this audit recommends committing to yet) — and otherwise treat each
+occurrence as its own ordinary Request or Trip, exactly as today,
+with no special recurring UI.
+
+What must be deferred to later Recurring Care Assurance work: any
+concept of a recurring series, a recurrence rule, automatic future-
+occurrence generation, or a dedicated recurring-care schema entity.
+Baking a placeholder recurring architecture into Request Hub now — even
+a "small," seemingly harmless one — risks exactly the "temporary bad
+recurring architecture" the phase explicitly warns against; better to
+ship S2 with recurring care handled identically to any other repeat
+request (an operator manually logs the next occurrence when it's time)
+and let a dedicated later phase design the real thing deliberately.
+
+
+20. PUBLIC-INTAKE BOUNDARY
+-------------------------------
+Current `/request-transportation`: confirmed a static placeholder with
+no form (§5). Current Zenward public flow: none beyond this one page.
+
+Recommendation: **the first Request Hub release should ship
+authenticated internal "Log Request" ONLY. Public intake should be
+implemented in a later, separate subphase.**
+
+Why, precisely (not just "public intake is scary"):
+  1. Public intake is a genuinely different security surface — it
+     requires an anonymous write path into a table that today has
+     ZERO anonymous access of any kind (§8). That is a materially
+     different threat model (spam, abuse, enumeration risk) than
+     anything an internal-only Request Hub needs to defend against, and
+     mixing the two into one phase multiplies the review surface for no
+     operational benefit — operators need SOMETHING to work with long
+     before public self-service intake is ready.
+  2. The one EXISTING decision that already governs this
+     (**ZD-050, CONFIRMED**) was explicitly scoped to "the MVP
+     single-operator launch," resolving `organization_id` server-side to
+     "the one configured Zenward operating organization." That
+     assumption is now **stale**: this product has since shipped real,
+     production multi-tenant organization switching (P1-UX-R1A) with
+     multiple real organizations (Fictional Org A/B, Harmony Transport,
+     Zenward Mobility). ZD-050's own stated "Review Trigger" —
+     "Multi-organization expansion (service-area routing design)" — has
+     literally already occurred. Building public intake against a
+     decision that pre-supposes single-tenancy, without first
+     re-deciding how a public submitter's organization gets resolved in
+     a genuinely multi-tenant product, would be building on a
+     foundation this audit cannot currently certify as still correct.
+  3. Internal Log Request alone already fully unblocks the phase's own
+     stated product purpose (an operator recording phone-in demand) —
+     public intake is a distinct, additive capability, not a
+     prerequisite for Request Hub to be useful.
+
+
+21. SOURCE HANDLING
+------------------------
+No `source` column exists on `transportation_requests` today (confirmed
+via the full column list in §3). The phase's own candidate values
+(phone/facility/email/web/other) are plausible but not currently backed
+by any schema, RPC, or UI.
+
+Recommendation: **add `source` only when it earns its place** — i.e.,
+concurrently with internal Log Request (§11), since "how did this
+demand reach us" is genuinely useful for operations/reporting once
+operators are actually logging requests through multiple real channels
+(phone vs. facility call vs. email), and costs almost nothing (one
+small nullable/defaulted text-or-enum column). This is NOT excessive
+CRM metadata — it's a single, low-cardinality, operationally meaningful
+field the Log Request form can set from a fixed small list at save
+time. See §28 for migration classification.
+
+
+22. OPERATIONS BRIEF INTEGRATION
+-------------------------------------
+Operations Brief's existing "Needs Attention" concept
+(`operations-brief-core.ts`) is entirely trip-lifecycle-derived — it is
+a pass-through of `getTodaysOperations().attentionItems`, itself driven
+by `trip-assurance.ts`'s evaluator and a fixed `PRIORITY_RANK` over trip-
+specific assurance codes (`NEEDS_ASSIGNMENT`, `OPEN_EXCEPTION`,
+`LOCATION_STALE`, `LOCATION_UNAVAILABLE`). A pending-request count is
+NOT a trip-assurance concept and should not be forced into that same
+`attention` array/shape.
+
+Recommendation: a small, SEPARATE summary element — e.g. "N requests
+need review" — as its own line/block near (not inside) the existing
+Needs Attention block, linking directly to `/operations/requests`.
+
+  Where it would fit: Operations Brief, adjacent to but visually
+    distinct from Needs Attention — never merged into the same list.
+  What the count should mean: the phase's own instinct is right to
+    question this — a raw count of `state = 'pending'` rows is the
+    simplest, most honest number and matches exactly what the existing
+    `transportation_requests_org_state_created_idx` was built to serve.
+    Restricting the count to only "not-ready" pending requests (§10)
+    would require Request Hub's readiness logic to exist first and adds
+    interpretive ambiguity ("why does this count differ from the queue's
+    own header count?") — simpler and more trustworthy to show the SAME
+    number Request Hub itself would show as its own queue-summary count
+    (§12), not a filtered subset.
+  Route/action: clicking through goes straight to
+    `/operations/requests` (the queue), not to any specific request.
+
+This is a recommendation only — **not implemented in this phase.**
+
+
+23. SIDEBAR PLACEMENT
+--------------------------
+Current Operations nav order (confirmed live from
+`src/components/operations/OperationsSidebar.tsx`'s `NAV_ITEMS`):
+Overview, Trips, Dispatch, Passengers, Facilities, Drivers, Fleet, then
+a conditional Drive item.
+
+Recommended placement for "Requests": **immediately after Overview,
+before Trips** — i.e.:
+  Overview → **Requests** → Trips → Dispatch → Passengers → Facilities
+  → Drivers → Fleet → (Drive)
+
+Justification, using the phase's own workflow sequence: demand arrives
+→ request reviewed → trip created → dispatch → execution. Requests is
+the FIRST operational stage in that sequence — it precedes Trips
+conceptually (a Trip today can still be created directly with no
+Request, and that path remains valid and untouched, but the *typical*
+lifecycle this phase is building starts with a Request). Placing it
+immediately after the dashboard-like Overview, and before the
+Trips/Dispatch pair it feeds, mirrors the left-to-right reading of the
+workflow itself, rather than being buried after operationally "later"
+concepts like Passengers/Facilities/Drivers/Fleet (all of which are
+supporting/reference data, not workflow stages). Not implemented in
+this phase.
+
+
+24. EMPTY/ZERO STATES
+--------------------------
+Design intent (not built): reuse the existing `EmptyState` component
+already used throughout Operations (e.g. OperationsShell's own
+narrow-width guard, and other tables' zero-result states per this
+session's own established convention), with request-hub-specific
+copy in each of the three named cases:
+
+  No requests exist at all (a brand-new organization): something like
+    "No requests yet — Log Request to record your first one," pairing
+    directly with the primary action button rather than a bare "No
+    data found."
+
+  No PENDING requests exist, but historical requests do: something
+    like "Nothing needs review right now" plus a visible way to reach
+    history (§25) — communicates the queue is caught up, not broken or
+    empty.
+
+  Filters return no results: something like "No requests match these
+    filters" plus a clear, one-click way to clear them — never
+    indistinguishable from "no requests exist at all," since those are
+    operationally very different situations for an operator to
+    understand.
+
+
+25. SEARCH/FILTERS/HISTORY
+-------------------------------
+Recommended filters for first release, evaluated against genuine
+operator need (not an exhaustive enterprise filter panel):
+  - **status** — essential; this is how "history" (§below) is reached
+    at all without a separate view.
+  - **passenger** (name/phone search, reusing `getPassengersList`'s own
+    ILIKE pattern) — essential; "did someone already call about this
+    person" is a real, common operator question.
+  - **service date** — useful, defer unless trivial to add alongside
+    status/passenger (a date-range filter on `preferred_date`).
+  - **source** — defer until `source` itself exists (§21/§28) and only
+    add if reporting need justifies it.
+  - **readiness** — defer; readiness is better surfaced as a per-row
+    badge (§12) than a filter dimension in the first release — the
+    pending queue itself, sorted oldest-first, already surfaces
+    "needs review" work without a separate filter.
+
+History access: **prefer a status filter/tab over a wholly separate
+page.** The simplest scalable pattern, consistent with `status` being
+the natural partition of the same underlying query
+(`transportation_requests_org_state_created_idx` already indexes
+exactly `(organization_id, state, created_at)`): a segmented control or
+tab set — "Pending" (default) / "Accepted" / "Declined" / "Cancelled" /
+"All" — all rendered by the same queue component with a different
+`state` filter, not a structurally separate "History" page. This keeps
+Request Hub as one coherent work queue with a history lens, rather than
+splitting into two different products.
+
+
+26. AUDIT TRAIL/EVENTS
+---------------------------
+Existing infrastructure, verified against actual schema (not assumed):
+
+  `trip_events` (`supabase/migrations/20260830131200_trip_events.sql`):
+    append-only, allow-listed `event_type` values, keyed to `trip_id`
+    (NOT `request_id`). SELECT granted to organization_admin AND
+    dispatcher (`trip_events_select_org_operations`) — i.e., the SAME
+    two roles Request Hub itself serves. The only request-relevant
+    value in the allow-list is `request_converted_to_trip`, written
+    once per Trip creation, carrying `request_id` in its JSON
+    `metadata` — this is a TRIP-side event ("this trip came from a
+    request"), not a REQUEST-side event ("this request was converted").
+    No INSERT is granted to any human role — event creation only
+    happens inside trusted SECURITY DEFINER functions like `create_trip`.
+
+  `audit_events` (`supabase/migrations/20260830131500_audit_events.sql`):
+    generic polymorphic `entity_type`/`entity_id` (no FK, no CHECK
+    constraint restricting either — schema-ready to log
+    `entity_type = 'transportation_request'` actions with ZERO
+    migration needed). SELECT, however, is **organization_admin +
+    Platform Admin ONLY** — confirmed via the RLS policy file:
+    Dispatcher deliberately has NO SELECT policy on this table at all
+    (per the migration's own comment, citing
+    "authorization-model.md §46: Dispatcher: no broad audit access").
+
+  **The gap this creates:** Request Hub is meant for BOTH
+  organization_admin and dispatcher (matching `transportation_requests`'
+  own RLS, §8). If future Accept/Decline/Cancel/Passenger-link actions
+  write their history into `audit_events` (the schema-ready, no-migration
+  option), a Dispatcher using Request Hub would see NO lifecycle history
+  for any request at all — only an Organization Admin would. If they
+  instead extend `trip_events`'s pattern (dispatcher-visible,
+  allow-listed, append-only) but keyed to `request_id` instead of
+  `trip_id`, that requires a genuinely new small table (`trip_events`
+  itself is FK'd to `trips`, not extensible to also reference
+  `transportation_requests` without either a nullable second FK column
+  or a new table) — see §28.
+
+  Recommendation: for the FIRST release, do not build a dedicated
+  request-event log at all. Rely on: (a) the Request's own `state` +
+  `updated_at` (sufficient to answer "what is it now, when did it last
+  change"), and (b) the ALREADY-EXISTING `request_converted_to_trip`
+  trip_event (sufficient to answer "when/that it was converted,"
+  visible to both roles). Defer a full, dispatcher-visible request-
+  level event log (recording who declined/cancelled/linked-passenger
+  and when) to a follow-up phase, once accept/decline/cancel RPCs
+  actually exist to write into it (§27) — do not invent the event
+  infrastructure before the actions that would populate it exist.
+
+
+27. MUTATION/ATOMICITY PLAN
+--------------------------------
+Not implemented in this phase (per explicit instruction) — recommended
+future shape only, following the EXACT existing security convention
+`create_trip` already establishes (ZD-085's error contract, live
+`has_org_role` authorization, row-level `FOR UPDATE` locking,
+SECURITY DEFINER with hardened `search_path`):
+
+  New RPC — `log_transportation_request(...)`: INSERT-only, live
+    `has_org_role(['organization_admin','dispatcher'])` check, explicit
+    `organization_id` never trusted from elsewhere. Could plausibly
+    remain a plain client-side INSERT (current grant already permits
+    it) rather than a new RPC, IF no additional business logic is
+    needed beyond what RLS already enforces — this is a genuine open
+    question for the mutation-foundation phase to resolve, not
+    pre-decided here.
+
+  New RPC — `link_request_passenger(p_organization_id, p_request_id,
+    p_passenger_id)`: validates the Request is still `pending` (or
+    permits it at any non-terminal state — a phase-level decision),
+    validates the Passenger is active/same-org (mirroring `create_trip`'s
+    own passenger check exactly), single UPDATE.
+
+  New RPC — `decline_transportation_request(p_organization_id,
+    p_request_id, p_reason)`: rejects if `state != 'pending'`. ATOMIC.
+
+  New RPC — `cancel_transportation_request(p_organization_id,
+    p_request_id)`: rejects if `state != 'pending'` OR any linked Trip
+    exists (§17). ATOMIC.
+
+  Existing — `create_trip(...)`: already atomic, already handles the
+    accept transition; unchanged.
+
+Business-critical lifecycle transitions (decline, cancel, and
+especially "reject an illegal transition") should NOT be several
+independent client writes that can partially succeed — this is the
+project's own stated non-negotiable pattern, already proven out for
+`trips`/`trip_assignments`/`driver_invites` via SECURITY DEFINER RPCs
+with a single transaction boundary each. `transportation_requests`
+should receive the exact same treatment, closing the raw-UPDATE gap
+identified in §8, rather than continuing to allow direct client writes
+to `state`.
+
+**DO NOT CREATE THESE NOW** — recorded here only as the recommended
+target shape for the phase that actually builds them (§31).
+
+
+28. MIGRATION CLASSIFICATION
+---------------------------------
+**B. SMALL ADDITIVE MIGRATION** — likely required, but genuinely small
+and deferred to a dedicated data/mutation-foundation phase, not this
+audit. Proposed additions (columns/constraints only — no SQL, no
+speculative fields beyond what this audit's own findings justify):
+
+  On `public.transportation_requests`:
+    - `source text` (nullable or defaulted, small fixed set —
+      phone/facility/email/web/other) — justified in §21, concurrent
+      with internal Log Request, not before.
+    - Possibly `created_by uuid references auth.users(id)` (nullable)
+      — to record WHICH operator logged a request on someone else's
+      behalf, a genuine gap noted in §3 (no attribution column exists
+      today). Worth confirming as wanted before adding — not assumed.
+
+  On `public.trips`:
+    - `leg text check (leg in ('outbound','return','unspecified'))`
+      (nullable, defaulted to `unspecified` or NULL) — the one
+      PROVISIONAL field from CONFIRMED decision ZD-069 (§7/§18),
+      recommended only if the linked-trips detail view needs to visibly
+      distinguish outbound/return rather than relying on creation
+      order/timestamps alone.
+
+  Possibly, IF a dispatcher-visible request-level audit trail is
+  wanted (§26) — a new, small, `trip_events`-shaped table:
+    - `request_events (id, organization_id, request_id, event_type,
+      actor_user_id, occurred_at, metadata)` with its own small
+      allow-listed `event_type` CHECK (e.g. `request_logged`,
+      `request_declined`, `request_cancelled`, `passenger_linked`,
+      `request_converted_to_trip`) and the same
+      organization_admin+dispatcher SELECT policy `trip_events` already
+      uses. This is the ONE piece of this classification that is a new
+      TABLE rather than a new column — still small, still additive,
+      still following an exactly-precedented shape.
+
+No column needs to be dropped, renamed, or have its type/constraint
+changed. No existing RLS policy needs to be weakened. This is
+unambiguously additive, not a rearchitecture.
+
+
+29. SECURITY THREAT REVIEW
+-------------------------------
+  Cross-tenant request reads: **Handled.** `has_org_role` re-validates
+    live Membership on every SELECT; no anonymous grant exists.
+  Cross-tenant request updates: **Handled**, at the row-authorization
+    level (`WITH CHECK`/`USING` both call `has_org_role`); the
+    column-level gap (state directly writable) is NOT a cross-tenant
+    issue — it's a same-tenant lifecycle-integrity issue (§8), and must
+    be closed via new RPCs (§27), not by tightening RLS alone.
+  Forged organization_id: **Handled** on INSERT (RLS `WITH CHECK`
+    independently validates it) and inside `create_trip` (treated as a
+    "requested context," re-validated against live Membership, never
+    trusted alone) — matches this project's established pattern
+    exactly.
+  Forged passenger_id from another tenant: **Handled** by `create_trip`'s
+    own explicit `organization_id = p_organization_id` filter on the
+    passenger existence check — a foreign-org passenger_id produces the
+    same ZW006 as a nonexistent one (no existence oracle).
+  Forged request_id passed to create_trip: **Handled** — the function
+    re-selects the request scoped to `organization_id = p_organization_id`
+    and locks it `FOR UPDATE`; a foreign-org or nonexistent id produces
+    ZW006, indistinguishable from each other.
+  Operator attempting to convert a declined/cancelled request:
+    **Handled** — `create_trip`'s own explicit
+    `state not in ('pending','accepted')` check, tested
+    (`create_trip_tests.sql` per ZD-102's own citation).
+  Duplicate conversion attempts: **Deliberately allowed, not a threat**
+    — this is a considered product decision (ZD-102), not a gap; two
+    legitimate Trips (e.g. outbound+return) are expected to share a
+    Request.
+  Unauthorized driver access: **Handled** — no policy grants Driver any
+    access to this table at all; `has_org_role` with
+    `['organization_admin','dispatcher']` excludes Driver by
+    construction.
+  Public unauthenticated spam, if/when public intake exists: **NOT YET
+    APPLICABLE** (no public path exists today, §5/§20) — this audit's
+    own recommendation (§20) is precisely to defer building that
+    surface until it can be deliberately designed against this exact
+    threat (rate limiting, validation, and a re-examined
+    organization-resolution model per the now-stale ZD-050), rather
+    than bolting it onto the first internal release.
+  Service-role leakage: **Not found** anywhere in this domain — no
+    function or code path in scope uses a service-role key.
+  Client-side-only authorization: **Not found for tenant isolation**
+    (every check is a live, database-side `has_org_role`/`auth.uid()`
+    call) — but the ONE place this audit found something close to it
+    in spirit is the `state` column's direct writability (§8): while
+    still fully tenant-scoped (a client cannot touch another org's row),
+    the *business-rule* enforcement for what values `state` may
+    legally move between currently exists nowhere in the database, only
+    (not even) in application code, since no application code writes
+    it at all today. S2's mutation foundation must close this before
+    building any Accept/Decline/Cancel UI on top of it.
+
+
+30. MVP BOUNDARY
+---------------------
+IN the first Request Hub release:
+  - Internal "Log Request" (§11)
+  - Pending request work queue, oldest-first (§12/§13)
+  - Request detail, dedicated page (§14)
+  - Explicit passenger linking/creation, reusing existing search/create
+    (§9)
+  - Readiness (missing-passenger / not-convertible only, §10)
+  - Convert to Trip (existing `create_trip`, unchanged)
+  - Decline (new narrow RPC, optional free-text reason, §16/§27)
+  - Cancel, only where valid — pending + zero linked trips (new narrow
+    RPC, §17/§27)
+  - Linked-trip visibility in detail (§7/§14)
+  - History via status filter/tabs on the same queue (§25)
+  - `source` field, added concurrently since it's genuinely useful and
+    cheap once Log Request exists (§21/§28)
+
+NOT in first release (explicitly deferred):
+  - Public/self-service intake (§20) — needs its own security design
+    and a re-examined organization-resolution model (ZD-050 is stale)
+  - Any recurring-care series/engine (§19) — deliberately deferred to
+    later Recurring Care Assurance work
+  - Predictive/weighted priority ordering (§13) — oldest-first only
+  - A facility portal of any kind — no facility-side login/access
+    concept exists anywhere in this codebase today
+  - Automated fuzzy passenger matching (§9) — explicitly prohibited by
+    the phase's own non-negotiable rule
+  - Extensive analytics/reporting on requests — Operations Brief's own
+    integration (§22) is a single count, not a reporting surface
+  - White-label/branded request portals — no such concept exists
+    anywhere in this product
+
+
+31. IMPLEMENTATION PHASES
+------------------------------
+Recommended, informed by this audit's own findings (labels are
+recommendations, not mandates):
+
+  P1-E1-S2B — Request mutation foundation
+    Objective: close the `state`-column write gap (§8/§29); implement
+    `link_request_passenger`, `decline_transportation_request`,
+    `cancel_transportation_request` RPCs; decide whether
+    `log_transportation_request` needs to be an RPC or can remain a
+    plain validated INSERT; add the `source` column (§21/§28); decide
+    the `created_by`/`leg` provisional fields (§28).
+    Files/systems: new `supabase/migrations/*.sql` only.
+    Migration: YES (small additive, §28).
+    Security review required: YES — this phase closes a real
+    lifecycle-integrity gap; needs the same rigor as
+    `create_trip`'s own original security migration.
+    Tests: new SQL test file(s) mirroring `create_trip_tests.sql`'s own
+    structure (role/membership/cross-tenant/state-impossibility
+    matrix) for each new RPC; full 22-file suite + concurrency scripts
+    re-run per this session's established per-file-fresh-reset method.
+    Dependency: this audit (S2A).
+
+  P1-E1-S2C — Internal Log Request
+    Objective: build the authenticated "Log Request" form/flow (§11),
+    using the new INSERT path from S2B.
+    Files: new route/component/action under
+    `src/app/operations/requests/`, `src/components/operations/requests/`.
+    Migration: NO (uses S2B's schema).
+    Security review required: light (reuses `requireOperationsAccess`
+    pattern already established everywhere else in Operations).
+    Tests: tsc/lint/build/unit; live CDP validation of the form.
+    Dependency: S2B.
+
+  P1-E1-S2D — Request queue
+    Objective: build `/operations/requests` (§12/§13/§24/§25) — the
+    work-queue list, oldest-pending-first, status filter/tabs, empty
+    states.
+    Files: `src/app/operations/requests/page.tsx`,
+    `src/lib/operations/requests-list.ts` (mirroring
+    `passengers-list.ts`'s own established shape), queue components.
+    Migration: NO.
+    Security review: light (read-only, existing RLS).
+    Tests: tsc/lint/build/unit; live validation across the empty-state
+    matrix (§24).
+    Dependency: S2B (for `source`/readiness inputs), can proceed in
+    parallel with S2C.
+
+  P1-E1-S2E — Request detail/readiness
+    Objective: build `/operations/requests/[id]` (§14), readiness
+    computation (§10), passenger linking/creation UI (§9), linked-trips
+    display (§7).
+    Files: new detail route/components; small server-side readiness
+    helper (pure function, testable, mirroring the
+    `operations-brief-core.ts` pure-core/server-wrapper split
+    established in P1-E1-S1B).
+    Migration: NO.
+    Security review: light-moderate (passenger-linking UPDATE path).
+    Tests: tsc/lint/build/unit (readiness as pure-function unit tests,
+    matching the established `*-core.test.mjs` convention); live
+    validation.
+    Dependency: S2B, S2D.
+
+  P1-E1-S2F — Request→Trip workflow (Convert/Decline/Cancel actions)
+    Objective: wire the detail page's action buttons to
+    `create_trip`/the new S2B RPCs; surface decline reason capture;
+    surface cancel-eligibility.
+    Files: server actions in `src/app/operations/requests/`.
+    Migration: NO (RPCs already exist from S2B).
+    Security review: MODERATE — this is where illegal-transition
+    protection actually gets exercised end-to-end; needs explicit
+    negative-path testing (attempt to decline an accepted request,
+    attempt to cancel a request with trips, etc.).
+    Tests: full SQL/RLS re-run (touches request lifecycle), tsc/lint/
+    build/unit, live CDP validation of every button/error path.
+    Dependency: S2B, S2E.
+
+  P1-E1-S2G — Operations Brief integration
+    Objective: the small "N requests need review" summary (§22).
+    Files: `operations-brief-core.ts`/`operations-brief.ts`/
+    `OperationsBrief.tsx` (additive, small — matching P1-E1-S1's own
+    established split).
+    Migration: NO.
+    Security review: light (read-only count, same RLS as the queue).
+    Tests: extend the existing `operations-brief-core.test.mjs` suite;
+    live validation.
+    Dependency: S2D (the count must match the queue's own definition).
+
+  P1-E1-S2H — Production release
+    Objective: staged, committed, pushed, deployed release of the
+    accumulated S2B–S2G work, following this session's own established
+    release discipline (repository precheck, manifest/classification,
+    secret scan, full test battery, staged-diff review, single commit,
+    push, Vercel confirmation, public/auth + legacy-domain smoke,
+    authenticated production validation marked HUMAN TEST REQUIRED
+    where real credentials are unavailable).
+    Migration: YES (S2B's migration ships here, if not released
+    earlier as its own database-only release).
+    Security review: full (this is the first phase where request
+    lifecycle mutations become live in production).
+    Tests: everything above, plus this session's established
+    production-release checklist.
+    Dependency: all of the above.
+
+Public intake (deferred per §20) would become its own later phase
+sequence (tentatively "P1-E1-S3" or similar), starting with its own
+audit of the now-stale ZD-050 and a fresh security design — not
+numbered here as part of S2, deliberately.
+
+
+32. RISKS/OPEN QUESTIONS
+-----------------------------
+  - Should `log_transportation_request` be a new RPC or remain a plain
+    client INSERT? Current INSERT grant/RLS already permits the latter
+    safely (no lifecycle-integrity concern on INSERT the way there is
+    on UPDATE) — S2B should make this decision deliberately, not by
+    default.
+  - Is operator attribution (`created_by`) actually wanted, or is
+    `actor_user_id` on a future `request_events` row sufficient? Two
+    different mechanisms could both answer "who logged this" — avoid
+    building both.
+  - Is the `leg` label (ZD-069, provisional) actually wanted for S2's
+    own linked-trips view, or is creation-order/timestamp display
+    sufficient for the first release? This audit recommends confirming
+    during S2B rather than assuming either answer.
+  - Exact wording/labels for the readiness state (§10) — this audit
+    deliberately did not lock in label text, only the underlying
+    logic, per the phase's own instruction not to adopt example labels
+    without justification.
+  - Whether cancel-eligibility (§17) should also block on a Trip that
+    is itself already `cancelled`/`no_show` (i.e., does a fully-
+    cancelled-out Trip still count as "linked" for the purpose of
+    blocking Request cancellation?) — this audit recommends the safer
+    default (ANY linked Trip row blocks Request cancellation,
+    regardless of that Trip's own state) but flags it as a real
+    judgment call for S2B to confirm.
+
+
+33. RECOMMENDED IMMEDIATE NEXT PHASE
+-----------------------------------------
+**P1-E1-S2B — Request mutation foundation** (schema-plus-RPC phase:
+close the `state`-column gap, add `source`, build
+`link_request_passenger`/`decline_transportation_request`/
+`cancel_transportation_request`). This is the correct next step because
+every later phase (Log Request, queue, detail, convert/decline/cancel
+UI) depends on this foundation being correct and secure FIRST — building
+UI against the current raw-UPDATE-capable `state` column would either
+require throwaway UI rework once S2B ships, or would ship a real
+lifecycle-integrity gap into production disguised as a "just UI" phase.
+
+
+34. GIT STATUS
+-------------------
+  git status -sb:
+    ## main...origin/main
+    (no ahead/behind — fully aligned, nothing staged or committed)
+    ?? .tmp-qa/auth-confirm-e2e.mjs
+    ?? .tmp-qa/join-auth-confirm-e2e.mjs
+    ?? .tmp-qa/n0-g0-audit-e2e.mjs
+    ?? docs/reports/g0-r3-driver-invitation-email-delivery.txt
+    ?? docs/reports/g1-a-nemryn-brand-foundation-architecture.txt
+    ?? docs/reports/g1-b-nemryn-brand-lock-token-specification.txt
+    ?? docs/reports/n0-g0-r2-auth-fix-deployment.txt
+    ?? docs/reports/n0-m1-a0-domain-migration-audit.txt
+    ?? docs/reports/n0-m1-a3-production-validation.txt
+    ?? docs/reports/n0-m2-a5-production-release.txt
+    ?? docs/reports/p0-s2a-closure.txt
+    ?? docs/reports/p0-s2a-d1-driver-invitation-production-release.txt
+    ?? docs/reports/p0-s2b-d1-password-recovery-production-release.txt
+    ?? docs/reports/p0-s2b-ux1-d1-password-visibility-production-release.txt
+    ?? docs/reports/p1-e1-s1d-operations-brief-production-release.txt
+    ?? docs/reports/p1-ux-r1-r1a-production-release.txt
+    ?? docs/reports/p1-ux-r2-production-release.txt
+
+  This report itself
+  (docs/reports/p1-e1-s2a-request-hub-product-workflow-audit.txt) is
+  the only new file created in this phase, and remains untracked, as
+  required. No application code, migration, or database state was
+  modified. No `git add`, `git commit`, or `git push` was performed at
+  any point in this phase. No scratch scripts were created during this
+  audit (all investigation was read-only `grep`/`Read`/`git diff`
+  inspection of existing source and migration files — no database
+  connection, no code execution, no temporary files needed).

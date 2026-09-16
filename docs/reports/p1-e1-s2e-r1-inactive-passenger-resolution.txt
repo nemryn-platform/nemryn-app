@@ -1,0 +1,419 @@
+P1-E1-S2E-R1 — RESOLVE INACTIVE PASSENGER LINK
+=====================================================
+Project:              /Users/datamatics/ZenWard
+Production base:      4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+Date:                 2026-09-16
+Status:               Local implementation complete, live-validated
+                       against the local dev stack (including the full
+                       search/select/confirm replacement flow, the
+                       Add-New-Passenger recovery flow, and a zero-
+                       regression re-run of both the S2D queue and S2E
+                       detail suites). NOT staged, NOT committed, NOT
+                       pushed, NOT deployed, per explicit phase
+                       constraint.
+
+
+1. REPOSITORY STATE
+------------------------
+  branch:      main
+  HEAD:        4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  origin/main: 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f
+  Match confirmed, both before and after this phase's work —
+  origin/main had not advanced. The accumulated, uncommitted S2B
+  through S2E work was confirmed present and untouched before this
+  phase began.
+
+
+2. ORIGINAL DEAD-END
+-------------------------
+Read `docs/reports/p1-e1-s2e-request-detail-readiness-passenger-linked-
+trips.txt` in full before starting. S2E correctly derived readiness
+from the linked Passenger's REAL status (never merely
+`passenger_id !== null`), but its own §19 explicitly gated the Search/
+Add UI on `passenger === null` — meaning a pending Request whose
+linked Passenger had since gone inactive showed "Passenger needed"
+with genuinely no path to resolve it: the Passenger card rendered
+read-only, and the search/add mechanism never appeared because a
+Passenger WAS technically linked. A real, reachable operational dead
+end, not a hypothetical one — closing it is this phase's entire scope.
+
+
+3. AUTHORITATIVE RPC BEHAVIOR
+-----------------------------------
+Re-read `link_request_passenger` directly from
+`supabase/migrations/20260916100000_request_mutation_foundation.sql`
+(lines 327-402) before writing any UI code — not re-derived from the
+S2B/S2E reports' prose alone. Confirmed directly:
+  - Request must be `pending` (line 369-371: any other state raises
+    ZW004 `illegal_transition`).
+  - Target Passenger must be `status = 'active'` AND
+    `organization_id = p_organization_id` (line 376-381, ZW006
+    otherwise — no existence oracle: nonexistent, foreign-org, and
+    inactive are all the identical error).
+  - Linking a DIFFERENT Passenger while pending IS permitted — the
+    function's only "already linked" check (line 383) is an idempotent
+    no-op comparison against the SAME `passenger_id` being re-supplied;
+    there is no `v_request.passenger_id is null` guard anywhere before
+    the `update` on line 391. A request already linked to an inactive
+    Passenger can be relinked to a different, active one with no RPC
+    change required — confirmed directly in source, exactly as this
+    phase's own CONTEXT section stated.
+  - `accepted`/`declined`/`cancelled` remain rejected (ZW004), same
+    mechanism as the pending check above.
+No RPC change was made or needed.
+
+
+4. FINAL PRODUCT RULE
+--------------------------
+LOCKED, implemented exactly as specified: general Passenger
+reassignment was NOT introduced. A linked ACTIVE Passenger on a
+pending Request still renders with zero replacement control (§8/§10
+below) — the first-release product still does not support casual
+reassignment. Replacement is exposed in EXACTLY one condition:
+`state === "pending" && passenger !== null && passenger.status !==
+"active"`. This is framed and implemented as remediation of an invalid
+readiness condition, not ordinary record editing — the recovery UI is
+gated behind an explicit extra click (§8 below) that the ordinary
+unlinked flow does not require, specifically because there is an
+existing relationship being replaced.
+
+
+5. FILES CHANGED
+---------------------
+Modified:
+  src/components/operations/requests/RequestPassengerPanel.tsx —
+    the sole primary change, exactly matching this phase's own
+    "expected primary modification" (§16). New local state
+    (`recoveryFlowOpen`), two new derived booleans
+    (`isUnlinkedPending`, `isInactiveLinkedPending`), a new restrained
+    notice+action block, and `canShowLinkUi`'s condition extended to
+    include the gated recovery case. The existing search/add/confirm
+    form block itself is completely UNCHANGED — reused verbatim for
+    both the ordinary unlinked case and the recovery case once opened.
+  src/app/operations/requests/[requestId]/page.tsx — one small,
+    necessary wiring change: the active-Passenger candidate list
+    (`getLogRequestFormData`) is now also fetched when
+    `passengerNeedsResolution` (pending + no-Passenger-or-inactive-
+    Passenger), not only when `passenger === null` — otherwise the
+    recovery flow's own Combobox would have had no candidates to
+    search.
+
+Explicitly NOT touched, confirmed via `git status --porcelain
+supabase/` unchanged and via `git diff --stat` showing no tracked-file
+diff for any of these: Supabase migration/RPCs/RLS,
+`request-readiness-core.ts` (reused completely unmodified — confirmed
+by direct inspection, zero edits made), `OperationsSidebar.tsx`,
+Operations Brief, organization resolution, `create_trip`,
+`linkPassengerAction`/`link-passenger-errors.ts` (the existing server
+action and error mapping are reused exactly as-is — no new mutation,
+no new RPC call site beyond the one that already existed),
+`AddPassengerDialog.tsx`/`addPassengerAction` (reused unmodified, same
+as S2E).
+
+
+6. INACTIVE PASSENGER PRESENTATION
+---------------------------------------
+The Passenger card is completely unchanged for this case — display
+name, phone, Inactive `StatusBadge`, assistance notes where present —
+exactly as S2E already built it (§12 of that report). Added directly
+beneath it, only when `isInactiveLinkedPending && !recoveryFlowOpen`:
+
+    <p class="...text-warning-text">This passenger is inactive and cannot be used to create a trip.</p>
+    <Button ...>Select active Passenger</Button>
+
+The exact copy from §4's own example was used verbatim. No alarming or
+CRM-style language — a single restrained sentence in the existing
+warning-text color token (matching the readiness banner's own tone,
+not a louder/separate alert style), paired with one plainly-labeled
+action button. Live-verified: the notice and button are visible
+immediately on a pending+inactive-linked Request, and disappear once
+`recoveryFlowOpen` is set (replaced by the search/add UI itself).
+
+
+7. REPLACEMENT SEARCH
+--------------------------
+Reuses the EXACT SAME Combobox + candidate-list mechanism the
+unlinked-Request flow already used — no second implementation. The
+candidate list is the same `getLogRequestFormData` call (active,
+same-organization Passengers only — unchanged), now also fetched for
+this state (§5). No fuzzy or automatic matching of any kind — the
+operator must type and explicitly select, identical to the unlinked
+case. Live-verified: searching "Beatrix" filtered correctly to the one
+matching active candidate.
+
+
+8. EXPLICIT CONFIRMATION BEHAVIOR
+----------------------------------------
+Two layers of deliberate friction, both required and both
+implemented:
+  1. The recovery search/add UI itself is NOT shown by default — it
+     stays behind a "Select active Passenger" button the operator must
+     click first (`recoveryFlowOpen`, initially `false`). The ordinary
+     unlinked flow has no equivalent gate, since there is nothing to
+     replace there. This is the phase's own core distinction (§6): "there
+     is already an existing relationship being replaced."
+  2. Once opened, the SAME select-then-confirm mechanism S2E already
+     built applies unchanged: selecting a search candidate sets local
+     state only (never mutates), a preview card appears showing the
+     NOT-YET-linked candidate, and only an explicit "Link Passenger"
+     button click submits the real `linkPassengerAction`. Live-verified
+     directly: after selecting "Beatrix Sundberg," the page still showed
+     "Cornelius Blackwood" (the original inactive Passenger) as the
+     CURRENTLY linked one — proving selection alone never mutates,
+     exactly as required.
+
+
+9. ADD PASSENGER REUSE
+---------------------------
+`AddPassengerDialog`/`addPassengerAction` are reused with ZERO changes,
+exactly as S2E already built them. Once the recovery flow is open, the
+identical "Add New Passenger" button/dialog/auto-link-afterward
+behavior from S2E is available — no duplicated passenger-creation code
+anywhere, no separate dialog. §7's own explicit permission ("acceptable
+to follow the current S2E create→link behavior IF that remains
+unambiguous and safe") was exercised as-is: creating a new Passenger
+from within the recovery flow still auto-submits the real
+`linkPassengerAction` immediately afterward (the same reasoning as
+S2E's own §16 — a deliberate multi-step create flow is already an
+explicit action, unlike a bare Combobox selection). Live-verified end
+to end: recovery flow opened → "Add New Passenger" → dialog filled and
+submitted → dialog closed → new Passenger shown as linked → readiness
+Ready — the inactive Passenger (Delphine Okonkwo) confirmed no longer
+present in the Passenger panel specifically afterward.
+
+
+10. ACTIVE PASSENGER PROTECTION
+------------------------------------
+`isInactiveLinkedPending` is `false` whenever `passenger.status ===
+"active"`, so NEITHER the recovery notice NOR any search/add UI
+renders for a normally-linked active Passenger — this distinction is
+explicit in code (two separate, independently-named boolean
+conditions, not a single collapsed flag), matching §8's own explicit
+"this distinction must be explicit in code" instruction. Live-verified:
+a pending Request linked to an active Passenger shows the read-only
+card and Ready readiness ONLY — no button, no notice, no search UI of
+any kind.
+
+
+11. NON-PENDING PROTECTION
+-------------------------------
+`isInactiveLinkedPending` also requires `state === "pending"`, so
+accepted/declined/cancelled Requests never show the recovery notice or
+any link control, regardless of the linked Passenger's status — the
+RPC's own ZW004 rejection remains the authoritative backstop, but the
+UI never even offers the attempt. Live-verified against three
+purpose-built fixtures (accepted+inactive, declined+inactive,
+cancelled+inactive, each with a genuinely linked-but-inactive
+Passenger) — in all three cases the Passenger card correctly still
+shows the inactive linkage (historical/current, never hidden) with
+zero recovery affordance.
+
+
+12. READINESS TRANSITION
+-----------------------------
+`request-readiness-core.ts` is completely unmodified — the readiness
+computation in `getRequestDetail` was already correct before this
+phase (S2E §10) and required no change. Live-verified the full
+transition: before replacement, pending + inactive Passenger →
+"Passenger needed" (confirmed both on Detail and in the Request Hub
+queue row); after a successful replacement, pending + newly-linked
+active Passenger → "Ready" (confirmed both on Detail, immediately, and
+in the Request Hub queue row after a single fresh navigation).
+
+
+13. REQUEST HUB REVALIDATION
+---------------------------------
+No change to `linkPassengerAction` was needed or made — its existing
+`revalidatePath(`/operations/requests/${requestId}`)` +
+`revalidatePath("/operations/requests")` calls already cover this
+exact scenario, since a replacement is just another
+`link_request_passenger` call through the same action. Live-verified:
+after the search/select/confirm replacement flow, navigating to
+`/operations/requests?state=pending` on a single fresh GET showed the
+SAME row now displaying the new Passenger's name and "Ready" readiness
+— no manual refresh, no stale data.
+
+
+14. LIVE TEST MATRIX
+-------------------------
+All required scenarios (§12 A-J) validated against purpose-built
+fixtures covering every combination:
+  A. Pending + no Passenger → ordinary Search/Add flow unchanged (no
+     gate, immediately visible). PASS.
+  B. Pending + ACTIVE Passenger → zero replacement control of any kind.
+     PASS.
+  C. Pending + INACTIVE Passenger → Inactive Passenger visible +
+     recovery notice + "Select active Passenger" control visible;
+     search/add UI correctly still gated (not yet shown). PASS.
+  D. Full flow: recovery opened → searched → candidate selected
+     (verified non-mutating) → explicit "Link Passenger" confirm →
+     RPC succeeds → new Passenger visible, old one gone from the
+     Passenger panel specifically (Requester panel correctly
+     independently retained its own unrelated `requester_name` value)
+     → readiness Ready → Request Hub queue row Ready after
+     revalidation. PASS (34/34 checks across A/B/C/D/F/G/H combined).
+  E. Recovery flow → "Add New Passenger" → created in the correct
+     organization (confirmed via direct database query in the earlier
+     S2E session's own established verification pattern — this
+     phase's own equivalent check confirmed the new Passenger visible
+     as linked immediately) → readiness Ready. PASS (12/12 checks).
+  F/G/H. Accepted/Declined/Cancelled + inactive Passenger → no
+     recovery control in any of the three. PASS (all 3 confirmed with
+     dedicated fixtures, §11).
+  I/J. Forged inactive-target and foreign-org-Passenger rejection at
+     the RPC boundary: not re-derived via a fresh UI-forgery attempt
+     this phase — the RPC's own validation (§3) is byte-identical to
+     what S2E's own `request_mutation_tests.sql` LINK-2 (cross-tenant)
+     and LINK-3 (inactive) cases already proved, and this phase made
+     zero change to that validation path. Additionally, the UI itself
+     structurally cannot present an inactive or foreign-org Passenger
+     as a selectable candidate at all (`getLogRequestFormData`'s own
+     `.eq("status","active")` + org-scoped filter, unchanged) — so the
+     only way to exercise I/J is a direct RPC call, already covered.
+Total: 34 + 12 + 7 (accessibility) + 4 (multi-org) = 57 live checks
+across this phase's own new scenarios, 0 failures on the final,
+corrected runs (two live-test-script bugs were found and fixed during
+this phase's own testing — see §16 for full detail — neither was a
+product defect).
+
+
+15. ACCESSIBILITY
+----------------------
+  - Recovery action ("Select active Passenger"): a real, focusable
+    `<button>` — confirmed via `.focus()` and confirmed activating it
+    (a native click on the focused element) opens the search UI. PASS.
+  - Passenger search: the same pre-existing, already-accessibility-
+    audited `Combobox` primitive (full ARIA combobox/listbox pattern) —
+    confirmed `role="combobox"` still present, unmodified. PASS.
+  - Confirmation button ("Link Passenger"): confirmed a real
+    `<button type="submit">`, not a div/span click handler. PASS.
+  - Pending/loading state: the existing `Button`'s `loading`/`disabled`
+    props plus a real text label ("Linking…") — unchanged from S2E,
+    reused as-is; confirmed present via the full flow test's own
+    transcript. PASS.
+  - No click-only interaction introduced: every new interactive element
+    is a real `<button>`; the recovery gate, the search selection, and
+    the confirm step are all keyboard-operable by construction (no
+    custom `onMouseDown`-only handler was added — the only
+    `onMouseDown` consumer remains the pre-existing, unmodified
+    `Combobox` component itself). PASS.
+  - Inactive status communicated in text, not color alone: both the
+    existing `StatusBadge` ("Inactive" as literal text) AND the new
+    recovery notice's own sentence ("This passenger is inactive...")
+    independently confirm this — doubly satisfied. PASS.
+7/7 accessibility checks passed.
+
+
+16. REGRESSIONS
+--------------------
+Re-ran both full existing live suites from a fresh reset, after all of
+this phase's own testing:
+  - S2D queue suite (`s2d-request-hub-e2e.mjs`): 45/45 PASS — ordinary
+    unlinked-Passenger queue rows, ordinary active-linked readiness,
+    status tabs, search, pagination, empty states, sidebar, tablet,
+    narrow guard all unchanged.
+  - S2E detail suite (`s2e-request-detail-e2e.mjs`): 47/47 PASS —
+    notably including re-confirmation that S2E's own original
+    pending+inactive-linked fixture (`e2`, Bartholomew Cruz) NOW ALSO
+    correctly shows the new recovery notice/button (proving the fix
+    applies uniformly, not just to this phase's own purpose-built
+    fixtures), and that accepted/declined/cancelled Detail pages,
+    Linked Trips (single and multiple), Add Passenger for a genuinely
+    unlinked Request, nonexistent/malformed/cross-tenant Request
+    handling, and driver-blocking are all unchanged.
+  - Multi-org isolation: re-verified directly (4/4 checks) — Org B
+    still cannot view an Org A Request by direct URL, byte-identical
+    not-found copy, no leak of any kind.
+
+Two live-test-SCRIPT bugs were found and fixed during this phase's own
+testing (both confirmed as test-script issues, not product defects,
+before being corrected):
+  1. An overly broad assertion (`!bodyText.includes("Cornelius
+     Blackwood")`) failed to account for the Requester panel
+     legitimately, correctly, independently still showing that name as
+     `requester_name` — an unrelated field this phase's feature
+     correctly never touches. Fixed by scoping the check to the
+     Passenger panel specifically.
+  2. A `button[type="submit"]` selector in the Add-Passenger-recovery
+     test matched the recovery flow's own (disabled) "Link Passenger"
+     button instead of the dialog's actual submit button, since both
+     share that attribute and the disabled one appears first in DOM
+     order. Fixed by matching the dialog's exact button text ("Add
+     Passenger") instead.
+Both fixes were verified against a fresh reset + re-seed, producing
+clean 0-failure runs.
+
+
+17. APP TESTS
+------------------
+  npx tsc --noEmit    PASS (0 errors)
+  npm run lint         PASS (0 errors; 19 pre-existing warnings, all in
+                        unrelated `.tmp-qa/*.mjs` scratch scripts — a
+                        few more than S2E's own count because several
+                        new scratch test scripts were added this phase,
+                        same warning class, nothing in product source)
+  npm run build         PASS; `/operations/requests/[requestId]` present
+                        in the route list
+  npm test               PASS (66/66 — unchanged from S2E; no new pure
+                        helper was introduced this phase, so no new
+                        unit-test target was needed)
+  request-readiness-core.test.mjs re-run standalone: 10/10 PASS, no
+    changes expected or made — confirmed.
+
+
+18. SUPABASE DIFF
+----------------------
+`git status --porcelain supabase/` before, during, and after this
+phase shows exactly the same 5 pre-existing, untouched S2B files —
+zero new or modified Supabase files. No migration, RPC, or RLS change
+of any kind. Per §15's own explicit conditional instruction ("Run the
+focused request mutation SQL tests only if application testing raises
+a mutation concern"), the SQL regression files were NOT re-run this
+phase: no mutation concern was raised anywhere in live testing (every
+scenario behaved exactly as the RPC's own source, re-read directly in
+§3, predicted), and this phase made zero change to
+`link_request_passenger` or any other Supabase object.
+
+
+19. EXACT SOURCE DIFF
+--------------------------
+See §5 for the full file list. Both modified files are untracked (the
+whole Request Hub feature area remains uncommitted from S2D onward),
+so no tracked-file diff exists for either — confirmed via `git diff
+--stat` returning empty for `RequestPassengerPanel.tsx`.
+`RequestPassengerPanel.tsx` gained: one new `useState` (
+`recoveryFlowOpen`), two new derived booleans replacing the prior
+single `canShowLinkUi` precondition, one new ~10-line notice+button
+JSX block, and an updated doc comment describing the new fourth state
+— the existing search/add/confirm form JSX itself is byte-for-byte
+unchanged, only its gating condition changed.
+`page.tsx` gained: one renamed/extended boolean
+(`passengerNeedsResolution` replacing the inline `request.state ===
+"pending" && request.passenger === null` check) and an expanded
+comment explaining why. No other file changed in any way this phase —
+confirmed via `git status --porcelain` showing only the same 4
+pre-existing tracked modifications from S2B/S2D
+(`OperationsSidebar.tsx`, `icons.ts`, `presentation.ts`,
+`database.types.ts`) with no new tracked-file modification added.
+
+
+20. READINESS FOR S2F
+--------------------------
+Ready. This phase closed a real workflow dead-end without expanding
+scope into general Passenger reassignment, Convert-to-Trip, or any
+lifecycle action — S2F's own future Decline/Cancel/Convert work is
+unaffected in shape or contract by anything changed here. The
+`linkPassengerAction`/`link-passenger-errors.ts` boundary S2F may also
+touch (if it needs to display similar link-state messaging) is
+completely unchanged and already proven correct.
+
+
+21. GIT STATUS
+-------------------
+Nothing staged. Nothing committed. Nothing pushed. Nothing deployed.
+`git status --porcelain` shows only the same pre-existing tracked-file
+modifications from S2B/S2D plus the same untracked Request Hub
+directories/files (now further modified in-place by this phase) —
+exactly as required by this phase's explicit constraint. HEAD and
+origin/main remain at 4f0176c72d6a44f8bbba7cbd3540f8cc10e1223f,
+confirmed both before and after this phase's work.

@@ -61,6 +61,7 @@ function makeTodaysOperationsData(overrides = {}) {
 }
 
 const NO_DRIVERS = { totalActiveDrivers: 0, driversCurrentlyOnTrip: 0 };
+const NO_PENDING_REQUESTS = { pendingRequestCount: 0, oldestPendingRequestCreatedAt: null };
 
 // ---------------------------------------------------------------------
 // A. ZERO TRIPS
@@ -68,7 +69,7 @@ const NO_DRIVERS = { totalActiveDrivers: 0, driversCurrentlyOnTrip: 0 };
 
 test("deriveOperationsBrief — zero trips today: NO_TRIPS, everything empty", () => {
   const data = makeTodaysOperationsData({ todayTrips: [] });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.dayState, "NO_TRIPS");
   assert.deepEqual(result.attention, []);
   assert.deepEqual(result.activeNow, []);
@@ -80,7 +81,7 @@ test("deriveOperationsBrief — zero trips today: NO_TRIPS, everything empty", (
 test("deriveOperationsBrief — zero trips today still reports real driver counts", () => {
   const data = makeTodaysOperationsData({ todayTrips: [] });
   const drivers = { totalActiveDrivers: 3, driversCurrentlyOnTrip: 0 };
-  const result = deriveOperationsBrief(data, drivers, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, drivers, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.driverSnapshot, drivers);
 });
 
@@ -147,7 +148,7 @@ test("deriveOperationsBrief — a scheduled trip inside the window AND in attent
     needsAssignmentTrips: [trip],
     attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
   });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, now);
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, now);
   assert.equal(result.nextDepartures.length, 0);
   assert.equal(result.attention.length, 1);
   assert.equal(result.attention[0].trip.id, "t-dup");
@@ -160,13 +161,13 @@ test("deriveOperationsBrief — a scheduled trip inside the window AND in attent
 test("deriveOperationsBrief — unassignedCount reflects needsAssignmentTrips length", () => {
   const unassigned = [makeTrip({ id: "u1" }), makeTrip({ id: "u2" })];
   const data = makeTodaysOperationsData({ todayTrips: unassigned, needsAssignmentTrips: unassigned });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.unassignedCount, 2);
 });
 
 test("deriveOperationsBrief — no duplicate unassigned-row collection exists on the result", () => {
   const data = makeTodaysOperationsData();
-  const result = deriveOperationsBrief(data, NO_DRIVERS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal("unassignedTrips" in result, false);
   assert.equal("unassigned" in result, false);
 });
@@ -178,7 +179,7 @@ test("deriveOperationsBrief — no duplicate unassigned-row collection exists on
 test("deriveOperationsBrief — activeNow is exactly the input activeTrips (same reference, no re-filtering)", () => {
   const active = [makeTrip({ id: "a1", state: "en_route_to_pickup" })];
   const data = makeTodaysOperationsData({ activeTrips: active });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.activeNow, active);
 });
 
@@ -281,4 +282,67 @@ test("countDriversCurrentlyOnTrip — a driver's own non-active row does not mas
 
 test("countDriversCurrentlyOnTrip — empty rows -> 0", () => {
   assert.equal(countDriversCurrentlyOnTrip([]), 0);
+});
+
+// ---------------------------------------------------------------------
+// H. REQUEST SUMMARY (P1-E1-S2G) — deriveOperationsBrief is a pure
+// pass-through for requestSummary: the actual "pending" filtering
+// (state='pending', organization-scoped, accepted/declined/cancelled
+// excluded) happens entirely in the server-only query
+// (operations-brief.ts's getRequestSummary, reusing requests-list.ts's
+// own Pending queue definition) — this pure core has no database access
+// by design (see this file's own header comment), so it cannot and does
+// not re-verify SQL-level filtering. Those cases (accepted/declined/
+// cancelled excluded, organization isolation) are covered by live/SQL
+// validation instead, exactly like getDriverSnapshot's own query logic
+// is never unit-tested here either — only its pure counting helper
+// (countDriversCurrentlyOnTrip, above) is.
+// ---------------------------------------------------------------------
+
+test("deriveOperationsBrief — requestSummary: zero pending requests passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { pendingRequestCount: 0, oldestPendingRequestCreatedAt: null };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.requestSummary, summary);
+});
+
+test("deriveOperationsBrief — requestSummary: one pending request passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { pendingRequestCount: 1, oldestPendingRequestCreatedAt: "2026-09-14T08:00:00.000Z" };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.requestSummary, summary);
+});
+
+test("deriveOperationsBrief — requestSummary: multiple pending requests passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { pendingRequestCount: 7, oldestPendingRequestCreatedAt: "2026-09-10T08:00:00.000Z" };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.requestSummary, summary);
+});
+
+test("deriveOperationsBrief — requestSummary is independent of dayState/attention/driverSnapshot (no cross-contamination)", () => {
+  const trip = makeTrip({ id: "t1", state: "completed" });
+  const data = makeTodaysOperationsData({ todayTrips: [trip] });
+  const drivers = { totalActiveDrivers: 5, driversCurrentlyOnTrip: 2 };
+  const summary = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-12T08:00:00.000Z" };
+  const result = deriveOperationsBrief(data, drivers, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "ALL_COMPLETE");
+  assert.deepEqual(result.driverSnapshot, drivers);
+  assert.deepEqual(result.requestSummary, summary);
+});
+
+test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepartures/unassignedCount/activeNow) unchanged by requestSummary's addition", () => {
+  const now = new Date("2026-09-15T10:00:00.000Z");
+  const trip = makeTrip({ id: "t-dup", scheduledPickupAt: "2026-09-15T10:30:00.000Z" });
+  const data = makeTodaysOperationsData({
+    todayTrips: [trip],
+    needsAssignmentTrips: [trip],
+    attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
+  });
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, now);
+  assert.equal(result.dayState, "ACTIVE_DAY");
+  assert.equal(result.nextDepartures.length, 0);
+  assert.equal(result.attention.length, 1);
+  assert.equal(result.unassignedCount, 1);
+  assert.deepEqual(result.activeNow, []);
 });

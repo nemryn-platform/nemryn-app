@@ -1,0 +1,281 @@
+P1-E1-S2G — OPERATIONS BRIEF REQUEST HUB INTEGRATION
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-16
+STATUS: COMPLETE — small read-only Request summary added to Operations
+Brief, answering "Is there inbound transportation demand I have not
+reviewed yet?"
+
+1. SCOPE SUMMARY
+-----------------
+Added ONE compact, read-only Operations Brief datum: "Requests awaiting
+review" — pendingRequestCount plus, when available from the same narrow
+query, oldestPendingRequestCreatedAt. No score, no SLA, no urgency model,
+no fake priority, no AI classification. Request Hub itself was not
+redesigned; public intake and recurring care were not started; nothing
+was committed, pushed, or deployed.
+
+2. AUDIT FINDINGS (READ BEFORE WRITING ANY CODE)
+------------------------------------------------------
+- src/app/operations/page.tsx: fetches TodaysOperationsData once, then
+  composes checklist + driverSnapshot in a `Promise.all`, then calls
+  `deriveOperationsBrief(data, driverSnapshot, new Date())` — the exact
+  insertion point for a third parallel fetch.
+- src/lib/operations/operations-brief-core.ts: a pure, zero-runtime-
+  import module (only `import type`). `deriveOperationsBrief` composes
+  `OperationsBriefData` from already-fetched inputs; `driverSnapshot` is
+  the closest existing precedent for "one small extra fact bolted onto
+  the Brief via an additional parameter," not a re-derivation of
+  anything else in the file.
+- src/lib/operations/operations-brief.ts: the server-only composition
+  wrapper. `getDriverSnapshot` is the exact template followed — a small,
+  dedicated, explicit-column query, never `select("*")`, never a
+  duplicate of a larger existing module.
+- src/lib/operations/operations-brief-core.test.mjs: pure-core-only
+  tests, no server-only import, loadable directly under plain Node.
+- src/components/operations/OperationsBrief.tsx: `DriverSnapshotBlock`
+  is the exact visual/structural template for a compact, non-trip-
+  scoped, always-rendered Brief block (single Panel, label + value +
+  action, no icon, no StatusBadge, rendered in every dayState mode).
+- src/lib/operations/requests-list.ts: the CURRENT, authoritative
+  Pending queue definition — `getRequestsList`'s own `pendingCount` query
+  is `.eq("organization_id", organizationId).eq("state", "pending")`,
+  head-only exact count, org-scoped independent of RLS. This is the
+  SAME definition reused here — no second interpretation of "pending"
+  was created. The Pending queue's own row ordering is locked as
+  `created_at ASC` (requests-list.ts §8) — reused for
+  oldestPendingRequestCreatedAt's own ordering.
+- Request Hub's actual filter contract (src/app/operations/requests/
+  page.tsx): the query parameter is `state` (via
+  `parseRequestsListStateFilter`), valid values `pending | accepted |
+  declined | cancelled | all` — confirmed directly from source, not
+  assumed. `?state=pending` is Request Hub's own real Pending filter;
+  no new query parameter was invented.
+
+3. REQUEST SUMMARY CONTRACT
+------------------------------
+`OperationsBriefRequestSummary` (operations-brief-core.ts):
+  pendingRequestCount: number
+  oldestPendingRequestCreatedAt: string | null
+Definition (exactly matching Request Hub's Pending queue):
+  transportation_requests WHERE organization_id = <current server-
+  resolved organization> AND state = 'pending'.
+No additional analytics, no score, no SLA, no urgency model, no fake
+priority, no AI classification anywhere in this datum or its rendering.
+
+4. DATA ACCESS
+-----------------
+`getRequestSummary` (src/lib/operations/operations-brief.ts) uses the
+normal server-side RLS-respecting Supabase client
+(`createServerSupabaseClient`) — the service role is never used anywhere
+in this phase's code. `organizationId` is a plain parameter supplied by
+the caller, which resolves it via `requireOperationsAccess` exactly like
+every other Operations data-access module — never read from the browser.
+`organization_id` is explicitly filtered in the query as defense in
+depth, on top of RLS. No migration, no RPC, no RLS change, no GRANT
+change — confirmed via `git status --porcelain supabase/` (§13).
+
+ONE narrow query serves both fields: `.select("created_at", { count:
+"exact" }).eq("organization_id", ...).eq("state", "pending")
+.order("created_at", { ascending: true }).limit(1)`. PostgREST's
+`count: "exact"` reflects the full filtered row count independent of
+`.limit()`, so this single round trip returns both the organization's
+real total pending count AND the single oldest pending row's
+`created_at` — Request rows are never fetched individually merely to
+compute a count or a single timestamp. Live-verified: this exact query
+produced "4 requests" for Org A (matching Request Hub's own independent
+pendingCount badge exactly — §9) from one query, not two.
+
+5. OPERATIONS BRIEF INTEGRATION
+-----------------------------------
+`RequestsAwaitingReviewBlock` (src/components/operations/
+OperationsBrief.tsx), added to `OperationsBrief`'s render output
+immediately after the existing `DriverSnapshotBlock`, rendered in every
+dayState mode (QUIET/CARRYOVER/ALL_COMPLETE/ACTIVE_DAY) — not trip-
+scoped, exactly like Driver Snapshot. Label: "Requests awaiting review".
+Primary value: "N requests" ("1 request" when singular — live-verified
+grammar correctness). Supporting copy when count > 0: "Oldest request
+received <human-readable date>" (via the existing
+`formatOperationsLongDate` helper — no new formatter). Action: "Review
+requests" → `/operations/requests?state=pending`, Request Hub's own
+actual filter contract, always rendered (matches Driver Snapshot's own
+"always show an action" convention, even in its own zero-drivers
+branch).
+
+6. UI BEHAVIOR
+-----------------
+Zero state (live-verified): "No requests awaiting review" — no request
+count shown, no large empty card; the block stays exactly as compact as
+Driver Snapshot's own single-row Panel. Non-zero state (live-verified):
+count + oldest-received copy + action button, all inside the same
+compact Panel — no new dashboard section, no redesign of Operations
+Brief's existing hierarchy. The block deliberately carries no
+WarningCircle icon, no StatusBadge, and no warning color — confirmed via
+live DOM inspection that the block's own HTML contains neither
+"warning-strong" nor a WarningCircle marker — so a pending Request is
+never visually classified as a Trip operational failure or given the
+same visual weight as Needs Attention.
+
+7. SMALL OPERATOR BEHAVIOR
+-------------------------------
+Live-verified directly: a 1-2-vehicle-scale organization (Org
+"harmonytransport") with 0 pending Requests sees the calm "No requests
+awaiting review" compact state (§9.A); a 1-pending-Request organization
+(Org B) immediately sees "1 request" plus exactly when it arrived
+(§9.B). No enterprise clutter was added — the block is one Panel, one
+heading, one value line, one optional supporting line, one action
+button.
+
+8. DO NOT TOUCH — CONFIRMED UNTOUCHED
+------------------------------------------
+Request lifecycle RPCs, Decline, Cancel, Create Trip, Request Activity,
+Request readiness, Passenger resolution, Trip lifecycle, Trip Assurance,
+Dispatch, Driver app, public intake, marketing site, recurring care,
+notifications, and the return-leg schema were not modified — confirmed
+by the exact, narrow file list touched (§12). No Request Hub mutation of
+any kind exists in Operations Brief's code; `RequestsAwaitingReviewBlock`
+performs no writes and calls no server action.
+
+9. LIVE VALIDATION RESULTS (16/16 PASS + count-match confirmation)
+------------------------------------------------------------------------
+A. ZERO pending (Org "harmonytransport", its one pending Request
+   temporarily flipped to `declined` via direct SQL for this test, then
+   restored to `pending` immediately after — confirmed byte-identical
+   restoration via a follow-up `SELECT`): shows "No requests awaiting
+   review", no count rendered, "Review requests" link still present with
+   the correct href even at zero. Screenshot captured:
+   /tmp/s2g-shots/A-zero-state.png
+B. ONE pending Request (Org B, its genuine existing single pending
+   Request, untouched): shows "1 request" (correct singular grammar,
+   confirmed the string "1 requests" does NOT appear), plus "Oldest
+   request received" supporting copy. Screenshot captured:
+   /tmp/s2g-shots/B-one-pending.png
+C. SEVERAL pending Requests (Org A, 4 genuine pending Requests from
+   S2F-B2's own live-test fixtures): shows "4 requests" (plural), oldest-
+   received copy present, block HTML confirmed to contain no warning-
+   colored badge or WarningCircle marker. Screenshot captured:
+   /tmp/s2g-shots/C-several-pending.png
+D. Clicking "Review requests" (from the Org A, 4-pending view) navigated
+   to exactly `/operations/requests?state=pending` and landed on the
+   real Pending Request Hub view showing the actual Request rows.
+E. Accepted/declined/cancelled do not affect the count: Org A carries 1
+   accepted + 2 cancelled + 4 declined + 4 pending Requests (11 total)
+   at the database level; the Brief correctly showed "4 requests," never
+   11 or any other total — confirming state='pending' filtering is
+   correctly applied end-to-end.
+F. Cross-organization isolation: Org A (4 pending) and Org B (1 pending)
+   each independently and correctly saw only their own count in the same
+   test run — never merged, never leaked, never showing the other org's
+   figure.
+G. Existing Operations Brief blocks remain correct (regression): "
+   Operations Brief" heading, "Needs Attention" block, "Driver Snapshot"
+   block, and the "trips today" summary strip were all confirmed still
+   present and rendering normally alongside the new block.
+
+Additional confirmation beyond the phase's own live-validation list: the
+Brief's displayed count ("4 requests") was directly cross-checked
+against Request Hub's own independent `pendingCount` badge ("4
+pending") in the same live session — exact match, proving this datum
+uses the identical Pending queue definition, not a parallel
+reinterpretation.
+
+10. TESTS
+------------
+- `npx tsc --noEmit`: clean, 0 errors.
+- `npm run lint`: 0 errors, 27 pre-existing warnings, all confined to
+  `.tmp-qa/*.mjs` scratch scripts (unrelated to this phase's shipped
+  code).
+- `npm run build`: succeeded; all expected routes present, including
+  `/operations`.
+- `npm test`: 71/71 passing (66 pre-existing + 5 new
+  `deriveOperationsBrief` requestSummary tests: zero pending, one
+  pending, multiple pending, independence-from-other-fields, and an
+  explicit "existing Brief behavior unchanged by this addition"
+  regression test). accepted/declined/cancelled-excluded and
+  organization-isolation cases are NOT unit-testable in the pure core
+  (which has zero database access by design, matching
+  `countDriversCurrentlyOnTrip`'s own established split) — those are
+  covered by live validation instead (§9.E/§9.F), exactly like
+  `getDriverSnapshot`'s own query logic is never pure-core-unit-tested
+  either.
+- Because no Supabase source changed, the focused live/RLS validation in
+  §9 was sufficient per this phase's own explicit instruction; the full
+  production-release battery was correctly NOT run (that belongs to
+  S2H).
+
+11. NEW/MODIFIED FILES
+---------------------------
+Modified:
+- src/lib/operations/operations-brief-core.ts (added
+  `OperationsBriefRequestSummary`, added `requestSummary` to
+  `OperationsBriefData`, extended `deriveOperationsBrief`'s signature)
+- src/lib/operations/operations-brief.ts (added `getRequestSummary`,
+  wired into `getOperationsBrief`, re-exported the new type)
+- src/app/operations/page.tsx (fetches `getRequestSummary` in the
+  existing `Promise.all`, passes it to `deriveOperationsBrief`)
+- src/components/operations/OperationsBrief.tsx (added
+  `RequestsAwaitingReviewBlock`, rendered after `DriverSnapshotBlock`)
+- src/lib/operations/operations-brief-core.test.mjs (updated every
+  existing `deriveOperationsBrief` call site for the new parameter;
+  added 5 new requestSummary-focused tests)
+No file outside this exact list was touched. `create_trip`, Decline,
+Cancel, Request Activity, Request readiness, Passenger resolution, Trip
+lifecycle, Trip Assurance, Dispatch, the Driver app, and Request Hub's
+own page/query code were all confirmed unmodified.
+
+12. SUPABASE SOURCE — UNCHANGED
+-------------------------------------
+`git status --porcelain supabase/` shows exactly the same untracked file
+set present before this phase began (the pre-existing S2B and S2F-A
+migrations and their associated test files). Zero new or modified
+Supabase files, zero migrations, zero RPC changes, zero RLS/GRANT
+changes.
+
+13. GIT STATE
+-----------------
+Nothing was staged, committed, pushed, or deployed at any point during
+this phase. All new/modified files listed in §11 remain as local,
+untracked/unstaged working-tree changes.
+
+============================================================
+REQUEST SUMMARY:
+PASS
+
+COUNT MATCHES REQUEST HUB:
+PASS
+
+ZERO STATE:
+PASS
+
+NONZERO STATE:
+PASS
+
+ORG ISOLATION:
+PASS
+
+OPERATIONS BRIEF REGRESSION:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+71/71
+
+SUPABASE SOURCE CHANGED:
+NO
+
+READY FOR S2H RELEASE:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E1-S2H — Request Hub Production Release

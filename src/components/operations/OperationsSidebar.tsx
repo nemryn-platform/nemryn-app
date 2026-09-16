@@ -34,8 +34,17 @@ const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffec
 // leading to it would be exactly the "convincing-looking dead
 // navigation" this phase exists to close. Restore once each has a real
 // screen, not merely to fill this list back out.
+//
+// P1-E1-S2D: "Requests" is placed immediately after Overview, before
+// Trips — locked position, matching the S2A audit's own workflow-order
+// justification (demand arrives → request reviewed → trip created →
+// dispatch → execution): Requests is the first real operational stage,
+// so it reads left-to-right before the Trips/Dispatch pair it feeds,
+// rather than being buried after reference-data sections
+// (Passengers/Facilities/Drivers/Fleet).
 const NAV_ITEMS: { key: keyof typeof navIcons; label: string; href: string }[] = [
   { key: "overview", label: "Overview", href: "/operations" },
+  { key: "requests", label: "Requests", href: "/operations/requests" },
   { key: "trips", label: "Trips", href: "/operations/trips" },
   { key: "dispatch", label: "Dispatch", href: "/operations/dispatch" },
   { key: "passengers", label: "Passengers", href: "/operations/passengers" },

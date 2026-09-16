@@ -11,7 +11,16 @@
  * rather than reached-into from `driver/` to keep that boundary clean (see
  * ZD-129). Neither module is a stored Trip state — see lifecycle-model.md
  * §C; both remain UI groupings over the same 9 canonical states.
+ *
+ * P1-E1-S2D also added the Request-facing helpers at the bottom of this
+ * file (requestStatusLabel/Category, requestReadinessLabel/TextClass,
+ * formatRequestAge, formatRequestServiceDate) — same "state → screen
+ * label, one place to look" discipline, extended to
+ * transportation_requests rather than duplicated into a parallel module.
  */
+
+import type { StatusCategory } from "@/components/ui/StatusBadge";
+import type { RequestReadiness } from "./request-readiness-core";
 
 /**
  * The exact label strings TRIP_STATUS_MAP (src/components/ui/TripStatus.tsx)
@@ -128,4 +137,123 @@ export function assuranceStatusCategory(code: string): "warning" | "positive" | 
   if (code === "ON_TRACK") return "positive";
   if (code === "TERMINAL") return "neutral";
   return "warning";
+}
+
+/**
+ * transportation_requests.state → label/StatusBadge category (P1-E1-S2D).
+ * The exact 4-value CHECK constraint vocabulary
+ * (20260830130900_transportation_requests.sql) — no fifth "converted"
+ * value exists (S2A §4: conversion is represented by accepted + linked
+ * Trips, never a stored state). `pending` reuses the "warning" (amber)
+ * tone already established by Operations Brief's own "Needs Attention"
+ * language for exactly the same underlying concept — real, unresolved
+ * work waiting on a person — rather than inventing a new tone.
+ * `declined`/`cancelled` both read as a plain closed/muted disposition
+ * (the `cancelled` StatusBadge category), matching TripStatus's own
+ * "cancelled" treatment; there is no reason for a Request decline to
+ * look more alarming than a cancellation.
+ */
+export function requestStatusLabel(state: string): string {
+  if (state === "pending") return "Pending";
+  if (state === "accepted") return "Accepted";
+  if (state === "declined") return "Declined";
+  if (state === "cancelled") return "Cancelled";
+  return state;
+}
+
+export function requestStatusCategory(state: string): StatusCategory {
+  if (state === "pending") return "warning";
+  if (state === "accepted") return "positive";
+  return "cancelled";
+}
+
+/**
+ * `RequestReadiness` (request-readiness-core.ts) → label/tone —
+ * deliberately kept in THIS presentation module, separate from the pure
+ * core, per that module's own doc comment ("keep the underlying state
+ * separate from presentation labels"). Rendered as restrained colored
+ * TEXT in the queue (never a second StatusBadge pill) specifically so
+ * Readiness reads as visually distinct from Status — P1-E1-S2D §18's
+ * own explicit instruction that the two concepts must never be merged
+ * or made to look like the same kind of thing.
+ */
+export function requestReadinessLabel(readiness: RequestReadiness): string {
+  if (readiness === "ready") return "Ready";
+  if (readiness === "needs_passenger") return "Passenger needed";
+  if (readiness === "not_convertible") return "Not convertible";
+  return "Accepted";
+}
+
+/** Maps to an existing semantic TEXT color token only (never a new color) — used as a plain `text-*` class, not a badge background. */
+export function requestReadinessTextClass(readiness: RequestReadiness): string {
+  if (readiness === "ready") return "text-success-text";
+  if (readiness === "needs_passenger") return "text-warning-text";
+  return "text-text-muted";
+}
+
+/**
+ * "Just now" / "12 min" / "2 hr" / "1 day" / "3 days" — the exact
+ * granularity P1-E1-S2D §19 asks for. `now` is always an explicit
+ * parameter (never `new Date()` internally), matching
+ * location-freshness.ts's own established determinism/testability
+ * discipline. Server-rendered once per request — deliberately NOT a
+ * client-side ticking interval (§19's own explicit instruction).
+ */
+export function formatRequestAge(createdAt: string, now: Date): string {
+  const created = new Date(createdAt);
+  if (Number.isNaN(created.getTime())) return "";
+  const ageMs = Math.max(0, now.getTime() - created.getTime());
+  const ageMinutes = Math.floor(ageMs / 60000);
+  if (ageMinutes < 1) return "Just now";
+  if (ageMinutes < 60) return `${ageMinutes} min`;
+  const ageHours = Math.floor(ageMinutes / 60);
+  if (ageHours < 24) return `${ageHours} hr`;
+  const ageDays = Math.floor(ageHours / 24);
+  return `${ageDays} day${ageDays === 1 ? "" : "s"}`;
+}
+
+/**
+ * "No date given" / "Sep 20" / "Sep 20 · 8:30 AM" (P1-E1-S2D §20).
+ * `preferred_date`/`preferred_time` are plain `date`/`time` columns
+ * (not `timestamptz`) — unlike `formatOperationsTime` above, there is
+ * no timezone conversion to perform; the stored calendar value is
+ * rendered exactly as given, never reinterpreted through any IANA zone.
+ * Never substitutes `created_at` (when the request was LOGGED) for the
+ * service date (when transportation is actually WANTED) — an absent
+ * preferred date renders as an honest "No date given", not a fabricated
+ * one.
+ */
+export function formatRequestServiceDate(preferredDate: string | null, preferredTime: string | null): string {
+  if (!preferredDate) return "No date given";
+  const [year, month, day] = preferredDate.split("-").map(Number);
+  // Formatted with timeZone: "UTC" explicitly, matching the UTC instant
+  // this Date was deliberately constructed with (Date.UTC) — without
+  // this, Intl.DateTimeFormat would reinterpret the instant through the
+  // SERVER's own local timezone, which could shift the displayed
+  // day/hour depending on where this code happens to run. There is no
+  // real timezone conversion happening here at all (these are plain
+  // date/time columns, not timestamptz) — UTC is used purely as a
+  // neutral, fixed calendar to format calendar-value components
+  // through, never as the request's actual timezone.
+  const dateLabel = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(
+    new Date(Date.UTC(year, month - 1, day)),
+  );
+  if (!preferredTime) return dateLabel;
+  const [hour, minute] = preferredTime.split(":").map(Number);
+  const timeLabel = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(
+    new Date(Date.UTC(2000, 0, 1, hour, minute)),
+  );
+  return `${dateLabel} · ${timeLabel}`;
+}
+
+/** `request_events.event_type` (P1-E1-S2B's own closed, allow-listed set) → restrained human label, for Request Detail's Activity panel (P1-E1-S2F-B2 §16). Never exposes the raw event_type string; an unrecognized value falls through to itself rather than crashing, matching every other label lookup in this file. */
+const REQUEST_EVENT_LABEL: Record<string, string> = {
+  request_logged: "Request logged",
+  passenger_linked: "Passenger linked",
+  request_declined: "Request declined",
+  request_cancelled: "Request cancelled",
+};
+
+export function requestEventLabel(eventType: string): string {
+  return REQUEST_EVENT_LABEL[eventType] ?? eventType;
 }
