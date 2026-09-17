@@ -1,0 +1,370 @@
+P1-E1-S4C1 — EXACT ORGANIZATION DAY BOUNDS + TOMORROW QUERY HARDENING
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Correctness + bounded-query hardening. No new product
+feature, no user-facing UI, no schema change, no RLS change, no
+deployment. Nothing committed, pushed, or deployed.
+
+------------------------------------------------------------------------
+PREFLIGHT
+------------------------------------------------------------------------
+HEAD confirmed unchanged (87940c2). `git status --short`/`git diff
+--stat` confirmed the accumulated S4B (3 files) + S4C (5 files) changes
+were the only prior state — nothing unrelated was absorbed. Every real
+call site of `organizationDayBoundsUtc` was located BEFORE any change
+was made: `todays-operations.ts`, `dispatch-board.ts`, `trips-list.ts`
+(3 separate calls — `today`/`upcoming`/`past` date filters, a consumer
+this phase had not previously examined), and S4C's own `tomorrow-
+readiness.ts`. `local-time.ts` was read in full and identified as
+already containing the exact "trustworthy timezone conversion
+strategy" this phase's own instructions asked to look for first.
+
+------------------------------------------------------------------------
+PREVIOUS DST DEFECT
+------------------------------------------------------------------------
+`organizationDayBoundsUtc` previously computed `endUtc = startUtc + 24
+hours` unconditionally. Correct for an ordinary day; wrong on the two
+DST transition days per year in any zone that observes DST — a
+spring-forward local calendar day genuinely has 23 elapsed hours, a
+fall-back day genuinely has 25. This produced a window up to 1 hour too
+wide (spring) or too narrow (fall) at its far edge, discovered and
+explicitly accepted as a documented tolerance during P1-E1-S4C's own
+work. This phase removes that tolerance entirely.
+
+------------------------------------------------------------------------
+EXACT DAY-BOUND CONTRACT
+------------------------------------------------------------------------
+`organizationDayBoundsUtc(instant, timezone)` now returns the EXACT UTC
+instants of `[start of instant's own organization-local calendar date,
+start of the NEXT organization-local calendar date)`. The duration is
+whatever that specific local date's real duration is — 23, 24, or 25
+hours — never assumed to be a fixed 24. The function's own public
+signature and return shape (`{startUtc: Date, endUtc: Date}`) is
+UNCHANGED, so every existing caller benefits automatically with zero
+call-site edits required.
+
+------------------------------------------------------------------------
+IMPLEMENTATION
+------------------------------------------------------------------------
+Rewrote `day-bounds.ts` to compute `startUtc` and `endUtc` as two
+INDEPENDENT calls to `organizationLocalToUtc` (`local-time.ts`, already
+existing, already proven, NOT modified in this phase) — "local 00:00 of
+this calendar date" — rather than deriving one from the other by adding
+a fixed duration:
+
+  const dateKey = /* the local calendar date containing `now`, via the
+                     same Intl.DateTimeFormat("en-CA", {...}) technique
+                     already used before this fix */
+  const startUtc = localMidnightUtc(dateKey, timezone);
+  const endUtc = localMidnightUtc(nextDateKey(dateKey), timezone);
+
+`organizationLocalToUtc` already resolves an arbitrary local
+date+time to a UTC instant correctly across DST by testing BOTH of a
+zone's two possible yearly offsets against the real IANA-backed wall-
+clock the resulting instant would actually show, keeping only the one
+that round-trips correctly (already used elsewhere in this codebase —
+Dispatcher pickup-time entry — never re-implemented, only reused).
+Feeding it `{date: dateKey, time: "00:00"}` gives the exact instant of
+that date's own local midnight, with its own, independently-correct
+offset — no assumption that yesterday's or tomorrow's offset applies.
+
+`nextDateKey` is pure calendar-digit arithmetic (`Date.UTC(year,
+month-1, day+1)`, reformatted) — never timezone-sensitive, matching this
+codebase's own established use of `Date.UTC` as a calendar-only
+scratchpad elsewhere (`formatRequestServiceDate`).
+
+`localMidnightUtc` throws a clear, diagnosable error if
+`organizationLocalToUtc` ever returns a non-`"ok"` status for a
+midnight boundary — a case that cannot occur for any IANA timezone this
+product currently supports (real-world DST transitions occur at 2:00 AM
+local in every zone actually used; midnight is never the transition
+instant), documented rather than silently worked around, matching this
+codebase's own "never fabricate a result" discipline.
+
+No new library was added. No hardcoded offset or transition-date table
+was introduced. `timezoneOffsetMs`, no longer used anywhere in
+`day-bounds.ts` after this rewrite, was removed as dead code.
+
+------------------------------------------------------------------------
+SPRING-FORWARD VALIDATION
+------------------------------------------------------------------------
+America/New_York, 2026-03-08 (2:00 AM → 3:00 AM, a genuine 23-hour
+local calendar day). Verified at three independent levels:
+
+1. Direct unit test (`day-bounds-tomorrow.test.mjs`): `organizationDay
+   BoundsUtc` queried directly for an instant already on March 8 —
+   `startUtc = 2026-03-08T05:00:00.000Z` (midnight EST, pre-transition),
+   `endUtc = 2026-03-09T04:00:00.000Z` (midnight EDT March 9) — duration
+   asserted to be EXACTLY 23 hours, no tolerance.
+2. Tomorrow composition (`today=Mar 7 → tomorrow=Mar 8`): identical
+   exact result, proving the shared helper's own fix flows through the
+   composition unchanged.
+3. LIVE, via real PostgREST + a real authenticated user JWT
+   (org-a-admin): a synthetic Trip at `2026-03-08T20:00:00Z` (4pm EST,
+   genuinely inside March 8) is correctly INCLUDED in March 8's own
+   candidate set; a synthetic Trip at `2026-03-09T04:30:00Z` (00:30 EDT,
+   genuinely March 9) is correctly EXCLUDED — this exact second case is
+   precisely the instant the OLD `+24h` implementation would have
+   wrongly included (old `endUtc` would have been `2026-03-09T05:00:00Z`,
+   one hour later than the new, correct value).
+
+------------------------------------------------------------------------
+FALL-BACK VALIDATION
+------------------------------------------------------------------------
+America/New_York, 2026-11-01 (2:00 AM EDT → 1:00 AM EST, a genuine
+25-hour local calendar day). Same three-level verification:
+
+1. Direct unit test: `startUtc = 2026-11-01T04:00:00.000Z` (midnight
+   EDT, pre-transition), `endUtc = 2026-11-02T05:00:00.000Z` (midnight
+   EST Nov 2) — duration asserted to be EXACTLY 25 hours.
+2. Tomorrow composition (`today=Oct 31 → tomorrow=Nov 1`): identical
+   exact result.
+3. LIVE: a synthetic Trip at `2026-11-02T04:30:00Z` (23:30 EST Nov 1,
+   genuinely still Nov 1 — the LAST legitimate hour of the 25-hour day)
+   is correctly INCLUDED — this is precisely the instant the OLD
+   implementation would have wrongly EXCLUDED (old `endUtc` would have
+   been `2026-11-02T04:00:00Z`, cutting off 1 hour too early). A
+   synthetic Trip at `2026-11-02T05:30:00Z` (00:30 EST, genuinely Nov 2)
+   is correctly EXCLUDED.
+
+------------------------------------------------------------------------
+SHARED CALLER REGRESSION
+------------------------------------------------------------------------
+Because the function's public signature/return shape is unchanged, no
+caller required a code edit. Verified anyway, at two levels:
+
+- MATHEMATICAL: the new and old implementations were directly compared
+  across 4 ordinary (non-transition) dates spanning the whole year
+  (Jan 15, Jun 14/"today", Jul 4, Dec 25) — IDENTICAL results in every
+  case, confirming zero behavioral change for the ~363 non-transition
+  days per year every existing consumer (`todays-operations.ts`,
+  `dispatch-board.ts`, `trips-list.ts`'s 3 date-filter branches) relies
+  on daily.
+- LIVE: signed in as org-a-admin and loaded `/operations` (Today's
+  Operations + Operations Brief), `/operations/dispatch`, and
+  `/operations/trips` — all three loaded without error, Operations
+  Brief and the Today's Operations summary strip rendered correctly.
+
+------------------------------------------------------------------------
+TOMORROW READINESS REVALIDATION
+------------------------------------------------------------------------
+All 8 of S4C's own original readiness-dimension fixtures (ready, no
+driver, no vehicle, inactive driver, inactive vehicle, inactive
+passenger, open exception, multi-reason) re-validated live against the
+hardened query — every one produced the identical, correct result as
+before this phase's changes. All exclusion cases (Trip scheduled today,
+Trip scheduled day-after-tomorrow, null `scheduled_pickup_at`, a
+non-scheduled state carrying a tomorrow timestamp, an Org B Trip)
+re-confirmed correctly excluded. Org isolation re-confirmed both
+positively (Org B sees its own fixture) and adversarially (Org A's own
+admin JWT, explicitly supplied Org B's real `organization_id`, receives
+zero rows via real RLS).
+
+------------------------------------------------------------------------
+ACTIVE ASSIGNMENT QUERY STRATEGY
+------------------------------------------------------------------------
+Investigated PostgREST's actual embedded-relation-filter behavior
+empirically (not assumed) before choosing a strategy: filtering an
+embedded (LEFT-JOINed) relation via a dotted query parameter
+(`trip_assignments.ended_at=is.null`) narrows WHICH rows of the embed
+come back, WITHOUT excluding the parent row when zero rows match —
+confirmed live, directly against this project's own local PostgREST:
+a Trip with zero assignments still returned with `trip_assignments: []`
+under this exact filter, never dropped. This is Option A from the
+phase's own choice.
+
+Implemented in `tomorrow-readiness.ts` as `.is("trip_assignments.
+ended_at", null)` — deliberately `.is()`, never `.eq()`: confirmed
+directly against the installed `@supabase/postgrest-js` source
+(`PostgrestFilterBuilder.ts`) before relying on it — its own
+documentation states explicitly "Using the eq() filter doesn't work
+when filtering for null. Instead, you need to use is()." Using `.eq()`
+here would have silently produced a query that never matches anything,
+a real defect this direct source-verification caught before it ever
+shipped.
+
+Never `!inner` — that would turn the embed into an inner join and
+silently drop every unassigned Trip, which is exactly the class of
+Trip this query most needs to correctly surface as NEEDS_DRIVER.
+
+Live-verified against a NEW, dedicated reassignment-history fixture (a
+Trip with one ENDED `trip_assignments` row plus one ACTIVE row): the
+hardened query returned exactly 1 assignment row (the active one) in
+the raw PostgREST response — the historical, ended row never appeared
+in the payload at all, confirmed both by inspecting the raw embed array
+length and by confirming the resulting readiness evaluates `READY`
+(correctly reflecting only the current, valid assignment). The
+in-memory mapping logic was simplified accordingly: since the embed can
+now contain at most one row (the schema's own partial unique index
+already guarantees at most one `ended_at IS NULL` row per Trip, and the
+query now filters to exactly that condition), `trip_assignments[0]` is
+used directly — the previous `.find((a) => a.ended_at === null)` search
+over potentially-historical rows was removed as no longer necessary.
+
+------------------------------------------------------------------------
+QUERY ROUND-TRIP COUNT
+------------------------------------------------------------------------
+Still exactly 2 per call to `getTomorrowReadiness` — the active-
+assignment hardening was achieved via a query PARAMETER on the existing
+first query, not an additional round trip:
+  1. The Trip candidate query (Trips + embedded Passenger + embedded
+     active-only TripAssignment + embedded Driver/Vehicle status — one
+     round trip).
+  2. The open-exception count query, scoped to the resulting candidate
+     Trip ids.
+Option B (a separate, explicit `trip_assignments` query) was considered
+per the phase's own explicit permission but not needed — Option A
+achieved full correctness and boundedness with no round-trip increase
+at all.
+
+------------------------------------------------------------------------
+NO N+1 VALIDATION
+------------------------------------------------------------------------
+Unchanged from S4C: every lookup remains scoped to the already-known
+candidate id set (`.in("trip_id", candidateIds)` for exceptions), never
+one query per Trip. The active-assignment hardening reduces payload
+size (no historical rows transmitted) without adding any query.
+
+------------------------------------------------------------------------
+ORG ISOLATION
+------------------------------------------------------------------------
+Re-confirmed at the real RLS level (not merely re-asserted): Org B's
+own tomorrow fixture correctly appears only in Org B's own aggregate;
+Org A's own admin JWT, explicitly querying with Org B's real
+`organization_id`, receives zero rows from the real PostgREST/RLS
+stack. No RLS policy was touched.
+
+------------------------------------------------------------------------
+DAY METADATA DECISION
+------------------------------------------------------------------------
+Added `timezone`, `tomorrowStartUtc`, `tomorrowEndUtc` to a new
+`TomorrowReadinessData` interface in `tomorrow-readiness.ts` (extending
+the pure `TomorrowReadinessAggregate` from `tomorrow-readiness-core.ts`,
+which itself remains completely unchanged and unaware of any date/
+timezone concept — matching its own established "date scope decisions
+never happen in the pure core" design). `getTomorrowReadiness`'s return
+type changed from `TomorrowReadinessAggregate` to `TomorrowReadinessData`.
+No formatted/presentation string was added (e.g. no "Wednesday,
+September 18") — only the raw, authoritative UTC boundary instants and
+the timezone string, so a future UI (S4D) can render its own date
+heading without needing to independently recompute `organizationDay
+BoundsUtc` itself, per this phase's own explicit preference for "one
+authoritative server result over presentation-layer duplicate date
+logic."
+
+------------------------------------------------------------------------
+FILES CREATED
+------------------------------------------------------------------------
+None new relative to S4C's own file set — S4C1 is a hardening pass over
+already-created S4B/S4C files. (S4C's own `day-bounds-tomorrow.test.mjs`
+and `server-only-stub-loader.mjs` were substantially rewritten in this
+phase — see FILES MODIFIED.)
+
+------------------------------------------------------------------------
+FILES MODIFIED
+------------------------------------------------------------------------
+  src/lib/operations/day-bounds.ts (PRE-EXISTING, already-committed
+    file from P1-E3-S4, predating this entire Request Hub/Readiness
+    work — rewritten to compute exact bounds via `organizationLocalToUtc`
+    instead of `startUtc + 24h`; public signature unchanged)
+  src/lib/operations/tomorrow-readiness.ts (S4C's own file — added the
+    `.is("trip_assignments.ended_at", null)` embed filter, simplified
+    the assignment-lookup logic, added `TomorrowReadinessData` with day
+    metadata, updated the function's own return type/value)
+  src/lib/operations/day-bounds-tomorrow.test.mjs (S4C's own file —
+    completely rewritten: the old ±1h-tolerance assertions were removed
+    entirely and replaced with exact-bounds assertions, transition-day-
+    itself tests, the previously-broken-edge tests, and [start,end)
+    inclusion/exclusion tests)
+  src/lib/operations/server-only-stub-loader.mjs (S4C's own file —
+    extended to also resolve extensionless relative `.ts` imports
+    between two server-only modules, needed because `day-bounds.ts` now
+    has a real runtime import of `local-time.ts`; still fakes nothing
+    beyond module-resolution mechanics)
+
+`local-time.ts` was read and reused but NOT modified — confirmed via
+`git status`/`git diff` showing no change to it at all.
+
+------------------------------------------------------------------------
+SCHEMA IMPACT
+------------------------------------------------------------------------
+NONE. `git status --porcelain supabase/` is empty.
+
+------------------------------------------------------------------------
+RLS IMPACT
+------------------------------------------------------------------------
+NONE. No RLS policy was created, modified, or removed. The hardened
+query's own correctness (parent-row inclusion preserved under an
+embedded-relation filter) was verified against the EXISTING, unmodified
+RLS policies.
+
+------------------------------------------------------------------------
+TEST RESULTS
+------------------------------------------------------------------------
+- `npx tsc --noEmit`: 0 errors.
+- `npm run lint`: 0 errors, 31 warnings, all confined to pre-existing
+  `.tmp-qa/*.mjs` scratch scripts.
+- `npm run build`: succeeded, no new route.
+- `npm test`: 112/112 passing (107 pre-existing S4B/S4C baseline, net
+  +5 from this phase's own rewritten DST test file — the old file had 8
+  tests documenting the now-removed tolerance; the new file has 13
+  testing exact bounds, transition days themselves, the previously-
+  broken edges, and [start,end) semantics). Every S4B (`trip-readiness-
+  core.test.mjs`) and S4C (`tomorrow-readiness-core.test.mjs`) test
+  remains passing unmodified.
+
+============================================================
+EXACT LOCAL DAY BOUNDS:
+PASS
+
+23-HOUR DAY:
+PASS
+
+25-HOUR DAY:
+PASS
+
+TODAY OPERATIONS REGRESSION:
+PASS
+
+DISPATCH REGRESSION:
+PASS
+
+TOMORROW CANDIDATE FILTERING:
+PASS
+
+ACTIVE ASSIGNMENT BOUNDED:
+PASS
+
+NO N+1:
+PASS
+
+ORG ISOLATION:
+PASS
+
+NEW SCHEMA:
+NO
+
+RLS CHANGES:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+112/112
+
+READY FOR S4D:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E1-S4D — Tomorrow Readiness Surface + Trip Detail Integration

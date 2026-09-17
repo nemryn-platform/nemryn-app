@@ -1,0 +1,423 @@
+P1-E1-S4E — OPERATIONS BRIEF TOMORROW READINESS INTEGRATION
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Small read-only Operations Brief integration over the
+already-proven Tomorrow Readiness engine. No new schema, no new RPC, no
+new RLS, no Dispatch changes, no new readiness rules, no production
+deployment. Nothing committed, pushed, or deployed.
+
+------------------------------------------------------------------------
+AUDIT PERFORMED BEFORE CODING
+------------------------------------------------------------------------
+Read fresh, in full, before writing any code: src/app/operations/page.tsx,
+OperationsBrief.tsx, operations-brief-core.ts, operations-brief.ts,
+operations-brief-core.test.mjs, tomorrow-readiness.ts, tomorrow-
+readiness-core.ts, src/app/operations/tomorrow/page.tsx, and
+OperationsLayoutClient.tsx (the actual current shared layout-chrome file
+— the phase's own alternate-name guess for this file did not exist; this
+is the real one, matching S4D's own prior finding). Also inspected the
+existing Driver Snapshot block, Requests Awaiting Review block, Needs
+Attention hierarchy, and SummaryStrip conventions.
+
+Key findings that shaped the design:
+  - Driver Snapshot and Requests Awaiting Review both follow the exact
+    same compact shape: a single `Panel` with a fixed `<h3>` title, ONE
+    varying description paragraph, and ONE `LinkButton` action on the
+    right. Reused verbatim — no new visual pattern introduced.
+  - Requests Awaiting Review is deliberately calm at every count,
+    including a nonzero pending count — no StatusBadge, no warning
+    color, no icon (its own doc comment: "never compete visually with
+    Needs Attention above"). This is the exact precedent §8 asks the
+    new block to follow, and it was followed exactly: the new Tomorrow
+    Readiness block never changes color/icon/weight based on
+    `needsPreparationCount`.
+  - `deriveOperationsBrief` (operations-brief-core.ts) already
+    establishes the exact "pure core takes an already-fetched summary as
+    a parameter, never fetches it itself" pattern for `requestSummary`
+    and `driverSnapshot` — extended identically for
+    `tomorrowReadiness`, not a new pattern.
+  - `RequestActivityPanel`'s `events: T[] | null` convention (`null` =
+    genuine fetch failure, `[]` = real, successfully-fetched empty
+    result) is the established graceful-degradation contract this
+    codebase already uses for exactly this situation — reused directly
+    for `tomorrowReadiness: OperationsBriefTomorrowSummary | null`.
+  - `getOperationsBrief`'s existing `Promise.all` (todaysOperations +
+    driverSnapshot + requestSummary) was confirmed to have no isolated
+    error handling of its own (a failure in any of those three already
+    fails the whole Brief) — out of scope to fix here; Tomorrow
+    Readiness was deliberately NOT added as a 4th member of that same
+    Promise.all (which would inherit that same all-or-nothing failure
+    mode), but as its own independently-started, independently-caught
+    promise instead (see PARALLEL FETCHING below).
+
+------------------------------------------------------------------------
+INTEGRATION STRATEGY
+------------------------------------------------------------------------
+Reused `getTomorrowReadiness` (S4C/S4C1's own already-authoritative
+entry point) directly — never a second Trips query, never a second
+readiness interpretation. A new, thin, server-only helper,
+`getTomorrowReadinessSummary` (operations-brief.ts), calls it and narrows
+the result to the 3 counts the Brief actually needs
+(`totalScheduledTrips`, `readyCount`, `needsPreparationCount`) — the
+SAME day bounds, the SAME candidate Trip set, the SAME evaluator
+`/operations/tomorrow` itself uses, confirmed by exact live count match
+(see COUNT MATCH WITH TOMORROW PAGE below).
+
+------------------------------------------------------------------------
+SHARED DATA AUTHORITY
+------------------------------------------------------------------------
+No parallel interpretation exists anywhere in this change. Every number
+the Brief block shows traces to the identical `TomorrowReadinessData`
+object `/operations/tomorrow` itself renders from, for the same
+organization and the same real "now." Verified live for both a mixed
+10-trip set (Org A: Brief "8 trips need preparation / 10 scheduled for
+tomorrow" vs. page "10 scheduled trips / 2 ready / 8 need preparation")
+and a 20-trip set (Harmony: Brief "9 trips need preparation / 20
+scheduled for tomorrow" vs. page "20 scheduled trips / 11 ready / 9 need
+preparation") — exact match in both cases.
+
+------------------------------------------------------------------------
+BRIEF CONTRACT
+------------------------------------------------------------------------
+Added to `operations-brief-core.ts` (pure, no Supabase import, no React,
+no hidden querying):
+  export interface OperationsBriefTomorrowSummary {
+    totalScheduledTrips: number;
+    readyCount: number;
+    needsPreparationCount: number;
+  }
+Added to `OperationsBriefData`:
+  tomorrowReadiness: OperationsBriefTomorrowSummary | null;
+`deriveOperationsBrief`'s signature gained one new parameter,
+`tomorrowReadiness`, inserted before the existing `now` parameter (kept
+last, matching its own established convention) — a pure pass-through,
+identical in kind to how `requestSummary`/`driverSnapshot` are already
+passed in as already-resolved values. No `timezone`/`tomorrowStartUtc`
+field and no `items` list were added — S4E §3's own "the Brief does not
+need every Trip row" instruction, and §14's own "omit a literal date if
+it does not materially improve the compact block" — the compact block
+never renders a literal date at all (see DATE decision under
+ORGANIZATION TIMEZONE below).
+
+------------------------------------------------------------------------
+ZERO STATE
+------------------------------------------------------------------------
+`totalScheduledTrips === 0` → title "Tomorrow readiness", description
+"No trips scheduled for tomorrow" (S4E §5's own exact suggested copy),
+action "View tomorrow" → `/operations/tomorrow`. No ready/need-
+preparation counters rendered in this branch at all (the summary block's
+own early-return skips straight past the count-bearing paragraph).
+Live-verified against Harmony Medical Transport (genuinely 0 Trips in
+the real current tomorrow window).
+
+------------------------------------------------------------------------
+ALL-READY STATE
+------------------------------------------------------------------------
+`totalScheduledTrips > 0 && needsPreparationCount === 0` → "Tomorrow is
+ready — all N scheduled trip(s) is/are prepared based on the information
+currently available." (S4E §6's exact suggested phrasing, folded into
+one compact paragraph rather than two separate lines, to keep the
+block's visual weight identical to Driver Snapshot/Requests' own single-
+paragraph shape). No "guaranteed"/"covered"/"everything will run"
+language anywhere. Action "View tomorrow". Live-verified for both N=1
+(singular: "all 1 scheduled trip is prepared") and N=2 (plural: "all 2
+scheduled trips are prepared") — correct grammar in both cases.
+
+------------------------------------------------------------------------
+NEEDS-PREPARATION STATE
+------------------------------------------------------------------------
+`needsPreparationCount > 0` → "{needsPreparationCount} trip(s) need(s)
+preparation" as the primary line, "{totalScheduledTrips} scheduled for
+tomorrow" as a smaller, muted supporting line (S4E §7's own suggested
+two-part copy), action "Review tomorrow" → `/operations/tomorrow`. No
+individual Trip reasons, no Passenger names — confirmed live: neither
+"Driver needed"/"Vehicle needed" (reason labels) nor any per-trip
+passenger name ever appears inside the Brief block itself, across every
+fixture set tested (3, 10, and 20-Trip sets). Live-verified singular
+("1 trip needs preparation") and plural ("8 trips need preparation" /
+"9 trips need preparation").
+
+------------------------------------------------------------------------
+VISUAL PRIORITY
+------------------------------------------------------------------------
+No StatusBadge, no WarningCircle, no critical/red styling, no banner —
+at every count, including 8 or 9 needs-preparation Trips. The block's
+own position in the Brief (rendered last, after Driver Snapshot and
+Requests Awaiting Review, well below Needs Attention) was never changed
+regardless of `needsPreparationCount`. No new dashboard section was
+created. Matches Requests Awaiting Review's own restraint exactly — live
+screenshots and text dumps across every fixture set confirm the block
+never grows a colored border, icon, or badge.
+
+------------------------------------------------------------------------
+SMALL OPERATOR
+------------------------------------------------------------------------
+Live-validated: 0 Trips (Harmony, ambient), 1 ready Trip (Harmony, +1
+temporary fixture), 1 needs-preparation Trip (Org B, ambient — its own
+single, unassigned Trip), 2 all-ready Trips (Harmony, +1 more temporary
+fixture), and a naturally-occurring 10-Trip mixed set (Org A, 2 ready +
+8 needs-preparation, the S4C1-era fixtures having rolled back into
+"tomorrow" as real time advanced during this session). Every case
+produced the correct compact copy, correct grammar, and a working
+"View tomorrow"/"Review tomorrow" link.
+
+------------------------------------------------------------------------
+LARGE OPERATOR
+------------------------------------------------------------------------
+Live-validated against a temporary 20-Trip Harmony batch (11 ready / 9
+needs-preparation after 2 of the batch's own fixtures self-corrected
+into "today" due to a fixture-authoring date-math slip — a test-fixture
+issue, not a product one, confirmed by the product correctly classifying
+them by the real America/New_York day boundary). The Brief block's own
+rendered text (from its heading through its action link) stayed under
+90 characters across two short lines — no per-trip rows, no passenger
+names, unchanged shape from the 3-Trip and 10-Trip cases. Confirms S4E
+§10's "do not scale the Brief UI proportional to fleet size."
+
+------------------------------------------------------------------------
+ERROR ISOLATION
+------------------------------------------------------------------------
+`getTomorrowReadinessSummary(...).catch(() => null)` is started BEFORE
+the page's existing `Promise.all` (never inside it), so a genuine
+failure there can never reject that Promise.all and take down Today's
+Operations, Needs Attention, Active Now, Next Departures, Driver
+Snapshot, or Requests Awaiting Review. Live-forced via a temporary,
+reverted, single-line code-level fault injection
+(`throw new Error(...)` at the top of `getTomorrowReadiness`, reverted
+immediately after the check) — chosen over a SQL-level REVOKE because
+`getTomorrowReadiness` and `getTodaysOperations` read the identical
+underlying tables (`trips`, `trip_exceptions`) by design, exactly the
+same structural overlap S4D already documented for Trip Detail's own
+readiness fetch; a table-level REVOKE would have broken BOTH data
+sources simultaneously and proven nothing about isolation specifically.
+Confirmed live: the whole Operations Overview page still rendered
+correctly (Needs Attention: 5 items, Today's Operations: 9 trips today,
+Driver Snapshot, Requests Awaiting Review — all present and correct),
+the Brief block showed "Tomorrow readiness unavailable" with a working
+"View tomorrow" link, and no fake "0 scheduled trips," "No trips
+scheduled for tomorrow," or "Tomorrow is ready" ever appeared. The fault
+injection was reverted immediately and the page re-confirmed working
+normally afterward (`grep` confirms zero occurrences of the forced-throw
+line remaining in the file).
+
+------------------------------------------------------------------------
+PARALLEL FETCHING
+------------------------------------------------------------------------
+`src/app/operations/page.tsx`: the Tomorrow Readiness summary promise
+is created (and its `.catch(() => null)` attached) immediately, before
+the pre-existing `data = await getTodaysOperations(...)` call and before
+the pre-existing `Promise.all([getOnboardingChecklist, getDriverSnapshot,
+getRequestSummary])` — so it overlaps with BOTH in wall-clock time,
+never serially delaying the page. It is `await`ed exactly once, right
+before `deriveOperationsBrief` is called — no duplicate call to
+`getTomorrowReadiness`/`getTomorrowReadinessSummary` exists anywhere in
+this request. `operations-brief.ts`'s own `getOperationsBrief`
+convenience function (currently unused by any live page, but kept
+internally consistent) follows the identical start-early/catch-
+independently/await-once shape.
+
+------------------------------------------------------------------------
+COUNT MATCH WITH TOMORROW PAGE
+------------------------------------------------------------------------
+See SHARED DATA AUTHORITY above for the exact live numbers. Verified at
+two different scales (10-Trip and 20-Trip sets) with exact matches in
+both the total and needs-preparation counts, for two different
+organizations/timezones.
+
+------------------------------------------------------------------------
+ORGANIZATION TIMEZONE
+------------------------------------------------------------------------
+The Brief block renders no literal date at all — S4E §14's own "if a
+literal date does not materially improve the compact block, omit it"
+was applied: "N scheduled trips," "N ready," "N need preparation" read
+correctly with no date context needed (the full `/operations/tomorrow`
+page already owns the authoritative "Friday, September 18" heading one
+click away). The counts themselves are still fully timezone-correct by
+inheritance — `getTomorrowReadinessSummary` passes `organization.
+organizationTimezone` straight through to the already-proven
+`getTomorrowReadiness`, never browser-local, never server-local, never
+`+24h` arithmetic. Live-verified indirectly: Org A (America/New_York)
+and Harmony (also America/New_York) both correctly resolved "tomorrow"
+as Sept 18 for the exact same real UTC instant Org B (America/Chicago)
+also resolved as Sept 18 — all three organizations agreeing on the
+correct calendar date despite their different UTC offsets, exactly as
+S4C1 already proved at the data layer.
+
+------------------------------------------------------------------------
+ROUTE DISCOVERY
+------------------------------------------------------------------------
+"View tomorrow"/"Review tomorrow" is now the primary, contextual
+discovery path to `/operations/tomorrow` from Operations Overview.
+Live-verified every action's `href` resolves to exactly
+`/operations/tomorrow` (checked in the zero-state and needs-preparation-
+state cases). No sidebar item was added (S4E §15/§19 — deliberately
+unchanged).
+
+------------------------------------------------------------------------
+SHARED CHROME LABEL
+------------------------------------------------------------------------
+Added `{ prefix: "/operations/tomorrow", label: "Tomorrow" }` to
+`OperationsLayoutClient.tsx`'s existing `SECTION_LABELS` array — the
+exact same convention every other Operations section already uses
+(Trips, Dispatch, Passengers, etc.), a one-line addition, no other
+logic touched. Live-verified: the persistent chrome header on
+`/operations/tomorrow` now reads "Tomorrow" instead of the generic
+"Operations" fallback S4D had documented as an open cosmetic gap.
+
+------------------------------------------------------------------------
+FILES CREATED
+------------------------------------------------------------------------
+None.
+
+------------------------------------------------------------------------
+FILES MODIFIED
+------------------------------------------------------------------------
+  src/lib/operations/operations-brief-core.ts — added
+    `OperationsBriefTomorrowSummary`, added `tomorrowReadiness` to
+    `OperationsBriefData`, extended `deriveOperationsBrief`'s signature
+    and return value. Still zero runtime imports beyond
+    `import type` — pure core discipline fully preserved.
+  src/lib/operations/operations-brief.ts — added
+    `getTomorrowReadinessSummary` (calls the existing `getTomorrowReadiness`,
+    narrows to 3 counts), updated `getOperationsBrief` to fetch it as an
+    independent, best-effort, early-started promise and pass it through.
+  src/lib/operations/operations-brief-core.test.mjs — added
+    `NO_TOMORROW_READINESS` default, threaded a `tomorrowReadiness`
+    argument through every pre-existing `deriveOperationsBrief` call
+    (11 call sites), added 7 new dedicated tests (zero/all-ready/one-
+    needs-prep/many-needs-prep/null-failure/independence/existing-
+    behavior-unchanged).
+  src/app/operations/page.tsx — added the early-started, independently-
+    caught Tomorrow Readiness summary fetch; passed it into
+    `deriveOperationsBrief`.
+  src/components/operations/OperationsBrief.tsx — added
+    `TomorrowReadinessBlock` (zero/all-ready/needs-preparation/
+    unavailable states) and rendered it after Requests Awaiting Review.
+  src/components/operations/OperationsLayoutClient.tsx — added the
+    `/operations/tomorrow` → "Tomorrow" entry to `SECTION_LABELS`.
+
+No S4B/S4C/S4C1/S4D file (trip-readiness-core.ts, trip-readiness.ts,
+tomorrow-readiness-core.ts, tomorrow-readiness.ts, day-bounds.ts,
+local-time.ts, the Tomorrow page, TripReadinessPanel.tsx) was modified —
+confirmed via `git status --porcelain src/` showing all of them either
+absent from this diff or already-known `M`/`??` entries from prior
+phases, none newly touched here. `tomorrow-readiness.ts` received a
+temporary, single-line, fully-reverted fault-injection edit during the
+ERROR ISOLATION test only (confirmed removed — see that section).
+
+------------------------------------------------------------------------
+SCHEMA IMPACT
+------------------------------------------------------------------------
+NONE. `git status --porcelain supabase/` is empty. Every live-validation
+fixture was inserted directly via `docker exec ... psql` against the
+local dev database only, and every inserted row was deleted again after
+use — confirmed via post-cleanup count queries returning 0 for every
+fixture-prefixed id.
+
+------------------------------------------------------------------------
+RLS IMPACT
+------------------------------------------------------------------------
+NONE. No RLS policy was created, modified, or removed. No GRANT/REVOKE
+was used in this phase (the S4D-established REVOKE-based error-injection
+technique was deliberately NOT reused here, in favor of the code-level
+fault injection described in ERROR ISOLATION, precisely because it would
+have affected `getTodaysOperations` too).
+
+------------------------------------------------------------------------
+TEST RESULTS
+------------------------------------------------------------------------
+- `npx tsc --noEmit`: 0 errors.
+- `npm run lint`: 0 errors, 33 warnings, all confined to pre-existing
+  `.tmp-qa/*.mjs` scratch scripts (unchanged count from the S4D
+  baseline — no new product-code warnings).
+- `npm run build`: succeeded; no new route (Brief integration is
+  entirely within the existing `/operations` route).
+- `npm test`: 119/119 passing (112 S4D baseline + 7 new
+  `tomorrowReadiness` tests in operations-brief-core.test.mjs).
+- Live CDP validation: 20/20 core matrix checks (zero/needs-prep/mixed/
+  org-isolation/count-match/other-sections-unchanged), 4/4 all-ready
+  grammar checks (1 and 2 Trips), 6/6 large-operator checks, 5/5 error-
+  isolation checks, 2/2 driver-boundary checks — 37/37 total, 0
+  failures across every run reported in this document.
+
+------------------------------------------------------------------------
+OPEN ISSUES
+------------------------------------------------------------------------
+None carried forward from S4D remain open for this phase's own scope —
+the SHARED CHROME LABEL item S4D recorded as open is now closed (see
+above). The Trip Detail readiness-isolation validation limitation S4D
+documented is unrelated to this phase (S4E made no Trip Detail changes,
+per its own explicit §17 boundary) and remains exactly as S4D described
+it, unaffected by this work.
+
+============================================================
+TOMORROW BRIEF:
+PASS
+
+ZERO STATE:
+PASS
+
+ALL READY:
+PASS
+
+NEEDS PREPARATION:
+PASS
+
+SINGULAR/PLURAL:
+PASS
+
+COUNT MATCH:
+PASS
+
+ORG ISOLATION:
+PASS
+
+ERROR ISOLATION:
+PASS
+
+REQUEST SUMMARY REGRESSION:
+PASS
+
+DRIVER SNAPSHOT REGRESSION:
+PASS
+
+NEEDS ATTENTION REGRESSION:
+PASS
+
+TODAY OPERATIONS REGRESSION:
+PASS
+
+TOMORROW ROUTE DISCOVERY:
+PASS
+
+SHARED CHROME LABEL:
+PASS
+
+NEW SCHEMA:
+NO
+
+RLS CHANGES:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+119/119
+
+READY FOR S4F:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E1-S4F — Trip/Tomorrow Readiness Security, Regression and Production
+Release

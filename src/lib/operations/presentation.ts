@@ -17,9 +17,15 @@
  * formatRequestAge, formatRequestServiceDate) — same "state → screen
  * label, one place to look" discipline, extended to
  * transportation_requests rather than duplicated into a parallel module.
+ *
+ * P1-E1-S4D added `tripReadinessReasonLabel` at the bottom — the same
+ * discipline again, extended to `TripReadinessReasonCode`
+ * (trip-readiness-core.ts, P1-E1-S4B). The underlying reason vocabulary
+ * itself is never changed or extended here — this is presentation only.
  */
 
 import type { StatusCategory } from "@/components/ui/StatusBadge";
+import type { TripReadinessReasonCode } from "./trip-readiness-core";
 import type { RequestReadiness } from "./request-readiness-core";
 
 /**
@@ -256,4 +262,25 @@ const REQUEST_EVENT_LABEL: Record<string, string> = {
 
 export function requestEventLabel(eventType: string): string {
   return REQUEST_EVENT_LABEL[eventType] ?? eventType;
+}
+
+/**
+ * `TripReadinessReasonCode` (trip-readiness-core.ts, P1-E1-S4B) → concise
+ * operator language (P1-E1-S4D §8) — the exact closed 7-value vocabulary,
+ * never a raw enum value, never an invented reason. Used by both Tomorrow
+ * Readiness (P1-E1-S4D) and Trip Detail's own Preparation panel — one
+ * mapping, not two independently-drifting copies.
+ */
+const TRIP_READINESS_REASON_LABEL: Record<TripReadinessReasonCode, string> = {
+  NO_SCHEDULE: "Pickup time needed",
+  NEEDS_DRIVER: "Driver needed",
+  NEEDS_VEHICLE: "Vehicle needed",
+  DRIVER_INACTIVE: "Assigned driver is inactive",
+  VEHICLE_INACTIVE: "Assigned vehicle is inactive",
+  PASSENGER_INACTIVE: "Passenger is inactive",
+  OPEN_EXCEPTION: "Open issue",
+};
+
+export function tripReadinessReasonLabel(code: TripReadinessReasonCode): string {
+  return TRIP_READINESS_REASON_LABEL[code];
 }

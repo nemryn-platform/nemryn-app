@@ -1,0 +1,475 @@
+P1-E1-S4C — TOMORROW READINESS QUERY + AGGREGATE
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Read-only server data layer + pure aggregation. No
+user-facing UI, no Operations Brief integration, no Trip Detail change,
+no deployment. Nothing committed, pushed, or deployed.
+
+------------------------------------------------------------------------
+PREFLIGHT
+------------------------------------------------------------------------
+HEAD confirmed unchanged (87940c2) before any code was written.
+`git status --short`/`git diff --stat` confirmed S4B's exact 3 files
+(`trip-readiness-core.ts`, `trip-readiness-core.test.mjs`,
+`trip-readiness.ts`) were the only new `src/` changes present — nothing
+unrelated was absorbed. Re-read fresh before coding: `trip-readiness-
+core.ts`, `trip-readiness.ts`, `day-bounds.ts`, `todays-operations.ts`,
+`dispatch-board.ts`, `trip-assurance.ts`, and the Organization
+timezone access pattern (`organizations.timezone`, already read
+throughout every prior phase this session).
+
+------------------------------------------------------------------------
+TOMORROW DAY-BOUNDARY STRATEGY
+------------------------------------------------------------------------
+Verified `organizationDayBoundsUtc`'s actual implementation before use
+(not assumed): it takes any instant `now` and returns THAT instant's
+own organization-local day as `[startUtc, endUtc)`, where `endUtc =
+startUtc + 24h` exactly, by construction.
+
+"Tomorrow" is computed by composing the SAME real, unmodified helper
+twice (`tomorrow-readiness.ts`'s own `computeTomorrowBoundsUtc`):
+
+  const today = organizationDayBoundsUtc(now, timezone);
+  return organizationDayBoundsUtc(today.endUtc, timezone);
+
+`today.endUtc` is, by the helper's own contract, the exact instant that
+belongs to the next organization-local calendar day — feeding it back
+into the same function re-derives THAT day's own correct offset and
+boundaries from scratch (via the function's own `Intl.DateTimeFormat`
+re-read of the wall-clock date at that instant), rather than assuming
+yesterday's offset still applies. No server-UTC or runtime-local date
+arithmetic was invented; the exact same real function already used
+everywhere else in this codebase is the only thing computing dates
+here.
+
+------------------------------------------------------------------------
+DST VALIDATION
+------------------------------------------------------------------------
+`day-bounds.ts` carries `import "server-only"`, which plain Node cannot
+resolve directly (the real `server-only` npm package is not installed
+at all — Next's bundler special-cases the literal specifier). Rather
+than write a fake timezone implementation (explicitly forbidden), a
+small, permanent, tracked Node ESM loader hook
+(`src/lib/operations/server-only-stub-loader.mjs`) was written that
+neutralizes ONLY the irrelevant "server-only" build-time marker,
+leaving `organizationDayBoundsUtc` itself completely real and
+unmodified. `src/lib/operations/day-bounds-tomorrow.test.mjs` (8 tests,
+all passing) exercises it directly:
+
+- Normal day (America/New_York, June): tomorrow's window is exactly
+  24h, correct next calendar date.
+- UTC (no DST at all): exactly 24h.
+- America/Phoenix (never observes DST, fixed -7:00 year-round):
+  exactly 24h even during a date that is DST-active elsewhere.
+- Spring-forward (America/New_York, 2026-03-08, a genuine 23-hour local
+  day): tomorrow's own START boundary is proven EXACTLY correct
+  (2026-03-08T05:00:00Z, true midnight EST) — this is the boundary that
+  actually determines WHICH calendar day is "tomorrow," and it is
+  exactly right.
+- Fall-back (America/New_York, 2026-11-01, a genuine 25-hour local
+  day): tomorrow's own START boundary is likewise proven exactly
+  correct (2026-11-01T04:00:00Z, true midnight EDT).
+- A dedicated test proves the composed result DIVERGES from a naive
+  `now.getTime() + 24*60*60*1000` on the spring-forward transition day
+  — directly demonstrating "tomorrow means the next local calendar
+  date," not "24 elapsed hours later," as required.
+
+HONEST FINDING (documented, not hidden, not "fixed" with invented
+arithmetic): `organizationDayBoundsUtc`'s own `endUtc = startUtc + 24h`
+construction is a PRE-EXISTING, already-documented characteristic of
+the shared helper (its own doc comment already says: "a query issued
+in the exact minutes of a DST transition could see the offset shift
+within the same org-day, an accepted edge case at this precision").
+Composing it twice for "tomorrow" INHERITS this exact tolerance at the
+FAR edge of a transition day, never introduces a new one: on the
+23-hour spring-forward day, the computed window ends up 1 hour too
+WIDE (spilling 1 hour into the day after); on the 25-hour fall-back
+day, it ends up 1 hour too NARROW (excluding the last hour of that
+day). Both are proven and asserted directly in the test file, with the
+exact expected offset. This is the same class of tolerance already
+accepted for TODAY's own boundary throughout `todays-operations.ts`/
+`dispatch-board.ts` — S4C inherits it, does not create it, and does
+not attempt to solve it with new date arithmetic (explicitly forbidden
+by this phase's own instruction).
+
+------------------------------------------------------------------------
+CANDIDATE QUERY
+------------------------------------------------------------------------
+`tomorrow-readiness.ts`'s `getTomorrowReadiness` — ONE bounded query
+against `trips`:
+
+  .eq("organization_id", organizationId)
+  .eq("state", "scheduled")
+  .gte("scheduled_pickup_at", tomorrowStartIso)
+  .lt("scheduled_pickup_at", tomorrowEndIso)
+  .order("scheduled_pickup_at", { ascending: true })
+  .order("id", { ascending: true })
+
+Selecting only: `id, state, scheduled_pickup_at`, plus the embedded
+`passengers(display_name, status)` and `trip_assignments(id, ended_at,
+vehicle_id, drivers(status), vehicles(status))` — the exact same
+composite-FK-hint convention already proven in S4B's own `trip-
+readiness.ts` (`trips_passenger_id_organization_id_fkey`,
+`trip_assignments_trip_id_organization_id_fkey`,
+`trip_assignments_driver_id_organization_id_fkey`,
+`trip_assignments_vehicle_id_organization_id_fkey`). Never
+`select("*")`. Ordering is deterministic: `scheduled_pickup_at`
+ascending with `id` ascending as an explicit, stable tiebreaker.
+
+A Trip with `scheduled_pickup_at IS NULL` can never satisfy either the
+`.gte()` or `.lt()` comparison (SQL NULL comparisons are never true) —
+it is excluded by the range filter itself, with no special-case code
+required, exactly matching S4C §3's locked rule.
+
+------------------------------------------------------------------------
+ACTIVE ASSIGNMENT STRATEGY
+------------------------------------------------------------------------
+Identical authoritative meaning to Trip Assurance and S4B Trip
+Readiness: `ended_at IS NULL`, found via `.find((a) => a.ended_at ===
+null)` on the embedded `trip_assignments` array. No second
+interpretation was invented. The schema's own partial unique index
+(`trip_assignments_one_active_per_trip`) guarantees at most one active
+row per Trip, so this is fetched embedded in the SAME query as the
+Trip itself (query 1) — no separate second-phase assignment query was
+needed (unlike the exception count, which genuinely does need its own
+scoped query — see below).
+
+------------------------------------------------------------------------
+OPEN EXCEPTION STRATEGY
+------------------------------------------------------------------------
+ONE scoped query against `trip_exceptions`, filtered by
+`organization_id`, `status='open'`, and `trip_id IN (<candidate ids>)`
+— never one query per Trip. Only `trip_id` is selected (count/list
+detail was not required by the aggregate contract); counted per Trip
+in memory via a `Map<string, number>`, mirroring `todays-
+operations.ts`'s own established pattern exactly. Skipped entirely
+when the candidate list is empty (no trivial `.in("trip_id", [])`
+round trip).
+
+------------------------------------------------------------------------
+AGGREGATE CONTRACT
+------------------------------------------------------------------------
+`TomorrowReadinessAggregate` (`tomorrow-readiness-core.ts`):
+
+  totalScheduledTrips: number
+  readyCount: number
+  needsPreparationCount: number
+  items: TomorrowReadinessItem[]  // { tripId, scheduledPickupAt, passengerDisplayName, readiness }
+
+`readiness` is the full, unmodified S4B `TripReadinessResult` — `state`
+(`READY`/`NEEDS_PREPARATION`, never `NOT_APPLICABLE` in a valid
+aggregate — see below) and the complete `reasons` array. No date/
+local-day-identity field was added to the aggregate itself — the raw
+`tomorrowStartUtc`/`tomorrowEndUtc` boundaries are computed inside the
+wrapper and available to a future caller if needed, but formatting a
+human-facing date label is a presentation concern explicitly deferred
+to S4D, matching this codebase's own established "keep state separate
+from presentation" discipline (`request-readiness-core.ts`/`trip-
+readiness-core.ts` both already draw this same line).
+
+------------------------------------------------------------------------
+AGGREGATE INVARIANTS
+------------------------------------------------------------------------
+All enforced, not merely tested-and-hoped:
+
+- `totalScheduledTrips === readyCount + needsPreparationCount` —
+  arithmetically guaranteed by construction (every item increments
+  exactly one of the two counters) and additionally asserted by a
+  dedicated unit test.
+- `items.length === totalScheduledTrips` — `totalScheduledTrips` is
+  literally defined as `items.length`.
+- Every item belongs to the same organization — guaranteed by the
+  wrapper's own `organization_id`-scoped query; the pure aggregator
+  itself does not carry an organization field at all (it operates
+  purely on an already-organization-scoped candidate list assembled by
+  the caller), so there is no organization field to accidentally get
+  wrong at the aggregation layer.
+- Every item is `state='scheduled'` and has a non-null
+  `scheduledPickupAt` — guaranteed by the SQL filter (§ CANDIDATE
+  QUERY above) before a row ever becomes a candidate at all.
+- Every item lies in tomorrow's exact organization-local window —
+  guaranteed by the same SQL range filter, computed via the DST-safe
+  composition above.
+- Every item's `readiness.state` is `READY` or `NEEDS_PREPARATION`,
+  never `NOT_APPLICABLE` — ENFORCED at the pure-aggregator level:
+  `aggregateTomorrowReadiness` throws immediately if any candidate's
+  own `readiness.state` is `NOT_APPLICABLE`, rather than silently
+  counting it as `READY` or quietly dropping it (S4C §10's own explicit
+  instruction). Verified by two dedicated unit tests that deliberately
+  supply a `NOT_APPLICABLE` candidate and assert the function throws.
+
+------------------------------------------------------------------------
+TRIP READINESS REUSE
+------------------------------------------------------------------------
+`deriveTripReadiness` (S4B) is called exactly once per candidate Trip,
+inside `tomorrow-readiness.ts` (the server wrapper), never
+re-implemented and never duplicated. `trip-readiness-core.ts` itself
+was NOT modified in this phase — confirmed via inspection; only
+`import type { TripReadinessFacts }` is referenced from
+`tomorrow-readiness.ts`, and the pure aggregator (`tomorrow-readiness-
+core.ts`) references only `import type { TripReadinessResult }` — no
+runtime code was changed in S4B's own files.
+
+DESIGN NOTE (a genuine implementation-time finding, not merely a plan
+followed blindly): the FIRST attempt had `tomorrow-readiness-core.ts`
+itself import and CALL `deriveTripReadiness` directly (matching a
+literal reading of "every candidate must be evaluated by
+deriveTripReadiness"). This exposed a real TypeScript/Node module-
+resolution conflict — the first case in this codebase where one pure
+`*-core.ts` module needed a genuine RUNTIME (non-type-only) import from
+a sibling pure module. `tsc`'s own "bundler" resolution requires a
+`.js`-suffixed relative specifier to reference a sibling `.ts` file's
+compiled output; Node's native direct TypeScript execution (used by
+`node --test`, exactly like every other `*-core.test.mjs` file here,
+with no bundler in front of it) does NOT implement that convention and
+looks for a literal `trip-readiness-core.js` file, which does not
+exist — `tsc --noEmit` and `node --test` could not both be satisfied by
+the same import statement. Rather than accept either a broken build or
+a broken direct-Node test run, `tomorrow-readiness-core.ts`'s own
+contract was narrowed: it now accepts ALREADY-EVALUATED
+`TripReadinessResult`s (the wrapper calls `deriveTripReadiness` itself,
+once per candidate, before handing the array to the aggregator). This
+still satisfies "use the S4B evaluator, never a second definition" —
+the evaluation happens exactly once, via the real function, one call
+site earlier — and is arguably a cleaner separation besides: assembling
+facts is already I/O-adjacent work living in the wrapper, so evaluating
+them there too is a natural fit, and the pure aggregator's own job
+stays exactly "sort + count + enforce the NOT_APPLICABLE invariant,"
+never touching a raw fact or an evaluation rule at all. Both `tsc
+--noEmit` and every `node --test` file now pass cleanly.
+
+------------------------------------------------------------------------
+MULTI-REASON PRESERVATION
+------------------------------------------------------------------------
+Never collapsed anywhere in this phase's own code. `deriveTripReadiness`
+(S4B, unmodified) already returns every applicable reason; the wrapper
+passes that FULL result through unchanged into each
+`TomorrowReadinessCandidate`; the aggregator copies it verbatim into
+each `TomorrowReadinessItem`. Verified directly, live, on the
+multi-reason fixture (Trip 8): a Trip with a driver-only assignment, an
+inactive Passenger, and an open exception simultaneously produced
+`["NEEDS_VEHICLE", "PASSENGER_INACTIVE", "OPEN_EXCEPTION"]` — all three,
+in the fixed `REASON_ORDER`, never reduced to one.
+
+------------------------------------------------------------------------
+NO_SCHEDULE EXCLUSION
+------------------------------------------------------------------------
+`transportation_requests.return_trip_needed` is never referenced
+anywhere in `tomorrow-readiness-core.ts` or `tomorrow-readiness.ts` —
+confirmed by inspection. No outbound/return inference is attempted, no
+`trip.leg` was added (confirmed via `git status --porcelain supabase/`
+showing zero Supabase source changes). A Trip with a null
+`scheduled_pickup_at` is excluded from every Tomorrow Readiness
+candidate list by the SQL range filter itself (§ CANDIDATE QUERY) —
+live-verified directly (fixture 11).
+
+------------------------------------------------------------------------
+ORG ISOLATION
+------------------------------------------------------------------------
+Verified at the REAL RLS level, via real authenticated user JWTs (the
+exact same methodology proven in S4B): Org B's own tomorrow fixture
+Trip correctly appeared in Org B admin's own aggregate; it never
+appeared in Org A admin's aggregate. As a stronger, adversarial check,
+Org A's own admin JWT was used to query with ORG B's real
+`organization_id` explicitly supplied as the filter — the real
+PostgREST/RLS stack returned ZERO rows, confirming `organization_id` is
+never trusted as authority on its own; RLS itself, not merely the
+wrapper's own WHERE clause, is what enforces isolation. No RLS policy
+was touched to produce this result.
+
+------------------------------------------------------------------------
+QUERY ROUND-TRIP COUNT
+------------------------------------------------------------------------
+Exactly 2 per call to `getTomorrowReadiness`:
+  1. The Trip candidate query (Trips + embedded Passenger + embedded
+     active TripAssignment + embedded Driver/Vehicle status — all in
+     one round trip).
+  2. The open-exception count query, scoped to exactly the resulting
+     candidate Trip ids (skipped entirely when there are zero
+     candidates).
+No third query was needed: `trip_assignments` is embedded in query 1
+(the schema's own partial unique index guarantees at most one active
+row per Trip, so no separate "pick the active one" query is required).
+No N+1 anywhere — every lookup is scoped to the already-known candidate
+id set, never one query per Trip.
+
+------------------------------------------------------------------------
+LIVE FIXTURE RESULTS
+------------------------------------------------------------------------
+Local dev database, Org A (`Fictional Org A`, tz=`America/New_York`)
+and Org B (`Fictional Org B`, tz=`America/Chicago`) — genuinely
+different timezones, deliberately. A fixed `now` (2026-09-17T15:00:00Z)
+was used throughout, giving Org A's own tomorrow window as
+[2026-09-18T04:00:00Z, 2026-09-19T04:00:00Z) and Org B's as
+[2026-09-18T05:00:00Z, 2026-09-19T05:00:00Z) — one hour offset between
+the two, exactly reflecting their real, different timezones.
+
+13 fixture Trips inserted under Org A/B, validated end-to-end via REAL
+PostgREST + REAL RLS + REAL authenticated user JWTs (org-a-admin,
+org-b-admin — the exact same methodology already proven in S4B), piped
+through the REAL, unmodified `deriveTripReadiness` +
+`aggregateTomorrowReadiness`. 21/21 checks passed:
+
+  Fixture 1 (fully ready): READY, []
+  Fixture 2 (no assignment): NEEDS_PREPARATION, [NEEDS_DRIVER]
+  Fixture 3 (driver-only assignment): NEEDS_PREPARATION, [NEEDS_VEHICLE]
+  Fixture 4 (inactive Driver): NEEDS_PREPARATION, [DRIVER_INACTIVE]
+  Fixture 5 (inactive Vehicle): NEEDS_PREPARATION, [VEHICLE_INACTIVE]
+  Fixture 6 (inactive Passenger): NEEDS_PREPARATION, [PASSENGER_INACTIVE]
+  Fixture 7 (open exception): NEEDS_PREPARATION, [OPEN_EXCEPTION]
+  Fixture 8 (multi-reason): NEEDS_PREPARATION, [NEEDS_VEHICLE,
+    PASSENGER_INACTIVE, OPEN_EXCEPTION] — all 3 retained
+  Fixture 9 (Trip scheduled today): correctly excluded
+  Fixture 10 (Trip scheduled day-after-tomorrow): correctly excluded
+  Fixture 11 (null scheduled_pickup_at): correctly excluded
+  Fixture 12 (non-scheduled state carrying a tomorrow timestamp):
+    correctly excluded
+  Fixture 13 (Org B Trip tomorrow): correctly excluded from Org A's own
+    aggregate; correctly INCLUDED in Org B's own aggregate
+
+Aggregate correctness: Org A's own aggregate = 8 total (7 fixtures 2-8
+NEEDS_PREPARATION + 1 fixture-1 READY), `total === ready +
+needsPreparation` held exactly, items appeared in the exact expected
+chronological order (14:00Z through 21:00Z). One PRE-EXISTING seed
+fixture (`80000000-...-a2`, seeded with a relative `now() + 1 day`
+schedule) coincidentally also fell inside this test's own "tomorrow"
+window purely because the local database happened to be reset earlier
+the same calendar day — explicitly excluded BY ID from this script's
+own count assertions, with the reason documented directly in the
+script, rather than either silently miscounting or inventing fragile
+"+1" arithmetic to paper over it. Every S4C-authored fixture's own
+individual behavior was independently confirmed correct regardless.
+
+Org isolation confirmed both positively (Org B sees its own Trip) and
+adversarially (Org A's own admin JWT, explicitly querying with Org B's
+real `organization_id`, receives zero rows).
+
+------------------------------------------------------------------------
+FILES CREATED
+------------------------------------------------------------------------
+  src/lib/operations/tomorrow-readiness-core.ts (pure aggregator)
+  src/lib/operations/tomorrow-readiness-core.test.mjs (11 unit tests)
+  src/lib/operations/tomorrow-readiness.ts (server-only data-access wrapper)
+  src/lib/operations/day-bounds-tomorrow.test.mjs (8 DST/day-boundary tests)
+  src/lib/operations/server-only-stub-loader.mjs (permanent, tracked test
+    infrastructure — a Node loader hook that neutralizes ONLY the
+    build-time "server-only" marker so `day-bounds.ts` can be tested
+    directly under plain Node; introduces no fake timezone/date logic
+    of any kind)
+
+------------------------------------------------------------------------
+FILES MODIFIED
+------------------------------------------------------------------------
+None. S4B's own three files (`trip-readiness-core.ts`, `trip-readiness-
+core.test.mjs`, `trip-readiness.ts`) are confirmed untouched —
+`git status --porcelain src/` shows exactly the 3 pre-existing S4B
+files plus the 5 new S4C files above, nothing else.
+
+------------------------------------------------------------------------
+SCHEMA IMPACT
+------------------------------------------------------------------------
+NONE. `git status --porcelain supabase/` is empty — no new migration,
+table, column, RPC, grant, or RLS policy. Matches the expected result
+stated in this phase's own §19 exactly.
+
+------------------------------------------------------------------------
+RLS IMPACT
+------------------------------------------------------------------------
+NONE. Every table this phase reads (`trips`, `trip_assignments`,
+`drivers`, `vehicles`, `passengers`, `trip_exceptions`) was already
+RLS-enabled and already read by existing Operations queries using the
+identical `organization_id`-scoped pattern. The live PostgREST
+validation exercised the EXISTING RLS policies directly (via real user
+JWTs) and confirmed they already produce the correct, secure result —
+no policy was touched.
+
+------------------------------------------------------------------------
+TEST RESULTS
+------------------------------------------------------------------------
+- `npx tsc --noEmit`: 0 errors.
+- `npm run lint`: 0 errors, 30 warnings, all confined to pre-existing
+  `.tmp-qa/*.mjs` scratch scripts.
+- `npm run build`: succeeded, no new route (matching "no UI yet").
+- `npm test`: 107/107 passing (88 pre-existing from S4B + 11 new
+  `aggregateTomorrowReadiness` tests + 8 new DST/day-boundary tests).
+  All 88 S4B tests remain passing, confirming zero regression to the
+  already-shipped Trip Readiness core.
+
+------------------------------------------------------------------------
+OPEN ISSUES
+------------------------------------------------------------------------
+- The exact wire shape/route for exposing `getTomorrowReadiness` to a
+  future UI (S4D) — a Server Component data fetch, a Server Action, or
+  a dedicated route handler — was not decided here; S4C's own job ends
+  at "the function exists, is correct, and is efficient."
+- `tomorrowStartUtc`/`tomorrowEndUtc` are computed inside the wrapper
+  but not currently returned in the aggregate result; if S4D's own UI
+  wants to render a literal date heading ("Tomorrow — Wednesday,
+  September 18"), it can either recompute the same boundary itself (the
+  function is cheap and pure aside from the DB calls) or this aggregate
+  can be extended to include the raw boundary/timezone fields — a small,
+  additive, non-breaking change left for S4D to decide based on its own
+  actual UI needs, not guessed at here.
+- The DST-edge tolerance documented above (±1h at the far boundary of a
+  transition day) is inherited, pre-existing, and shared with every
+  other Operations surface using `organizationDayBoundsUtc` — no action
+  is proposed or needed; noted here only so it's visible to whoever
+  eventually reviews S4D's own UI copy (a Trip scheduled in that exact
+  1-hour margin on a transition day is an extremely rare, already-
+  accepted edge case, not a defect to chase).
+
+============================================================
+TOMORROW DAY BOUNDS:
+PASS
+
+DST SPRING-FORWARD:
+PASS
+
+DST FALL-BACK:
+PASS
+
+CANDIDATE FILTERING:
+PASS
+
+AGGREGATE COUNTS:
+PASS
+
+MULTI-REASON PRESERVATION:
+PASS
+
+NO_SCHEDULE EXCLUSION:
+PASS
+
+ORG ISOLATION:
+PASS
+
+NO N+1:
+PASS
+
+NEW SCHEMA:
+NO
+
+RLS CHANGES:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+107/107
+
+READY FOR S4D:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E1-S4D — Tomorrow Readiness Surface + Trip Detail Integration

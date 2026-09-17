@@ -64,6 +64,24 @@ export interface OperationsBriefRequestSummary {
   oldestPendingRequestCreatedAt: string | null;
 }
 
+/**
+ * Compact Tomorrow Readiness summary for Operations Brief (P1-E1-S4E).
+ * Deliberately just 3 counts — never the full `TomorrowReadinessData`
+ * (never its `items` list, never `timezone`/`tomorrowStartUtc`, which
+ * this compact block does not need — S4E §3/§14's own explicit "the
+ * Brief does not need every Trip row" / "omit a literal date if it does
+ * not materially improve the compact block" instructions). Sourced
+ * ENTIRELY from S4C/S4C1's already-authoritative `getTomorrowReadiness`
+ * — this pure module never queries Trips or re-evaluates readiness
+ * itself; it only narrows an already-computed result down to what this
+ * one compact block actually renders.
+ */
+export interface OperationsBriefTomorrowSummary {
+  totalScheduledTrips: number;
+  readyCount: number;
+  needsPreparationCount: number;
+}
+
 export interface OperationsBriefData {
   dayState: OperationsBriefDayState;
   totalTripsToday: number;
@@ -77,6 +95,16 @@ export interface OperationsBriefData {
   unassignedCount: number;
   driverSnapshot: OperationsBriefDriverSnapshot;
   requestSummary: OperationsBriefRequestSummary;
+  /**
+   * `null` only when the underlying `getTomorrowReadiness` fetch
+   * genuinely failed (P1-E1-S4E §11) — never used to represent "zero
+   * trips scheduled tomorrow," which is a real, distinct, successfully-
+   * fetched `{ totalScheduledTrips: 0, ... }` value. Mirrors
+   * `RequestActivityPanel`'s own established `events: T[] | null`
+   * failure-vs-empty convention exactly (src/components/operations/
+   * requests/RequestActivityPanel.tsx).
+   */
+  tomorrowReadiness: OperationsBriefTomorrowSummary | null;
 }
 
 /** See OperationsBriefDayState's own doc comment for the exact rule each branch implements. */
@@ -163,6 +191,7 @@ export function deriveOperationsBrief(
   data: TodaysOperationsData,
   driverSnapshot: OperationsBriefDriverSnapshot,
   requestSummary: OperationsBriefRequestSummary,
+  tomorrowReadiness: OperationsBriefTomorrowSummary | null,
   now: Date,
 ): OperationsBriefData {
   const attentionTripIds = new Set(data.attentionItems.map((item) => item.trip.id));
@@ -176,5 +205,6 @@ export function deriveOperationsBrief(
     unassignedCount: data.needsAssignmentTrips.length,
     driverSnapshot,
     requestSummary,
+    tomorrowReadiness,
   };
 }

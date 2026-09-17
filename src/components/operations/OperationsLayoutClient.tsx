@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 
 const SECTION_LABELS: { prefix: string; label: string }[] = [
+  { prefix: "/operations/tomorrow", label: "Tomorrow" },
   { prefix: "/operations/trips", label: "Trips" },
   { prefix: "/operations/dispatch", label: "Dispatch" },
   { prefix: "/operations/passengers", label: "Passengers" },

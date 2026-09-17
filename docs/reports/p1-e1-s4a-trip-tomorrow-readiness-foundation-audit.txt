@@ -1,0 +1,704 @@
+P1-E1-S4A — TRIP READINESS + TOMORROW READINESS
+PRODUCT / DATA FOUNDATION AUDIT
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Audit only. No application code, SQL, migration, RLS, or UI
+was changed. Nothing committed, pushed, or deployed.
+
+============================================================
+CURRENT TRIP MODEL
+============================================================
+Read directly from source (not from memory of prior phases):
+
+`supabase/migrations/20260830131000_trips.sql` — `trips`:
+  - 9 canonical states (scheduled → en_route_to_pickup →
+    arrived_at_pickup → passenger_onboard → en_route_to_destination →
+    arrived_at_destination → completed; cancelled from most states;
+    no_show from en_route_to_pickup/arrived_at_pickup).
+  - `passenger_id uuid not null` — every Trip always has a Passenger;
+    never absent.
+  - `pickup_description`/`destination_description text not null` —
+    always present at creation (create_trip rejects blank/oversized
+    values); can never be genuinely "missing."
+  - `scheduled_pickup_at timestamptz` and `appointment_at timestamptz`
+    are BOTH nullable — `create_trip`'s own `p_scheduled_pickup_at
+    default null` confirms a Trip CAN exist with no scheduled pickup
+    time at all. This is a real, checkable gap, not a hypothetical one.
+  - `pickup_facility_id`/`destination_facility_id` — optional, soft
+    (`ON DELETE SET NULL`), explicitly "for reporting/context linkage
+    only" per the table's own comment — never a requirement.
+  - `request_id` — nullable in both directions (ZD-045): operator-
+    created Trips need no Request.
+  - No `current_driver_id`/`current_vehicle_id` columns (ZD-051) —
+    `trip_assignments` is the sole assignment source of truth.
+
+`supabase/migrations/20260830131100_trip_assignments.sql` —
+`trip_assignments`:
+  - `driver_id uuid not null` — an assignment always has a Driver.
+  - `vehicle_id uuid` — NULLABLE. An active assignment can exist with a
+    Driver but no Vehicle. This is a real, distinct, currently-
+    unchecked gap from "no assignment at all."
+  - Active assignment = the row with `ended_at IS NULL`; enforced to
+    be at most one per Trip by a partial unique index.
+  - `assign_trip`/`reassign_trip` (in
+    `20260901120000_reassignment_concurrency_hardening.sql`) validate
+    Driver/Vehicle `status='active'` and same-organization ONLY AT THE
+    MOMENT OF ASSIGNMENT. Neither RPC nor any trigger re-validates this
+    later — a Driver or Vehicle can be set to `inactive` after
+    assignment, and the existing active `trip_assignments` row is left
+    untouched. This is a real, currently undetected condition.
+
+`supabase/migrations/20260830130500_drivers.sql` — `drivers.status`:
+  exactly `active`/`inactive`. No license, certification, insurance, or
+  any credential/compliance field of any kind.
+
+`supabase/migrations/20260830130800_vehicles.sql` — `vehicles.status`:
+  exactly `active`/`inactive`. No capacity, capability
+  (wheelchair/ambulatory), or credential field — the table's own
+  comment states this is deliberate: "no capability taxonomy... are
+  unresolved product decisions."
+
+`supabase/migrations/20260830130600_passengers.sql` —
+  `assistance_notes text` — free text only, no structured field to
+  match against any Vehicle capability (none exists to match against).
+
+`supabase/migrations/20260830131400_trip_exceptions.sql` —
+  `status in ('open','resolved')`, free-text `exception_type` — the
+  exact same table Trip Assurance already reads.
+
+`supabase/migrations/20260830130900_transportation_requests.sql` —
+  `return_trip_needed text not null check (in ('yes','no','not_sure'))`
+  — a real, structured, NOT NULL field on every Request.
+
+Organization: `organizations.timezone text not null` (no default,
+always required) — already the basis for every existing day-boundary
+computation in this codebase.
+
+============================================================
+CURRENT TRIP ASSURANCE
+============================================================
+`src/lib/operations/trip-assurance.ts` — read in full. It already
+exists, is centralized, and is NOT to be replaced, renamed, or
+duplicated. Documented precisely as instructed:
+
+WHAT IT EVALUATES: exactly 5 possible outcomes, in a fixed priority
+order, for ONE Trip against one supplied `now`:
+  1. TERMINAL — `state` ∈ {completed, cancelled, no_show}. Overrides
+     everything else.
+  2. OPEN_EXCEPTION — `openExceptionCount > 0` (a real open
+     `trip_exceptions` row exists).
+  3. NEEDS_ASSIGNMENT — `state === 'scheduled' && !hasActiveAssignment`.
+  4. LOCATION_STALE / LOCATION_UNAVAILABLE — only reachable when
+     `isEligibleTrackingState && hasActiveAssignment` (eligible states
+     are the 5 active/in-progress ones — en_route_to_pickup through
+     arrived_at_destination — never `scheduled`).
+  5. ON_TRACK — none of the above.
+
+WHEN IT APPLIES: every non-terminal Trip, across every surface that
+currently shows Trips at all — Today's Operations (`todays-
+operations.ts`), Dispatch Board (`dispatch-board.ts`'s own
+`hasOpenException`/assignment fields feed the identical underlying
+facts even though Dispatch renders them slightly differently), and
+(by the same shared evaluator) Trip Detail. It is explicitly scoped to
+TODAY plus any currently-active Trip (`todays-operations.ts`'s own
+`todayTrips ∪ activeTrips` candidate set) — it has NEVER been run
+against a future day. No "tomorrow" query exists anywhere in this
+codebase today (confirmed by inspection — `todays-operations.ts`,
+`dispatch-board.ts`, and Operations Brief's own `NextDeparturesBlock`
+all operate on TODAY's own boundary only, computed via
+`organizationDayBoundsUtc(now, timezone)`).
+
+INPUTS (its own `TripAssuranceFacts` shape, exhaustive): `state`,
+`hasActiveAssignment` (boolean only — presence, not identity or
+current status of the Driver/Vehicle), `isEligibleTrackingState`,
+`latestLocationRecordedAt` (assignment-scoped), `openExceptionCount`.
+
+WHAT IT DOES NOT EVALUATE (confirmed by absence from its own facts
+shape — none of the following can be added to this evaluator without
+changing its documented, narrow contract): Vehicle presence on the
+assignment; whether the assigned Driver or Vehicle is CURRENTLY
+`active` (only that SOME assignment exists); whether
+`scheduled_pickup_at` is set at all; Passenger's own current status;
+anything about a Request's `return_trip_needed`; anything about
+tomorrow or any future day; anything about credentials/compliance.
+
+============================================================
+REQUEST READINESS VS TRIP READINESS
+============================================================
+Confirmed as genuinely distinct, non-overlapping concepts, grounded in
+current code (not merely asserted):
+
+Request Readiness (`src/lib/operations/request-readiness-core.ts`,
+`deriveRequestReadiness`) answers "can this inbound demand be converted
+into a Trip?" — a pure function of `{state, passengerId,
+passengerActive}` on a `transportation_requests` row, producing
+`ready | needs_passenger | not_convertible | accepted`. It has nothing
+to do with a Trip's own scheduling/assignment state — it stops being
+relevant the moment a Request becomes `accepted` (a Trip now exists;
+Request Readiness's own job is finished).
+
+Trip Readiness (this phase's subject) would answer "is a SCHEDULED
+Trip sufficiently prepared to execute?" — a question about the Trip
+itself (schedule set, Driver/Vehicle assigned and currently valid, no
+open issue), which only becomes askable AFTER a Trip already exists —
+i.e., strictly after Request Readiness's own job is done. There is no
+overlap in the facts each one reads (Request Readiness never reads
+`trips`/`trip_assignments`; a Trip Readiness evaluator would never read
+`transportation_requests.passenger_id`/`.state` directly — it would, at
+most, read `return_trip_needed` for the one narrow return-coordination
+signal in §11 below).
+
+Trip Assurance answers "once a Trip exists, does it currently need a
+human's attention" — spanning the ENTIRE non-terminal lifecycle
+(scheduled through arrived_at_destination), for TODAY/active Trips
+only. Trip Readiness, as defined by this phase, is the SAME underlying
+question restricted to the specific, narrower `scheduled`-and-not-yet-
+begun window, PLUS additional dimensions Assurance was never designed
+to check (Vehicle presence, Driver/Vehicle current validity, schedule
+presence) — see §"READINESS VS ASSURANCE BOUNDARY" below for exactly
+how these coexist without duplication.
+
+============================================================
+TRIP READINESS DEFINITION
+============================================================
+Trip Readiness answers exactly one question, for exactly one Trip in
+`state = 'scheduled'` (see LIFECYCLE APPLICABILITY below for why other
+states are explicitly excluded): "is everything currently known and
+checkable about this Trip in place for it to execute as scheduled?" It
+is derived, never stored — no new `trips` column, no new state value,
+computed fresh from already-authoritative facts exactly like Trip
+Assurance already is. It is never a score, never a percentage, never
+AI-classified — a small closed vocabulary plus a reason list, per the
+phase's own explicit instruction.
+
+============================================================
+SUPPORTED READINESS DIMENSIONS
+============================================================
+| Dimension | Classification | Basis |
+|---|---|---|
+| Passenger present | SHOULD NOT BE PART OF READINESS | `trips.passenger_id not null` — schema-guaranteed, can never be missing |
+| Passenger currently active | SUPPORTED NOW (new dimension, not currently checked anywhere) | `passengers.status` is mutable after Trip creation; no existing check re-verifies it |
+| Pickup/Destination description | SHOULD NOT BE PART OF READINESS | `not null`, validated at creation by `create_trip`; can never be missing |
+| Schedule/time set | SUPPORTED NOW | `scheduled_pickup_at` is nullable; a real, observable gap |
+| Driver assignment | SUPPORTED NOW — REUSE Trip Assurance's own `hasActiveAssignment` fact, do not re-derive | Identical to Assurance's NEEDS_ASSIGNMENT dimension, restricted to `state='scheduled'` (the only state where Assurance's own NEEDS_ASSIGNMENT is ever reachable anyway) |
+| Vehicle assignment | SUPPORTED NOW (new dimension Assurance does not check) | `trip_assignments.vehicle_id` nullable independent of `driver_id` |
+| Driver currently active | SUPPORTED NOW (new dimension, requires one join Assurance does not do) | Assignment validated only at assignment time; no later re-check exists anywhere |
+| Vehicle currently active | SUPPORTED NOW (new dimension, same as above) | Same gap, Vehicle side |
+| Facility references | SHOULD NOT BE PART OF READINESS | Explicitly optional/contextual by the schema's own design comment — absence is normal, not a gap |
+| Request linkage | SHOULD NOT BE PART OF READINESS | Nullable by design (ZD-045) — an internal Trip with no Request is normal, not a gap |
+| Open operational issue | SUPPORTED NOW — REUSE Trip Assurance's own OPEN_EXCEPTION fact, do not re-derive | Identical underlying `trip_exceptions` count Assurance already computes |
+| Return coordination | PARTIALLY SUPPORTED — see §RETURN-TRIP LIMITATIONS | `transportation_requests.return_trip_needed` exists, but only as a soft informational signal, never a pass/fail readiness condition |
+| Special requirements (Passenger assistance notes vs. Vehicle capability) | NOT REPRESENTED IN DATA MODEL as a checkable match | `assistance_notes` is free text; no Vehicle capability field exists to validate against — presence of the note is knowable, correctness of the match is not |
+| Credentials/compliance | NOT REPRESENTED IN DATA MODEL | Driver/Vehicle have only `status active/inactive` — see §CREDENTIAL-READINESS LIMITATIONS |
+
+============================================================
+UNSUPPORTED / FUTURE DIMENSIONS
+============================================================
+- Credential/compliance validation (license expiry, insurance,
+  certification) — no schema exists at all. FUTURE MODEL WORK (§12).
+- Special-requirement-to-vehicle-capability matching — no Vehicle
+  capability taxonomy exists (vehicles.sql's own comment confirms this
+  is a deliberately unresolved product decision). Cannot be built
+  without new schema; not proposed here.
+- Return-trip lateness/overdue detection — `return_trip_needed` tells
+  us intent, never a deadline; no field records when a return is
+  expected. Cannot be inferred.
+- Routing/deadhead/ETA-based readiness — explicitly excluded by this
+  phase's own instruction; no such data exists regardless.
+
+============================================================
+READINESS VS ASSURANCE BOUNDARY
+============================================================
+| | Trip Readiness | Trip Assurance |
+|---|---|---|
+| Temporal scope | BEFORE execution begins (`state='scheduled'` only) | DURING the entire non-terminal lifecycle |
+| Day scope | Today AND tomorrow (any future scheduled date) | Today + any currently-active Trip only |
+| Question | "Are we prepared?" | "Is execution proceeding without an issue?" |
+| Persisted? | No — derived | No — derived |
+| Driver-assignment check | Reuses Assurance's own fact | NEEDS_ASSIGNMENT (already exists) |
+| Open-exception check | Reuses Assurance's own fact | OPEN_EXCEPTION (already exists) |
+| Vehicle-assignment check | New — Assurance never checks this | Not evaluated |
+| Driver/Vehicle currently-active check | New — Assurance never checks this | Not evaluated |
+| Schedule-set check | New — Assurance never checks this (meaningless for Assurance's own today/active scope, since a Trip without a scheduled time would not even appear in today's day-bounded query) | Not evaluated |
+| Location freshness | Not evaluated (only meaningful once execution begins) | LOCATION_STALE/UNAVAILABLE |
+
+RESOLUTION FOR THE TWO OVERLAPPING DIMENSIONS (Driver assignment, Open
+exception): Trip Readiness's own evaluator MUST call into (or receive
+as already-computed input) the identical facts/logic
+`evaluateTripAssurance` already uses for these two checks — never a
+second, independently-maintained definition of "unassigned" or "has an
+open issue." Concretely, this means either (a) Trip Readiness's own
+pure function accepts the same `hasActiveAssignment`/
+`openExceptionCount` facts as parameters (mirroring
+`TripAssuranceFacts`'s own shape for exactly these two fields), or (b)
+Trip Readiness is implemented as a set of ADDITIONAL checks layered on
+top of a Trip Assurance result already computed for that Trip, adding
+only the genuinely new dimensions (Vehicle assignment, Driver/Vehicle
+currently-active, schedule-set) rather than re-evaluating what
+Assurance already answered. Either shape avoids duplicate warnings by
+construction — the exact requirement in the phase's own §4.
+
+UI IMPLICATION (not implemented, recommendation only): for a Trip
+scheduled TODAY, Assurance's own NEEDS_ASSIGNMENT already surfaces in
+Needs Attention / Dispatch — Trip Readiness should NOT show a second,
+separately-worded "not ready: no driver" badge on that same Trip on
+the SAME-day surfaces where Assurance already owns that message. Trip
+Readiness's own distinct value is (1) surfacing the SAME class of gap
+for TOMORROW's Trips, where nothing currently looks at all, and (2)
+surfacing the genuinely NEW dimensions (Vehicle, Driver/Vehicle
+currently-active, schedule-set) that Assurance was never designed to
+check, on any day.
+
+============================================================
+READINESS STATE MODEL
+============================================================
+Recommended vocabulary (evaluated against, not assumed before, the
+above audit):
+
+  READY — no supported readiness dimension is currently unmet.
+  NEEDS_PREPARATION — at least one supported readiness dimension is
+    unmet; the reason list (below) says which.
+  NOT_APPLICABLE — the Trip is not in `state='scheduled'` (see
+    LIFECYCLE APPLICABILITY) — Readiness has nothing to say about it;
+    this is a distinct case from READY, never conflated with it.
+
+No numerical score, no percentage, no AI classification — this
+three-value vocabulary is sufficient for every dimension found above;
+nothing in the audit produced a case needing a fourth value or a
+severity-weighted composite.
+
+============================================================
+READINESS REASON MODEL
+============================================================
+For every SUPPORTED NOW dimension from §SUPPORTED READINESS DIMENSIONS
+above:
+
+NO_SCHEDULE
+  Source: `trips.scheduled_pickup_at IS NULL`
+  Condition: Trip is `scheduled` with no pickup time set
+  Resolved by: Operations, via Trip Detail (edit the schedule) —
+    exact UI surface for editing schedule was not audited in this
+    phase (out of scope, no implementation) and should be confirmed
+    before S4B locks this reason's own resolution path
+
+NEEDS_DRIVER
+  Source: same fact as Trip Assurance's NEEDS_ASSIGNMENT
+    (`hasActiveAssignment`)
+  Condition: Trip is `scheduled` with no active `trip_assignments` row
+  Resolved by: Operations, via Dispatch / Trip Detail (existing
+    `assign_trip` flow — unchanged)
+
+NEEDS_VEHICLE
+  Source: active `trip_assignments.vehicle_id IS NULL`
+  Condition: Trip is `scheduled`, has an active assignment, but that
+    assignment carries no Vehicle
+  Resolved by: Operations, via Dispatch / Trip Detail (existing
+    `reassign_trip`/assignment-edit flow — confirm it supports
+    adding a Vehicle to an existing Driver-only assignment before
+    locking this reason)
+
+DRIVER_INACTIVE
+  Source: active assignment's Driver row has `status='inactive'`
+    (requires one additional join Assurance does not currently do)
+  Condition: Trip is `scheduled`, has an active assignment, but the
+    assigned Driver is no longer `active`
+  Resolved by: Operations, via Dispatch/Trip Detail (reassign to an
+    active Driver)
+
+VEHICLE_INACTIVE
+  Source: active assignment's Vehicle row has `status='inactive'`
+  Condition: symmetric to DRIVER_INACTIVE, Vehicle side
+  Resolved by: same as above, Vehicle side
+
+PASSENGER_INACTIVE
+  Source: `passengers.status='inactive'` for the Trip's own
+    `passenger_id`
+  Condition: the Trip's linked Passenger has gone inactive since the
+    Trip was created
+  Resolved by: Operations — the actual correct resolution path (edit
+    Passenger status back to active? reassign the Trip to a different
+    Passenger — a capability that does not exist today?) was not
+    designed in this audit and should be a genuine open decision before
+    S4B, not assumed
+
+OPEN_EXCEPTION
+  Source: same fact as Trip Assurance's OPEN_EXCEPTION
+    (`openExceptionCount`)
+  Condition: a real open `trip_exceptions` row exists against this Trip
+  Resolved by: Dispatcher/Organization Admin resolves the exception
+    (existing flow, unchanged)
+
+No severity/importance ranking beyond a fixed display-priority order
+(mirroring Assurance's own established convention) is proposed here —
+introducing one was not shown by this audit to be necessary and would
+be exactly the kind of "do not decide by intuition alone" invention the
+phase warns against.
+
+============================================================
+LIFECYCLE APPLICABILITY
+============================================================
+| Trip state | Readiness applicability |
+|---|---|
+| scheduled | The ONLY state Trip Readiness evaluates. This is exactly and only the "before execution" window. |
+| en_route_to_pickup | NOT_APPLICABLE — execution has begun; Trip Assurance owns this window from here forward |
+| arrived_at_pickup | NOT_APPLICABLE |
+| passenger_onboard | NOT_APPLICABLE |
+| en_route_to_destination | NOT_APPLICABLE |
+| arrived_at_destination | NOT_APPLICABLE |
+| completed | NOT_APPLICABLE (terminal — Assurance's own TERMINAL code already covers this) |
+| cancelled | NOT_APPLICABLE (terminal) |
+| no_show | NOT_APPLICABLE (terminal) |
+
+The Trip lifecycle itself is unchanged by this audit and must remain
+unchanged by any future implementation — Readiness is a read-only
+derived lens over the existing 9 states, never a new state and never a
+gate that blocks a state transition.
+
+============================================================
+TOMORROW READINESS DEFINITION
+============================================================
+"Before I finish today, what scheduled work for tomorrow is not ready?"
+— every `state='scheduled'` Trip whose `scheduled_pickup_at` falls
+within the organization's own "tomorrow" window (see ORGANIZATION
+TIMEZONE BEHAVIOR below), evaluated through the identical Trip
+Readiness function defined above — NOT a separate evaluator. Tomorrow
+Readiness is a QUERY SCOPE (which Trips, which day), not a different
+readiness DEFINITION. A Trip scheduled for tomorrow and a Trip
+scheduled for later today, both in `state='scheduled'`, are evaluated
+by the exact same function with the exact same reasons.
+
+Recommended summary shape (matches the phase's own illustrative
+example, evaluated as achievable with current data — not merely
+copied):
+
+  Tomorrow — 18 scheduled Trips
+  READY — 14
+  NEEDS PREPARATION — 4
+  [8:30 AM — Patricia Cole — Needs Driver]
+  [9:15 AM — Aaron Miles — Needs Vehicle]
+  ...
+
+Every field in that shape is directly backed by data already audited
+above (Trip time, Passenger name, and one or more of the 6 real
+NEEDS_* reasons) — nothing fabricated.
+
+============================================================
+ORGANIZATION TIMEZONE BEHAVIOR
+============================================================
+Must reuse, not reinvent, `src/lib/operations/day-bounds.ts`'s
+existing `organizationDayBoundsUtc(now, timezone)`. This function
+already computes any given instant's own organization-local day
+boundary as `[startUtc, endUtc)` — it takes `now` as a parameter, not
+"the actual current instant" specifically. "Tomorrow" therefore
+requires ZERO new day-boundary logic: feed it a "tomorrow-probe"
+instant (`new Date(now.getTime() + 24*60*60*1000)`) — the exact same
+DST-safe technique `src/lib/driver/trip-presentation.ts`'s own
+`operationalDayLabel` already uses for its own "Today"/"Tomorrow"
+labeling — and the function returns tomorrow's own correct [start,end)
+directly. Never server UTC day boundaries; never the runtime's local
+timezone; always `organizations.timezone`.
+
+============================================================
+SMALL OPERATOR EXPERIENCE
+============================================================
+For a 1-2 vehicle owner-operator, Tomorrow Readiness should render as a
+short, calm list — likely fewer than 5 Trips total most days — framed
+as "what do I need to sort out before tomorrow," matching the exact
+tone Operations Brief already established for its own "Requests
+awaiting review" block (S2G): a compact single Panel, real counts, no
+icon/warning-color escalation merely because a number is nonzero,
+restrained action links. When `NEEDS_PREPARATION === 0`, the calm state
+should read plainly ("Tomorrow is ready") — never a large empty-state
+card, matching the same restrained-zero-state precedent Operations
+Brief's own Driver Snapshot / Requests-awaiting-review blocks already
+set.
+
+============================================================
+LARGE OPERATOR EXPERIENCE
+============================================================
+The SAME derived engine and the SAME query shape serve a dispatcher-led
+larger fleet without any separate backend model — only the SURFACE
+changes. A larger fleet's Tomorrow Readiness view would show more rows
+and likely wants the existing Dispatch Board's own grid/filter
+conventions (already proven at scale for TODAY's Trips) rather than
+Operations Brief's compact list — but the underlying data-access
+function (see QUERY / DATA ACCESS DESIGN below) is identical either
+way; only which component renders its result differs. This mirrors
+this codebase's own established precedent of "one pure evaluator, many
+presentation surfaces" (Trip Assurance itself is the proof this pattern
+already works at this exact scale).
+
+============================================================
+UI SURFACE RECOMMENDATIONS
+============================================================
+| Surface | Classification | Reasoning |
+|---|---|---|
+| Operations Brief | PRIMARY | Exactly where S2G already added "Requests awaiting review" — Tomorrow Readiness's own compact summary belongs alongside it, serving the same "brief the operator" purpose, for both operator sizes |
+| Tomorrow Readiness view (a dedicated page/section) | PRIMARY | The actionable row-by-row list (per-Trip reasons) needs more room than a Brief block can offer once NEEDS_PREPARATION > a handful — needed for the larger-fleet case specifically |
+| Trip Detail | SECONDARY | A single Trip's own Readiness state/reasons belongs here as a small, restrained addition (mirrors how Trip Detail already surfaces its own Assurance state) — not the primary discovery surface |
+| Dispatch | SECONDARY | Today's Dispatch Board already effectively shows Readiness's two overlapping dimensions via Assurance (NEEDS_ASSIGNMENT); the genuinely new dimensions (Vehicle/Driver-Vehicle-active/schedule) could be added as small indicators here for TODAY's own unassigned/assigned columns, but this is not the primary place Tomorrow's own Trips would be reviewed |
+| Trips list | NOT APPROPRIATE | A general historical/all-Trips list is the wrong place for a time-sensitive "before tomorrow" concern — scattering a Readiness badge across every row regardless of date would dilute rather than clarify, contrary to the phase's own explicit caution |
+
+============================================================
+QUERY / DATA ACCESS DESIGN
+============================================================
+Proposed architecture (not implemented) mirrors `todays-operations.ts`
+almost exactly, substituting tomorrow's own day-bounds for today's:
+
+  1. Resolve `organizationId`/`timezone` via the existing
+     `requireOperationsAccess` boundary — unchanged pattern.
+  2. Compute tomorrow's `[startUtc, endUtc)` via
+     `organizationDayBoundsUtc(tomorrowProbe, timezone)` — zero new
+     day-boundary code.
+  3. ONE query: `trips` where `organization_id = ...`,
+     `state = 'scheduled'`, `scheduled_pickup_at` in `[startUtc,
+     endUtc)`, embedding the SAME `trip_assignments(driver, vehicle)`
+     and `passengers(display_name)` relations `todays-operations.ts`'s
+     own `TRIP_COLUMNS` constant already embeds — reusing that exact
+     query shape, not inventing a second one.
+  4. A SECOND, small parallel phase, scoped ONLY to the candidate Trip
+     ids from step 3 (never a broader per-organization scan, matching
+     the two-phase discipline `todays-operations.ts` already
+     established): open-exception counts (`trip_exceptions`, exact
+     same query shape already used), and — new for Readiness — a
+     lookup of each candidate's assigned Driver/Vehicle CURRENT
+     `status` (a small `.in("id", driverIds)`/`.in("id", vehicleIds)`
+     query against `drivers`/`vehicles`, organization-scoped) and each
+     candidate's Passenger CURRENT `status` (same shape, against
+     `passengers`).
+  5. A pure `deriveTripReadiness(facts, ...)` function (mirroring
+     `request-readiness-core.ts`'s own pure-core convention) combines
+     the above into the 3-state vocabulary + reason list, no I/O
+     inside it.
+
+This is 2 round trips (plus the small second-phase lookups, all
+scoped to the tiny candidate-id set from step 3, never unbounded) —
+the same shape `todays-operations.ts` already proves works at this
+scale. No N+1 risk: every lookup is a single `.in()` query against the
+already-known candidate ids, never one query per Trip.
+
+============================================================
+SECURITY / RLS IMPACT
+============================================================
+Every table this design reads (`trips`, `trip_assignments`, `drivers`,
+`vehicles`, `passengers`, `trip_exceptions`) is already RLS-enabled
+and already read by existing, working Operations queries
+(`todays-operations.ts`, `dispatch-board.ts`) using the exact same
+`organization_id`-scoped, `createServerSupabaseClient`-based pattern.
+No new table, no new column, no new RPC, and no new RLS policy is
+required to build Trip Readiness or Tomorrow Readiness as scoped by
+this audit — it is a PURE DERIVED READ MODEL over already-secured data,
+exactly the preferred outcome the phase asked to confirm rather than
+assume. The service role is never involved, matching every other
+Operations data-access module in this codebase.
+
+============================================================
+SCHEMA IMPACT
+============================================================
+NONE required for the scope this audit actually supports (§SUPPORTED
+READINESS DIMENSIONS). Specifically, and explicitly per instruction:
+  - `trips.leg` is NOT proposed and must not be added in this phase or
+    the next (ZD-069 remains PROVISIONAL, unconfirmed).
+  - No placeholder compliance/credential boolean is proposed anywhere.
+  - No Vehicle capability taxonomy is proposed.
+If a future product decision confirms `leg` or a credential model is
+wanted, that is new schema work belonging to its own future phase, not
+a hidden dependency of S4B/S4C/S4D below.
+
+============================================================
+RETURN-TRIP LIMITATIONS
+============================================================
+The current schema allows exactly what ZD-069 confirmed: multiple
+ordinary Trip rows sharing one `request_id`, no new entity, `leg`
+unimplemented. Tomorrow Readiness CAN truthfully say, for a Trip
+scheduled tomorrow whose linked Request has `return_trip_needed='yes'`
+and currently has exactly one Trip linked to it (this one): "a return
+trip may still be needed" — a soft, informational note, NEVER a
+readiness-blocking condition on the outbound Trip itself (the outbound
+Trip's own preparedness is unaffected by whether its return has been
+scheduled yet). Tomorrow Readiness CANNOT truthfully say whether a
+return is overdue, when one is expected, or distinguish `not_sure` from
+a genuine future return — no field records timing or intent beyond the
+one three-value flag. This limitation is stated here rather than
+worked around with an invented heuristic.
+
+============================================================
+CREDENTIAL-READINESS LIMITATIONS
+============================================================
+Confirmed directly from schema (§CURRENT TRIP MODEL): Driver and
+Vehicle each carry only `status active/inactive` — no license,
+insurance, certification, inspection, or any expiry-dated field exists
+anywhere in this database. Credential Readiness is FUTURE MODEL WORK,
+full stop. No placeholder boolean (e.g. a fake `credentials_verified`
+column defaulting to `true`) is proposed — that would misrepresent a
+real compliance state this system does not actually track, which is
+exactly the kind of fabrication this phase's own instructions forbid.
+
+============================================================
+DRIVER TEST ACCOUNT HOUSEKEEPING
+============================================================
+Carried forward, unchanged, not investigated or repaired in this
+phase: the synthetic Org A Driver credential used during S2H
+production validation did not authenticate against
+`app.nemryn.com` ("that email and password combination doesn't match
+our records," confirmed across two independent retry attempts). This
+remains a standalone validation-housekeeping item, unrelated to Trip
+Readiness, and is explicitly NOT classified as a product gap in either
+Request Hub or the Trip Readiness model audited here. It should be
+resolved separately, before any real pilot Driver-facing validation is
+attempted — not folded into S4B/C/D/E/F below.
+
+============================================================
+IMPLEMENTATION SLICES (PROPOSED, NOT IMPLEMENTED)
+============================================================
+
+S4B — Trip Readiness Core
+  Objective: the pure `deriveTripReadiness` evaluator + its server-only
+    data-access wrapper for a SINGLE Trip (or a small already-fetched
+    set), covering exactly the SUPPORTED NOW dimensions in this audit
+    (schedule set, Driver assigned, Vehicle assigned, Driver/Vehicle/
+    Passenger currently active, open exception via the shared Assurance
+    fact) — mirrors `request-readiness-core.ts`'s own pure-core/
+    server-wrapper split.
+  Files: new `src/lib/operations/trip-readiness-core.ts` (pure),
+    a server-only wrapper alongside it (naming to be decided against
+    this codebase's own `*-core.ts`/plain-name convention at
+    implementation time).
+  Schema impact: none.
+  RLS/security impact: none — reads only existing, already-RLS-scoped
+    tables via the existing server client.
+  Tests: pure-function unit tests (`*.test.mjs`, matching
+    `request-readiness-core.test.mjs`'s own established convention) —
+    every dimension, every combination that can actually occur.
+  UI surfaces: none yet.
+  Release dependency: none (S2H is already live; this is new,
+    independent read-only capability).
+
+S4C — Tomorrow Readiness Query + Aggregate
+  Objective: the "tomorrow" query design in this audit's own §QUERY /
+    DATA ACCESS DESIGN — one Trip-range query + one small scoped
+    second-phase lookup, feeding S4B's evaluator per Trip, aggregated
+    into the READY/NEEDS_PREPARATION counts + per-Trip reason rows.
+  Files: new `src/lib/operations/tomorrow-readiness.ts` (or equivalent
+    name), reusing `day-bounds.ts` unchanged.
+  Schema impact: none.
+  RLS/security impact: none.
+  Tests: tsc/lint/build/unit; a live data-shape check against a
+    realistic fixture set (multiple Trips tomorrow, mixed readiness
+    reasons) — no UI yet to test through, so this is a data-layer
+    validation phase.
+  UI surfaces: none yet.
+  Release dependency: S4B.
+
+S4D — Tomorrow Readiness Surface + Trip Detail Integration
+  Objective: build the actual Tomorrow Readiness view (§UI SURFACE
+    RECOMMENDATIONS' own PRIMARY dedicated view) and the SECONDARY
+    Trip Detail readiness display, small-operator-first per §SMALL
+    OPERATOR EXPERIENCE.
+  Files: new route/component under `src/app/operations/` (exact path
+    to be decided at implementation time), a small addition to the
+    existing Trip Detail page.
+  Schema impact: none.
+  RLS/security impact: none (read-only).
+  Tests: tsc/lint/build/unit; live CDP validation across the small-
+    operator (few Trips) and larger-fleet (many Trips, mixed reasons)
+    cases; empty-state (`NEEDS_PREPARATION === 0`) validation.
+  UI surfaces: Tomorrow Readiness view (PRIMARY), Trip Detail
+    (SECONDARY).
+  Release dependency: S4C.
+
+S4E — Operations Brief Integration
+  Objective: the compact Tomorrow Readiness summary block inside
+    Operations Brief, mirroring S2G's own "Requests awaiting review"
+    integration pattern exactly (same restrained tone, same
+    zero-state discipline).
+  Files: `operations-brief-core.ts`/`operations-brief.ts`/
+    `OperationsBrief.tsx` (additive, matching S2G's own established
+    shape).
+  Schema impact: none.
+  RLS/security impact: none.
+  Tests: extend `operations-brief-core.test.mjs`; live validation.
+  UI surfaces: Operations Brief (PRIMARY).
+  Release dependency: S4C (count must match the same underlying
+    evaluator S4D's own view uses — never a second, drifting
+    definition, matching S2G's own "count must match the queue's own
+    definition" discipline for Request Hub).
+
+S4F — Security / Regression / Release
+  Objective: full regression (existing Trip/Dispatch/Assurance/
+    Operations Brief surfaces unchanged), RLS re-confirmation (no
+    policy change expected, but confirm via the existing adversarial
+    suite that read access remains correctly org-scoped), production
+    release following this session's own established S2H discipline.
+  Files: none new — verification only.
+  Schema impact: none (confirms none occurred).
+  RLS/security impact: none (confirms none occurred).
+  Tests: full existing SQL suite (still passes unmodified, since no
+    schema changed) + whatever S4B-E's own new unit tests added;
+    tsc/lint/build; live smoke test; production release.
+  UI surfaces: all of the above, regression-checked.
+  Release dependency: S4B, S4C, S4D, S4E.
+
+This 6-slice sequence is a genuine re-slicing based on this audit's own
+findings (schema-impact confirmation drove separating "core evaluator"
+from "query/aggregate" from "surfaces" from "Brief integration"), not a
+blind reuse of the phase prompt's own suggested names — the prompt's
+suggested S4B/C/D/E/F labels turned out to match well once evaluated,
+so they were kept, but S4C was specifically added as its own slice
+(the prompt's own suggestion collapsed "Trip Detail + Trips
+integration" together, which this audit separates from the Tomorrow-
+specific query/aggregate work since they have different release
+dependencies and different testing shapes).
+
+============================================================
+RISKS / OPEN DECISIONS
+============================================================
+- Exact UI path for resolving NO_SCHEDULE (editing a Trip's own
+  scheduled_pickup_at from Trip Detail) was not audited — confirm this
+  exists or is in scope before S4B locks the reason's own "resolved by"
+  text.
+- Exact UI path for resolving NEEDS_VEHICLE (adding a Vehicle to an
+  existing Driver-only assignment via the current `reassign_trip`
+  flow) was not audited in this phase — confirm before S4B.
+- PASSENGER_INACTIVE's own correct resolution path is a genuine open
+  product question (reactivate the Passenger? reassign the Trip to a
+  different Passenger, a capability that does not exist today?) — not
+  decided here, flagged for product decision before S4B.
+- Whether Dispatch (a SECONDARY surface per §UI SURFACE
+  RECOMMENDATIONS) should show the new dimensions for TODAY's own
+  Trips, or whether that is deferred entirely to a later phase, is an
+  open product-scope decision, not an engineering one — this audit
+  recommends deferring it (out of the minimum S4B-F sequence above)
+  unless product explicitly wants it sooner.
+- The exact naming convention for the new files (`trip-readiness-
+  core.ts` vs. some other name) should follow whatever this codebase's
+  own naming review process decides at implementation time — not
+  locked prematurely by this audit.
+
+============================================================
+TRIP READINESS MODEL:
+READY
+
+TOMORROW READINESS MODEL:
+READY
+
+CURRENT DATA SUFFICIENT FOR MVP:
+YES
+
+NEW SCHEMA REQUIRED FOR MVP:
+NO
+
+RLS CHANGES REQUIRED:
+NO
+
+OPEN PRODUCT DECISIONS:
+NO_SCHEDULE resolution UI path; NEEDS_VEHICLE resolution UI path;
+PASSENGER_INACTIVE resolution path; whether Dispatch should surface
+the new dimensions for today's own Trips (recommended: defer).
+
+RECOMMENDED NEXT SLICE:
+P1-E1-S4B — Trip Readiness Core
+
+BLOCKERS:
+NONE

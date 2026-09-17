@@ -62,6 +62,8 @@ function makeTodaysOperationsData(overrides = {}) {
 
 const NO_DRIVERS = { totalActiveDrivers: 0, driversCurrentlyOnTrip: 0 };
 const NO_PENDING_REQUESTS = { pendingRequestCount: 0, oldestPendingRequestCreatedAt: null };
+/** A legitimate "zero trips scheduled tomorrow" result — used as the default "not under test" value throughout this file's PRE-EXISTING test cases below, exactly like NO_DRIVERS/NO_PENDING_REQUESTS are each other's "not under test" defaults. Deliberately NOT `null` (which means a genuine fetch failure, P1-E1-S4E §11) — the dedicated Tomorrow Readiness section further down exercises `null` and real non-zero summaries explicitly. */
+const NO_TOMORROW_READINESS = { totalScheduledTrips: 0, readyCount: 0, needsPreparationCount: 0 };
 
 // ---------------------------------------------------------------------
 // A. ZERO TRIPS
@@ -69,7 +71,7 @@ const NO_PENDING_REQUESTS = { pendingRequestCount: 0, oldestPendingRequestCreate
 
 test("deriveOperationsBrief — zero trips today: NO_TRIPS, everything empty", () => {
   const data = makeTodaysOperationsData({ todayTrips: [] });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.dayState, "NO_TRIPS");
   assert.deepEqual(result.attention, []);
   assert.deepEqual(result.activeNow, []);
@@ -81,7 +83,7 @@ test("deriveOperationsBrief — zero trips today: NO_TRIPS, everything empty", (
 test("deriveOperationsBrief — zero trips today still reports real driver counts", () => {
   const data = makeTodaysOperationsData({ todayTrips: [] });
   const drivers = { totalActiveDrivers: 3, driversCurrentlyOnTrip: 0 };
-  const result = deriveOperationsBrief(data, drivers, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, drivers, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.driverSnapshot, drivers);
 });
 
@@ -148,7 +150,7 @@ test("deriveOperationsBrief — a scheduled trip inside the window AND in attent
     needsAssignmentTrips: [trip],
     attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
   });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, now);
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, now);
   assert.equal(result.nextDepartures.length, 0);
   assert.equal(result.attention.length, 1);
   assert.equal(result.attention[0].trip.id, "t-dup");
@@ -161,13 +163,13 @@ test("deriveOperationsBrief — a scheduled trip inside the window AND in attent
 test("deriveOperationsBrief — unassignedCount reflects needsAssignmentTrips length", () => {
   const unassigned = [makeTrip({ id: "u1" }), makeTrip({ id: "u2" })];
   const data = makeTodaysOperationsData({ todayTrips: unassigned, needsAssignmentTrips: unassigned });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.unassignedCount, 2);
 });
 
 test("deriveOperationsBrief — no duplicate unassigned-row collection exists on the result", () => {
   const data = makeTodaysOperationsData();
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal("unassignedTrips" in result, false);
   assert.equal("unassigned" in result, false);
 });
@@ -179,7 +181,7 @@ test("deriveOperationsBrief — no duplicate unassigned-row collection exists on
 test("deriveOperationsBrief — activeNow is exactly the input activeTrips (same reference, no re-filtering)", () => {
   const active = [makeTrip({ id: "a1", state: "en_route_to_pickup" })];
   const data = makeTodaysOperationsData({ activeTrips: active });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.activeNow, active);
 });
 
@@ -302,21 +304,21 @@ test("countDriversCurrentlyOnTrip — empty rows -> 0", () => {
 test("deriveOperationsBrief — requestSummary: zero pending requests passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { pendingRequestCount: 0, oldestPendingRequestCreatedAt: null };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.requestSummary, summary);
 });
 
 test("deriveOperationsBrief — requestSummary: one pending request passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { pendingRequestCount: 1, oldestPendingRequestCreatedAt: "2026-09-14T08:00:00.000Z" };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.requestSummary, summary);
 });
 
 test("deriveOperationsBrief — requestSummary: multiple pending requests passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { pendingRequestCount: 7, oldestPendingRequestCreatedAt: "2026-09-10T08:00:00.000Z" };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.requestSummary, summary);
 });
 
@@ -325,7 +327,7 @@ test("deriveOperationsBrief — requestSummary is independent of dayState/attent
   const data = makeTodaysOperationsData({ todayTrips: [trip] });
   const drivers = { totalActiveDrivers: 5, driversCurrentlyOnTrip: 2 };
   const summary = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-12T08:00:00.000Z" };
-  const result = deriveOperationsBrief(data, drivers, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, drivers, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.dayState, "ALL_COMPLETE");
   assert.deepEqual(result.driverSnapshot, drivers);
   assert.deepEqual(result.requestSummary, summary);
@@ -339,10 +341,86 @@ test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepart
     needsAssignmentTrips: [trip],
     attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
   });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, now);
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, now);
   assert.equal(result.dayState, "ACTIVE_DAY");
   assert.equal(result.nextDepartures.length, 0);
   assert.equal(result.attention.length, 1);
   assert.equal(result.unassignedCount, 1);
   assert.deepEqual(result.activeNow, []);
+});
+
+// ---------------------------------------------------------------------
+// I. TOMORROW READINESS SUMMARY (P1-E1-S4E) — deriveOperationsBrief is a
+// pure pass-through here too: the real day-bounds/candidate-query/
+// evaluator logic lives entirely in S4C/S4C1's getTomorrowReadiness,
+// narrowed to 3 counts by getTomorrowReadinessSummary (operations-
+// brief.ts) — this pure core never recomputes readiness, so these tests
+// only confirm the pass-through/independence contract, exactly like the
+// requestSummary section above.
+// ---------------------------------------------------------------------
+
+test("deriveOperationsBrief — tomorrowReadiness: zero trips passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { totalScheduledTrips: 0, readyCount: 0, needsPreparationCount: 0 };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.tomorrowReadiness, summary);
+});
+
+test("deriveOperationsBrief — tomorrowReadiness: all ready passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { totalScheduledTrips: 4, readyCount: 4, needsPreparationCount: 0 };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.tomorrowReadiness, summary);
+});
+
+test("deriveOperationsBrief — tomorrowReadiness: one needs-preparation trip passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { totalScheduledTrips: 3, readyCount: 2, needsPreparationCount: 1 };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.tomorrowReadiness, summary);
+});
+
+test("deriveOperationsBrief — tomorrowReadiness: multiple needs-preparation trips passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { totalScheduledTrips: 25, readyCount: 18, needsPreparationCount: 7 };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.tomorrowReadiness, summary);
+});
+
+test("deriveOperationsBrief — tomorrowReadiness: null (genuine fetch failure) passes through unchanged, never coerced to a zero/ready value", () => {
+  const data = makeTodaysOperationsData();
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, null, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.tomorrowReadiness, null);
+});
+
+test("deriveOperationsBrief — tomorrowReadiness is independent of dayState/attention/driverSnapshot/requestSummary (no cross-contamination)", () => {
+  const trip = makeTrip({ id: "t1", state: "completed" });
+  const data = makeTodaysOperationsData({ todayTrips: [trip] });
+  const drivers = { totalActiveDrivers: 5, driversCurrentlyOnTrip: 2 };
+  const requestSummary = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-12T08:00:00.000Z" };
+  const tomorrow = { totalScheduledTrips: 10, readyCount: 6, needsPreparationCount: 4 };
+  const result = deriveOperationsBrief(data, drivers, requestSummary, tomorrow, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "ALL_COMPLETE");
+  assert.deepEqual(result.driverSnapshot, drivers);
+  assert.deepEqual(result.requestSummary, requestSummary);
+  assert.deepEqual(result.tomorrowReadiness, tomorrow);
+});
+
+test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepartures/unassignedCount/activeNow/requestSummary) unchanged by tomorrowReadiness's addition", () => {
+  const now = new Date("2026-09-15T10:00:00.000Z");
+  const trip = makeTrip({ id: "t-dup", scheduledPickupAt: "2026-09-15T10:30:00.000Z" });
+  const data = makeTodaysOperationsData({
+    todayTrips: [trip],
+    needsAssignmentTrips: [trip],
+    attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
+  });
+  const requestSummary = { pendingRequestCount: 1, oldestPendingRequestCreatedAt: "2026-09-14T08:00:00.000Z" };
+  const tomorrow = { totalScheduledTrips: 2, readyCount: 1, needsPreparationCount: 1 };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, requestSummary, tomorrow, now);
+  assert.equal(result.dayState, "ACTIVE_DAY");
+  assert.equal(result.nextDepartures.length, 0);
+  assert.equal(result.attention.length, 1);
+  assert.equal(result.unassignedCount, 1);
+  assert.deepEqual(result.activeNow, []);
+  assert.deepEqual(result.requestSummary, requestSummary);
 });

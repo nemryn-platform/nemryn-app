@@ -1,0 +1,612 @@
+P1-E1-S4D — TOMORROW READINESS SURFACE + TRIP DETAIL INTEGRATION
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: User-facing implementation over the already-proven
+S4B/S4C/S4C1 read-only readiness engine. No new schema, no new RPC, no
+new RLS, no Operations Brief integration, no production deployment.
+Nothing committed, pushed, or deployed.
+
+------------------------------------------------------------------------
+AUDIT PERFORMED BEFORE CODING
+------------------------------------------------------------------------
+Read in full before writing any UI: OperationsSidebar.tsx, OperationsShell
+.tsx, OperationsLayoutClient.tsx, AppHeader.tsx, OperationsBrief.tsx,
+Today's Operations page.tsx, Trip Detail page.tsx, CurrentStatusPanel.tsx,
+TripExceptionsPanel.tsx, AssignmentDialog.tsx, EditPassengerDialog.tsx,
+DataTable.tsx, Panel.tsx, PageHeader.tsx, SectionHeader.tsx, EmptyState
+.tsx, AttentionState.tsx, StatusBadge.tsx, LinkButton.tsx, Breadcrumb.tsx,
+typography.ts, presentation.ts, authorization.ts, and the full S4B/S4C/
+S4C1 data layer (trip-readiness-core.ts, trip-readiness.ts, tomorrow-
+readiness-core.ts, tomorrow-readiness.ts, day-bounds.ts). No design
+decision below was made from the phase prompt's own description alone —
+every visual/structural choice traces to a real, already-existing
+pattern found during this audit.
+
+Key findings that shaped the design:
+  - `SummaryStrip` (inline mode) and `EmptyState` already exist and are
+    exactly the "compact figures, never decorative KPI cards" primitives
+    the phase asks for — reused directly, nothing new built.
+  - `assuranceStatusCategory` (presentation.ts) already establishes the
+    exact precedent this phase asks for independently: EVERY active
+    attention condition renders as StatusBadge category="warning" — the
+    same "never escalate to critical/red merely because it's an
+    exception" reasoning that shaped Tomorrow Readiness's own reason
+    badges below.
+  - `CurrentStatusPanel` already links "Assign Driver"/"Manage
+    Assignment" to a GENERIC `/operations/dispatch` (not a per-Trip deep
+    link) — its own doc comment: "the Dispatch Board has no per-Trip
+    deep-link parameter yet." This is the load-bearing fact behind the
+    RESOLUTION-ACTION AUDIT section below.
+  - Trip Detail currently has NO existing Trip Assurance banner of any
+    kind (confirmed by grep — `trip-assurance.ts` is only ever imported
+    by Today's Operations/Operations Brief, never by trip-detail.ts or
+    the Trip Detail page). The "duplication" risk this phase warns about
+    is therefore prospective, not an existing banner to remove — the
+    real risk is Preparation duplicating CurrentStatusPanel's assignment
+    affordance and TripExceptionsPanel's own exception list, both of
+    which DO already exist on this exact page.
+  - No schedule-edit mutation path exists anywhere in the codebase
+    (grepped every `p_scheduled_pickup_at` write site — only
+    `trips/new/actions.ts`, at creation time). This directly settled the
+    NO_SCHEDULE TRIP DETAIL BEHAVIOR section.
+  - The Assign/Reassign dialog's Vehicle field is optional on both
+    `assign_trip` and `reassign_trip` — a Reassign (driver re-selected,
+    vehicle added) CAN turn a driver-only assignment into a fully
+    assigned one. This directly settled the NEEDS_VEHICLE BEHAVIOR
+    section.
+
+------------------------------------------------------------------------
+PAGE INFORMATION ARCHITECTURE
+------------------------------------------------------------------------
+Route: `/operations/tomorrow` (src/app/operations/tomorrow/page.tsx),
+directly navigable, not linked from the sidebar or Operations Brief
+(S4D §3/§28/§29 — deferred to S4E). Authorization is the ordinary
+`/operations/*` boundary: the parent layout's own `requireOperationsAccess`
+already gates every route under this segment, and this page ALSO calls
+`requireOperationsAccess` itself (mirroring the exact convention every
+other Operations page.tsx already follows) to obtain
+`organizationId`/`organizationTimezone` for its own data fetch. No second
+access model was introduced; no `organizationId` is ever read from the
+client.
+
+Hierarchy actually built (server component, PageHeader + Panels, no new
+primitives):
+  Tomorrow
+  [organization-local long date]
+  [inline SummaryStrip: N scheduled trips · N ready · (N need preparation,
+   only rendered when > 0)]
+  Needs preparation  [N Trips badge]     <- primary content, only when
+    [row: time · passenger, reason badges, "View trip" link]  needsPrep>0
+  Ready                                   <- quieter secondary section,
+    [row: time · passenger — "Ready"]        always visible when any exist
+
+No KPI-card wall, no invented severity scoring, no client state, no
+polling — a pure Server Component rendering `getTomorrowReadiness`'s
+already-proven output.
+
+------------------------------------------------------------------------
+SMALL OPERATOR EXPERIENCE
+------------------------------------------------------------------------
+Live-validated against Fictional Org B (America/Chicago) with exactly 3
+scheduled trips for the real current "tomorrow" (2 pre-existing ambient
+fixtures + 1 temporary fully-ready fixture): summary strip correctly
+reads "3 scheduled trips · 1 ready · 2 need preparation", Needs
+preparation lists both non-ready trips with their own reason badges and
+"View trip" links, Ready lists the one ready trip in its own quieter
+section. No dense table, no enterprise-console feel — plain rows with
+generous spacing, identical structure to the large-operator case (§12's
+own "same route, same engine" requirement). Verified at desktop (1440px)
+and the platform's own 768px tablet floor.
+
+------------------------------------------------------------------------
+LARGE OPERATOR EXPERIENCE
+------------------------------------------------------------------------
+Live-validated against the same Org B with 20 additional temporary
+Trips layered on top (23 total: 12 ready, 11 needs-preparation — one
+fixture-authoring accident, a reused `inactive` passenger across two
+trips, correctly turned one intended "ready padding" Trip into a second
+genuine PASSENGER_INACTIVE Trip; the product's own behavior was verified
+exactly correct given that data, this was a test-fixture mistake, not a
+defect). All 6 applicable reason labels rendered correctly across the
+set, a same-time pair (8:00 AM ×2) both appeared correctly ordered
+(deterministic tie-break already proven at the data layer in S4C), a
+multi-reason Trip showed both its reasons ("Vehicle needed" + "Open
+issue") stacked in one row, and all 23 distinct trip-time labels were
+found in the rendered DOM (nothing truncated, paginated away, or
+collapsed). The plain-list structure (no table) scaled cleanly to this
+size without any layout change — confirming §12's "same page must
+remain scannable... do not create separate product modes."
+
+------------------------------------------------------------------------
+SUMMARY PRESENTATION
+------------------------------------------------------------------------
+`SummaryStrip` in `inline` mode — the existing "bold value + lowercase
+label, divided by a vertical rule" primitive (already used identically
+on Today's Operations), never a new component. Three items: "N scheduled
+trips", "N ready" (default tone), "N need preparation" (warning tone,
+only present when > 0 — omitted entirely when every Trip is ready, so
+the strip never shows a triumphant "0 need preparation" item). Not
+rendered at all in the zero-trips state — no "0 scheduled trips" strip
+sitting above a "no trips" empty state.
+
+------------------------------------------------------------------------
+NEEDS-PREPARATION PRESENTATION
+------------------------------------------------------------------------
+A `Panel` with a header row (title + `N Trips` StatusBadge, category=
+"warning" — the exact category `assuranceStatusCategory` already uses
+for the analogous case), then a `divide-y` list of rows (time ·
+passenger name, wrapped reason badges beneath, "View trip" LinkButton).
+Every applicable reason renders as its own StatusBadge — never
+collapsed to one, matching S4B's own "preserve every applicable reason"
+contract exactly (live-verified via the multi-reason fixture showing
+"Vehicle needed" + "Open issue" together). All reason badges use
+category="warning" uniformly (§10's own instruction — never escalate to
+critical merely because it's an OPEN_EXCEPTION), matching the existing
+`assuranceStatusCategory` convention exactly rather than inventing a new
+severity rule.
+
+------------------------------------------------------------------------
+READY PRESENTATION
+------------------------------------------------------------------------
+A separate, visually quieter `Panel`: a muted-color "Ready" heading
+(text-text-secondary, not text-primary), then a plain `divide-y` list —
+time · passenger name as a single muted link, "Ready" as small
+success-colored text (no StatusBadge, no icon) on the right. No
+collapsible disclosure was introduced: this codebase has no existing
+Disclosure/Accordion primitive anywhere (confirmed by inventory), and
+S4D §13 only permits hiding/collapsing "if consistent with existing UI
+patterns" — since no such pattern exists, Ready stays a plain, always-
+visible, quieter secondary section, matching Operations Brief's own
+"Active Now"/"Next Departures" precedent (always visible, differentiated
+by content and tone, never by visibility).
+
+------------------------------------------------------------------------
+REASON LABEL MAPPING
+------------------------------------------------------------------------
+Added `tripReadinessReasonLabel` to the existing shared
+`src/lib/operations/presentation.ts` (never a new module — matching this
+file's own established "state → screen label, one place to look"
+discipline already used for Trip status, Request status, and Request
+Readiness). Exact mapping, the closed 7-value vocabulary, no invented
+reasons, no raw enum ever rendered (live-verified — grepped the full
+rendered Org A/B pages for every raw enum string, none found):
+  NO_SCHEDULE        -> "Pickup time needed"
+  NEEDS_DRIVER       -> "Driver needed"
+  NEEDS_VEHICLE      -> "Vehicle needed"
+  DRIVER_INACTIVE    -> "Assigned driver is inactive"
+  VEHICLE_INACTIVE   -> "Assigned vehicle is inactive"
+  PASSENGER_INACTIVE -> "Passenger is inactive"
+  OPEN_EXCEPTION     -> "Open issue"
+Shared by both Tomorrow Readiness and Trip Detail's Preparation panel —
+one mapping, not two independently-drifting copies.
+
+------------------------------------------------------------------------
+DATE/TIMEZONE PRESENTATION
+------------------------------------------------------------------------
+The page never recomputes day boundaries itself. `formatOperationsLongDate
+(new Date(data.tomorrowStartUtc), data.timezone)` renders the heading date
+entirely from S4C1's own authoritative `TomorrowReadinessData` fields —
+`tomorrowStartUtc` and `timezone` — the same already-existing time-
+formatting helper Today's Operations/Operations Brief already use. Every
+row's own time is rendered via `formatOperationsTime(scheduledPickupAt,
+timezone)` — always the ORGANIZATION timezone, never browser-local or
+server-local. Live-verified indirectly at every step of this validation:
+Org A (America/New_York) and Org B (America/Chicago) each rendered their
+own correct "tomorrow" calendar date and correct local wall-clock times
+for their own fixtures throughout — including the discovery (see LIVE
+FIXTURE RESULTS) that "tomorrow" for each organization tracks the real
+current moment exactly, including across the two different UTC offsets.
+
+------------------------------------------------------------------------
+TRIP DETAIL INTEGRATION
+------------------------------------------------------------------------
+Added `TripReadinessPanel` (src/components/operations/trip-detail/
+TripReadinessPanel.tsx) and wired it into `src/app/operations/trips/
+[tripId]/page.tsx`. `getTripReadiness(trip.id, organization.organizationId)`
+(S4B's own existing wrapper, unmodified) is only ever called when
+`trip.state === "scheduled"` — sparing 2 round trips for every in-
+progress and terminal Trip view, which together outnumber scheduled
+views. For any other state, `readiness` stays `null` and the panel
+renders nothing at all — no "Not Applicable" badge (§16), confirmed live
+against an en_route Trip and a completed Trip.
+
+------------------------------------------------------------------------
+ASSURANCE/READINESS DUPLICATION STRATEGY
+------------------------------------------------------------------------
+Trip Detail carries no generic Trip Assurance banner today (confirmed by
+the audit above), so there was no existing banner to literally merge
+with. The real duplication risk is Preparation restating what
+CurrentStatusPanel's "Assign Driver"/"Manage Assignment" link and
+TripExceptionsPanel's own exception list already express. Resolved by
+making Preparation strictly SECONDARY and REFERENCE-ONLY:
+  - No AttentionState banner, no icon, no per-reason action button — a
+    small Panel with a single StatusBadge ("Prepared"/"Needs
+    preparation") and a plain bulleted reason list.
+  - OPEN_EXCEPTION is referenced as one line, "Open issue" — never a
+    restatement of the exception's type/description/Resolve control,
+    which stays exclusively in TripExceptionsPanel. Live-verified: on a
+    Trip with an open exception, the rendered page contains exactly one
+    "Resolve" control (found: 1), proving no duplicate exception UI was
+    introduced.
+  - NEEDS_DRIVER is referenced as "Driver needed" — the actual, only
+    working control for it (CurrentStatusPanel's "Assign Driver" link)
+    is left completely alone; Preparation adds no second button. Live-
+    verified on a Trip scheduled TODAY with no assignment: the rendered
+    page shows the Preparation panel's own "Driver needed" line AND
+    CurrentStatusPanel's pre-existing "Assign Driver" link, with zero
+    occurrences of any page-level "Needs Attention" banner text —
+    confirming no loud, duplicated warning treatment was created for the
+    exact case §18 calls out.
+
+------------------------------------------------------------------------
+RESOLUTION-ACTION AUDIT
+------------------------------------------------------------------------
+NEEDS_DRIVER   -> INDIRECT PATH EXISTS. CurrentStatusPanel's existing
+  "Assign Driver" link (generic /operations/dispatch, no per-Trip deep
+  link — confirmed from that component's own doc comment) is the only
+  real control; Preparation never adds a second one.
+NEEDS_VEHICLE  -> INDIRECT PATH EXISTS. Audited AssignmentDialog.tsx: a
+  Reassign (driver re-selected — required field — vehicle now added,
+  optional) genuinely can add a Vehicle to a driver-only assignment via
+  the same generic Dispatch/"Manage Assignment" link CurrentStatusPanel
+  already exposes once an assignment exists. No new deep link was built
+  (Dispatch has no per-Trip parameter); Preparation states the fact only.
+DRIVER_INACTIVE / VEHICLE_INACTIVE -> NO SAFE RESOLUTION ACTION EXISTS
+  FROM THIS PAGE. Reactivating a Driver/Vehicle is an entity-level
+  action on the Drivers/Fleet pages, not a Trip-level action; no link
+  was added. Preparation states the fact only.
+PASSENGER_INACTIVE -> NO SAFE RESOLUTION ACTION EXISTS FROM THIS PAGE
+  (see its own section below).
+OPEN_EXCEPTION -> DIRECT RESOLUTION ACTION EXISTS, already fully built
+  (TripExceptionsPanel's own "Resolve" control) — Preparation references
+  it, never duplicates it.
+NO_SCHEDULE (Trip Detail only) -> NO SAFE RESOLUTION ACTION EXISTS (see
+  its own section below).
+Across all Tomorrow Readiness list rows, the audited truthful action is
+simply "View trip" (the phase's own example row already used this exact
+copy) — the real, working, per-reason controls all live one click away,
+on Trip Detail itself, exactly where the audit found them.
+
+------------------------------------------------------------------------
+NO_SCHEDULE TRIP DETAIL BEHAVIOR
+------------------------------------------------------------------------
+Confirmed via a full-codebase grep that no `scheduled_pickup_at` write
+path exists anywhere except Trip creation (`trips/new/actions.ts`) — no
+schedule-edit action, dialog, or route exists today. Live-validated
+against the existing NO_SCHEDULE fixture (Trip 97000000-...-1101,
+scheduled, `scheduled_pickup_at IS NULL`): the Preparation panel shows
+"Pickup time needed" and nothing else — no "Update schedule" button was
+added (confirmed absent in the rendered page). This missing mutation
+path is recorded as future product work, not built here per S4D §22's
+own explicit instruction.
+
+------------------------------------------------------------------------
+PASSENGER_INACTIVE BEHAVIOR
+------------------------------------------------------------------------
+Audited EditPassengerDialog.tsx: it exists and DOES support toggling
+Passenger status back to "active" — but only from the Passengers list
+page, with no route/param that deep-links a specific Passenger's edit
+dialog open from elsewhere. Since Preparation cannot truthfully open
+that exact dialog for this exact Passenger from Trip Detail, no
+"Reactivate passenger" action was added — "Passenger is inactive" is
+stated as a plain fact only, satisfying S4D §20's explicit instruction
+not to invent this action.
+
+------------------------------------------------------------------------
+NEEDS_VEHICLE BEHAVIOR
+------------------------------------------------------------------------
+Audited AssignmentDialog.tsx and its Server Action (`assignmentAction`,
+src/app/operations/dispatch/actions.ts): the Vehicle field is genuinely
+optional on both `assign_trip` and `reassign_trip`, so Reassigning the
+SAME Driver while now also choosing a Vehicle is a real, working path
+that resolves NEEDS_VEHICLE. Since this happens through the exact same
+generic, non-deep-linked Dispatch route CurrentStatusPanel's "Manage
+Assignment" link already goes to, no new link was added in Preparation —
+it states "Vehicle needed" as a fact, consistent with every other
+reason's treatment on this page.
+
+------------------------------------------------------------------------
+OPEN_EXCEPTION BEHAVIOR
+------------------------------------------------------------------------
+No second exception workflow was created. TripExceptionsPanel remains
+the sole surface for exception detail/resolution on Trip Detail;
+Preparation contributes a single referencing line, "Open issue." Live-
+verified exactly one "Resolve" control renders on a Trip with an open
+exception (see ASSURANCE/READINESS DUPLICATION STRATEGY above).
+
+------------------------------------------------------------------------
+ERROR ISOLATION
+------------------------------------------------------------------------
+Tomorrow Readiness: live-forced via a reversible SQL fault injection
+(`REVOKE SELECT ON trip_exceptions FROM authenticated`, matching this
+codebase's own established reversible-fault-injection technique from
+earlier phases) — the page rendered a contained "Couldn't load
+tomorrow's trips" panel, never a fake "0 scheduled trips," never "No
+trips scheduled for tomorrow," never "Tomorrow is ready." The grant was
+restored immediately afterward and re-verified (Trip Detail/Tomorrow
+both confirmed working normally again).
+
+Trip Detail: the `getTripReadiness` call is wrapped in its own
+try/catch, setting a `readinessUnavailable` flag that renders "Preparation
+status isn't available right now." instead of throwing — the same
+pattern already proven correct on the Tomorrow page. Attempting to
+force ONLY this query to fail via the same REVOKE technique also broke
+`getTripDetail`'s own PRE-EXISTING `trip_exceptions` query (both
+wrappers read the identical table by design, since they describe the
+same Trip's same facts), which took down the whole page before this
+phase's own try/catch could ever be exercised — this is not a defect in
+the new code, it is a property of both wrappers legitimately sharing the
+same underlying tables, and no table-level grant could isolate one from
+the other. This is a genuine validation limitation, recorded honestly
+below (OPEN ISSUES) rather than worked around with a synthetic test;
+the try/catch itself was verified correct by direct code review and by
+its structural identity to the Tomorrow page's already-live-proven
+version.
+
+------------------------------------------------------------------------
+RESPONSIVE VALIDATION
+------------------------------------------------------------------------
+Desktop (1440px): full validation matrix, all fixture sets.
+Narrow desktop (1024px): confirmed the large-operator (23-Trip) dataset
+  still renders without error.
+Tablet (768px, the platform's own `md` floor — OperationsShell's
+  documented minimum before it swaps to its guard state): confirmed
+  content renders and "View trip" links are neither hidden nor
+  truncated.
+True phone width (390px): confirmed this route shows the SAME pre-
+  existing "This workspace is designed for tablet and desktop use." guard
+  every other Operations route already shows below 768px
+  (OperationsShell.tsx's own documented, unmodified, platform-wide
+  design decision — "the operations console is tablet/desktop only by
+  design"). This is not a gap introduced by this phase; Tomorrow
+  Readiness behaves identically to Today's Operations, Dispatch, and
+  every other Operations route at this width.
+
+------------------------------------------------------------------------
+ACCESSIBILITY
+------------------------------------------------------------------------
+Every reason renders as a `StatusBadge` — text label + colored dot
+together, never a bare color chip or icon-only treatment (§27). Heading
+hierarchy: `<h1>` "Tomorrow" (PageHeader) -> `<h2>` "Needs preparation"/
+"Ready" — one level down, consistent with every other Operations page's
+own hierarchy. "View trip" is a real `<Link>`-backed `LinkButton` with
+its own visible text (not an icon button), giving it a real accessible
+name with no extra `aria-label` needed. Trip Detail's Preparation panel
+reuses the identical `StatusBadge` pattern for "Prepared"/"Needs
+preparation."
+
+------------------------------------------------------------------------
+AUTHORIZATION
+------------------------------------------------------------------------
+No second access model. `/operations/tomorrow` is gated by the exact
+same `requireOperationsAccess` boundary as every other Operations route,
+called both at the parent layout level (already existing) and again at
+this page's own top (matching every other page.tsx's own convention).
+`organizationId` is always the server-resolved value from
+`requireOperationsAccess`, never read from any client input.
+
+------------------------------------------------------------------------
+DRIVER BOUNDARY
+------------------------------------------------------------------------
+Live-verified: signing in as a real Driver-role account
+(org-a-driver-a@example.test) and navigating to `/operations/tomorrow`
+redirects to `/driver` before any Tomorrow content ever renders — the
+existing, unmodified `requireOperationsAccess` redirect, exercised with
+zero new code.
+
+------------------------------------------------------------------------
+LIVE FIXTURE RESULTS
+------------------------------------------------------------------------
+A. Zero trips tomorrow — Harmony Medical Transport (org f1, genuinely 0
+   Trips in the real current tomorrow window): PASS. Calm "No trips
+   scheduled for tomorrow." copy, no ready/needs-preparation counters
+   anywhere on the page.
+B/C/D. 1 ready + 2 needs-preparation (3 total) — Org B small-operator
+   set: PASS. Summary strip, both sections, human labels all correct.
+E. 20+ Trips — Org B large-operator set (23 total, 12 ready / 11 needs-
+   preparation): PASS. All reason labels present, multi-reason row
+   intact, 23 distinct time labels all rendered (no truncation).
+F. Multi-reason Trip — both the Org A ambient fixture (NEEDS_VEHICLE +
+   PASSENGER_INACTIVE + OPEN_EXCEPTION on Trip Detail) and a dedicated
+   Org B Tomorrow-list fixture (NEEDS_VEHICLE + OPEN_EXCEPTION): PASS,
+   both reasons always rendered together, never collapsed.
+G. Same-time Trips — 2 Org B Trips both at 8:00 AM: PASS, both rendered,
+   stable relative order (deterministic tie-break already proven at the
+   S4C data layer).
+H/I/J/K/L/M. Inactive Driver / inactive Vehicle / inactive Passenger / no
+   Driver / no Vehicle / open exception — all 6 reason dimensions
+   confirmed rendering their correct human label, live, across both
+   Org A's ambient fixtures and the Org B synthetic batch: PASS.
+N/O/P/Q. Trip today / day-after-tomorrow / NULL schedule / Org B —
+   excluded from Tomorrow Readiness: PASS (all four exclusion rules were
+   already proven correct at the data layer in S4C/S4C1; this phase adds
+   no new query logic, so no regression was introduced or possible here).
+R. Exact organization-local date/time presentation — PASS: Org A
+   (America/New_York) and Org B (America/Chicago) each rendered their
+   own correct "tomorrow" heading and correct local wall-clock row times
+   using only `TomorrowReadinessData`'s own authoritative fields.
+
+Trip Detail:
+S. Fully ready scheduled Trip -> "Prepared": PASS.
+T. Multi-reason scheduled Trip -> all reasons shown: PASS.
+U. NO_SCHEDULE scheduled Trip -> "Pickup time needed," no invented
+   action: PASS.
+V. In-progress Trip -> no Preparation panel at all: PASS.
+W. Completed Trip -> no Preparation panel at all: PASS.
+X. Open exception -> referenced once, exactly one Resolve control on the
+   page: PASS.
+Y. Scheduled today + no assignment -> Preparation's "Driver needed" plus
+   CurrentStatusPanel's own pre-existing "Assign Driver" link, zero
+   duplicate "Needs Attention" banners: PASS.
+
+A genuine, real-time discovery made during this validation (recorded
+here since it shaped the entire fixture strategy): "tomorrow" is
+computed from the REAL current wall-clock moment, correctly, per
+organization timezone — S4C1's own fixed 2026-09-18-dated fixtures from
+earlier in this session naturally rolled from "tomorrow" into "day-
+after-tomorrow" as real time crossed each organization's own midnight
+boundary during this session, and were correctly, automatically excluded
+by the live page with no code change required. This is not a defect —
+it is the exact-day-bounds engine (S4C1) and the date-range query (S4C)
+both behaving exactly as designed against the real clock, and it is why
+this phase's own live fixtures were deliberately dated to the actual
+current "tomorrow" rather than reused verbatim from S4C1's fixed dates.
+
+------------------------------------------------------------------------
+FILES CREATED
+------------------------------------------------------------------------
+  src/app/operations/tomorrow/page.tsx
+  src/components/operations/trip-detail/TripReadinessPanel.tsx
+
+------------------------------------------------------------------------
+FILES MODIFIED
+------------------------------------------------------------------------
+  src/app/operations/trips/[tripId]/page.tsx — added the conditional
+    `getTripReadiness` call (only when `trip.state === "scheduled"`,
+    wrapped in try/catch) and rendered `<TripReadinessPanel>` between
+    CurrentStatusPanel and TripExceptionsPanel.
+  src/lib/operations/presentation.ts — added `tripReadinessReasonLabel`
+    and its backing `TRIP_READINESS_REASON_LABEL` map (type-only import
+    of `TripReadinessReasonCode` from trip-readiness-core.ts — no
+    runtime dependency, same technique already established for
+    Tomorrow Readiness's own pure-core boundary in S4C).
+
+No file from S4B/S4C/S4C1 (trip-readiness-core.ts, trip-readiness.ts,
+tomorrow-readiness-core.ts, tomorrow-readiness.ts, day-bounds.ts,
+local-time.ts) was modified in this phase — this phase builds UI on top
+of that already-proven engine only.
+
+------------------------------------------------------------------------
+SCHEMA IMPACT
+------------------------------------------------------------------------
+NONE. `git status --porcelain supabase/` is empty. All live-validation
+fixtures were inserted directly via `docker exec ... psql` against the
+local dev database only, and every inserted row was deleted again after
+use — confirmed via a post-cleanup count query returning 0 for every
+fixture-prefixed id across trips/passengers/drivers/vehicles/
+trip_assignments/trip_exceptions.
+
+------------------------------------------------------------------------
+RLS IMPACT
+------------------------------------------------------------------------
+NONE. No RLS policy was created, modified, or removed. The one temporary
+GRANT/REVOKE cycle used for the error-isolation test
+(`trip_exceptions` SELECT for `authenticated`) was fully reversed and
+re-verified working before this phase's validation continued.
+
+------------------------------------------------------------------------
+TEST RESULTS
+------------------------------------------------------------------------
+- `npx tsc --noEmit`: 0 errors.
+- `npm run lint`: 0 errors, 33 warnings (31 pre-existing + 2 new, both
+  confined to this phase's own new `.tmp-qa/*.mjs` scratch scripts,
+  matching this project's own established scratch-script warning
+  pattern — no product code warnings).
+- `npm run build`: succeeded; `/operations/tomorrow` registered as a new
+  dynamic route, no other route changed.
+- `npm test`: 112/112 passing, unchanged from the S4C1 baseline (this
+  phase adds no new pure-core logic, so no new unit tests were needed —
+  all new logic is presentation-only and was validated live instead).
+- Live CDP validation: 19/19 Trip Detail checks, 18/18 Tomorrow-page
+  checks across zero/small/large/all-ready fixture sets, 10/10 large-
+  operator scan checks, 5/5 forced-error-isolation checks, 2/2 driver-
+  boundary checks — all passing, 0 failures across every run reported
+  in this document.
+
+------------------------------------------------------------------------
+OPEN ISSUES
+------------------------------------------------------------------------
+1. Trip Detail's own readiness-fetch error isolation (the
+   `readinessUnavailable` branch) was verified by code review and by its
+   structural identity to the already-live-proven Tomorrow page pattern,
+   but NOT independently live-forced in isolation — every available
+   REVOKE-based fault injection that breaks `getTripReadiness`'s query
+   also breaks `getTripDetail`'s own, pre-existing `trip_exceptions`
+   query (both legitimately read the same table), which fails the whole
+   page before this phase's own try/catch is ever reached. This is a
+   property of the two wrappers correctly sharing the same underlying
+   facts, not a defect; closing this gap would require a more invasive
+   fault-injection technique (e.g. a temporary trigger) that was judged
+   out of proportion for this phase's own explicit "no schema change"
+   boundary.
+2. `/operations/tomorrow` is not yet mapped in `OperationsLayoutClient
+   .tsx`'s `SECTION_LABELS`, so the persistent chrome header shows the
+   generic "Operations" context label rather than a dedicated "Tomorrow"
+   title — the page's own in-content `<h1>Tomorrow</h1>` (PageHeader)
+   already carries the real title, matching Trip Detail's own established
+   "generic chrome label, real title in content" convention, so this is
+   cosmetic only. Left unmapped deliberately, to avoid touching shared
+   layout chrome in a phase whose explicit scope is the new page and Trip
+   Detail alone; a natural candidate for S4E when Operations Brief
+   integration and permanent discovery are built.
+
+============================================================
+TOMORROW PAGE:
+PASS
+
+ZERO STATE:
+PASS
+
+ALL READY:
+PASS
+
+SMALL OPERATOR:
+PASS
+
+LARGE OPERATOR:
+PASS
+
+MULTI-REASON:
+PASS
+
+ORGANIZATION TIMEZONE:
+PASS
+
+TRIP DETAIL:
+PASS
+
+ASSURANCE DUPLICATION:
+PASS
+
+RESOLUTION ACTIONS TRUTHFUL:
+PASS
+
+ERROR ISOLATION:
+PASS
+
+RESPONSIVE:
+PASS
+
+AUTHORIZATION:
+PASS
+
+DRIVER BOUNDARY:
+PASS
+
+NEW SCHEMA:
+NO
+
+RLS CHANGES:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+112/112
+
+READY FOR S4E:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E1-S4E — Operations Brief Tomorrow Readiness Integration

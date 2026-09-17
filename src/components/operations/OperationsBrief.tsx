@@ -46,7 +46,7 @@ export interface OperationsBriefProps {
  * the day-state-gated Trip sections above).
  */
 export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
-  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot, requestSummary } = brief;
+  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot, requestSummary, tomorrowReadiness } = brief;
 
   const isQuiet = dayState === "NO_TRIPS" && activeNow.length === 0 && attention.length === 0;
   const isAllComplete = dayState === "ALL_COMPLETE";
@@ -88,6 +88,7 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
 
       <DriverSnapshotBlock snapshot={driverSnapshot} />
       <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
+      <TomorrowReadinessBlock summary={tomorrowReadiness} />
     </div>
   );
 }
@@ -320,6 +321,90 @@ function RequestsAwaitingReviewBlock({
       </div>
       <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm">
         Review requests
+      </LinkButton>
+    </Panel>
+  );
+}
+
+/**
+ * Tomorrow Readiness (P1-E1-S4E) — mirrors DriverSnapshotBlock's and
+ * RequestsAwaitingReviewBlock's own compact single-row shape exactly
+ * (same Panel layout, same fixed-title/varying-description/single-action
+ * structure) — no new visual pattern. Deliberately calm at every count,
+ * including when `needsPreparationCount > 0`: no StatusBadge, no
+ * WarningCircle, no warning-toned text — the SAME restraint
+ * RequestsAwaitingReviewBlock already establishes for exactly the same
+ * reason ("never compete visually with Needs Attention above"). Tomorrow
+ * preparation is workflow, not a current operational failure (S4E §8's
+ * own explicit instruction).
+ *
+ * Reuses `TomorrowReadinessData`'s already-authoritative counts
+ * end-to-end — this component performs no filtering, sorting, or
+ * re-evaluation of its own; `summary` is `null` only when the underlying
+ * fetch genuinely failed (S4E §11), never used to represent a real zero
+ * value.
+ */
+function TomorrowReadinessBlock({ summary }: { summary: OperationsBriefData["tomorrowReadiness"] }) {
+  if (summary === null) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Tomorrow readiness unavailable</p>
+        </div>
+        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
+          View tomorrow
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  const { totalScheduledTrips, needsPreparationCount } = summary;
+
+  if (totalScheduledTrips === 0) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>No trips scheduled for tomorrow</p>
+        </div>
+        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
+          View tomorrow
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  if (needsPreparationCount === 0) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
+            Tomorrow is ready — all {totalScheduledTrips} scheduled {totalScheduledTrips === 1 ? "trip is" : "trips are"} prepared
+            based on the information currently available.
+          </p>
+        </div>
+        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
+          View tomorrow
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
+        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
+          {needsPreparationCount} {needsPreparationCount === 1 ? "trip needs" : "trips need"} preparation
+        </p>
+        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+          {totalScheduledTrips} scheduled for tomorrow
+        </p>
+      </div>
+      <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
+        Review tomorrow
       </LinkButton>
     </Panel>
   );

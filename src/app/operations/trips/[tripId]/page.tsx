@@ -3,6 +3,7 @@ import { WarningCircle, CheckCircle, XCircle } from "@phosphor-icons/react/dist/
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTripDetail } from "@/lib/operations/trip-detail";
+import { getTripReadiness, type TripReadinessResult } from "@/lib/operations/trip-readiness";
 import { formatOperationsTime, formatOperationsLongDate } from "@/lib/operations/presentation";
 import { TripStatus } from "@/components/ui/TripStatus";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -11,6 +12,7 @@ import { TripInfoStrip } from "@/components/operations/trip-detail/TripInfoStrip
 import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePanel";
 import { PassengerInfoPanel } from "@/components/operations/trip-detail/PassengerInfoPanel";
 import { CurrentStatusPanel } from "@/components/operations/trip-detail/CurrentStatusPanel";
+import { TripReadinessPanel } from "@/components/operations/trip-detail/TripReadinessPanel";
 import { TripExceptionsPanel } from "@/components/operations/trip-detail/TripExceptionsPanel";
 import { TripNotesPanel } from "@/components/operations/trip-detail/TripNotesPanel";
 import { typography } from "@/design/typography";
@@ -61,6 +63,24 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
 
   const { trip, notes, openExceptions, events } = result;
   const lastUpdateAt = events[0]?.occurredAt ?? trip.updatedAt;
+
+  // P1-E1-S4D §16: Trip Readiness is only ever fetched/rendered for a
+  // Trip currently in state='scheduled' — deriveTripReadiness itself
+  // already returns NOT_APPLICABLE for every other state, but this Trip
+  // Detail page never even calls it in that case, sparing 2 needless
+  // round trips for the vast majority of Trip Detail views (in-progress
+  // and terminal Trips together outnumber scheduled ones). A fetch
+  // failure is isolated here (§24) — it never takes down the rest of the
+  // page, matching this codebase's own Request Activity precedent.
+  let readiness: TripReadinessResult | null = null;
+  let readinessUnavailable = false;
+  if (trip.state === "scheduled") {
+    try {
+      readiness = await getTripReadiness(trip.id, organization.organizationId);
+    } catch {
+      readinessUnavailable = true;
+    }
+  }
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -161,6 +181,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
             eligibleForAssignmentAction={!trip.isTerminal}
             hasActiveAssignment={trip.activeAssignmentId !== null}
           />
+          <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
           <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />
           <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />
         </div>

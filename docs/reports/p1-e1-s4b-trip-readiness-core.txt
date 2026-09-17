@@ -1,0 +1,386 @@
+P1-E1-S4B — TRIP READINESS CORE
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Pure product-logic + secured data-access foundation. No
+user-facing UI. No Tomorrow Readiness page. No Operations Brief
+integration. Nothing committed, pushed, or deployed.
+
+------------------------------------------------------------------------
+0. PREFLIGHT
+------------------------------------------------------------------------
+HEAD confirmed at 87940c2 ("Complete Request Hub operating workflow")
+before any code was written — unchanged from the S4A audit's own
+starting point. Re-read source fresh (not from the S4A report alone)
+before writing any code: `trip-assurance.ts`, `request-readiness-
+core.ts`, `todays-operations.ts`, `dispatch-board.ts`, `day-bounds.ts`,
+`trip-detail.ts`, and the raw migration files for `trips`,
+`trip_assignments`, `drivers`, `vehicles`, `passengers`,
+`trip_exceptions`. No unrelated working-tree change was absorbed —
+confirmed via `git status --porcelain src/` both before and after this
+phase's own edits, showing exactly the 3 new files this phase created
+and nothing else.
+
+------------------------------------------------------------------------
+FINAL READINESS FACTS CONTRACT
+------------------------------------------------------------------------
+`src/lib/operations/trip-readiness-core.ts` — `TripReadinessFacts`:
+
+  state: string
+  scheduledPickupAt: string | null
+  hasActiveAssignment: boolean
+  assignedVehicleId: string | null
+  driverStatus: string | null
+  vehicleStatus: string | null
+  passengerStatus: string
+  openExceptionCount: number
+
+Deliberately excludes (per S4B's own explicit list, re-confirmed against
+source, not merely copied from the phase prompt): Facility presence,
+Request presence, `return_trip_needed`, `assistance_notes` matching,
+credentials, routing/ETA/deadhead, location freshness. None of these
+appear anywhere in the module.
+
+------------------------------------------------------------------------
+FINAL STATE VOCABULARY
+------------------------------------------------------------------------
+Exactly three values, as locked by the phase (no implementation
+evidence emerged to justify a fourth):
+
+  READY — `state === 'scheduled'` and no supported reason applies.
+  NEEDS_PREPARATION — `state === 'scheduled'` and one or more reasons
+    apply.
+  NOT_APPLICABLE — `state !== 'scheduled'` (every in-progress and every
+    terminal state) — reasons always empty.
+
+No score, no percentage, no AI classification anywhere in the module.
+
+------------------------------------------------------------------------
+FINAL REASON VOCABULARY
+------------------------------------------------------------------------
+  NO_SCHEDULE — `scheduledPickupAt === null`.
+  NEEDS_DRIVER — `!hasActiveAssignment`.
+  NEEDS_VEHICLE — `hasActiveAssignment && assignedVehicleId === null`
+    (never fires merely because there is no assignment at all — that is
+    exclusively NEEDS_DRIVER's own condition; verified mutually
+    exclusive by a dedicated unit test).
+  DRIVER_INACTIVE — `hasActiveAssignment && driverStatus === 'inactive'`.
+  VEHICLE_INACTIVE — `hasActiveAssignment && assignedVehicleId !== null
+    && vehicleStatus === 'inactive'`.
+  PASSENGER_INACTIVE — `passengerStatus === 'inactive'` (independent of
+    assignment state).
+  OPEN_EXCEPTION — `openExceptionCount > 0` — identical meaning to Trip
+    Assurance's own check, never a second definition.
+
+Every reason a Trip qualifies for is returned simultaneously — the
+evaluator never stops after the first match (verified directly by the
+multi-reason unit tests and the live "H" fixture, which returns all 4
+of its applicable reasons at once).
+
+------------------------------------------------------------------------
+REASON ORDERING
+------------------------------------------------------------------------
+Fixed array `REASON_ORDER = [NO_SCHEDULE, NEEDS_DRIVER, NEEDS_VEHICLE,
+DRIVER_INACTIVE, VEHICLE_INACTIVE, PASSENGER_INACTIVE, OPEN_EXCEPTION]`
+— a presentation-friendly "preparation checklist" order (schedule it,
+assign a Driver, assign a Vehicle, confirm the assigned Driver is still
+valid, confirm the assigned Vehicle is still valid, confirm the
+Passenger is still valid, resolve any flagged issue). This is
+DELIBERATELY NOT the same kind of thing as Trip Assurance's own
+priority order — Assurance's order picks which ONE result wins;
+Readiness's order only fixes the DISPLAY sequence of however many
+reasons are simultaneously true. Verified stable regardless of the
+order facts are supplied in (dedicated unit test).
+
+------------------------------------------------------------------------
+ASSURANCE SHARED-FACT STRATEGY
+------------------------------------------------------------------------
+`trip-assurance.ts` was read in full again this phase and is completely
+UNCHANGED — confirmed via `git diff --stat src/lib/operations/trip-
+assurance.ts` returning empty both before and after this phase's work.
+It was not renamed, not refactored, not duplicated.
+
+Trip Readiness does NOT call `evaluateTripAssurance` and does NOT
+import from `trip-assurance.ts` at all. This was a deliberate decision,
+directly following S4B's own correction #2: Assurance intentionally
+COLLAPSES multiple facts into one highest-priority result; Readiness
+must PRESERVE every applicable reason. Reusing Assurance's own single
+collapsed output would silently discard every reason but one — exactly
+the mistake the phase's own corrections warned against. Instead, the
+two modules share MEANING, not code: "active assignment exists" and
+"open exception count" are computed from the identical underlying
+source shape in both places (`trip_assignments` row with `ended_at IS
+NULL`; a real open `trip_exceptions` row) — the data-access wrapper
+(`trip-readiness.ts`) derives these facts using the exact same
+`ended_at IS NULL` filter and the exact same `status='open'` filter
+Assurance's own callers (`todays-operations.ts`, `dispatch-board.ts`)
+already use, never a second, independently-drifting interpretation of
+either concept.
+
+No refactor of `trip-assurance.ts` or its callers was performed or
+proposed — regression risk to the already-shipped, already-live
+Assurance feature is exactly zero from this phase's own changes.
+
+------------------------------------------------------------------------
+DATA-ACCESS DESIGN
+------------------------------------------------------------------------
+`src/lib/operations/trip-readiness.ts` — `getTripReadiness(tripId,
+organizationId)`:
+
+  1. One query: `trips` filtered by `id` + `organization_id` (explicit,
+     never left to RLS alone), embedding `passengers(status)` and
+     `trip_assignments(id, ended_at, vehicle_id, drivers(status),
+     vehicles(status))` — the exact same composite-FK-hint convention
+     `trip-detail.ts`/`dispatch-board.ts` already use
+     (`trips_passenger_id_organization_id_fkey`,
+     `trip_assignments_trip_id_organization_id_fkey`,
+     `trip_assignments_driver_id_organization_id_fkey`,
+     `trip_assignments_vehicle_id_organization_id_fkey` — all 4
+     confirmed to exist as real constraint names via
+     `pg_constraint` before use, not assumed).
+  2. One small head-only count query against `trip_exceptions`,
+     mirroring `operations-brief.ts`'s own `getRequestSummary` pattern.
+  3. The pure `deriveTripReadiness` call.
+
+Two round trips total, both scoped to exactly one Trip id — no N+1. A
+malformed/nonexistent/foreign-org `tripId` resolves to `null` (no
+existence oracle), matching `trip-detail.ts`'s own established
+convention exactly. `createServerSupabaseClient` (normal RLS) is used
+throughout; the service role is never referenced anywhere in this
+module. `organizationId` is a plain parameter the caller must already
+have resolved via `requireOperationsAccess` — never trusted from the
+browser.
+
+A small-set (multiple Trips at once) variant was deliberately NOT built
+in this phase, per S4B's own explicit boundary ("S4C owns tomorrow
+querying/aggregation") — noted as straightforward future work in OPEN
+ISSUES below, not built ahead of schedule.
+
+------------------------------------------------------------------------
+NO_SCHEDULE LIMITATION
+------------------------------------------------------------------------
+Documented directly in the pure core's own doc comments and exercised
+by a dedicated unit test and a dedicated live fixture (I): a Trip can
+correctly report NO_SCHEDULE on this single-Trip evaluator, but such a
+Trip cannot be discovered by a future Tomorrow Readiness date-range
+query, since it has no date to range against. This is stated as a known
+limitation, not solved here — matching S4B's own explicit instruction
+not to attempt a fix in this phase. If a future "Unscheduled work"
+surface is ever wanted, that is new, separate product work, not implied
+by anything built in this phase.
+
+------------------------------------------------------------------------
+RETURN-TRIP EXCLUSION
+------------------------------------------------------------------------
+`transportation_requests.return_trip_needed` is never read anywhere in
+`trip-readiness-core.ts` or `trip-readiness.ts` — confirmed by
+inspection (neither file references `transportation_requests` at all).
+No outbound/return inference is attempted. `trip.leg` was NOT added —
+confirmed via `git status --porcelain supabase/` showing zero Supabase
+source changes of any kind.
+
+------------------------------------------------------------------------
+CREDENTIAL/CAPABILITY EXCLUSION
+------------------------------------------------------------------------
+No Driver/Vehicle credential field, no license/insurance/certification
+check, no wheelchair/ambulatory capability matching exists anywhere in
+this module — confirmed by inspection. No placeholder boolean was
+introduced. `drivers.status`/`vehicles.status` (the only fields this
+module reads from either table) remain exactly `active`/`inactive`, as
+they already were before this phase.
+
+------------------------------------------------------------------------
+LIVE FIXTURE RESULTS
+------------------------------------------------------------------------
+Fresh `supabase db reset`, then 9 synthetic fixture Trips inserted
+under Org A (fictional org `10000000-...-a1`) plus 1 cross-tenant
+fixture under Org B (`10000000-...-b1`), reusing existing seeded active
+Driver/Vehicle/Passenger rows plus 3 new deliberately-`inactive` rows
+created for this validation. Validated in THREE independent, genuinely
+different ways (not merely re-running the same check three times):
+
+1. Pure unit tests (17/17) — synthetic in-memory facts only, no
+   database.
+
+2. Raw-SQL-mirrored validation (27 checks, 0 failures) — a small script
+   queries the local database directly via the identical join shape the
+   real wrapper uses, feeds the result through the SAME
+   `deriveTripReadiness` the real wrapper calls, and compares against
+   the expected state/reasons for all 9 fixtures (A-I) plus 2 org-
+   isolation checks:
+     A (fully ready): READY, []
+     B (no assignment): NEEDS_PREPARATION, [NEEDS_DRIVER]
+     C (driver-only assignment): NEEDS_PREPARATION, [NEEDS_VEHICLE]
+     D (inactive Driver): NEEDS_PREPARATION, [DRIVER_INACTIVE]
+     E (inactive Vehicle): NEEDS_PREPARATION, [VEHICLE_INACTIVE]
+     F (inactive Passenger): NEEDS_PREPARATION, [PASSENGER_INACTIVE]
+     G (open exception): NEEDS_PREPARATION, [OPEN_EXCEPTION]
+     H (several simultaneous gaps — no schedule, driver-only, inactive
+       Passenger, open exception): NEEDS_PREPARATION, [NO_SCHEDULE,
+       NEEDS_VEHICLE, PASSENGER_INACTIVE, OPEN_EXCEPTION]
+     I (null scheduled_pickup_at, otherwise fully ready):
+       NEEDS_PREPARATION, [NO_SCHEDULE]
+
+3. REAL PostgREST + REAL RLS + a REAL authenticated user JWT (org-a-
+   admin, signed in via the actual GoTrue password-grant endpoint, the
+   exact same auth flow the real application uses) — the EXACT query
+   string `trip-readiness.ts` builds internally was issued directly
+   against the local REST API for fixtures A, H, and I. All three
+   returned HTTP 200 with a JSON shape matching this module's own
+   `TripRow`/`AssignmentEmbed`/`StatusRelation` types exactly (a single
+   embedded object for `passengers`, an array for `trip_assignments`,
+   `null` sub-embeds correctly present when no Vehicle was assigned).
+   This confirms the wrapper's actual query syntax is valid against the
+   real PostgREST/RLS stack — not merely type-checked by `tsc` — and
+   that access is governed by real RLS policy enforcement, not a
+   superuser bypass.
+
+All three layers agree with each other and with the unit tests. No
+discrepancy was found at any layer.
+
+------------------------------------------------------------------------
+ORG ISOLATION
+------------------------------------------------------------------------
+Confirmed at two levels:
+  - WHERE-clause level (raw SQL check): Org A's fixture Trip A queried
+    with Org B's `organization_id` returns no row.
+  - REAL RLS level (PostgREST + real user JWT): org-a-admin's own
+    authenticated session, querying Org B's real fixture Trip by its
+    real id AND explicitly supplying Org B's real `organization_id`,
+    received HTTP 200 with ZERO rows — RLS itself blocks the read
+    regardless of what filter value the caller supplies, confirming
+    `organization_id` is never trusted as authority on its own, exactly
+    matching this codebase's own established defense-in-depth
+    discipline.
+No RLS policy was modified to produce this result — it already existed
+and was already correct; this phase only exercised it.
+
+------------------------------------------------------------------------
+FILES CREATED
+------------------------------------------------------------------------
+  src/lib/operations/trip-readiness-core.ts (pure evaluator)
+  src/lib/operations/trip-readiness-core.test.mjs (17 unit tests)
+  src/lib/operations/trip-readiness.ts (server-only data-access wrapper)
+
+------------------------------------------------------------------------
+FILES MODIFIED
+------------------------------------------------------------------------
+None. `trip-assurance.ts`, `request-readiness-core.ts`, `todays-
+operations.ts`, `dispatch-board.ts`, `day-bounds.ts`, `trip-detail.ts`
+were all read for this audit and are all confirmed byte-for-byte
+unchanged (`git status --porcelain src/` shows exactly the 3 new files
+above and nothing else).
+
+------------------------------------------------------------------------
+SCHEMA IMPACT
+------------------------------------------------------------------------
+NONE. `git status --porcelain supabase/` is empty — no new migration,
+no new table, no new column, no new RPC, no new grant, no new RLS
+policy. This matches the expected result stated in the phase's own §14
+exactly; nothing unexpected was required, so no STOP condition was
+triggered.
+
+------------------------------------------------------------------------
+RLS IMPACT
+------------------------------------------------------------------------
+NONE. Every table this module reads (`trips`, `trip_assignments`,
+`drivers`, `vehicles`, `passengers`, `trip_exceptions`) was already
+RLS-enabled and already read by existing Operations queries using the
+identical `organization_id`-scoped pattern. The live PostgREST test
+above exercised the EXISTING RLS policies directly (via a real user
+JWT) and confirmed they already produce the correct, secure result —
+no policy was touched.
+
+------------------------------------------------------------------------
+TEST RESULTS
+------------------------------------------------------------------------
+- `npx tsc --noEmit`: 0 errors.
+- `npm run lint`: 0 errors, 30 warnings, all confined to pre-existing
+  `.tmp-qa/*.mjs` scratch scripts (none new from this phase's own
+  shipped files).
+- `npm run build`: succeeded, all expected routes present (unchanged —
+  no route was added, matching "no UI yet").
+- `npm test`: 88/88 passing (71 pre-existing + 17 new
+  `deriveTripReadiness` tests). No existing test's behavior changed.
+- No dedicated `trip-assurance.test.mjs` unit-test file exists in this
+  repository (Assurance's own regression coverage lives in the SQL
+  suite, which was not touched and did not need re-running since no
+  Supabase source changed) — `evaluateTripAssurance` itself is
+  confirmed byte-for-byte unchanged via `git diff`, which is the
+  authoritative confirmation available for this module.
+
+------------------------------------------------------------------------
+OPEN ISSUES
+------------------------------------------------------------------------
+- A small-set (multiple-Trip) variant of `getTripReadiness` was
+  deliberately not built in this phase; it falls out naturally from the
+  same query shape (replacing `.eq("id", tripId)` with `.in("id",
+  tripIds)` and grouping the exception count by `trip_id`, mirroring
+  `todays-operations.ts`'s own two-phase pattern) and is expected,
+  straightforward work for S4C, not a gap in S4B's own scope.
+- The exact UI resolution path for NO_SCHEDULE, NEEDS_VEHICLE, and
+  PASSENGER_INACTIVE (carried forward unresolved from the S4A audit)
+  remain open product/UI questions for S4D, not resolved or assumed
+  here — this phase built only the trusted derivation engine, per its
+  own explicit boundary.
+
+============================================================
+TRIP READINESS CORE:
+PASS
+
+READY CASE:
+PASS
+
+MULTI-REASON CASE:
+PASS
+
+NO ASSIGNMENT SEMANTICS:
+PASS
+
+DRIVER STATUS:
+PASS
+
+VEHICLE STATUS:
+PASS
+
+PASSENGER STATUS:
+PASS
+
+OPEN EXCEPTION:
+PASS
+
+NO_SCHEDULE:
+PASS
+
+ASSURANCE REGRESSION:
+PASS
+
+ORG ISOLATION:
+PASS
+
+NEW SCHEMA:
+NO
+
+RLS CHANGES:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+88/88
+
+READY FOR S4C:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E1-S4C — Tomorrow Readiness Query + Aggregate

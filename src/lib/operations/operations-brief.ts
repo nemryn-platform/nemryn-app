@@ -1,15 +1,22 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getTodaysOperations } from "./todays-operations";
+import { getTomorrowReadiness } from "./tomorrow-readiness";
 import { isActiveTripState } from "./presentation";
 import { deriveOperationsBrief, countDriversCurrentlyOnTrip, type DriverAssignmentStateRow } from "./operations-brief-core";
-import type { OperationsBriefData, OperationsBriefDriverSnapshot, OperationsBriefRequestSummary } from "./operations-brief-core";
+import type {
+  OperationsBriefData,
+  OperationsBriefDriverSnapshot,
+  OperationsBriefRequestSummary,
+  OperationsBriefTomorrowSummary,
+} from "./operations-brief-core";
 
 export type {
   OperationsBriefData,
   OperationsBriefDayState,
   OperationsBriefDriverSnapshot,
   OperationsBriefRequestSummary,
+  OperationsBriefTomorrowSummary,
 } from "./operations-brief-core";
 
 /**
@@ -162,23 +169,65 @@ export async function getRequestSummary(organizationId: string): Promise<Operati
 }
 
 /**
+ * Compact Tomorrow Readiness summary for Operations Brief (P1-E1-S4E
+ * §2) — reuses S4C/S4C1's already-authoritative `getTomorrowReadiness`
+ * directly (the SAME day bounds, the SAME candidate Trip set, the SAME
+ * evaluator `/operations/tomorrow` itself uses), then narrows the result
+ * down to the 3 counts `OperationsBriefTomorrowSummary` needs — never a
+ * parallel query, never a second interpretation of "tomorrow" or
+ * "ready." `null` represents a genuine fetch failure (caught by the
+ * caller, mirroring `RequestActivityPanel`'s established null-on-failure
+ * convention) — this function itself does not catch; every caller below
+ * wraps its own call in try/catch so the failure mode is visible at each
+ * call site, exactly like `candidatePassengers`/`activityEvents` in
+ * src/app/operations/requests/[requestId]/page.tsx.
+ */
+export async function getTomorrowReadinessSummary(
+  organizationId: string,
+  timezone: string,
+  now: Date = new Date(),
+): Promise<OperationsBriefTomorrowSummary> {
+  const data = await getTomorrowReadiness(organizationId, timezone, now);
+  return {
+    totalScheduledTrips: data.totalScheduledTrips,
+    readyCount: data.readyCount,
+    needsPreparationCount: data.needsPreparationCount,
+  };
+}
+
+/**
  * The one Operations Brief entry point. `organizationId`/`timezone` follow
  * the exact same caller-resolves-context convention getTodaysOperations()
  * already established. `now` defaults to the real current instant but is
  * an explicit parameter so a future caller (or a test that mocks
  * createServerSupabaseClient) can pin it — mirrors organizationDayBoundsUtc's
  * own existing `now: Date` parameter shape, not a new pattern.
+ *
+ * Tomorrow Readiness (P1-E1-S4E) is fetched as its own isolated,
+ * best-effort promise — started before the existing Promise.all so it
+ * overlaps with those fetches in wall-clock time (S4E §12's own "do not
+ * serially delay the page" instruction), but caught independently so a
+ * genuine failure there degrades only the Brief's own compact block,
+ * never this whole function (S4E §11).
  */
 export async function getOperationsBrief(
   organizationId: string,
   timezone: string,
   now: Date = new Date(),
 ): Promise<OperationsBriefData> {
+  const tomorrowReadinessPromise: Promise<OperationsBriefTomorrowSummary | null> = getTomorrowReadinessSummary(
+    organizationId,
+    timezone,
+    now,
+  ).catch(() => null);
+
   const [todaysOperations, driverSnapshot, requestSummary] = await Promise.all([
     getTodaysOperations(organizationId, timezone),
     getDriverSnapshot(organizationId),
     getRequestSummary(organizationId),
   ]);
 
-  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, now);
+  const tomorrowReadiness = await tomorrowReadinessPromise;
+
+  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, tomorrowReadiness, now);
 }
