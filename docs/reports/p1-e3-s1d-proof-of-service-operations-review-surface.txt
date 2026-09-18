@@ -1,0 +1,527 @@
+P1-E3-S1D — Proof-of-Service Operations Review Surface
+===========================================================================
+Operator-facing, read-only Proof-of-Service review workflow. No database
+schema change, no migration, no RPC, no RLS change, no mutation, no
+correction workflow, no PDF/export, no Operations Brief integration, no
+deployment, no commit/push occurred. Exactly one local `supabase db
+reset` was used to establish a deterministic fixture baseline, per this
+phase's own explicit allowance — no full or focused SQL regression
+battery and no concurrency battery were run.
+
+===========================================================================
+INFORMATION ARCHITECTURE
+===========================================================================
+Audited before coding: Trips list (`trips/page.tsx` — paginated DataTable
++ plain-GET query-param filters, the exact convention this page reuses),
+Tomorrow Readiness (`tomorrow/page.tsx` — the "Couldn't load" contained
+error-state precedent), Recurring Care list (its own
+`RecurringCareStatusTabs` — the exact segmented-Link-tab pattern this
+phase's window selector mirrors), `DataTable`, `StatusBadge`,
+`EmptyState`, `PageHeader`, `presentation.ts` (the established home for
+state → label mappings). No Proof-of-Service logic was recalculated in
+React anywhere — the page renders `getProofOfServiceReview`'s (S1C)
+already-composed rows and the S1B core's already-derived
+`state`/`reasons`, nothing more.
+
+===========================================================================
+ROUTE
+===========================================================================
+`/operations/proof-of-service`, title "Proof of Service", description
+"Review completed transportation before billing." No sidebar entry added
+(§3 — S1F's own decision). Not named Revenue/Revenue Assurance/Claims/
+Billing Center/Invoices anywhere in the route, title, or copy.
+
+===========================================================================
+AUTHORIZATION
+===========================================================================
+The page calls `requireOperationsAccess(pathname)` directly (its own
+page-level call, matching every other Operations page's established
+convention — Trips list, Tomorrow Readiness, Recurring Care all do the
+same). Organization Admin and Dispatcher are allowed; a Driver Membership
+is redirected before this component ever renders. Empirically validated
+this phase (not merely assumed) — see DRIVER BOUNDARY.
+
+===========================================================================
+TRUSTED ORGANIZATION CONTEXT
+===========================================================================
+`organization.organizationId`/`organization.organizationTimezone` come
+ONLY from the `OrganizationContext` `requireOperationsAccess` returns —
+confirmed by direct source inspection: no search-param value is ever
+assigned to either variable, and `getProofOfServiceReview` is called with
+exactly these two trusted values plus the parsed `window`/`page`
+(themselves independently validated — see URL INPUT SAFETY). This is the
+same, unmodified trust boundary every other Operations page in this
+codebase already relies on; nothing new was introduced.
+
+===========================================================================
+DEFAULT WINDOW
+===========================================================================
+`YESTERDAY`, confirmed both by direct source inspection
+(`parseProofOfServiceWindowParam` returns `"YESTERDAY"` for a missing or
+unrecognized value) and empirically (navigating to the bare route with no
+query string rendered yesterday's fixtures and the Yesterday tab marked
+active). Matches this phase's own stated rationale: a completed-work
+review workflow is more useful defaulting to what just finished than to
+today's still-in-progress work.
+
+===========================================================================
+WINDOW SELECTOR
+===========================================================================
+`ProofOfServiceWindowTabs` — a plain, shareable-URL `<Link>` segmented
+control mirroring `RecurringCareStatusTabs`' own exact shape (no client
+JS required, real anchor elements, `aria-current="page"` on the active
+tab). URL values are kebab-case (`?window=today`,
+`?window=last-7-days`), distinct from the internal
+`ProofOfServiceReviewWindow` UPPER_SNAKE union; `window=yesterday` (the
+default) omits the query param entirely, matching Recurring Care's own
+established convention. `parseProofOfServiceWindowParam` falls back
+safely to `YESTERDAY` for any value other than the 2 explicit non-default
+strings — never throws, never passes an unrecognized value through to
+the read model.
+
+===========================================================================
+PRIMARY LIST
+===========================================================================
+A `DataTable` with exactly the 7 suggested columns: Status, Passenger,
+Completed, Route, Driver, Vehicle, Review (a trailing "View trip →"
+link). No KPI-card wall, no dashboard tiles — confirmed by direct source
+inspection (no `SummaryStrip`/KPI component is imported or rendered).
+
+===========================================================================
+STATUS PRESENTATION
+===========================================================================
+`proofOfServiceStateLabel`/`proofOfServiceStateCategory` (presentation.ts,
+new this phase) map the closed `TripProofOfServiceState` union via
+`Record<TripProofOfServiceState, ...>` lookups — TypeScript itself
+refuses to compile if a state is ever added to that union without a
+corresponding label/category here, so an unrecognized value can never
+silently render as a raw string. `READY_FOR_REVIEW` → "Ready for review"
++ `"positive"` category (quiet green dot — deliberately NOT `StatusBadge`'s
+existing `"completed"` checkmark treatment, which already means "this
+Trip's own lifecycle reached completed"; Proof-of-Service is a distinct
+second judgment about that same Trip and gets its own visual language).
+`NEEDS_REVIEW` → "Needs review" + `"warning"` category (amber dot) —
+never `"critical"` (red), confirmed both by direct code inspection (no
+`"critical"` category is ever assigned) and by a dedicated unit test
+asserting no supported state maps to `"critical"`.
+
+===========================================================================
+REASON PRESENTATION
+===========================================================================
+`proofOfServiceReasonLabel` — `Record<TripProofOfServiceReasonCode,
+string>`, same exhaustiveness discipline. `MISSING_VEHICLE` → "Vehicle
+not recorded"; `OPEN_EXCEPTION` → "Open issue"; `EVIDENCE_INTEGRITY_GAP`
+→ "Service evidence incomplete" — restrained wording per §11, with no
+internal cause (missing assignment row, duplicate event, event-order
+problem, missing `completed_at`) ever exposed on this list surface,
+confirmed both by direct code inspection (the label map has no
+conditional branching on cause) and empirically (a dedicated E2E check
+scanned the rendered integrity-gap row for cause-revealing substrings and
+found none). Multiple reasons are always ALL shown, as a small bulleted
+list under the status badge — never collapsed to one, never a numeric
+severity score (validated directly against a real multi-reason fixture:
+"Vehicle not recorded" and "Open issue" both rendered together).
+
+===========================================================================
+COMPLETION ASSIGNMENT PRESENTATION
+===========================================================================
+Driver/Vehicle columns render `row.performingDriver`/
+`row.performingVehicle` directly from S1C's own authoritative
+`end_reason='trip_completed'` resolution — never re-derived, never a
+"current assignment" fallback. Both render "Not recorded" (muted text,
+never a fabricated value) when null — validated against both the
+ordinary `MISSING_VEHICLE` case (Vehicle: "Not recorded", Driver: a real
+name) and the `EVIDENCE_INTEGRITY_GAP` case (both "Not recorded", since
+S1C's own cardinality handling correctly nulls both when no valid single
+completion assignment exists).
+
+===========================================================================
+COMPLETION TIME
+===========================================================================
+`formatOperationsTime(row.completedAt, data.timezone)` — the actual
+`trips.completed_at`, organization-local, under the "Completed" column
+header. Never `scheduled_pickup_at`/`appointment_at`/`updated_at` —
+confirmed by direct source inspection (only `completedAt` is passed to
+the formatter).
+
+===========================================================================
+ROUTE SNAPSHOT
+===========================================================================
+`row.pickupDescription` → `row.destinationDescription`, the Trip's own
+immutable execution snapshot fields (exactly as S1C already resolved
+them) — never rejoined from the current Passenger/Facility record.
+Rendered with the same arrow-separated inline style Trips list and
+Recurring Care list already use, not a new pattern.
+
+===========================================================================
+REVIEW ACTION
+===========================================================================
+Exactly one action per row: "View trip →", linking to the existing
+`/operations/trips/[tripId]` route. No "Mark reviewed," "Approve,"
+"Correct evidence," or any mutation affordance exists anywhere — confirmed
+by direct source inspection (no `<form>`, no Server Action, no `<button>`
+appears on this page at all; every interactive element is a plain
+navigation `<Link>`).
+
+===========================================================================
+PAGINATION
+===========================================================================
+Reuses `PROOF_OF_SERVICE_PAGE_SIZE` (25, from S1C) and the exact
+Previous/Next `<Link>`-based convention Trips list already established.
+`buildPageHref` always carries the current `window` forward (when it is
+not the default) and always drops `page` back to nothing when navigating
+to page 1 — validated empirically: the "Next" link on a 32-row
+`LAST_7_DAYS` window carried `window=last-7-days` in its own href, and
+page 2's resulting URL contained both `window=last-7-days` and `page=2`.
+Sort remains `completed_at DESC`, stable `id` tie-breaker — inherited
+directly from S1C's own query, never re-sorted client-side.
+
+===========================================================================
+GLOBAL COUNT / FILTER DEFERRAL
+===========================================================================
+No "N need review" (or any other whole-window aggregate) is rendered
+anywhere — confirmed by direct source inspection and by a dedicated E2E
+regex check across real multi-page fixture data. No proof-state filter
+tabs (Needs Review / Ready / All) exist — the only tabs on this page are
+the 3 window tabs. Both deferrals are deliberate, per §18/§19: the S1C
+read model paginates the completed-Trip set BEFORE Proof-of-Service
+evaluation runs, so any such feature built now would either require an
+unbuilt second whole-window query or would silently mislead by reporting
+only what happens to be on the current page (page 1 could show 0
+NEEDS_REVIEW rows while page 2 holds 10). Deferred honestly to a future
+slice that deliberately solves derived-state-before-pagination semantics.
+
+===========================================================================
+ZERO STATE
+===========================================================================
+"No completed trips in this period." / "Completed transportation will
+appear here for service-evidence review." — never "No revenue," "No
+billable trips," or "Everything is ready" (all three explicitly absent,
+confirmed by direct source inspection and by an E2E check against a
+genuinely empty window).
+
+===========================================================================
+ERROR STATE
+===========================================================================
+A thrown error from `getProofOfServiceReview` (matching S1C's own
+established "throw on query failure" convention) is caught at the page
+level and rendered as a contained "Proof-of-service review unavailable"
+`EmptyState` — mirroring Tomorrow Readiness's own identical "Couldn't
+load" pattern exactly. Never renders as "0 completed trips" or "all
+ready" — confirmed by direct source inspection (the catch block returns
+before any `data.rows`/`data.totalCount` access is possible). The rest of
+the Operations shell (sidebar, header) remains functional in this state,
+since only the page's own body is replaced.
+
+===========================================================================
+NO-SHOW EXCLUSION
+===========================================================================
+No no-show query or UI concept exists anywhere on this page — inherited
+structurally from the S1C read model's own `state = 'completed'` filter.
+No second query was added merely because the S1A audit discussed
+no-shows; no-show billing treatment remains unresolved and deferred.
+
+===========================================================================
+CANCELLATION EXCLUSION
+===========================================================================
+Same mechanism — cancelled Trips are structurally absent from
+`getProofOfServiceReview`'s own result set; no cancellation financial/
+review judgment is made or implied anywhere on this page. Validated
+directly: a dedicated cancelled-Trip fixture never appeared in any window
+this phase's E2E exercised.
+
+===========================================================================
+OPEN EXCEPTION PRESENTATION
+===========================================================================
+A completed Trip with an open exception renders "Needs review" / "Open
+issue" — validated directly against a real fixture. This page does not
+duplicate Trip Assurance's own live-execution UI in any way (no new
+exception system, no exception-resolution affordance); "View trip" reuses
+the EXISTING Trip Detail page, which already shows open-exception detail
+for any Trip, completed or not.
+
+===========================================================================
+MISSING VEHICLE PRESENTATION
+===========================================================================
+A completed Trip with no recorded Vehicle renders "Needs review" /
+"Vehicle not recorded," with the Vehicle column itself also reading "Not
+recorded." No post-completion Vehicle-edit action exists anywhere — an
+operator can identify the gap without a way to immediately fix it, exactly
+as this phase's own MVP boundary intends.
+
+===========================================================================
+EVIDENCE INTEGRITY PRESENTATION
+===========================================================================
+See REASON PRESENTATION above — "Service evidence incomplete," no
+internal-cause detail exposed on this list surface (missing assignment
+row, duplicate event, event-order problem, missing `completed_at` are all
+possible underlying causes S1C's own `EVIDENCE_INTEGRITY_GAP` collapses
+into this one reason, and this page never distinguishes among them).
+
+===========================================================================
+SMALL OPERATOR
+===========================================================================
+Validated directly: 0 completed Trips (Org B's own `TODAY` window — a
+genuinely empty window, not a contrived mock), a single fully-valid
+"Ready for review" Trip, a single "Needs review" Trip (missing Vehicle),
+and a mixed set of 5 Trips (ready / vehicle-gap / open-exception /
+multi-reason / evidence-integrity-gap) together on one page. Every case
+answered "what did we complete, and does anything look incomplete before
+billing" without any finance-console terminology anywhere on the page.
+
+===========================================================================
+LARGE OPERATOR
+===========================================================================
+Validated directly: 32 completed Trips spread across a 6-day span within
+the `LAST_7_DAYS` window. Pagination worked (a real "Next" link appeared,
+correctly bounded by the S1C-established page size of 25), the selected
+window survived paging (both the tab state and the URL's own `window=`
+param persisted onto page 2), and the list remained scannable — no
+separate "enterprise mode" component or route was introduced.
+
+===========================================================================
+DRIVER BOUNDARY
+===========================================================================
+EMPIRICALLY validated this phase (per §32's own explicit instruction that
+S1C's documentation-only validation was insufficient here): a real local
+synthetic Driver session (`org-a-driver-a@example.test`) navigating
+directly to `/operations/proof-of-service` was redirected to `/driver`
+before the Proof-of-Service page ever rendered. The Driver session's
+rendered text was scanned and confirmed to contain none of: "Proof of
+Service," "Ready for review," or "Needs review" — the Driver never sees
+Proof states, Passengers from this review workspace, Driver/Vehicle
+review rows, or billing-review language of any kind.
+
+===========================================================================
+ORG ISOLATION
+===========================================================================
+EMPIRICALLY validated against real RLS-backed local data, both
+directions: Org A's own review (32+ fixture rows) never contained Org B's
+fixture, and Org B's own review showed exactly its own single fixture and
+ZERO Org A rows. No URL/query manipulation was needed to prove this —
+`organizationId` is never sourced from a search param at all (see TRUSTED
+ORGANIZATION CONTEXT), so there is no parameter to manipulate in the
+first place.
+
+===========================================================================
+URL INPUT SAFETY
+===========================================================================
+Only `window` and `page` are read from `searchParams`. `window` is parsed
+through the closed 3-value mapping in `parseProofOfServiceWindowParam`
+(anything else falls back to `YESTERDAY`). `page` is parsed through
+`parsePageParam`: non-numeric/non-finite/less-than-1 values fall back to
+`1`; the result is additionally clamped to a maximum of 1000
+(`MAX_PAGE`), a defense-in-depth bound against an arbitrarily large
+`OFFSET` even though Postgres itself already handles an out-of-range
+`.range()` call safely (an empty result, not an error or a resource
+exhaustion). No search-param value is ever assigned to
+`organizationId`/`timezone`/`role`/a proof state/a Passenger id, or any
+other trusted-authority variable — confirmed by direct source inspection.
+
+===========================================================================
+ACCESSIBILITY
+===========================================================================
+Status is communicated via `StatusBadge`'s own existing text+dot
+convention — never color-only (the label text "Ready for review"/"Needs
+review" is always present alongside the colored dot, inherited unchanged
+from the existing component). Reason bullets are plain, real list markup
+(`<ul>`/`<li>`), readable to assistive technology without any special
+handling. The window selector is a real `<nav>` of real `<a>` elements
+with `aria-current="page"` on the active one — keyboard-focusable and
+activatable by construction, identical to `RecurringCareStatusTabs`'
+already-relied-upon pattern. Pagination is plain `<Link>` elements,
+same as Trips list. "View trip →" is a real, meaningfully-labeled link
+(not an icon-only button) — no icon-only row action exists anywhere on
+this page.
+
+===========================================================================
+RESPONSIVE
+===========================================================================
+Validated at the 1024px Operations floor: the page itself never
+overflows horizontally (`document.documentElement.scrollWidth <=
+clientWidth`), and the table's own dedicated `overflow-x-auto` scroll
+region (an existing `DataTable` convention, not new to this page) was
+directly confirmed to have real horizontal scroll available
+(`scrollWidth=904` vs. `clientWidth=703` inside that one container) —
+the same behavior every other DataTable-based Operations screen
+(Trips list, Recurring Care list) already exhibits at this width, not a
+regression introduced here. No mobile-specific redesign was attempted —
+the existing phone-width guard remains authoritative, per this phase's
+own explicit instruction.
+
+===========================================================================
+LOCAL E2E
+===========================================================================
+`.tmp-qa/s1d-proof-of-service-e2e.mjs` against real local fixtures
+(`.tmp-qa/s1d-fixtures.sh` — 5 "interesting" Yesterday-dated cases built
+via the real `driver_*` RPC chain and then uniformly backdated by exactly
+1 day, 2 malformed cases via direct DB-owner insertion, 1 Org B fixture,
+32 pagination fixtures spread 1-6 days back, all cleaned up after
+validation): 37/37 PASS, covering every lettered scenario A-V this phase
+specified (Accessibility keyboard-interaction specifics and exact
+reduced-motion/contrast checks were not separately automated — validated
+structurally via the real, semantic markup each component already uses,
+consistent with how this codebase has validated accessibility in prior
+phases).
+
+===========================================================================
+APPLICATION TEST RESULTS
+===========================================================================
+tsc --noEmit: PASS (0 errors)
+lint: PASS (0 errors, 40 warnings — identical pre-existing count, all
+  confined to `.tmp-qa/*.mjs` scratch scripts, none in `src/`)
+build (`next build`): PASS — `/operations/proof-of-service` present in
+  the route manifest
+unit (`npm test`): 221/221 PASS (209 baseline + 12 new presentation
+  tests; zero regressions)
+
+===========================================================================
+FILES CREATED
+===========================================================================
+  src/app/operations/proof-of-service/page.tsx
+  src/components/operations/proof-of-service/ProofOfServiceWindowTabs.tsx
+  src/lib/operations/proof-of-service-presentation.test.mjs
+  docs/reports/p1-e3-s1d-proof-of-service-operations-review-surface.txt
+    (this report)
+
+Local-only, not committed (test tooling): `.tmp-qa/s1d-fixtures.sh`,
+`.tmp-qa/s1d-proof-of-service-e2e.mjs`.
+
+===========================================================================
+FILES MODIFIED
+===========================================================================
+`src/lib/operations/presentation.ts` — appended
+`proofOfServiceStateLabel`/`proofOfServiceStateCategory`/
+`proofOfServiceReasonLabel`/`proofOfServiceWindowLabel` and their backing
+`Record` lookups, plus 2 new type-only imports
+(`TripProofOfServiceState`/`TripProofOfServiceReasonCode` from
+trip-proof-of-service-core.ts, `ProofOfServiceReviewWindow` from
+trip-proof-of-service.ts). No existing export in this file was changed
+or removed.
+
+`trip-proof-of-service.ts`/`trip-proof-of-service-core.ts`/
+`trip-proof-of-service-evidence.ts` (S1C/S1B) were read and imported,
+never edited.
+
+===========================================================================
+SCHEMA IMPACT
+===========================================================================
+NONE. No migration, table, column, or database-type change was made or
+is required.
+
+===========================================================================
+RLS IMPACT
+===========================================================================
+NONE. No policy, grant, or role was touched. RLS remained the sole
+enforcement mechanism for org isolation and every underlying read —
+validated directly (ORG ISOLATION, DRIVER BOUNDARY above), not merely
+assumed.
+
+===========================================================================
+OPEN ISSUES
+===========================================================================
+1. The GLOBAL COUNT / FILTER DEFERRAL (§18/§19) remains genuinely
+   unsolved — a future slice that wants "N Trips need review" or a
+   Needs-Review-only filter will need either a second, deliberately
+   bounded whole-window aggregate query, or a different pagination
+   strategy that evaluates Proof-of-Service before paginating. Not
+   designed here, per this phase's own explicit deferral.
+2. `EVIDENCE_INTEGRITY_GAP` rows expose neither cause nor any
+   diagnostic path today (by design, per §11) — an operator seeing
+   "Service evidence incomplete" has no way to learn more without
+   engineering involvement. A later diagnostic/admin workflow may address
+   this; not attempted here.
+3. Keyboard-interaction and screen-reader behavior were validated
+   structurally (real semantic elements, `aria-current`, text+icon status)
+   rather than via an automated keyboard-navigation E2E pass — consistent
+   with how accessibility has been validated elsewhere in this codebase,
+   but noted as a lighter-touch validation than the full functional E2E
+   matrix received.
+
+===========================================================================
+FINAL STATUS
+===========================================================================
+PROOF-OF-SERVICE PAGE:
+PASS
+
+DEFAULT YESTERDAY:
+PASS
+
+TODAY:
+PASS
+
+LAST 7 DAYS:
+PASS
+
+READY PRESENTATION:
+PASS
+
+NEEDS REVIEW:
+PASS
+
+MULTI-REASON:
+PASS
+
+EVIDENCE INTEGRITY:
+PASS
+
+COMPLETION ASSIGNMENT:
+PASS
+
+ORG ISOLATION:
+PASS
+
+DRIVER BOUNDARY:
+PASS
+
+PAGINATION:
+PASS
+
+NO MISLEADING GLOBAL COUNT:
+PASS
+
+NO PROOF-STATE PAGE FILTER:
+PASS
+
+RESPONSIVE:
+PASS
+
+ACCESSIBILITY:
+PASS
+
+FULL SQL:
+NOT RUN — READ-ONLY/UI PHASE
+
+NEW SCHEMA:
+NO
+
+NEW RLS:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+221/221
+
+READY FOR S1E/S1F DECISION:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+Decision checkpoint: either P1-E3-S1E — Internal Proof-of-Service
+Detail/Document, or defer S1E and proceed to P1-E3-S1F — Operations
+Brief Proof-of-Service Integration.
+
+Do NOT begin either next slice. Do NOT run SQL regression. Do NOT commit.
+Do NOT push. Do NOT deploy.
+
+STOP.

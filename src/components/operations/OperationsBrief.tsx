@@ -46,8 +46,18 @@ export interface OperationsBriefProps {
  * the day-state-gated Trip sections above).
  */
 export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
-  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare } =
-    brief;
+  const {
+    dayState,
+    attention,
+    activeNow,
+    nextDepartures,
+    unassignedCount,
+    driverSnapshot,
+    requestSummary,
+    tomorrowReadiness,
+    recurringCare,
+    proofOfService,
+  } = brief;
 
   const isQuiet = dayState === "NO_TRIPS" && activeNow.length === 0 && attention.length === 0;
   const isAllComplete = dayState === "ALL_COMPLETE";
@@ -91,6 +101,7 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
       <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
       <TomorrowReadinessBlock summary={tomorrowReadiness} />
       <RecurringCareBlock summary={recurringCare} />
+      <ProofOfServiceBlock summary={proofOfService} />
     </div>
   );
 }
@@ -504,6 +515,122 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
       </div>
       <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
         Review recurring care
+      </LinkButton>
+    </Panel>
+  );
+}
+
+/**
+ * Proof of Service (P1-E3-S1F) — mirrors `TomorrowReadinessBlock`'s/
+ * `RecurringCareBlock`'s own compact single-row shape and fixed-title/
+ * varying-description structure exactly (same Panel layout, same "Proof
+ * of service" heading in every state — never state-dependent). Answers
+ * exactly one question: "does any recently completed transportation need
+ * operational evidence review before billing?" (§Mission) — never a
+ * revenue amount, a claim/invoice/payment state, or a payer-compliance
+ * judgment (none of that data exists in this schema — see docs/reports/
+ * p1-e3-s1a-revenue-assurance-foundation-audit.txt). This block owns
+ * ONLY completed-service evidence review — never live Trip execution,
+ * Trip Readiness, Tomorrow Readiness, Recurring Care gaps, Requests
+ * awaiting review, Driver capacity, or any monetary concept, all already
+ * owned by other Brief blocks or explicitly out of scope for this
+ * product today (§12).
+ *
+ * WINDOW: always Yesterday, in the organization's local timezone (§3,
+ * locked) — never Today, never Last 7 Days; the summary itself
+ * (`getProofOfServiceSummary`) only ever evaluates that one window. The
+ * "Review proof of service"/"View proof of service" action always routes
+ * to `/operations/proof-of-service`, which itself already defaults to
+ * Yesterday (P1-E3-S1D) — no query param is needed here to keep the two
+ * in sync.
+ *
+ * `summary` is `null` only on a genuine fetch failure OR a deliberate
+ * whole-window "unavailable" decision (a safety-cap trip or a detected
+ * truncation — trip-proof-of-service.ts's own `getYesterdayProofOfServiceResults`,
+ * S1F §9/§11 — "Unknown ≠ healthy") — renders "Proof-of-service review
+ * unavailable," never silently falling back to a covered/zero appearance.
+ * `completedTripCount === 0` is a real, successfully-fetched "nothing to
+ * review" state (§13), not an error — restrained copy, never "No
+ * revenue"/"No billable trips"/"Everything ready." `needsReviewCount ===
+ * 0` (with completed trips present) is a calm, factual "ready for
+ * review" state (§14) — deliberately never "ready to bill"/"claim
+ * ready"/"revenue secured," since none of those claims is one this
+ * product can truthfully make. `needsReviewCount > 0` uses the SAME
+ * restrained warm-text-only attention styling `RecurringCareBlock`
+ * already established (§18 — "lower urgency than active Trip exception
+ * or current operational failure," no WarningCircle icon, no
+ * StatusBadge, no critical-red treatment) — administrative follow-through
+ * on completed work, not a current incident. An `evidenceIntegrityGapCount
+ * > 0` contribution adds one restrained extra line (§16) without ever
+ * exposing which specific internal-integrity cause produced it and
+ * without turning the whole block critical.
+ */
+function ProofOfServiceBlock({ summary }: { summary: OperationsBriefData["proofOfService"] }) {
+  if (summary === null) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Proof-of-service review unavailable</p>
+        </div>
+        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+          View proof of service
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  const { completedTripCount, needsReviewCount, evidenceIntegrityGapCount } = summary;
+
+  if (completedTripCount === 0) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>No completed trips to review from yesterday.</p>
+        </div>
+        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+          View proof of service
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  if (needsReviewCount === 0) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Yesterday&apos;s completed trips are ready for review.</p>
+          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+            {completedTripCount} completed {completedTripCount === 1 ? "trip has" : "trips have"} the required operational evidence.
+          </p>
+        </div>
+        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+          View proof of service
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
+        <p className={cn(typography.bodySmall, "mt-1 text-warning-text")}>
+          {needsReviewCount} completed {needsReviewCount === 1 ? "trip needs" : "trips need"} review
+        </p>
+        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+          From {completedTripCount} completed {completedTripCount === 1 ? "trip" : "trips"} yesterday.
+        </p>
+        {evidenceIntegrityGapCount > 0 && (
+          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+            {evidenceIntegrityGapCount} {evidenceIntegrityGapCount === 1 ? "has" : "have"} incomplete service evidence.
+          </p>
+        )}
+      </div>
+      <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+        Review proof of service
       </LinkButton>
     </Panel>
   );

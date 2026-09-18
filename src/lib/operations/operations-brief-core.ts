@@ -169,6 +169,97 @@ export function deriveRecurringCareSummary(rows: RecurringCareSummaryRow[]): Ope
   };
 }
 
+/**
+ * Compact Proof-of-Service summary for Operations Brief (P1-E3-S1F).
+ * Answers exactly one question: "Does any recently completed
+ * transportation need operational evidence review before billing?" —
+ * never a revenue amount, a claim/invoice/payment state, or a payer-
+ * compliance judgment (none of that data exists in this schema — see
+ * docs/reports/p1-e3-s1a-revenue-assurance-foundation-audit.txt). Just 4
+ * plain counts, deliberately not the per-reason breakdown
+ * (`missingVehicleCount`/`openExceptionCount`) the S1F spec itself
+ * offered as optional — §5/§17's own explicit instruction that the
+ * detailed reason breakdown belongs on the Proof-of-Service workspace,
+ * not the Brief.
+ */
+export interface OperationsBriefProofOfServiceSummary {
+  completedTripCount: number;
+  readyForReviewCount: number;
+  needsReviewCount: number;
+  evidenceIntegrityGapCount: number;
+}
+
+/**
+ * Minimal structural input for `deriveProofOfServiceSummary` —
+ * deliberately NOT an import of `TripProofOfServiceResult`/
+ * `TripProofOfServiceState`/`TripProofOfServiceReasonCode`
+ * (trip-proof-of-service-core.ts), matching this file's own "no runtime
+ * import of any kind" charter exactly, the same way `RecurringCareSummaryRow`
+ * above restates its own minimal shape rather than importing
+ * `RecurringArrangementAssurance`. `state`/`reasons` are plain `string`/
+ * `string[]` here — the server-only wrapper (trip-proof-of-service.ts)
+ * passes in the real `TripProofOfServiceResult` values unchanged; this
+ * function only ever compares them against the same literal strings the
+ * real closed unions are made of.
+ */
+export interface ProofOfServiceSummaryInputResult {
+  state: string;
+  reasons: string[];
+}
+
+/**
+ * Reduces an already-evaluated, whole-window array of
+ * `deriveTripProofOfService` results (P1-E3-S1B, never re-implemented
+ * here — S1F §7's own explicit "do not create a second Proof-of-Service
+ * evaluator") down to the Brief's own 4-count summary. Pure aggregation
+ * only — every fact-gathering/evidence-normalization step that produced
+ * each result already ran before this function ever sees it.
+ *
+ * INVARIANT (§6): `readyForReviewCount + needsReviewCount ===
+ * completedTripCount` always holds — including for the anomalous case
+ * below. The whole-window query this feeds from only ever selects
+ * `state = 'completed'` Trips, so `deriveTripProofOfService` should
+ * never actually return `"NOT_APPLICABLE"` for any input here — if it
+ * somehow does (a genuine integrity/programming anomaly, never a normal
+ * outcome), that result is NOT silently dropped from the arithmetic: it
+ * is counted into `needsReviewCount` (preserving the invariant above)
+ * AND into `evidenceIntegrityGapCount` (so the anomaly stays visible
+ * rather than vanishing), fail-closed rather than fail-silent.
+ */
+export function deriveProofOfServiceSummary(results: ProofOfServiceSummaryInputResult[]): OperationsBriefProofOfServiceSummary {
+  let readyForReviewCount = 0;
+  let needsReviewCount = 0;
+  let evidenceIntegrityGapCount = 0;
+
+  for (const result of results) {
+    if (result.state === "READY_FOR_REVIEW") {
+      readyForReviewCount += 1;
+      continue;
+    }
+
+    if (result.state === "NEEDS_REVIEW") {
+      needsReviewCount += 1;
+      if (result.reasons.includes("EVIDENCE_INTEGRITY_GAP")) {
+        evidenceIntegrityGapCount += 1;
+      }
+      continue;
+    }
+
+    // Anomalous NOT_APPLICABLE (or any other unexpected value) in a
+    // completed-only input set — see this function's own INVARIANT note
+    // above.
+    needsReviewCount += 1;
+    evidenceIntegrityGapCount += 1;
+  }
+
+  return {
+    completedTripCount: results.length,
+    readyForReviewCount,
+    needsReviewCount,
+    evidenceIntegrityGapCount,
+  };
+}
+
 export interface OperationsBriefData {
   dayState: OperationsBriefDayState;
   totalTripsToday: number;
@@ -201,6 +292,18 @@ export interface OperationsBriefData {
    * null-on-failure convention exactly.
    */
   recurringCare: OperationsBriefRecurringCareSummary | null;
+  /**
+   * `null` only when the underlying whole-window Proof-of-Service fetch
+   * genuinely failed OR was deliberately declined as unavailable (P1-E3-S1F
+   * §11 — a safety-cap trip, a truncation-detection trip, or a real query
+   * error all collapse to this same `null` from the Brief's point of
+   * view; the server-only wrapper is where those cases are distinguished
+   * for logging, never here). Never used to represent "zero completed
+   * trips yesterday," which is a real, successfully-fetched
+   * `{ completedTripCount: 0, ... }` value. Mirrors `recurringCare`'s own
+   * established null-on-failure convention exactly.
+   */
+  proofOfService: OperationsBriefProofOfServiceSummary | null;
 }
 
 /** See OperationsBriefDayState's own doc comment for the exact rule each branch implements. */
@@ -289,6 +392,7 @@ export function deriveOperationsBrief(
   requestSummary: OperationsBriefRequestSummary,
   tomorrowReadiness: OperationsBriefTomorrowSummary | null,
   recurringCare: OperationsBriefRecurringCareSummary | null,
+  proofOfService: OperationsBriefProofOfServiceSummary | null,
   now: Date,
 ): OperationsBriefData {
   const attentionTripIds = new Set(data.attentionItems.map((item) => item.trip.id));
@@ -304,5 +408,6 @@ export function deriveOperationsBrief(
     requestSummary,
     tomorrowReadiness,
     recurringCare,
+    proofOfService,
   };
 }

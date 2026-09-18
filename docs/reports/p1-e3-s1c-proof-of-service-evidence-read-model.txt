@@ -1,0 +1,546 @@
+P1-E3-S1C — Proof-of-Service Evidence Read Model
+===========================================================================
+Read-only server data layer over the S1B pure core. No database schema
+change, no migration, no RPC, no RLS change, no mutation, no UI, no
+deployment, no commit/push occurred. Exactly one local `supabase db
+reset` was used to establish a deterministic fixture baseline, per this
+phase's own explicit allowance — no full or focused SQL regression
+battery and no concurrency battery were run.
+
+===========================================================================
+READ MODEL ARCHITECTURE
+===========================================================================
+`src/lib/operations/trip-proof-of-service.ts` — `getProofOfServiceReview`
+composes DB facts -> `TripProofOfServiceFacts` -> `deriveTripProofOfService`
+(S1B core, unmodified) -> presentation-ready rows, exactly the pipeline
+this phase specifies. No business-state decision is made anywhere in this
+file. A new pure sibling module,
+`src/lib/operations/trip-proof-of-service-evidence.ts`, holds the two
+mechanical DB-row-normalization helpers this phase required
+(`evaluateLifecycleEventChain`, `extractLifecycleEventTimestamps`,
+`classifyCompletionAssignmentCardinality`) — kept separate from S1B's own
+core precisely so the "reimplement Proof-of-Service logic in the query
+layer" trap (§2) is structurally impossible: the evidence module only
+ever produces booleans/enums the S1B core already knows how to consume,
+never a READY_FOR_REVIEW/NEEDS_REVIEW/reason decision of its own.
+
+AUTHORIZATION PATTERN: `getProofOfServiceReview` takes
+`organizationId`/`timezone` as plain parameters and calls
+`requireOperationsAccess` from nowhere inside this module — the SAME
+established convention `tomorrow-readiness.ts`/`operations-brief.ts`/
+`trips-list.ts` already use. The calling page (S1D) is the trust
+boundary, exactly as for every other Operations read model in this
+codebase; no new pattern was invented.
+
+===========================================================================
+REVIEW WINDOWS
+===========================================================================
+`ProofOfServiceReviewWindow = "TODAY" | "YESTERDAY" | "LAST_7_DAYS"`,
+accepted explicitly as a parameter (no custom date range, per §3). No
+default is hardcoded inside the read model itself — S1D's own UI layer
+decides which window to request first; this report's own recommendation
+(unchanged from the S1A audit) remains YESTERDAY as the most useful
+default landing view for a small operator reviewing just-completed work.
+
+===========================================================================
+TIMEZONE BOUNDARIES
+===========================================================================
+Every boundary is computed via the EXISTING, already-DST-hardened
+`day-bounds.ts` primitives (`organizationDayBoundsUtc`, `localDateKey`,
+`addDaysToDateKey`, `localMidnightUtc`) — never `now - N * 24h`
+arithmetic, never a browser/server-local timezone, matching this
+codebase's own P1-E1-S4C1 DST-correctness precedent exactly:
+  - TODAY: `organizationDayBoundsUtc(now, timezone)` directly.
+  - YESTERDAY: `[localMidnightUtc(yesterdayKey), today.startUtc)` — `end`
+    is TODAY's own `start` reused directly (never recomputed), `start` is
+    independently resolved via `localMidnightUtc` so it reflects that
+    specific calendar date's own real UTC offset.
+  - LAST_7_DAYS: `[localMidnightUtc(todayKey - 6 days), today.endUtc)` —
+    exactly 7 organization-local calendar dates (today + previous 6).
+Window authority is `trips.completed_at` exclusively — never
+`scheduled_pickup_at`, `appointment_at`, `updated_at`, or `created_at`
+(§4, confirmed via direct inspection of the query's own `.gte`/`.lt`
+filter columns).
+
+Validated empirically against real local data (see LOCAL VALIDATION):
+YESTERDAY's own `endUtc` was directly asserted equal to TODAY's own
+`startUtc` (contiguous, no gap/overlap), and LAST_7_DAYS was directly
+asserted to span exactly 7 calendar days on a non-DST-transition test
+date. A DST-transition-day boundary test was NOT re-derived from scratch
+this phase — it is already covered by day-bounds.ts's own existing test
+suite from the phase that introduced the DST fix (P1-E1-S4C1), and this
+module's three window functions are pure compositions of those same
+already-proven primitives, never a parallel implementation that could
+drift from that guarantee.
+
+===========================================================================
+PRIMARY TRIP QUERY
+===========================================================================
+`trips` filtered to `organization_id = <org>`, `state = 'completed'`,
+`completed_at` within `[startUtc, endUtc)`, ordered `completed_at DESC,
+id ASC` (§32 — most recent completed work first, stable tie-breaker,
+never Passenger-name-first), server-side paginated via `.range()` with
+`{ count: "exact" }`. `scheduled/in-progress/cancelled/no_show` Trips are
+structurally excluded by the `state = 'completed'` filter alone — no
+separate exclusion logic exists or is needed.
+
+===========================================================================
+PASSENGER CONTEXT
+===========================================================================
+Embedded directly in the primary query (`id, display_name` only) — no
+`phone`, no `assistance_notes`, no medical/insurance data of any kind
+(§9's own explicit exclusion list, and this phase's own data-minimization
+instruction). Matches the minimal Passenger projection precedent
+`tomorrow-readiness.ts` already established.
+
+===========================================================================
+COMPLETION ASSIGNMENT AUTHORITY
+===========================================================================
+Locked exactly as instructed (§10): `trip_assignments.trip_id = Trip.id
+AND end_reason = 'trip_completed'` — never "active assignment," never
+"latest by timestamp," never `trip_events.actor_user_id`. Confirmed via
+direct query-column inspection: query 2 filters `.eq("end_reason",
+"trip_completed")`, nothing else.
+
+===========================================================================
+ASSIGNMENT CARDINALITY
+===========================================================================
+`classifyCompletionAssignmentCardinality` (evidence.ts) distinguishes
+`"none" | "one" | "multiple"` from a real row COUNT, never silently
+choosing one. Both `"none"` and `"multiple"` map to
+`hasCompletionAssignment: false` fed to the S1B core (both correctly
+produce `EVIDENCE_INTEGRITY_GAP`); only `"one"` populates a real
+Driver/Vehicle identity. Validated against real local data for all three
+cases: FIXTURE E (0 rows), FIXTURES A-D (1 row each), and a dedicated
+FIXTURE K (2 rows sharing `end_reason = 'trip_completed'` on the same
+Trip, DB-owner-inserted specifically to simulate corrupted historical
+data) — all three produced the expected classification and, for `"none"`/
+`"multiple"`, both `performingDriver`/`performingVehicle` were confirmed
+`null` in the actual composed row (never an arbitrarily-chosen candidate).
+
+===========================================================================
+DRIVER / VEHICLE CONTEXT
+===========================================================================
+`drivers(id, display_name)` / `vehicles(id, label)` embedded directly
+into query 2, sourced ONLY from the one authoritative completion
+assignment — never the current/active assignment (§12's own explicit
+instruction). No Driver profile field beyond `id`/`display_name` is
+exposed (no phone, matching this phase's own minimization instruction —
+narrower than Trip Detail's own Driver projection, which does include
+phone for a different, operationally-necessary purpose).
+
+===========================================================================
+LIFECYCLE EVENT CHAIN
+===========================================================================
+`evaluateLifecycleEventChain` (evidence.ts) requires, for the 6
+`REQUIRED_LIFECYCLE_EVENT_TYPES`: (1) each type present EXACTLY once, (2)
+monotonically non-decreasing `occurred_at` in the fixed state-machine
+order, (3) the `trip_completed` event's own `occurred_at` exactly equal
+to `trips.completed_at` (see COMPLETED_AT CROSS-CHECK). Sourced entirely
+from `trip_events` — never `trips` timestamps alone, never `state` alone,
+never `audit_events` (§14, confirmed by direct inspection: query 3 reads
+only `trip_events`).
+
+===========================================================================
+EVENT DUPLICATION
+===========================================================================
+AUDITED: no `UNIQUE(trip_id, event_type)` constraint exists anywhere in
+`20260830131200_trip_events.sql` — only `(trip_id, occurred_at)` and
+`(organization_id)` indexes. This repository's mutation architecture
+(every forward transition is its own single-edge SECURITY DEFINER RPC,
+transitions strictly forward, no terminal state ever revisited) means a
+duplicate required event type should never arise from normal operation —
+but since the database itself does not enforce this, a duplicate is a
+genuine, reachable data-integrity anomaly, not merely a hypothetical one.
+Per this phase's own preference, `evaluateLifecycleEventChain` treats a
+duplicate EXACTLY the same as a missing event (both `matches.length !==
+1` fail the check) — never silently accepted as "the same fact twice."
+Directly unit-tested (`trip-proof-of-service-evidence.test.mjs`,
+"duplicate required event -> false").
+
+===========================================================================
+EVENT ORDER
+===========================================================================
+The 6 required timestamps are checked for monotonic non-decreasing order
+in the fixed state-machine sequence; any violation fails the chain, even
+when every required type is present exactly once (directly unit-tested:
+"out-of-order timestamps -> false"). Malformed evidence is never silently
+re-sorted and declared valid.
+
+===========================================================================
+COMPLETED_AT CROSS-CHECK
+===========================================================================
+AUDITED (§17): `_driver_execute_trip_transition`
+(`20260831100200_controlled_trip_mutations.sql`) sets `trips.completed_at
+= now()` and, in the SAME function invocation (same transaction), inserts
+the `trip_completed` `trip_events` row relying on that column's own
+`default now()` — no explicit `occurred_at` parameter is passed. Postgres
+`now()` is `transaction_timestamp()`, constant for every statement within
+one transaction (never `clock_timestamp()`, which WOULD legitimately
+drift). Because both writes are structurally guaranteed to share one
+transaction-start instant for the one real completion path, EXACT
+equality is a safe, meaningful integrity signal — not a "false failure
+waiting to happen," per this phase's own explicit caution. Implemented as
+an exact-equality check inside `evaluateLifecycleEventChain` (never a
+tolerance window), and empirically confirmed against real data: FIXTURE
+A, created entirely through the real `driver_*` RPC chain, returned
+`READY_FOR_REVIEW` (not `EVIDENCE_INTEGRITY_GAP`) — proving the equality
+genuinely holds in practice, not merely in theory.
+
+===========================================================================
+OPEN EXCEPTIONS
+===========================================================================
+Query 4: `trip_exceptions` where `status = 'open'`, scoped to the
+returned Trip ids, grouped into a per-Trip count in memory — identical
+shape to `tomorrow-readiness.ts`'s own established exception-count
+pattern. No exception text, no resolved exceptions, no `trip_notes`
+content is inspected anywhere in this module (§18, §24).
+
+===========================================================================
+FACT MAPPING
+===========================================================================
+`hasPassenger` / `hasPickupDescription` / `hasDestinationDescription` are
+derived from the Trip's own execution-snapshot columns (never the current
+Passenger/Facility record) via a shared `isNonBlank` helper — "non-blank"
+means non-empty after `.trim()`, so a whitespace-only value is correctly
+treated as absent, never silently accepted (§19).
+
+===========================================================================
+RESULT CONTRACT
+===========================================================================
+`ProofOfServiceReviewRow`: `tripId`, `passenger {id, displayName}`,
+`completedAt`, `scheduledPickupAt`, `pickupDescription`,
+`destinationDescription`, `performingDriver {id, displayName} | null`,
+`performingVehicle {id, label} | null`, `lifecycleEvents` (see SUPPORTING
+TIMESTAMPS), `result: TripProofOfServiceResult`. No finance field of any
+kind. `ProofOfServiceReviewResult` (the top-level return) additionally
+carries `window`, `timezone`, `startUtc`, `endUtc`, `totalCount`, `page`,
+`pageSize` — mirroring `TomorrowReadinessData`'s/`TripsListResult`'s own
+established "authoritative window/pagination metadata travels with the
+data" convention, so S1D never needs to recompute the window boundaries
+itself.
+
+===========================================================================
+SUPPORTING TIMESTAMPS
+===========================================================================
+`lifecycleEvents` (`ProofOfServiceLifecycleTimestamps`) exposes all 6
+required event timestamps via `extractLifecycleEventTimestamps`, sourced
+from the SAME `trip_events` query already fetched for chain validation —
+zero additional query cost. Deliberately independent of, and never
+consulted by, the `result` field itself (that decision is already fully
+captured in `hasCompleteLifecycleEventChain` before this object is even
+built) — matches §22's own explicit "do not make the pure core depend on
+individual timestamps beyond the chain-validity boolean."
+
+===========================================================================
+GPS EXCLUSION
+===========================================================================
+`driver_location_updates` is never queried anywhere in this module —
+confirmed by direct inspection (no reference to that table exists in
+`trip-proof-of-service.ts`). GPS remains supporting-only evidence a
+future single-Trip detail view may fetch separately, per §23.
+
+===========================================================================
+NOTES EXCLUSION
+===========================================================================
+`trip_notes` is never queried anywhere in this module — confirmed by
+direct inspection. Notes remain a future detail/review-presentation
+concern, per §24.
+
+===========================================================================
+NO-SHOW EXCLUSION
+===========================================================================
+No-show Trips are structurally excluded by the primary query's own
+`state = 'completed'` filter — no separate no-show read path exists in
+this module (§25); no billability judgment is made anywhere. A future S1D
+design MAY add a separate, clearly-distinct no-show count method, but
+none was built this phase (not required, and this phase's own boundary
+explicitly defers that decision to the Operations surface design phase).
+
+===========================================================================
+CANCELLATION EXCLUSION
+===========================================================================
+Same mechanism as NO-SHOW EXCLUSION — `state = 'completed'` structurally
+excludes cancelled Trips; no cancellation billing judgment is made (§26).
+
+===========================================================================
+QUERY ROUND TRIPS
+===========================================================================
+Exactly 4, matching this phase's own specified bounded shape, confirmed
+by direct source inspection (no query exists inside a loop; grep for
+`for (`/`.map(` calling `.from(` returns nothing):
+  1. `trips` (state='completed', completed_at in window,
+     organization_id-scoped), WITH the `passengers` relation embedded in
+     the SAME round trip — paginated, `{count: "exact"}`.
+  2. `trip_assignments` (`end_reason = 'trip_completed'` ONLY, scoped to
+     the page's Trip ids), WITH `drivers`/`vehicles` embedded in the SAME
+     round trip.
+  3. `trip_events` (scoped to the page's Trip ids, pre-filtered to
+     exactly the 6 required event types).
+  4. `trip_exceptions` (`status = 'open'`, scoped to the page's Trip
+     ids).
+
+Embedding query 2 directly into query 1 (mirroring how `tomorrow-
+readiness.ts` embeds its OWN `ended_at IS NULL` active assignment) was
+evaluated and deliberately NOT done: that embed's "still returns the
+parent row when zero children match" behavior was previously empirically
+verified in this codebase only for `.is(..., null)` filters
+(`tomorrow-readiness.ts`'s own documented empirical confirmation), never
+for a NEW `.eq("trip_assignments.end_reason", "trip_completed")` text
+filter this phase introduces — collapsing queries 1 and 2 without that
+same empirical confirmation risks silently EXCLUDING a completed Trip
+with a real completion assignment from the result set entirely, a
+materially worse failure than one extra round trip. Documented directly
+in the module's own doc comment. Correctness over round-trip count, per
+this phase's own explicit instruction.
+
+===========================================================================
+NO N+1
+===========================================================================
+Confirmed: all 4 queries are issued exactly once per `getProofOfServiceReview`
+call, each scoped to the already-resolved page's Trip id set (never one
+query per Trip). Composition (facts -> core -> row) happens entirely in
+memory afterward via `Map` lookups keyed by `trip_id`.
+
+===========================================================================
+PAGINATION / BOUNDS
+===========================================================================
+`PROOF_OF_SERVICE_PAGE_SIZE = 25`, matching `TRIPS_LIST_PAGE_SIZE`'s own
+established magnitude — server-side `.range()` + `{count: "exact"}`,
+identical convention to `trips-list.ts`. Applies uniformly to all 3
+windows (not only LAST_7_DAYS) for consistency; TODAY/YESTERDAY are
+naturally small in practice but are never assumed unbounded.
+
+===========================================================================
+AUTHORIZATION
+===========================================================================
+No authorization call exists inside this module (by design — see READ
+MODEL ARCHITECTURE). Documented for S1D: Organization Admin — allowed;
+Dispatcher — allowed; Driver — not through this read surface, enforced by
+the EXISTING, unmodified `requireOperationsAccess` (Driver is redirected
+to `/driver` before ever reaching a page that would call this module) —
+the same pre-existing, already-proven mechanism every other Operations
+read model already relies on. No service role is used anywhere in this
+module (`createServerSupabaseClient()` uses the publishable key + session
+cookie, exactly like every other Operations read model).
+
+===========================================================================
+ORG ISOLATION
+===========================================================================
+Every query is explicitly `organization_id`-scoped; `organizationId` is a
+plain parameter never sourced from a browser-supplied value by this
+module (the calling page's own responsibility, per the established
+convention). Validated directly against real RLS-backed local data (see
+LOCAL VALIDATION): Org A's own review never surfaced Org B's completed
+Trip, and Org B's own review showed exactly its own Trip and ZERO Org A
+fixtures — both directions confirmed, not assumed.
+
+===========================================================================
+LOCAL VALIDATION
+===========================================================================
+`.tmp-qa/s1c-read-model-validation.mjs` — a plain `@supabase/supabase-js`
+client, signed in as real local users (`org-a-admin@example.test`,
+`org-b-admin@example.test`), replicating the EXACT same 4 queries
+`getProofOfServiceReview` performs, reusing the REAL exported pure
+functions (`deriveTripProofOfService`, `evaluateLifecycleEventChain`,
+`classifyCompletionAssignmentCardinality`) — never a re-implementation of
+that logic. (`createServerSupabaseClient()` itself requires a Next.js
+request context via `next/headers` and cannot run outside one; this
+script substitutes an equivalently-authenticated plain client so the SAME
+real RLS enforcement is exercised end to end.)
+
+Fixtures (`.tmp-qa/s1c-fixtures.sh`) — VALID completed Trips (A-D, J) were
+created via the real, unmodified lifecycle RPC chain
+(`create_trip` -> `assign_trip` -> the 6 `driver_*` transitions, plus
+`report_trip_exception` for C/D), exactly as this phase instructed.
+MALFORMED fixtures (E, F, K) required direct DB-owner SQL, since the
+trusted RPC surface structurally cannot produce them — kept strictly
+local/test-only, cleaned up after validation, never any production
+bypass logic introduced anywhere in application code.
+
+Results — 23/23 PASS:
+  A. fully valid (Driver+Vehicle, full chain, no exception) -> READY_FOR_REVIEW: PASS
+  B. Driver, no Vehicle -> NEEDS_REVIEW [MISSING_VEHICLE]: PASS
+  C. open exception -> NEEDS_REVIEW [OPEN_EXCEPTION]: PASS
+  D. both gaps -> NEEDS_REVIEW [MISSING_VEHICLE, OPEN_EXCEPTION], correct order: PASS
+  E. no completion assignment (DB-owner fixture) -> EVIDENCE_INTEGRITY_GAP, null Driver/Vehicle: PASS
+  F. incomplete event chain (DB-owner fixture) -> EVIDENCE_INTEGRITY_GAP: PASS
+  K. >1 completion assignment rows (DB-owner fixture) -> EVIDENCE_INTEGRITY_GAP, null Driver/Vehicle (never arbitrarily chosen): PASS
+  G. scheduled Trip -> absent from result: PASS
+  H. cancelled Trip -> absent from result: PASS
+  I. no-show Trip -> absent from result: PASS
+  J. Org B's completed Trip invisible to Org A's query, and vice versa (both directions): PASS
+  J. Org B's own valid completed Trip -> READY_FOR_REVIEW under Org B's own review: PASS
+  L/M. Fixture completed "today" does not appear in YESTERDAY: PASS
+  N. Fixture completed "today" appears in LAST_7_DAYS; LAST_7_DAYS >= TODAY in row count: PASS
+  Boundary: YESTERDAY.end === TODAY.start (contiguous): PASS
+  Boundary: LAST_7_DAYS spans exactly 7 calendar days: PASS
+  (O. DST-transition boundary: not re-derived this phase — see TIMEZONE BOUNDARIES.)
+
+===========================================================================
+PURE TEST RESULTS
+===========================================================================
+`trip-proof-of-service-evidence.test.mjs` (NEW, this phase): 17/17 PASS —
+complete 6-event chain, missing event, duplicate required event,
+out-of-order timestamps, unrelated event type ignored, completed_at
+cross-check (both match and mismatch), completedAt-null defensive case,
+empty event list, `extractLifecycleEventTimestamps` for complete/missing/
+duplicated/unrelated cases, `classifyCompletionAssignmentCardinality` for
+0/1/2/5 rows, and order-independence.
+
+`trip-proof-of-service-core.test.mjs` (S1B, unmodified, reconfirmed
+unaffected): 23/23 PASS.
+
+===========================================================================
+APPLICATION TEST RESULTS
+===========================================================================
+tsc --noEmit: PASS (0 errors)
+lint: PASS (0 errors, 40 warnings — identical pre-existing count, all
+  confined to `.tmp-qa/*.mjs` scratch scripts, none in `src/`)
+build (`next build`): PASS
+unit (`npm test`): 209/209 PASS (192 baseline + 17 new; zero regressions)
+database.types.ts: regenerated for a sanity check only (not committed —
+  no schema changed) — confirmed BYTE-IDENTICAL to the current committed
+  file via direct `diff`.
+
+===========================================================================
+FILES CREATED
+===========================================================================
+  src/lib/operations/trip-proof-of-service.ts
+  src/lib/operations/trip-proof-of-service-evidence.ts
+  src/lib/operations/trip-proof-of-service-evidence.test.mjs
+  docs/reports/p1-e3-s1c-proof-of-service-evidence-read-model.txt (this report)
+
+Local-only, not committed (test tooling): `.tmp-qa/s1c-fixtures.sh`,
+`.tmp-qa/s1c-read-model-validation.mjs`.
+
+===========================================================================
+FILES MODIFIED
+===========================================================================
+NONE. `trip-proof-of-service-core.ts` (S1B) was read for reference and
+imported, never edited. `day-bounds.ts`/`local-time.ts` were read and
+their existing exported functions reused, never edited.
+
+===========================================================================
+SCHEMA IMPACT
+===========================================================================
+NONE. No migration, table, column, index, or database-type change was
+made or is required.
+
+===========================================================================
+RLS IMPACT
+===========================================================================
+NONE. No policy, grant, or role was touched. RLS remained the sole
+enforcement mechanism for every read this module performs — validated
+directly (ORG ISOLATION above), not merely assumed.
+
+===========================================================================
+OPEN ISSUES
+===========================================================================
+1. A DST-transition-day boundary test was not independently re-derived
+   for this module's own window functions — it relies entirely on
+   `day-bounds.ts`'s own already-proven DST correctness (P1-E1-S4C1). If
+   a future audit wants an S1C-specific DST regression test, one can be
+   added cheaply (pure, no DB) since `computeYesterdayBoundsUtc`/
+   `computeLast7DaysBoundsUtc` are themselves pure compositions — but this
+   was judged unnecessary duplication for this phase, not an oversight.
+2. The Driver-boundary claim (K in this phase's own spec) was validated
+   by documentation and by confirming this module contains no
+   authorization call of its own, rather than by a fresh empirical RLS
+   test — this phase's own fixture design (one Driver performed every
+   Org A completed fixture) would not have produced a meaningful
+   Driver-vs-Admin visibility DIFFERENCE for the completed-Trip set
+   specifically, since that Driver has genuine historical visibility into
+   every one of those same Trips via the pre-existing, already-proven
+   `trips_select_assigned_driver` RLS policy. The actual Driver boundary
+   for this feature is enforced at the page/authorization layer
+   (`requireOperationsAccess`), which S1D will apply — this is the same,
+   unmodified, already-relied-upon mechanism every other Operations
+   surface in this codebase uses, not a gap introduced by this phase.
+3. `report_trip_exception` (used for fixtures C/D) has no Trip-state
+   restriction and can legitimately be called against an already-
+   completed Trip by Operations — confirmed directly from that RPC's own
+   source. This is existing, unmodified behavior, not something S1C
+   changed; noted here only because it is what made fixtures C/D
+   possible without any DB-owner bypass.
+
+===========================================================================
+FINAL STATUS
+===========================================================================
+READ MODEL:
+PASS
+
+TODAY:
+PASS
+
+YESTERDAY:
+PASS
+
+LAST 7 DAYS:
+PASS
+
+COMPLETION ASSIGNMENT:
+PASS
+
+EVENT CHAIN:
+PASS
+
+EVENT ORDER:
+PASS
+
+VEHICLE GAP:
+PASS
+
+OPEN EXCEPTION:
+PASS
+
+EVIDENCE INTEGRITY:
+PASS
+
+ORG ISOLATION:
+PASS
+
+DRIVER BOUNDARY:
+PASS (enforced by the existing, unmodified requireOperationsAccess —
+see OPEN ISSUES #2 for how this was validated this phase)
+
+NO N+1:
+PASS
+
+DATABASE ROUND TRIPS:
+4
+
+NEW SCHEMA:
+NO
+
+NEW RLS:
+NO
+
+SQL REGRESSION:
+NOT RUN — READ-ONLY PHASE
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+209/209
+
+READY FOR S1D:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E3-S1D — Proof-of-Service Operations Review Surface
+
+Do NOT begin S1D. Do NOT run full SQL regression. Do NOT commit. Do NOT
+push. Do NOT deploy.
+
+STOP.

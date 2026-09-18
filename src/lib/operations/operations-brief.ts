@@ -3,11 +3,13 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getTodaysOperations } from "./todays-operations";
 import { getTomorrowReadiness } from "./tomorrow-readiness";
 import { getRecurringArrangementsList } from "./recurring-care-list";
+import { getYesterdayProofOfServiceResults } from "./trip-proof-of-service";
 import { isActiveTripState } from "./presentation";
 import {
   deriveOperationsBrief,
   countDriversCurrentlyOnTrip,
   deriveRecurringCareSummary,
+  deriveProofOfServiceSummary,
   type DriverAssignmentStateRow,
 } from "./operations-brief-core";
 import type {
@@ -16,6 +18,7 @@ import type {
   OperationsBriefRequestSummary,
   OperationsBriefTomorrowSummary,
   OperationsBriefRecurringCareSummary,
+  OperationsBriefProofOfServiceSummary,
 } from "./operations-brief-core";
 
 export type {
@@ -25,6 +28,7 @@ export type {
   OperationsBriefRequestSummary,
   OperationsBriefTomorrowSummary,
   OperationsBriefRecurringCareSummary,
+  OperationsBriefProofOfServiceSummary,
 } from "./operations-brief-core";
 
 /**
@@ -231,6 +235,34 @@ export async function getRecurringCareSummary(
 }
 
 /**
+ * Compact Proof-of-Service summary for Operations Brief (P1-E3-S1F) —
+ * reuses `getYesterdayProofOfServiceResults` (trip-proof-of-service.ts,
+ * S1C's own whole-window evidence fetch, extended this phase) directly,
+ * then narrows the result down to the 4 counts
+ * `OperationsBriefProofOfServiceSummary` needs via the pure
+ * `deriveProofOfServiceSummary` (operations-brief-core.ts) — never a
+ * second Proof-of-Service query architecture, never a second evaluator.
+ * `null` represents EITHER a genuine query failure OR a deliberate
+ * `"unavailable"` decision from the whole-window fetch itself (a safety-
+ * cap trip or a detected truncation) — both collapse to the same
+ * Brief-facing `null`, matching every other Brief summary's own
+ * established null-on-failure convention; which specific case occurred
+ * is not distinguished here, since the Brief only ever needs to know
+ * "can I trust this count," not why it can't.
+ */
+export async function getProofOfServiceSummary(
+  organizationId: string,
+  timezone: string,
+  now: Date = new Date(),
+): Promise<OperationsBriefProofOfServiceSummary | null> {
+  const fetch = await getYesterdayProofOfServiceResults(organizationId, timezone, now);
+  if (fetch.status !== "ok") {
+    return null;
+  }
+  return deriveProofOfServiceSummary(fetch.results);
+}
+
+/**
  * The one Operations Brief entry point. `organizationId`/`timezone` follow
  * the exact same caller-resolves-context convention getTodaysOperations()
  * already established. `now` defaults to the real current instant but is
@@ -261,6 +293,11 @@ export async function getOperationsBrief(
   const recurringCarePromise: Promise<OperationsBriefRecurringCareSummary | null> = getRecurringCareSummary(organizationId, now).catch(
     () => null,
   );
+  const proofOfServicePromise: Promise<OperationsBriefProofOfServiceSummary | null> = getProofOfServiceSummary(
+    organizationId,
+    timezone,
+    now,
+  ).catch(() => null);
 
   const [todaysOperations, driverSnapshot, requestSummary] = await Promise.all([
     getTodaysOperations(organizationId, timezone),
@@ -270,6 +307,7 @@ export async function getOperationsBrief(
 
   const tomorrowReadiness = await tomorrowReadinessPromise;
   const recurringCare = await recurringCarePromise;
+  const proofOfService = await proofOfServicePromise;
 
-  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, now);
+  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, proofOfService, now);
 }

@@ -4,11 +4,18 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTodaysOperations, type TodaysOperationsTrip, type TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { getOnboardingChecklist } from "@/lib/operations/onboarding-checklist";
-import { getDriverSnapshot, getRequestSummary, getTomorrowReadinessSummary, getRecurringCareSummary } from "@/lib/operations/operations-brief";
+import {
+  getDriverSnapshot,
+  getRequestSummary,
+  getTomorrowReadinessSummary,
+  getRecurringCareSummary,
+  getProofOfServiceSummary,
+} from "@/lib/operations/operations-brief";
 import {
   deriveOperationsBrief,
   type OperationsBriefTomorrowSummary,
   type OperationsBriefRecurringCareSummary,
+  type OperationsBriefProofOfServiceSummary,
 } from "@/lib/operations/operations-brief-core";
 import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
@@ -63,6 +70,17 @@ export default async function OperationsOverviewPage() {
     organization.organizationId,
     now,
   ).catch(() => null);
+  // Proof-of-Service whole-window summary (P1-E3-S1F) — same independent,
+  // best-effort, caught-separately shape as Tomorrow Readiness/Recurring
+  // Care immediately above; a genuine failure (or a deliberate
+  // unavailable decision from the whole-window fetch itself) degrades
+  // only the Brief's own Proof-of-Service block, never the rest of this
+  // page.
+  const proofOfServicePromise: Promise<OperationsBriefProofOfServiceSummary | null> = getProofOfServiceSummary(
+    organization.organizationId,
+    organization.organizationTimezone,
+    now,
+  ).catch(() => null);
 
   const data = await getTodaysOperations(organization.organizationId, organization.organizationTimezone);
   // Operations Brief (P1-E1-S1C) is derived from this SAME already-fetched
@@ -76,7 +94,8 @@ export default async function OperationsOverviewPage() {
   ]);
   const tomorrowReadiness = await tomorrowReadinessPromise;
   const recurringCare = await recurringCarePromise;
-  const brief = deriveOperationsBrief(data, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, now);
+  const proofOfService = await proofOfServicePromise;
+  const brief = deriveOperationsBrief(data, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, proofOfService, now);
   const timezone = organization.organizationTimezone;
 
   const attentionColumns: DataTableColumn<TodaysOperationsAttentionItem>[] = [

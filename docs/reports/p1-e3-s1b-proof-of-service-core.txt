@@ -1,0 +1,389 @@
+P1-E3-S1B — Proof-of-Service Assurance Core
+===========================================================================
+Pure derived product logic phase. No database query layer, no UI, no
+migration, no RPC, no RLS change, no deployment, no commit/push occurred.
+Only focused unit tests + tsc/lint/build/full-unit were run, per this
+phase's own explicit regression rule (no SQL regression of any kind).
+
+===========================================================================
+FINAL PRODUCT BOUNDARY
+===========================================================================
+Proof-of-Service Assurance is a DERIVED operational evidence evaluator —
+mirroring `trip-readiness-core.ts` / `trip-assurance.ts`'s own established
+pure-core convention exactly (`facts -> result`, no DB access, no
+`new Date()`, no framework import). It is explicitly NOT: a Trip lifecycle
+state, a billing status, a claim status, a payer-compliance status, an
+invoice state, a payment state, a revenue amount, or a financial score.
+Nothing here is persisted, and nothing is written back to `trips.state` or
+any other table — confirmed structurally, since the module has no
+database import of any kind (verified: `grep -n "import" trip-proof-of-
+service-core.ts` returns nothing).
+
+===========================================================================
+APPLICABILITY
+===========================================================================
+The core evaluates COMPLETED transportation only. `tripState !== 'completed'`
+short-circuits to `NOT_APPLICABLE` with empty reasons BEFORE any other fact
+is examined — this includes `scheduled` and all 5 in-progress states (not
+yet applicable), AND both `cancelled` and `no_show` (terminal, but
+deliberately never evaluated as completed-service Proof of Service, per
+this phase's own locked §21/§22 decisions — no billability judgment is
+made for either). Test coverage proves the short-circuit genuinely
+prevents evaluation, not merely returns the right answer by coincidence:
+every NOT_APPLICABLE test case supplies facts that WOULD trigger every
+reason if the state were evaluated.
+
+===========================================================================
+STATE VOCABULARY
+===========================================================================
+Locked exactly as specified: `READY_FOR_REVIEW | NEEDS_REVIEW |
+NOT_APPLICABLE`. `READY_FOR_REVIEW` means Nemryn possesses the required
+operational evidence and there is no unresolved execution issue — it does
+NOT mean claim-ready, payer-approved, invoice-ready, or payment-
+guaranteed (documented verbatim in the module's own header comment, so
+this distinction travels with the code, not only this report).
+
+===========================================================================
+REASON VOCABULARY
+===========================================================================
+Locked exactly as specified: `EVIDENCE_INTEGRITY_GAP | MISSING_VEHICLE |
+OPEN_EXCEPTION`. Deliberately excludes `MISSING_DRIVER`,
+`MISSING_PICKUP_EVENT`, `MISSING_DESTINATION_EVENT`,
+`MISSING_COMPLETION_EVENT` as ordinary reasons — the current lifecycle
+architecture (every forward transition is its own single-edge SECURITY
+DEFINER RPC with no skip path) structurally guarantees those facts for
+any correctly-created completed Trip; their absence is a data-integrity
+anomaly, not a normal operator condition, and collapses into the single
+fail-closed `EVIDENCE_INTEGRITY_GAP` instead of several normally-
+unreachable, effectively-dead reason codes.
+
+===========================================================================
+FACT CONTRACT
+===========================================================================
+`TripProofOfServiceFacts` (src/lib/operations/trip-proof-of-service-core.ts):
+  tripState: string
+  hasPassenger: boolean
+  hasPickupDescription: boolean
+  hasDestinationDescription: boolean
+  completedAt: string | null
+  hasCompleteLifecycleEventChain: boolean
+  hasCompletionAssignment: boolean
+  completionAssignmentVehicleId: string | null
+  openExceptionCount: number
+
+Deliberately excludes (S1B §16, verified by a dedicated unit test that
+scans the fact contract's own keys for forbidden substrings —
+"fact contract requires no GPS, notes, or monetary field"): Passenger
+name, Driver name, Vehicle label, notes, GPS/location, money, rate,
+payer, request/recurring-arrangement provenance. All presentation/context
+concerns belonging to a later (S1C/S1D+) layer.
+
+===========================================================================
+READY_FOR_REVIEW RULE
+===========================================================================
+`tripState === 'completed'` AND no `EVIDENCE_INTEGRITY_GAP` AND a
+completion assignment exists with a non-null `completionAssignmentVehicleId`
+AND `openExceptionCount === 0`. Returns `{ state: "READY_FOR_REVIEW",
+reasons: [] }`. Verified directly (test E).
+
+===========================================================================
+NEEDS_REVIEW RULE
+===========================================================================
+For a completed Trip, every independently-applicable reason from the
+closed 3-code vocabulary is collected into a `Set`, then emitted in the
+fixed `REASON_ORDER` (`EVIDENCE_INTEGRITY_GAP, MISSING_VEHICLE,
+OPEN_EXCEPTION`) — integrity problem first, missing execution resource
+second, unresolved operational issue third. Multiple simultaneous reasons
+are always ALL preserved (test H, test P, test "completion assignment
+missing + open exception") — never collapsed to one highest-priority
+result, unlike Trip Assurance's own single-collapsed shape. Order is
+provably independent of fact-assignment order (test Q, constructs the
+same fact set two different ways and asserts identical output).
+
+===========================================================================
+EVIDENCE INTEGRITY RULE
+===========================================================================
+`EVIDENCE_INTEGRITY_GAP` fires (once, regardless of how many structural
+facts are simultaneously absent — test O) when ANY of: `completedAt` is
+null, `hasPassenger` is false, `hasPickupDescription` is false,
+`hasDestinationDescription` is false, `hasCompletionAssignment` is false,
+or `hasCompleteLifecycleEventChain` is false. This is a single boolean
+condition (`hasIntegrityGap`), never a per-defect counter — multiple
+defects still produce exactly one `EVIDENCE_INTEGRITY_GAP` entry in the
+reasons array (test O, directly asserts `reasons.length === 1` via
+`deepEqual` against a single-element array with 6 simultaneous defects
+supplied). `EVIDENCE_INTEGRITY_GAP` DOES still combine with
+`OPEN_EXCEPTION` when both independently apply (test P and the dedicated
+"completion assignment missing + open exception" test) — an unresolved
+exception remains a separately meaningful fact even when the completion
+record also has an unrelated structural problem.
+
+===========================================================================
+VEHICLE POLICY
+===========================================================================
+Locked per S1B §6/§20. `MISSING_VEHICLE` fires ONLY when
+`hasCompletionAssignment === true` AND `completionAssignmentVehicleId ===
+null` — i.e., only when the authoritative completion assignment record
+itself genuinely exists but carries no Vehicle. When
+`hasCompletionAssignment === false`, `MISSING_VEHICLE` is deliberately
+NEVER additionally emitted (test "completion assignment missing ->
+NEEDS_REVIEW [EVIDENCE_INTEGRITY_GAP], never also MISSING_VEHICLE", and
+re-confirmed alongside an open exception in a second dedicated test) —
+per the phase's own explicit reasoning, Vehicle absence cannot be
+independently interpreted when the authoritative performing-assignment
+record itself is missing; that case is already fully covered by
+`EVIDENCE_INTEGRITY_GAP` alone. The Driver identity source itself
+(`hasCompletionAssignment`, corresponding to the `trip_assignments` row
+closed with `end_reason = 'trip_completed'`) is documented in the fact
+contract's own field comment as the ONE authoritative source — never the
+current active assignment (none exists post-completion), never the most-
+recent-by-timestamp assignment, never `trip_events.actor_user_id` alone.
+No assignment RULE was modified — this module only surfaces the missing
+fact after completion, exactly as instructed.
+
+===========================================================================
+OPEN EXCEPTION POLICY
+===========================================================================
+`openExceptionCount > 0` emits `OPEN_EXCEPTION`, using the identical
+`trip_exceptions.status = 'open'` count definition `trip-assurance.ts` and
+`trip-readiness-core.ts` both already use — never re-derived. This does
+NOT duplicate Trip Assurance: Trip Assurance only evaluates non-terminal
+Trips (its own `TERMINAL` code short-circuits `completed`/`cancelled`/
+`no_show` before any other check), while this module only evaluates
+`completed` Trips — the two lifecycle-state windows are disjoint by
+construction, so the same underlying `trip_exceptions` fact is
+legitimately consumed by both without either duplicating the other's
+judgment.
+
+===========================================================================
+NO-SHOW POLICY
+===========================================================================
+Locked `NOT_APPLICABLE` (S1B §21) — no-show is not evaluated by this core
+at all, not merely "no reasons apply." No `NO_SHOW_READY`,
+`NO_SHOW_REVENUE`, or `NO_SHOW_CHARGEABLE` code exists anywhere in the
+vocabulary (verified: the closed `TripProofOfServiceReasonCode` type has
+exactly 3 members; a dedicated test also confirms no unsupported reason
+code is ever returned, across 12 varied fact combinations including
+`tripState: "no_show"`). A later S1C/S1D read-model/UI phase may surface
+no-shows separately as "No-show — billing policy review"; no billability
+decision is made or implied here.
+
+===========================================================================
+CANCELLATION POLICY
+===========================================================================
+Locked `NOT_APPLICABLE` (S1B §22) — cancelled Trips are never surfaced in
+the completed-service review queue and receive no billability judgment.
+Verified directly (dedicated cancellation test, facts constructed to
+trigger every other reason if evaluated).
+
+===========================================================================
+GPS EXCLUSION
+===========================================================================
+No location/GPS fact is consumed anywhere in `TripProofOfServiceFacts` —
+confirmed both by direct interface inspection and by the dedicated
+"fact contract requires no GPS, notes, or monetary field" unit test, which
+scans every fact-contract key for `location`/`gps`/`latitude`/`longitude`
+substrings and fails if any is found. GPS remains supporting evidence
+only, per the S1A audit's own finding (periodic, device-dependent, not
+guaranteed, subject to an unenforced retention policy) — never part of
+the MVP state machine.
+
+===========================================================================
+NOTES EXCLUSION
+===========================================================================
+No `TripNote` content, keyword matching, or AI analysis of any kind is
+performed — the module has no notion of a "note" fact at all (confirmed
+by the same forbidden-substring test). Notes remain a future presentation-
+layer, human-review-only concern, never a proof-derivation input.
+
+===========================================================================
+SIGNATURE / PHOTO EXCLUSION
+===========================================================================
+No `MISSING_SIGNATURE`, `MISSING_PHOTO`, or `MISSING_DOCUMENT` reason
+exists — the closed reason vocabulary has exactly 3 members, verified
+directly. These evidence types do not exist in the product schema today
+(confirmed in the S1A audit: no Supabase Storage bucket, no file-upload
+mechanism exists anywhere in this repository) and no payer requirement
+has established them as mandatory.
+
+===========================================================================
+MILEAGE EXCLUSION
+===========================================================================
+No mileage fact is consumed or derived anywhere in this module. Actual
+mileage is not captured in the schema (S1A finding); this module makes no
+attempt to derive it from GPS coordinates (which would be actively
+misleading, not merely approximate) and defines no `MISSING_MILEAGE`
+reason. Mileage remains scoped to future monetary/rate work.
+
+===========================================================================
+ROLE DECISION
+===========================================================================
+Documented for later slices, not enforced here (this is a pure core with
+no authorization logic of any kind):
+  Organization Admin: allowed
+  Dispatcher: allowed
+  Driver: no Proof-of-Service workspace
+No monetary amounts exist anywhere in this schema, so no new Billing role
+is introduced. Consistent with the S1A audit's own recommendation — this
+follows the SAME precedent every other operational read surface already
+uses (Trip Readiness, Trip Assurance, Operations Brief are all Dispatcher-
+visible today). When monetary figures eventually appear in a later phase,
+this role decision must be revisited (not resolved by this audit or this
+phase).
+
+===========================================================================
+CORRECTION-WORKFLOW DEFERRAL
+===========================================================================
+No correction mutation of any kind was created. The core only reports
+facts — a completed Trip missing its Vehicle, for example, legitimately
+surfaces as `NEEDS_REVIEW` with no accompanying "fix" action; this is
+accepted as correct MVP behavior, not an oversight to patch. A future
+authorized correction workflow (e.g., an Organization Admin correcting a
+missing Vehicle identity after the fact while preserving the original
+completion record) requires its own audited product design and is
+explicitly out of scope for this phase.
+
+===========================================================================
+PURE TEST RESULTS
+===========================================================================
+23/23 new focused tests pass (src/lib/operations/trip-proof-of-service-
+core.test.mjs), covering the full matrix A through V specified by this
+phase plus the "no unsupported reason code" defensive sweep:
+  A/B — scheduled, every in-progress state -> NOT_APPLICABLE
+  C — cancelled -> NOT_APPLICABLE
+  D — no_show -> NOT_APPLICABLE
+  E — complete evidence, Vehicle present, no exception -> READY_FOR_REVIEW
+  F — Vehicle missing -> NEEDS_REVIEW [MISSING_VEHICLE]
+  G — open exception -> NEEDS_REVIEW [OPEN_EXCEPTION] (+ multi-exception
+      count collapse)
+  H — Vehicle missing + open exception -> both reasons, correct order
+  I — completed_at missing -> EVIDENCE_INTEGRITY_GAP
+  J — completion assignment missing -> EVIDENCE_INTEGRITY_GAP, never
+      MISSING_VEHICLE
+  K — lifecycle chain incomplete -> EVIDENCE_INTEGRITY_GAP
+  L — Passenger missing -> EVIDENCE_INTEGRITY_GAP
+  M — pickup missing/blank -> EVIDENCE_INTEGRITY_GAP
+  N — destination missing/blank -> EVIDENCE_INTEGRITY_GAP
+  O — 6 simultaneous structural defects -> exactly one
+      EVIDENCE_INTEGRITY_GAP
+  P — structural defect + open exception -> both preserved (+ a second
+      variant specifically for the completion-assignment-missing case)
+  Q — stable deterministic ordering, independent of input fact order
+  R — READY_FOR_REVIEW always has empty reasons
+  S — NOT_APPLICABLE always has empty reasons
+  T/U/V — no GPS, notes, or monetary fact required (contract-key sweep)
+  Plus: no unsupported reason code ever appears, across 12 fact
+  combinations.
+
+Full application unit suite: 192/192 pass (169 pre-existing + 23 new;
+zero regressions in any pre-existing test).
+
+===========================================================================
+FILES CREATED
+===========================================================================
+  src/lib/operations/trip-proof-of-service-core.ts
+  src/lib/operations/trip-proof-of-service-core.test.mjs
+  docs/reports/p1-e3-s1b-proof-of-service-core.txt (this report)
+
+===========================================================================
+FILES MODIFIED
+===========================================================================
+NONE. No existing file was changed — `trip-readiness-core.ts` and
+`trip-assurance.ts` were read for convention reference only, never edited.
+
+===========================================================================
+SCHEMA IMPACT
+===========================================================================
+NONE. No migration, table, column, RPC, index, or database-type change was
+made or is required for this phase.
+
+===========================================================================
+RLS IMPACT
+===========================================================================
+NONE. No policy, grant, or role was touched or is required for this
+phase — the module performs no database access of any kind.
+
+===========================================================================
+OPEN ISSUES
+===========================================================================
+1. The Vehicle-identity policy question flagged in the S1A audit (should
+   a completed Trip with a known Driver but no Vehicle count as fully
+   READY, or only conditionally) is now RESOLVED for MVP by this phase's
+   own explicit lock: MISSING_VEHICLE always blocks READY_FOR_REVIEW.
+   Documented here for continuity, not reopened.
+2. No read model exists yet to supply real facts to this core — S1C owns
+   building the query layer (including the `end_reason = 'trip_completed'`
+   assignment lookup and the 6-event lifecycle-chain check) that will
+   populate `TripProofOfServiceFacts` from actual database state. Until
+   then, this core is exercised only by synthetic unit-test facts.
+3. Role visibility (ROLE DECISION above) is documented, not enforced —
+   S1D's Operations Review Surface phase must apply the actual
+   `has_org_role(organization_admin, dispatcher)` gate; nothing in this
+   phase enforces it.
+
+===========================================================================
+FINAL STATUS
+===========================================================================
+PROOF-OF-SERVICE CORE:
+PASS
+
+READY CASE:
+PASS
+
+VEHICLE GAP:
+PASS
+
+OPEN EXCEPTION:
+PASS
+
+MULTI-REASON:
+PASS
+
+EVIDENCE INTEGRITY:
+PASS
+
+NO-SHOW:
+NOT_APPLICABLE
+
+CANCELLATION:
+NOT_APPLICABLE
+
+GPS REQUIRED:
+NO
+
+MONETARY DATA REQUIRED:
+NO
+
+NEW SCHEMA:
+NO
+
+NEW RLS:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+192/192
+
+READY FOR S1C:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E3-S1C — Proof-of-Service Evidence Read Model
+
+TESTING:
+PURE UNIT ONLY — NO SQL REGRESSION
+
+Do NOT begin S1C. Do NOT commit. Do NOT push. Do NOT deploy.
+
+STOP.

@@ -27,6 +27,8 @@
 import type { StatusCategory } from "@/components/ui/StatusBadge";
 import type { TripReadinessReasonCode } from "./trip-readiness-core";
 import type { RequestReadiness } from "./request-readiness-core";
+import type { TripProofOfServiceState, TripProofOfServiceReasonCode } from "./trip-proof-of-service-core";
+import type { ProofOfServiceReviewWindow } from "./trip-proof-of-service";
 
 /**
  * The exact label strings TRIP_STATUS_MAP (src/components/ui/TripStatus.tsx)
@@ -402,4 +404,76 @@ export function formatWallClockTime(time: string): string {
   const instant = new Date(`1970-01-01T${time}Z`);
   if (Number.isNaN(instant.getTime())) return time;
   return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(instant);
+}
+
+/**
+ * Proof-of-Service Assurance (P1-E3-S1D) presentation helpers — same
+ * "state → screen label, one place to look" discipline, extended to
+ * `TripProofOfServiceState`/`TripProofOfServiceReasonCode`
+ * (trip-proof-of-service-core.ts, P1-E3-S1B) and
+ * `ProofOfServiceReviewWindow` (trip-proof-of-service.ts, P1-E3-S1C).
+ * Every mapping below is a `Record<..., ...>` keyed on the exact closed
+ * union each type already locks — TypeScript itself refuses to compile
+ * if a new state/reason/window is ever added to one of those unions
+ * without a corresponding entry here, so an unrecognized value can never
+ * silently render as a raw internal string (S1D §38's own explicit
+ * requirement). `READY_FOR_REVIEW` deliberately never borrows
+ * `StatusBadge`'s existing `"completed"` category (the checkmark
+ * treatment already means "this Trip's OWN lifecycle reached
+ * completed") — Proof-of-Service is a distinct, second judgment about
+ * that same completed Trip, so it gets its own quiet `"positive"`
+ * category instead of visually overloading the pre-existing meaning.
+ */
+export function proofOfServiceStateLabel(state: TripProofOfServiceState): string {
+  return PROOF_OF_SERVICE_STATE_LABEL[state];
+}
+
+const PROOF_OF_SERVICE_STATE_LABEL: Record<TripProofOfServiceState, string> = {
+  READY_FOR_REVIEW: "Ready for review",
+  NEEDS_REVIEW: "Needs review",
+  // Never reached in practice — the S1C read model only ever returns
+  // completed Trips, so `deriveTripProofOfService` never yields this
+  // state for anything the UI displays. Present anyway so this Record
+  // stays exhaustive against the full `TripProofOfServiceState` union.
+  NOT_APPLICABLE: "Not applicable",
+};
+
+export function proofOfServiceStateCategory(state: TripProofOfServiceState): StatusCategory {
+  return PROOF_OF_SERVICE_STATE_CATEGORY[state];
+}
+
+const PROOF_OF_SERVICE_STATE_CATEGORY: Record<TripProofOfServiceState, StatusCategory> = {
+  READY_FOR_REVIEW: "positive",
+  NEEDS_REVIEW: "warning",
+  NOT_APPLICABLE: "neutral",
+};
+
+/**
+ * Concise operator language for the closed 3-value reason vocabulary
+ * (S1D §9) — never the raw internal code, never a sentence describing
+ * the underlying implementation. `EVIDENCE_INTEGRITY_GAP` deliberately
+ * says only "Service evidence incomplete" here — whether the underlying
+ * cause was a missing assignment row, a duplicated event, an out-of-order
+ * timestamp, or a missing `completed_at` is an internal integrity detail
+ * this list surface never exposes (S1D §11); a future diagnostic/admin
+ * workflow may say more.
+ */
+const PROOF_OF_SERVICE_REASON_LABEL: Record<TripProofOfServiceReasonCode, string> = {
+  MISSING_VEHICLE: "Vehicle not recorded",
+  OPEN_EXCEPTION: "Open issue",
+  EVIDENCE_INTEGRITY_GAP: "Service evidence incomplete",
+};
+
+export function proofOfServiceReasonLabel(code: TripProofOfServiceReasonCode): string {
+  return PROOF_OF_SERVICE_REASON_LABEL[code];
+}
+
+const PROOF_OF_SERVICE_WINDOW_LABEL: Record<ProofOfServiceReviewWindow, string> = {
+  TODAY: "Today",
+  YESTERDAY: "Yesterday",
+  LAST_7_DAYS: "Last 7 days",
+};
+
+export function proofOfServiceWindowLabel(window: ProofOfServiceReviewWindow): string {
+  return PROOF_OF_SERVICE_WINDOW_LABEL[window];
 }

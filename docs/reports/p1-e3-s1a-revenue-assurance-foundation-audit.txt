@@ -1,0 +1,1068 @@
+P1-E3-S1A — REVENUE ASSURANCE
+Product / Data Foundation Audit
+===========================================================================
+AUDIT ONLY. No implementation, migration, UI, RPC, deployment, commit, or
+push occurred in this phase. No full SQL regression, concurrency test, or
+browser E2E was run — this is a static source/schema/documentation
+inspection only, per this phase's own explicit regression rule.
+
+Core question this audit answers: "After transportation is performed, does
+Nemryn contain enough operational evidence for the operator to confidently
+move that Trip toward billing, and what completed work still needs
+attention?" — and, more fundamentally, what Nemryn can currently and
+truthfully KNOW, as opposed to what "Revenue Assurance" as a feature name
+might tempt the product to claim.
+
+===========================================================================
+CURRENT EXECUTION MODEL
+===========================================================================
+Trip is the sole unit of transportation execution (`trips` table,
+`supabase/migrations/20260830131000_trips.sql`). Exactly 9 canonical
+states, no "draft":
+  scheduled -> en_route_to_pickup -> arrived_at_pickup -> passenger_onboard
+    -> en_route_to_destination -> arrived_at_destination -> completed
+  (from any non-terminal, non-cancelled state) -> cancelled
+  (from en_route_to_pickup or arrived_at_pickup only) -> no_show
+
+The full legal-edge set lives in exactly one place,
+`_is_valid_trip_transition` (`20260831100200_controlled_trip_mutations.sql`)
+— never duplicated ad hoc. Trip itself carries no `current_driver_id`/
+`current_vehicle_id` (deliberate, ZD-051/ZD-068) — `trip_assignments` is
+the sole assignment source of truth, append-oriented (a reassignment closes
+the active row and inserts a new one; historical driver/vehicle values are
+never rewritten in place).
+
+CRITICAL STRUCTURAL FACT: **the only path to `state='completed'` is
+`driver_complete_trip`**, a Driver-only RPC, and it is only reachable from
+`arrived_at_destination`. There is no operations-side "mark completed"
+override, no bulk-completion path, no direct UPDATE grant on
+`trips.state` to any client role. Because every one of the 6 forward
+transitions (`en_route_to_pickup` through `completed`) is its own single-
+edge RPC, and none of them permits skipping a step, **any Trip that
+reaches `completed` is structurally guaranteed to have passed through
+every intermediate state in order** — this is a proof-relevant fact
+established by the state machine's own construction, not merely typical
+operator behavior.
+
+===========================================================================
+COMPLETION SEMANTICS
+===========================================================================
+`Trip.state = 'completed'` ALONE is not, by itself, sufficient proof that
+service occurred with full context — it is a necessary but not complete
+signal. What `driver_complete_trip` actually guarantees atomically, in one
+transaction (`_driver_execute_trip_transition`):
+  - `trips.state` set to `'completed'`, `trips.completed_at = now()`
+    (write-once terminal timestamp column).
+  - The active `trip_assignments` row is closed
+    (`ended_at = now(), end_reason = 'trip_completed'`) — the Trip has NO
+    active assignment once completed.
+  - A `trip_events` row is inserted (`event_type = 'trip_completed'`,
+    `actor_user_id = auth.uid()`, `occurred_at = now()`) — but this is only
+    the LAST of a mandatory chain; every earlier transition
+    (`en_route_to_pickup`, `arrived_at_pickup`, `passenger_onboard`,
+    `en_route_to_destination`, `arrived_at_destination`) has already
+    written its own `trip_events` row, each with its own real
+    `occurred_at` and `actor_user_id`.
+  - No `audit_events` row for the routine 6 driver progression steps
+    (`trip_events` only — "routine operational progress", per this
+    migration's own ZD-087 event/audit matrix) — but completion, as a
+    terminal disposition, DOES also matter for cancellation/no-show
+    (see those sections below, which DO write `audit_events`).
+
+Correction to a naive reading: completion itself does not insert an
+`audit_events` row (only cancellation, no-show, assignment, and
+reassignment do, per the migration's own documented matrix — completion is
+one of "the 6 transitions", all of which are `trip_events`-only). This
+means the single most financially consequential state transition in the
+system currently has NO `audit_events` row of its own — only the
+`trip_events` row. This is not a security gap (trip_events is itself
+append-only, RLS-protected, and non-fabricable — see IMMUTABILITY /
+CORRECTION MODEL below) but is worth naming explicitly: an eventual
+Revenue Assurance read model must treat `trip_events` (not
+`audit_events`) as the source for "when/who completed this Trip."
+
+So: `Trip.state='completed'` truthfully means "a Driver, while holding the
+active assignment, executed all 6 forward transitions in the state
+machine's exact enforced order." It does NOT by itself prove GPS
+corroboration, a signature, a photo, or that anyone reviewed it — none of
+those exist in this schema (see PROOF-OF-SERVICE INVENTORY).
+
+===========================================================================
+PROOF-OF-SERVICE INVENTORY
+===========================================================================
+Evidence Nemryn currently, structurally captures for a completed Trip,
+classified per the phase's own required taxonomy:
+
+CAPTURED RELIABLY:
+  - Trip identity, Passenger identity (`trips.passenger_id`, NOT NULL).
+  - Pickup/destination text (`trips.pickup_description`,
+    `trips.destination_description`) — immutable address SNAPSHOTS, never
+    rederived from a mutable Passenger/Facility record
+    (domain-model.md's own "hybrid strategy", confirmed in the trips.sql
+    migration's own header comment).
+  - Full ordered chain of actual lifecycle-transition timestamps
+    (`trip_events.occurred_at` for each of the 6 forward event types) —
+    see ACTUAL TIMESTAMP ANALYSIS below.
+  - `actor_user_id` on every `trip_events` row — the authenticated user
+    (Driver) who performed each transition.
+  - The performing Driver/Vehicle identity for a completed Trip, via the
+    `trip_assignments` row with `end_reason = 'trip_completed'` — see
+    HISTORICAL ASSIGNMENT ANALYSIS below (a genuinely reliable answer, not
+    a gap, once you know to query by `end_reason` rather than "current
+    assignment").
+  - Cancellation: `cancelled_at`, `cancellation_reason` (NOT NULL,
+    1-500 chars enforced at the RPC layer), plus `trip_events` +
+    `audit_events` rows recording who/when/why.
+  - No-show: `no_show_at` (write-once column on `trips`); reason is NOT a
+    `trips` column — it lives only in `trip_events.metadata` and
+    `audit_events.reason` (see AUTHORITATIVE EVIDENCE SOURCES).
+  - Request provenance, when the Trip originated from a Request:
+    `trips.request_id` (nullable FK) plus a `request_converted_to_trip`
+    `trip_events` row.
+  - Recurring Care provenance, when applicable:
+    `trips.recurring_arrangement_id` (nullable, established in the
+    Recurring Care epic).
+
+CAPTURED PARTIALLY:
+  - Driver location during execution (`driver_location_updates`) — real,
+    server-timestamped, assignment-scoped samples exist for the 5 eligible
+    in-progress states, but sampling is periodic/client-driven (interval
+    depends on the Driver's device sending `driver_record_location` calls,
+    not a guaranteed continuous track), `accuracy_meters` is optional and
+    can be null, and a 30-day retention policy is DOCUMENTED but not yet
+    enforced by any automated job — see DRIVER LOCATION below.
+  - `trip_notes` — real, timestamped, author-attributed, but free text,
+    never structured, and explicitly not intended to be parsed as proof
+    (see NOTES below).
+
+INFERABLE BUT NOT AUTHORITATIVE:
+  - "Trip duration" — technically derivable as
+    `trip_completed.occurred_at - trip_scheduled/en_route_to_pickup
+    .occurred_at`, but no column stores this; it is a derived read-model
+    calculation, not a stored fact, and has never been validated for
+    billing purposes.
+  - Straight-line distance from any two location samples — explicitly NOT
+    actual road mileage (see MILEAGE below); this audit does not treat it
+    as usable evidence at all, not even "partial."
+
+NOT CAPTURED:
+  - Actual mileage (odometer or otherwise) — no column exists on `trips`,
+    `vehicles`, or anywhere else.
+  - Signature (Passenger, Driver, or facility) — no schema, no storage
+    bucket, no file-upload infrastructure of any kind exists in this
+    repository (`grep` for `storage.`/`bucket`/`upload` across all
+    migrations and application source returns nothing relevant).
+  - Photo/document proof — same as above; no Supabase Storage bucket is
+    provisioned anywhere in the migration set.
+  - Any financial/monetary fact whatsoever — rate, fare, price, charge,
+    payer, invoice reference, billing status, currency. See CURRENT
+    FINANCIAL MODEL.
+  - Wait time as a discrete, billable fact — `arrived_at_pickup` and
+    `passenger_onboard` timestamps exist and their delta IS wait time, but
+    it is not stored, named, or exposed as such anywhere today.
+
+NOT APPROPRIATE FOR BILLING READINESS (recommend never introducing for
+this purpose):
+  - `trip_notes` free text — must never be parsed/keyword-matched to infer
+    proof status (see NOTES).
+  - `assistance_notes`, `instructions` — operational context, not
+    execution evidence.
+  - Passenger `assistance_notes` — see PASSENGER PRIVACY; this is
+    medically-adjacent free text that has no bearing on whether service
+    was rendered and should never enter a billing-readiness computation.
+
+===========================================================================
+AUTHORITATIVE EVIDENCE SOURCES
+===========================================================================
+For every proof-relevant fact, exactly one authoritative source — no fact
+should ever be re-derived from two competing places:
+
+| Fact | Authoritative source |
+|---|---|
+| Current/terminal Trip state | `trips.state` |
+| Actual timestamp of each lifecycle transition | `trip_events.occurred_at` WHERE `event_type` = that transition (never `trips.updated_at`, which is a generic trigger-set mutation timestamp with no transition-specific meaning) |
+| Completion timestamp specifically | `trips.completed_at` (write-once) — corroborated by, but not derived from, the `trip_completed` `trip_events` row |
+| Cancellation timestamp/reason | `trips.cancelled_at` / `trips.cancellation_reason` |
+| No-show timestamp | `trips.no_show_at` (write-once column) |
+| No-show REASON | `trip_events.metadata->>'reason'` or `audit_events.reason` for the `no_show_recorded` row — **not** a `trips` column; there is no `trips.no_show_reason` |
+| Performing Driver/Vehicle for a completed Trip | The `trip_assignments` row with `end_reason = 'trip_completed'` — never "current active assignment" (there is none, post-completion) |
+| Assignment history in general | `trip_assignments`, append-oriented, `ended_at`/`end_reason` closing each row |
+| Who cancelled / recorded no-show / assigned / reassigned | `trip_events.actor_user_id` AND `audit_events.actor_user_id` (both written in the same transaction for these 4 actions — redundant by design, not competing) |
+| Open/unresolved execution issues | `trip_exceptions.status = 'open'` |
+| Pickup/destination text at time of execution | `trips.pickup_description` / `trips.destination_description` (immutable snapshot, never re-joined from the live Passenger/Facility row) |
+| Request provenance | `trips.request_id` (nullable) + the `request_converted_to_trip` `trip_events` row |
+| Recurring Care provenance | `trips.recurring_arrangement_id` (nullable, context only) |
+
+===========================================================================
+HISTORICAL ASSIGNMENT ANALYSIS
+===========================================================================
+This is a genuinely POSITIVE finding, not a gap. `assign_trip` /
+`reassign_trip` are only legal while the Trip is in `scheduled`,
+`en_route_to_pickup`, or `arrived_at_pickup` (ZD-088) — once
+`passenger_onboard` is reached, reassignment is no longer a legal RPC call
+(`illegal_transition`, ZW004). This means: for any Trip that reaches
+`completed`, the driver/vehicle pair active at `passenger_onboard` is
+GUARANTEED to be the same pair active for the entire rest of execution
+through to `completed` (no reassignment window remains open).
+
+`driver_complete_trip` closes the active assignment with
+`end_reason = 'trip_completed'` in the SAME transaction that sets
+`trips.state = 'completed'`. Because `end_reason = 'trip_completed'` is
+set ONLY by this one code path, querying
+`trip_assignments WHERE trip_id = <id> AND end_reason = 'trip_completed'`
+deterministically and uniquely identifies the performing Driver and
+Vehicle for any completed Trip — reliably, without relying on "current
+active assignment" (which is null after completion) or on assuming the
+Trip's most recent assignment row is the right one (in a Trip that was
+reassigned once or more before `passenger_onboard`, several
+`trip_assignments` rows exist; only the one closed with
+`end_reason = 'trip_completed'` is authoritative).
+
+CONCLUSION: the Historical Assignment Problem the phase spec asked this
+audit to investigate is **solvable with existing schema** — classify as
+CAPTURED RELIABLY, not a gap, provided any future Revenue Assurance read
+model queries by `end_reason = 'trip_completed'` and not by "most recent"
+or "currently active."
+
+===========================================================================
+ACTUAL TIMESTAMP ANALYSIS
+===========================================================================
+Nemryn CAN truthfully identify actual (not scheduled) timestamps for:
+  - actual dispatch (`en_route_to_pickup` trip_events.occurred_at)
+  - actual arrival at pickup (`arrived_at_pickup`)
+  - actual passenger onboard (`passenger_onboard`)
+  - actual departure toward destination (`en_route_to_destination`)
+  - actual arrival at destination (`arrived_at_destination`)
+  - actual completion (`trip_completed` / `trips.completed_at`)
+
+Every one of these is written by a SECURITY DEFINER RPC using the
+server's own `now()` — never a client-supplied timestamp parameter,
+confirmed directly in `_driver_execute_trip_transition`. `trips.updated_at`
+is explicitly NOT an acceptable substitute for any of these — it is a
+generic `set_updated_at()` trigger timestamp with no transition-specific
+meaning and is set on ANY column update, not specifically a lifecycle
+transition.
+
+`trips.scheduled_pickup_at` and `trips.appointment_at` are, by contrast,
+PLANNED facts, not actual ones — they must never be presented or
+interpreted as "when service occurred." This distinction must be
+preserved explicitly in any Proof-of-Service or Billing-Readiness model:
+scheduled vs. actual are different fields with different authority, never
+merged.
+
+===========================================================================
+PROOF-OF-SERVICE DEFINITION
+===========================================================================
+Recommended definition, grounded in what actually exists: **Proof of
+Service = the set of structural, immutable, server-timestamped execution
+facts Nemryn holds proving a specific transportation movement was carried
+out by a specific Driver, in a specific Vehicle, for a specific Passenger,
+between two specific locations, at specific actual times.**
+
+Minimum facts to call Proof of Service COMPLETE for a given Trip (proposed,
+not locked — see MVP PRODUCT BOUNDARY for the recommendation to treat this
+as S1B's own design task):
+  - Trip reached `state = 'completed'`.
+  - Passenger identified (always true — NOT NULL by schema).
+  - Performing Driver identified (via `end_reason = 'trip_completed'`
+    assignment row — always true, since completion cannot occur without
+    an active assignment to close).
+  - Performing Vehicle identified — **NOT always true**: `assign_trip`
+    permits `p_vehicle_id = null` (Vehicle is optional at assignment
+    time). A completed Trip can therefore have a known Driver but an
+    unknown Vehicle. This is a real, current gap a Proof-of-Service
+    evaluator must surface, not silently treat as complete.
+  - Pickup location present (always true — NOT NULL).
+  - Destination present (always true — NOT NULL).
+  - At least the `arrived_at_pickup` and `arrived_at_destination`
+    (or the full 6-event chain) events exist with real timestamps —
+    always true for any Trip that reached `completed`, by construction.
+  - No unresolved (`open`) `trip_exceptions` row exists for the Trip.
+
+On the open-exception question specifically (phase §9's explicit ask):
+recommend BLOCK, not merely flag, for Proof-of-Service completeness. An
+unresolved exception is, by this codebase's own definition
+(`trip_exceptions` comment: "something needing attention that coexists
+with, but is not, Trip.state"), an unresolved OPERATIONAL fact about that
+specific Trip's execution — treating a Trip with a genuinely open issue as
+"proof complete" would be dishonest. This does not duplicate Trip
+Assurance (which only evaluates NON-terminal Trips — see PROOF VS
+BILLING BOUNDARY / OPERATIONS BRIEF RELATIONSHIP) — Revenue Assurance
+would be the ONLY place that looks at exception status AFTER a Trip has
+already completed.
+
+===========================================================================
+BILLING READINESS DEFINITION
+===========================================================================
+Billing Readiness is deliberately NOT a synonym for Proof of Service.
+Recommended definition: **Billing Readiness = Proof of Service is
+complete, AND the operational (non-monetary) fields an internal billing
+review process needs are present.**
+
+Given CURRENT FINANCIAL MODEL below (no rate/payer/mileage/invoice fields
+exist anywhere), Nemryn cannot yet compute Billing Readiness beyond Proof
+of Service — there is no additional operational-but-non-monetary field to
+check beyond what Proof of Service already requires (Vehicle presence is
+arguably a Billing Readiness concern rather than a Proof-of-Service one,
+since some operators may not require Vehicle identity to review a
+completed Trip for billing purposes — this is a genuine open product
+decision, not resolved by this audit).
+
+===========================================================================
+PROOF VS BILLING BOUNDARY
+===========================================================================
+Layered model, none collapsed:
+
+  Trip (execution record, all 9 states)
+    -> Proof of Service (execution evidence exists: who/what/where/when,
+       actual not scheduled)
+    -> Billing Readiness (Proof of Service + whatever non-monetary
+       operational fields internal billing review needs — currently
+       equal to Proof of Service, since no additional field is
+       identified; Vehicle-identity is the one open question)
+    -> Invoice / Claim (future financial workflow — NOT modeled at all
+       today)
+    -> Payment / Revenue (future accounting outcome — NOT modeled at all
+       today)
+
+Nemryn today can support the first two layers truthfully. It cannot
+truthfully support the last two — see CURRENT FINANCIAL MODEL.
+
+===========================================================================
+CURRENT FINANCIAL MODEL
+===========================================================================
+Exhaustive repository search (migrations + application source) for `fare`,
+`rate`, `charge`, `price`, `cost` (as a monetary concept), `invoice`,
+`payer`, `payment`, `billing status`, `claim`, `currency`: **zero
+authoritative monetary fields exist attached to any Trip, Request, Vehicle,
+Organization, Facility, or Passenger row.** The only "cost" hits in the
+repository are unrelated (developer-facing engineering-tradeoff prose,
+e.g. "at the cost of one explicit CSS rule").
+
+`docs/product/decision-register.md` confirms this is not an oversight but
+an explicit, still-open product decision: ZD-021 (Pricing model), ZD-022
+(Medicaid participation), ZD-023 (Broker participation), and ZD-024
+(Billing workflow) are ALL recorded with `Status: UNKNOWN`, `Reason:
+Reason pending product validation`. `src/app/operations/billing/page.tsx`
+is a literal, honestly-labeled placeholder ("Structural placeholder —
+billing records are built in a later phase"), unlinked from navigation
+(ZD-188) — the product has already explicitly declined to pretend billing
+exists in the UI.
+
+CONCLUSION (verbatim, per this phase's own required framing): **Nemryn can
+build Proof-of-Service / Billing-Readiness assurance before it can build
+actual Revenue Amount assurance.** No monetary value should be invented,
+estimated, or implied anywhere in this product until ZD-021/ZD-024 are
+resolved by an actual product/pricing decision.
+
+===========================================================================
+CANCELLATION
+===========================================================================
+`cancel_trip`: Organization Admin / Dispatcher only, any non-terminal
+state, reason REQUIRED (1-500 chars, enforced), idempotent if already
+cancelled, `ZW004` if already `completed`/`no_show`. Records
+`cancelled_at`, `cancellation_reason` on `trips`, closes any active
+assignment (`end_reason = 'trip_cancelled'`), writes both `trip_events`
+and `audit_events`.
+
+Per this phase's own explicit instruction, cancellation is NOT classified
+here as billable, non-billable, or lost revenue — that is a
+contract-specific, operator-specific policy question this audit cannot
+answer from current data. RECOMMENDATION for MVP: treat cancelled Trips as
+entirely SEPARATE from completed-service Billing Readiness — `NOT_
+APPLICABLE`, never `NEEDS_REVIEW`, never counted toward "completed trips
+needing billing review." A later phase may introduce an operator-specific
+cancellation-billing policy; nothing in the current schema prevents that
+from being layered in additively later.
+
+===========================================================================
+NO-SHOW
+===========================================================================
+`record_no_show`: Organization Admin / Dispatcher only, legal ONLY from
+`en_route_to_pickup` or `arrived_at_pickup` (i.e., dispatch had already
+begun or the Driver had physically arrived) — not legal from `scheduled`
+(never dispatched) or from `passenger_onboard` onward (passenger was
+already aboard; that is no longer a no-show by definition). Reason
+REQUIRED (same 1-500-char rule as cancellation). `trips.no_show_at` is a
+write-once column; the reason itself is NOT a `trips` column (lives only
+in `trip_events.metadata` / `audit_events.reason`).
+
+Per this phase's explicit instruction, a no-show is NOT classified here as
+billable. RECOMMENDATION for MVP: surface no-show Trips separately, as
+"No-show — review billing policy" rather than silently excluding them —
+unlike cancellation (which represents no service attempt reaching the
+Passenger), a no-show DOES represent real dispatched/arrived operational
+cost (Driver time, Vehicle mileage) that many NEMT operators' actual
+billing/payer agreements do treat as chargeable under specific
+circumstances. Because that policy is operator- and payer-specific and
+entirely undetermined in this product (ZD-021/ZD-024), Revenue Assurance
+MVP should show it as a distinct, separately-labeled category rather than
+folding it into either "ready for billing" or "excluded entirely."
+
+===========================================================================
+MULTI-TRIP / RETURN
+===========================================================================
+One `transportation_requests` row can already produce multiple `trips`
+rows (`trips.request_id` nullable, 1:N by design, ZD-045).
+`transportation_requests.return_trip_needed` (`'yes' | 'no' | 'not_sure'`)
+exists as REQUESTER INTENT only — there is no `trips.leg` column and none
+has ever been added (confirmed directly in `trips.sql`; reconfirmed by
+Trip Readiness's own explicit exclusion, `trip-readiness-core.ts`: "no
+`trip.leg` exists and none is added here; without a confirmed
+discriminator, which linked Trip is 'the return' cannot be truthfully
+determined"). Recurring Care can also generate many Trips from one
+arrangement, on the same "no special financial grouping" basis.
+
+CONCLUSION: Revenue Assurance MUST evaluate readiness at the individual
+Trip level, exactly as the phase spec requires. It must never infer "two
+Trips under one Request = one billable round trip" — that mapping is
+currently undeterminable and inventing it would misrepresent Nemryn's
+actual knowledge.
+
+===========================================================================
+RECURRING CARE RELATIONSHIP
+===========================================================================
+Once a Recurring Care occurrence produces a real `trips` row (via
+`create_trip_for_recurring_occurrence`, which internally calls the same
+`create_trip` every other Trip creation path uses), that row IS a Trip —
+identical schema, identical lifecycle, identical RPCs govern it. No
+"Recurring Revenue Assurance" should be built. `trips.
+recurring_arrangement_id` is provenance/context only (nullable, never
+required, never a discriminator for readiness logic) — consistent with
+how `request_id` provenance already works today.
+
+===========================================================================
+FACILITY RELATIONSHIP
+===========================================================================
+`facilities` is a directory table only: name + address + status. No
+contract, rate, or billing-terms field exists. No authenticated
+Facility-user login exists anywhere in this system (confirmed in the
+migration's own comment: "no authenticated facility users exist yet").
+`trips.pickup_facility_id` / `trips.destination_facility_id` are OPTIONAL,
+soft references (`on delete set null`) for reporting/context linkage only
+— not a required relationship.
+
+CONCLUSION: Facility today can only be CONTEXT. It cannot currently be
+modeled as a billing party — there is no mechanism by which a Facility
+"owns" or is responsible for a charge, and inventing one would require new
+schema, new authentication, and a genuine product/payer-strategy decision
+(ZD-022/ZD-023, both UNKNOWN) well outside this audit's scope. Facility
+Coordination, as the phase spec itself notes, remains a distinct, later
+product engine.
+
+===========================================================================
+DRIVER LOCATION
+===========================================================================
+`driver_location_updates`: real, append-only, server-timestamped
+(`recorded_at`, never client-supplied), assignment-scoped (tied to the
+specific `trip_assignments.id` in force at write time — a stale former
+Driver's pre-reassignment samples are never confusable with the current
+assignment's own history). Written only during the 5 eligible in-progress
+states; nothing is recorded once a Trip reaches a terminal state.
+
+Real limitations that must not be papered over: sampling depends entirely
+on the Driver's own client sending periodic calls (no guaranteed interval,
+no guaranteed minimum sample count per Trip); `accuracy_meters` is
+optional and can be null; a documented 30-day retention policy exists but
+NO automated cleanup job has been built yet (this repository has no
+`pg_cron`/scheduled-function infrastructure at all) — meaning in PRACTICE
+data currently persists past the intended window, but the intended
+long-term behavior is deletion at 30 days, which a Proof-of-Service model
+must not assume permanence against. Location samples are also never tied
+to a SPECIFIC lifecycle transition (no "this exact sample proves arrival
+at pickup") — they are periodic snapshots during a window, not
+event-linked corroboration.
+
+RECOMMENDATION: GPS should be SUPPORTING evidence only, never REQUIRED
+evidence for Proof-of-Service or Billing-Readiness completeness. Requiring
+it would make completeness depend on device connectivity/permission
+factors entirely outside the Driver's operational control, and would
+silently exclude legitimate completed service whenever a sample gap
+occurred.
+
+===========================================================================
+NOTES
+===========================================================================
+`trip_notes`: free text, `operations_only` or `driver_visible` (exactly 2
+values, DB-constrained), author-attributed, timestamped. Notes should
+support human REVIEW only — never be parsed, keyword-matched, or
+AI-classified to determine readiness or proof status. This audit
+recommends explicitly excluding `trip_notes` content from any Proof-of-
+Service or Billing-Readiness DERIVATION logic (structured facts only);
+notes may still be SHOWN alongside a Trip under review, as context for a
+human, exactly as Trip Detail already does today.
+
+===========================================================================
+EXCEPTIONS
+===========================================================================
+`trip_exceptions`: exactly 2 states (`open`/`resolved`, no "dismissed"),
+free-text `exception_type` (taxonomy deliberately unfinalized). Trip
+Assurance already owns "does this Trip need attention RIGHT NOW, during
+execution" (`evaluateTripAssurance`, which is NOT_APPLICABLE-equivalent
+for any terminal state — it only evaluates non-terminal Trips in
+practice). Revenue Assurance's boundary is the COMPLEMENT: it should only
+ever look at exception status for Trips that have ALREADY completed —
+"was there an unresolved issue on a Trip we're now trying to bill for,"
+never re-deriving or duplicating Trip Assurance's own live-execution
+judgment. A completed Trip with an unresolved exception should surface as
+NEEDS_REVIEW in a Revenue Assurance model (see PROOF-OF-SERVICE
+DEFINITION's recommendation to BLOCK completeness on an open exception,
+not merely flag it) — the two systems never evaluate the same Trip state
+window, so there is no duplication risk if this boundary is respected.
+
+===========================================================================
+READINESS VOCABULARY
+===========================================================================
+Recommend modeling directly on the two existing, proven precedents in this
+codebase — `deriveTripReadiness` (`trip-readiness-core.ts`,
+multi-reason, `READY | NEEDS_PREPARATION | NOT_APPLICABLE`) and
+`evaluateTripAssurance` (`trip-assurance.ts`, single-collapsed-priority).
+Revenue Assurance's own question ("list everything not yet in place")
+matches Trip Readiness's SHAPE, not Trip Assurance's — multiple
+independent gaps must be preserved simultaneously (phase §22 explicitly
+requires this), so the MULTI-REASON shape is the right one to reuse.
+
+Proposed vocabulary (NOT locked — this audit recommends S1B/S1C design the
+exact set against real query shapes, per MVP PRODUCT BOUNDARY):
+  READY_FOR_REVIEW | NEEDS_DOCUMENTATION | NOT_APPLICABLE
+
+Reasoning: "READY_FOR_REVIEW" (not "CLAIM_READY", not "REVENUE_SECURED",
+not "PAYMENT_READY") is the only state name that matches what Nemryn can
+actually prove — that Proof-of-Service/Billing-Readiness facts are
+present, NOT that a claim will be accepted or a payment will be received.
+"NEEDS_DOCUMENTATION" avoids implying money is at risk (see REVENUE-AT-
+RISK FEASIBILITY). "NOT_APPLICABLE" mirrors the existing precedent exactly
+for any Trip outside the completed-service window (scheduled, every
+in-progress state, cancelled, no_show under the MVP cancellation
+recommendation above).
+
+===========================================================================
+MULTI-REASON MODEL
+===========================================================================
+YES — multiple independent gaps must be preserved simultaneously, matching
+`deriveTripReadiness`'s own established pattern (a Trip can genuinely be
+missing a Vehicle identity AND have an open exception at once; both must
+be reported, never collapsed to one). No numeric score, ever — matches
+this codebase's own repeatedly-stated MVP principle
+(`trip-readiness-core.ts`: "never a score, never a percentage, never
+AI-classified"). Candidate reason codes to evaluate in a design phase
+(examples only, per the phase spec's own explicit instruction — none of
+these are locked):
+  MISSING_VEHICLE, OPEN_EXCEPTION, ... — deliberately not expanded further
+  here; MISSING_DRIVER/MISSING_PICKUP_EVENT/MISSING_DESTINATION_EVENT/
+  MISSING_COMPLETION_EVENT are not realistic reasons given the audit's own
+  finding that these facts are ALWAYS present for any Trip that reached
+  `completed` (the state machine guarantees the full event chain) — a
+  future design should not implement reason codes for conditions that are
+  structurally impossible given the current schema, since a reason that
+  can never fire is dead code, not a real safeguard.
+
+===========================================================================
+LIFECYCLE APPLICABILITY
+===========================================================================
+| State | Revenue Assurance applicability |
+|---|---|
+| scheduled | NOT_APPLICABLE |
+| en_route_to_pickup | NOT_APPLICABLE |
+| arrived_at_pickup | NOT_APPLICABLE |
+| passenger_onboard | NOT_APPLICABLE |
+| en_route_to_destination | NOT_APPLICABLE |
+| arrived_at_destination | NOT_APPLICABLE |
+| completed | APPLICABLE — the only state Proof-of-Service/Billing-
+| | Readiness evaluation ever runs against |
+| cancelled | NOT_APPLICABLE for MVP (see CANCELLATION — deliberately
+| | excluded from completed-service billing readiness, not forced into
+| | it) |
+| no_show | Distinct, separately-labeled ("No-show — review billing
+| | policy") — neither fully NOT_APPLICABLE nor folded into completed-
+| | service readiness (see NO-SHOW) |
+
+===========================================================================
+REVENUE-AT-RISK FEASIBILITY
+===========================================================================
+**NOT YET SUPPORTABLE**, and this audit recommends explicitly deferring
+the term. Missing documentation is not the same claim as lost money — with
+zero rate/payer/amount data anywhere in the schema (CURRENT FINANCIAL
+MODEL), Nemryn cannot compute or even estimate a dollar figure at risk.
+The safer, honest operational concept for MVP is "completed Trips needing
+billing review" or "completed service awaiting documentation" — a COUNT
+of Trips, never a dollar amount, never a probability. Revenue-at-risk (as
+an actual monetary concept) should be deferred until BOTH an actual
+rate/amount model AND some notion of a billing deadline/status exist —
+neither does today.
+
+===========================================================================
+DATE / REVIEW WINDOW
+===========================================================================
+Recommend the simplest useful MVP, consistent with how Tomorrow Readiness
+and the Operations Brief already scope their own date windows
+(organization-timezone-aware calendar-day boundaries, never a raw UTC
+`timestamptz` comparison — `organization-local-to-utc` / day-bounds
+helpers already exist and should be reused, not reinvented). Suggested
+windows: **Today | Yesterday | Last 7 days**, with Yesterday as the
+practical default landing view (a small operator reviewing what needs
+billing attention typically reviews what was JUST completed, not today's
+still-in-progress work). Avoid a general-purpose custom date-range picker
+at MVP — that is enterprise-finance-console complexity the phase spec
+explicitly warns against.
+
+===========================================================================
+SMALL OPERATOR EXPERIENCE
+===========================================================================
+Matches the phase spec's own example well: a compact daily/weekly summary
+— "N completed trips, M ready for review, K need attention" — with each
+K item naming the Passenger and the SPECIFIC missing fact (e.g. "Missing
+Vehicle identity" or "Open issue: <exception_type>"), never a generic
+"incomplete" label. This mirrors the existing Recurring Care Brief block's
+own restrained-density precedent (a small, scannable block, not a new
+giant KPI row) rather than inventing a new visual pattern.
+
+===========================================================================
+LARGE OPERATOR EXPERIENCE
+===========================================================================
+Same backend model, same reason vocabulary — no separate enterprise
+engine. Presentation differences only: filterable/groupable by date,
+Driver, and readiness reason (Facility grouping is lower priority given
+Facility's current context-only role — see FACILITY RELATIONSHIP).
+
+===========================================================================
+PROOF-OF-SERVICE DOCUMENT FEASIBILITY
+===========================================================================
+**SUPPORTED NOW** for an internal, non-legally-binding record composed
+purely from existing data: Trip ID, Passenger name, scheduled time, the
+full actual lifecycle-transition timestamp chain, performing Driver name
+(via the `end_reason='trip_completed'` assignment), performing Vehicle
+(when present — see PROOF-OF-SERVICE DEFINITION's Vehicle-identity
+caveat), pickup/destination text, completion timestamp, and any
+Operations-visible notes. This audit does NOT recommend building
+PDF/reporting output now (explicitly out of scope for this phase and
+likely a later slice) — only confirming the underlying DATA already
+supports assembling such a record. It must never be labeled or presented
+as a legally/commercially compliant billing document — no payer or
+Medicaid documentation requirement has been modeled.
+
+===========================================================================
+SIGNATURE / PHOTO / DOCUMENT GAP
+===========================================================================
+**NOT SUPPORTABLE today.** No signature field, no photo field, no file
+upload mechanism, no Supabase Storage bucket exists anywhere in this
+repository (confirmed via direct grep across all migrations and
+application source). None of these should be treated as REQUIRED for
+Nemryn's own MVP Proof-of-Service concept — the state-machine-derived
+event chain is a materially stronger, tamper-resistant proof source than
+an unverified uploaded image would be on its own, and no specific payer
+requirement has been named that would force this now. Classify as future
+optional evidence, contingent on an actual payer/compliance requirement
+being identified later.
+
+===========================================================================
+MILEAGE GAP
+===========================================================================
+**NOT CAPTURED.** No actual-mileage column exists on `trips`, `vehicles`,
+or anywhere else. Per this phase's own explicit instruction, this audit
+does not attempt to derive road mileage from GPS coordinates (straight-
+line distance would be actively misleading, not merely approximate) and
+does not treat GPS as a usable mileage substitute. This gap does NOT block
+Proof of Service (service execution is provable without mileage) and does
+NOT block Billing Readiness as currently scoped (no operator has yet
+specified a per-mile rate to apply it against). It DOES block any future
+per-mile rate calculation entirely — required only once actual monetary
+Revenue Assurance is attempted.
+
+===========================================================================
+PRICING / RATE GAP
+===========================================================================
+Not required for Proof-of-Service assurance. Not required for the
+Billing-Readiness definition this audit recommends (operational
+completeness only, no dollar amount involved). REQUIRED ONLY for
+monetary Revenue Assurance — and blocked entirely today by ZD-021
+(Pricing model — UNKNOWN). This audit deliberately does not design a
+pricing engine (out of scope, explicitly instructed) — only concludes
+where in the layered model it becomes necessary.
+
+===========================================================================
+PAYER / BILLING-ENTITY GAP
+===========================================================================
+No representation anywhere of WHO pays (self-pay, facility, broker,
+insurer, other contract party) — confirmed by the exhaustive financial-
+term search and by ZD-022 (Medicaid — UNKNOWN) / ZD-023 (Broker — UNKNOWN)
+both being explicitly open decisions. A payer/billing-entity model IS
+required before Nemryn can move beyond Proof-of-Service/Billing-Readiness
+into actual billing — this audit does not propose specific payer
+categories, per its own explicit instruction not to introduce values in
+this phase.
+
+===========================================================================
+IMMUTABILITY / CORRECTION MODEL
+===========================================================================
+Current architecture already protects the proof-relevant facts well:
+  - `trip_events`: append-only, no UPDATE/DELETE grant to ANY client role
+    at all (confirmed directly in the migration's own comment and in
+    `rls_policies.sql` — SELECT-only grant).
+  - `audit_events`: SYSTEM-OWNED, append-only forever, no client
+    INSERT/UPDATE/DELETE grant of any kind, ever (not even Organization
+    Admin) — writes happen only from within the trusted SECURITY DEFINER
+    mutation functions.
+  - `trips.completed_at`/`cancelled_at`/`no_show_at`: write-once terminal
+    columns by construction (each is only ever set once, by the one RPC
+    that legally reaches that terminal state; no RPC ever clears or
+    re-sets one).
+  - `trip_assignments`: historical rows are never rewritten in place —
+    only `ended_at`/`end_reason` on the CURRENT row are ever client-
+    writable (column-scoped GRANT), and only by Organization Admin/
+    Dispatcher via the controlled RPCs.
+  - Immutable pickup/destination SNAPSHOTS on `trips` itself (never
+    re-joined live from Passenger/Facility, which CAN change over time).
+
+No integrity gap was found for facts that already exist. The real gap is
+COVERAGE, not mutability — several evidence types (mileage, signature,
+rate) simply do not exist yet to protect, not that existing evidence is
+insufficiently protected.
+
+===========================================================================
+CORRECTIONS
+===========================================================================
+Current `trip_events`/`audit_events` structures already distinguish
+immutable original execution evidence (the `trip_events` row itself, never
+editable) from administrative record-keeping (`audit_events`, also never
+editable) — but there is NO existing mechanism for an authorized
+correction (e.g., "the wrong Vehicle was recorded, Dispatcher corrects it
+after the fact") that preserves both the original fact and the correction
+as distinct, chained entries. This audit does not design a correction
+workflow (explicitly out of scope) but notes it as a real, currently-
+unaddressed gap that Billing Readiness will eventually need: the moment
+Billing Readiness or Revenue Assurance becomes operationally load-bearing,
+"we got it wrong and need to fix it without destroying history" becomes a
+real requirement this schema does not yet answer.
+
+===========================================================================
+ROLE MODEL
+===========================================================================
+Current `memberships.role` enum is EXACTLY `organization_admin`,
+`dispatcher`, `driver` — no fourth "billing" role exists at the database
+level today (`20260830130400_memberships.sql`). Note also that
+`audit_events` itself is Organization-Admin/Platform-Admin only —
+Dispatcher does NOT get SELECT on `audit_events` at all, even though
+Dispatcher DOES get full operational read access to `trips`,
+`trip_assignments`, and `trip_events`.
+
+RECOMMENDATION for MVP: Revenue Assurance operational visibility
+(Proof-of-Service / Billing-Readiness review, no dollar amounts) should
+follow the SAME precedent every other operational read surface already
+uses — Organization Admin + Dispatcher — consistent with Trip Readiness,
+Trip Assurance, and the Operations Brief, all of which are dispatcher-
+visible today. This audit does NOT recommend inventing a Billing role now
+(explicitly out of scope; no product requirement currently names one).
+However: the moment actual monetary figures are introduced (a later
+phase), this role question should be REVISITED — `audit_events`'s own
+existing Organization-Admin-only precedent suggests dollar-figure
+visibility may reasonably warrant a narrower role than Dispatcher gets for
+purely operational data. This is a genuine open product decision, not
+resolved here.
+
+===========================================================================
+DRIVER BOUNDARY
+===========================================================================
+Driver must NOT receive a Revenue Assurance workspace — no product
+requirement supports it, and it would be a novel, unjustified expansion of
+Driver-side financial visibility this codebase has consistently avoided
+elsewhere (e.g. `driver_list_trip_history`'s own deliberately minimal
+projection). Driver's existing RESPONSIBILITY — performing the 6
+lifecycle transitions, recording location, adding `driver_visible` notes —
+already IS the evidence-capture mechanism Proof of Service depends on;
+nothing new is required of the Driver app. Financial review remains
+strictly Operations-side (Organization Admin/Dispatcher), per ROLE MODEL
+above.
+
+===========================================================================
+OPERATIONS BRIEF RELATIONSHIP
+===========================================================================
+A future compact signal ("N completed trips need billing review") would
+belong in the Operations Brief, following the exact precedent Recurring
+Care's own Brief integration already established (S1F): a small, separate
+block, reusing an already-computed read model with zero new queries where
+possible, never duplicating Needs Attention (which is Trip Assurance's
+domain — live, non-terminal Trip conditions only). This audit does NOT
+implement this — flagged here only to preserve the boundary for whichever
+future slice builds it: Revenue Assurance's own Brief signal must concern
+COMPLETED work only, never re-surface an in-progress Trip's exception or
+assignment gap Trip Assurance/Needs Attention already owns.
+
+===========================================================================
+SCHEMA SUFFICIENCY
+===========================================================================
+CURRENT SCHEMA SUFFICIENT FOR PROOF-OF-SERVICE MVP: **YES** — every fact
+the PROOF-OF-SERVICE DEFINITION above requires already exists in `trips`,
+`trip_assignments`, and `trip_events`, reliably, for any Trip that reached
+`completed`. No new table or column is required to build a Proof-of-
+Service READ MODEL (a derivation, exactly like Trip Readiness/Trip
+Assurance) — though see SCHEMA GAP ANALYSIS for the one small case
+(Vehicle-identity gap) worth flagging as a surfaced condition, not a
+schema fix.
+
+CURRENT SCHEMA SUFFICIENT FOR BILLING-READINESS MVP: **YES**, under this
+audit's recommended definition (Billing Readiness = Proof of Service, no
+additional monetary field required at this layer) — but only because this
+audit deliberately scoped Billing Readiness to NOT require rate/payer
+data. If a future decision expands Billing Readiness to require, say,
+payer identity before a Trip counts as "ready," the answer becomes NO for
+that expanded definition.
+
+CURRENT SCHEMA SUFFICIENT FOR MONETARY REVENUE ASSURANCE: **NO** — no
+rate, no payer, no invoice, no billing status, no mileage exists anywhere.
+This is a hard, structural gap, not merely unimplemented UI.
+
+===========================================================================
+SCHEMA GAP ANALYSIS
+===========================================================================
+This audit recommends NO new table or column for Proof-of-Service or
+Billing-Readiness MVP — both can be built as a pure, derived READ MODEL
+(mirroring `trip-readiness-core.ts`/`trip-assurance.ts` exactly: facts in,
+`{state, reasons[]}` out, nothing persisted) directly against existing
+`trips`/`trip_assignments`/`trip_events`/`trip_exceptions` data. Existing
+data can safely carry this responsibility because every fact it needs is
+already immutable, server-timestamped, and RLS-protected — there is no
+new WRITE requirement, only a new READ derivation.
+
+For a LATER phase (monetary Revenue Assurance only — NOT proposed for
+implementation now, and NOT migrations, per this phase's explicit
+prohibition), the following are the minimum conceptual additions this
+audit anticipates being necessary, each ADDITIVE (new tables, never new
+required columns jammed onto `trips`):
+  - A payer/billing-entity concept — because WHO pays cannot be
+    represented at all today, and stuffing it onto `trips` would
+    conflate a per-Trip execution fact with a commercial-relationship
+    fact that more naturally belongs to the Organization/Facility/
+    Passenger relationship, not the Trip row.
+  - A trip-charge/rate record, keyed to a completed Trip — additive,
+    because existing Trip data has zero fields prepared for this and
+    retrofitting a `rate` column onto `trips` would blur "execution
+    record" with "financial record," which this audit's own layered
+    model explicitly keeps separate.
+  - A billing-status concept, likely on that same new rate/charge
+    record rather than on `trips` itself — for the same reason.
+  - Actual mileage as its own fact (whether captured via a future
+    odometer-entry mechanism or a future verified-routing integration is
+    NOT decided here) — additive, since no existing column can safely
+    carry it (inventing a straight-line-GPS estimate under an "actual
+    mileage" name would be actively misleading, not merely incomplete).
+  - Signature/document evidence, IF a specific payer/compliance
+    requirement is ever identified — would require both new schema and
+    new Supabase Storage infrastructure (which does not exist in this
+    repository at all today, for anything). Not currently justified by
+    any named requirement.
+
+===========================================================================
+MVP PRODUCT BOUNDARY
+===========================================================================
+Recommend NOT jumping directly to "Revenue Assurance" as a monetary
+concept. The smallest defensible next product, consistent with what this
+audit found Nemryn can truthfully support:
+
+  Phase 1: Proof-of-Service Assurance — a derived read model over
+    existing completed-Trip data, answering "does this completed Trip
+    have the operational evidence Nemryn requires."
+  Phase 2: Billing Readiness — under this audit's current scoping,
+    materially the same computation as Phase 1 (no additional field
+    identified) — may simply BE Phase 1 rather than a separate slice,
+    pending the Vehicle-identity policy decision noted in PROOF-OF-
+    SERVICE DEFINITION.
+  Phase 3: Monetary Revenue Assurance — blocked entirely on ZD-021
+    (pricing) / ZD-022 (Medicaid) / ZD-023 (broker) / ZD-024 (billing
+    workflow), all currently UNKNOWN. Not schedulable until at least one
+    of those is resolved by an actual product/business decision outside
+    engineering's control.
+
+===========================================================================
+IMPLEMENTATION SLICES
+===========================================================================
+Proposed next phases (subject to revision once S1B actually begins design
+— these are recommendations, not commitments):
+
+S1B — Proof-of-Service Core
+  Objective: pure `trip-proof-of-service-core.ts`, mirroring
+    `trip-readiness-core.ts`'s exact shape (`facts -> {state, reasons[]}`,
+    no I/O). Define the exact minimal reason vocabulary against real
+    query shapes (resolve the Vehicle-identity question here).
+  Schema impact: NONE.
+  RLS/security impact: NONE (pure function, no new table).
+  Mutation impact: NONE.
+  UI impact: NONE (core logic only, unit-tested).
+  Test strategy: unit tests only, mirroring `trip-readiness-core.test.mjs`.
+  Dependency: none — this audit.
+
+S1C — Read Model / Evidence Query Layer
+  Objective: the server-only wrapper (`trip-proof-of-service.ts`) that
+    resolves real facts (including the `end_reason='trip_completed'`
+    assignment lookup) for a date-bounded set of completed Trips, reusing
+    existing organization-timezone-aware day-bounds helpers.
+  Schema impact: NONE — read-only against existing tables.
+  RLS/security impact: NONE — reuses existing SELECT policies
+    (organization_admin/dispatcher already have full read access to every
+    table this needs).
+  Mutation impact: NONE.
+  UI impact: NONE yet.
+  Test strategy: focused SQL/read-model tests only — NOT a full
+    regression battery (no schema changed).
+  Dependency: S1B.
+
+S1D — Operations Review Surface
+  Objective: a new Operations page (e.g. `/operations/revenue-assurance`
+    or a more precisely-named route once S1B's vocabulary is locked)
+    listing completed Trips needing review, grouped by the Date/Review
+    Window recommendation above.
+  Schema impact: NONE.
+  RLS/security impact: NONE new (reuses existing read policies); the
+    route itself gets the same organization_admin/dispatcher gate every
+    other Operations page uses.
+  Mutation impact: NONE — this is a review surface, not a correction
+    workflow (see CORRECTIONS — that remains a later, undesigned gap).
+  UI impact: new page + navigation entry.
+  Test strategy: focused local E2E for this one surface + org isolation +
+    Driver boundary — not a full regression battery.
+  Dependency: S1C.
+
+S1E — Proof-of-Service Document (internal, non-compliance) — OPTIONAL,
+  may be deferred past initial release
+  Objective: an internal, downloadable/printable summary of the facts
+    already assembled by S1C for one Trip — explicitly NOT a claim of
+    legal/payer compliance.
+  Schema/RLS/mutation impact: NONE.
+  UI impact: new document/export view.
+  Test strategy: focused only.
+  Dependency: S1C/S1D.
+
+S1F — Operations Brief integration
+  Objective: a compact "N completed trips need billing review" signal,
+    mirroring Recurring Care's own S1F precedent exactly (small block,
+    zero new queries where possible, reuse S1C's read model).
+  Schema/RLS/mutation impact: NONE.
+  UI impact: Brief block only.
+  Test strategy: focused (Brief scenarios + fault injection, mirroring
+    Recurring Care's own established pattern) — not a full regression.
+  Dependency: S1C.
+
+S1G — Release
+  Objective: the same release-gate discipline the Recurring Care epic
+    just completed (S1G there) — full regression ONLY here, at the end,
+    once actual schema/RPC changes exist to regress against. If S1B-S1F
+    above genuinely introduce NO schema/RLS/RPC changes (plausible, per
+    SCHEMA SUFFICIENCY above), this release gate may be materially
+    lighter than Recurring Care's own S1G — no migration to apply, no
+    production privilege re-audit needed, since nothing privilege-
+    relevant changed.
+
+Per the phase's own proportional-regression instruction: none of S1B-S1F
+above should schedule a full SQL regression — only S1G (or an earlier
+slice, if and only if it turns out to need real schema/RLS/RPC changes
+this audit did not anticipate).
+
+===========================================================================
+SECURITY / PRIVACY
+===========================================================================
+Nothing in this audit's recommended Phase 1/2 scope requires: a new
+table, a new column, a new RPC, new RLS, a new role, a new storage bucket,
+or file uploads. Everything needed already exists and is already
+correctly access-controlled. Preserved invariants going forward:
+  - Deny by default — a new Operations read surface must explicitly gate
+    on `has_org_role(organization_admin, dispatcher)`, matching every
+    existing surface, never assume inherited access.
+  - Organization-scoped access — every fact this audit inventoried is
+    already `organization_id`-scoped by its owning table's existing RLS;
+    a Proof-of-Service read model introduces no new cross-tenant surface.
+  - No service role in browser — unaffected; this audit proposes no
+    client-side privileged access of any kind.
+  - Driver minimization — explicitly preserved (see DRIVER BOUNDARY); no
+    new Driver-side financial or review visibility.
+  - Passenger data minimization — explicitly preserved (see PASSENGER
+    PRIVACY below); Revenue Assurance needs only `passenger_id` +
+    `display_name` (already exposed to Operations roles today), never
+    `assistance_notes`, and certainly never diagnosis/insurance/clinical
+    data, none of which exists in this schema at all.
+
+===========================================================================
+RISKS / OPEN DECISIONS
+===========================================================================
+1. Vehicle-identity policy: should a completed Trip with a known Driver
+   but no recorded Vehicle count as Proof-of-Service complete, or only
+   Billing-Readiness incomplete? Not resolved by this audit — recommend
+   S1B resolve it against real operator expectations before locking the
+   reason vocabulary.
+2. No-show billing treatment: this audit recommends surfacing it
+   distinctly rather than excluding or including it outright — final
+   product policy is an open, operator/payer-specific decision (ZD-021/
+   ZD-024).
+3. Cancellation billing treatment: recommended excluded from MVP
+   completed-service readiness entirely; a future operator-specific
+   policy could reopen this additively.
+4. Role visibility once monetary data exists: Dispatcher's current full
+   operational-read access may not be the right default the moment actual
+   dollar amounts are introduced — flagged for revisit at that time, not
+   resolved now.
+5. Correction workflow: no mechanism exists today for an authorized
+   post-completion correction to Proof-of-Service facts while preserving
+   original history — a real gap once Billing Readiness becomes
+   operationally load-bearing, not designed in this audit.
+6. Driver location's unenforced 30-day retention policy (pre-existing,
+   not introduced by this audit) means Proof-of-Service today could, in
+   principle, rely on GPS data that the product's own documented policy
+   intends to eventually delete — reinforcing this audit's own
+   recommendation that GPS remain supporting-only evidence, never
+   required.
+
+===========================================================================
+FINAL STATUS
+===========================================================================
+PROOF-OF-SERVICE MODEL:
+READY
+
+CURRENT SCHEMA SUFFICIENT FOR PROOF MVP:
+YES
+
+CURRENT SCHEMA SUFFICIENT FOR BILLING READINESS:
+YES (under this audit's recommended scoping — Billing Readiness =
+Proof of Service, no monetary field required at this layer)
+
+CURRENT SCHEMA SUFFICIENT FOR MONETARY REVENUE:
+NO
+
+NEW DOMAIN ENTITY REQUIRED:
+NO (for Phase 1/2 — Proof-of-Service / Billing-Readiness MVP; YES, later,
+for monetary Revenue Assurance specifically — payer/rate/billing-status,
+deferred, not designed here)
+
+NEW RLS REQUIRED:
+NO
+
+REVENUE-AT-RISK SUPPORTABLE NOW:
+NO
+
+MVP PRODUCT BOUNDARY:
+Proof-of-Service Assurance as a pure derived read model over existing
+completed-Trip data (trips/trip_assignments/trip_events/trip_exceptions),
+mirroring the trip-readiness-core.ts precedent exactly. Billing Readiness
+is, under current scoping, the same computation — not a separate schema
+layer yet. Monetary Revenue Assurance is explicitly deferred pending
+ZD-021/ZD-022/ZD-023/ZD-024.
+
+OPEN PRODUCT DECISIONS:
+1. Vehicle-identity requirement for Proof-of-Service completeness
+2. No-show billing treatment policy
+3. Cancellation billing treatment policy
+4. Role visibility once monetary figures exist
+5. Post-completion correction workflow design
+(All listed in full under RISKS / OPEN DECISIONS above.)
+
+RECOMMENDED NEXT SLICE:
+S1B — Proof-of-Service Core (pure read-model function, no schema/RLS/RPC
+changes, unit-tested only)
+
+BLOCKERS:
+NONE
+
+TESTING:
+AUDIT ONLY — NO FULL SQL REGRESSION
+
+Do NOT implement. Do NOT commit. Do NOT push. Do NOT deploy.
+
+STOP.

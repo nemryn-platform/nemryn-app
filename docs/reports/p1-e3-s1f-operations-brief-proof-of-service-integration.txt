@@ -1,0 +1,531 @@
+P1-E3-S1F — Operations Brief Proof-of-Service Integration
+===========================================================================
+Read-only whole-window Proof-of-Service summary + Operations Brief
+integration. No database schema change, no migration, no RPC, no RLS
+change, no mutation, no correction workflow, no PDF/export, no
+deployment, no commit/push occurred. No local Supabase reset was needed
+this phase (the local database was already in a clean, fixture-free
+state from S1D's own cleanup) — no full or focused SQL regression
+battery and no concurrency battery were run.
+
+===========================================================================
+S1E DOCUMENT DEFERRAL
+===========================================================================
+P1-E3-S1E — Internal Proof-of-Service Detail/Document is deliberately
+DEFERRED, per this phase's own explicit instruction. Existing Trip Detail
+plus the S1D Proof-of-Service review surface already provide sufficient
+operational review context for MVP; a document/export capability does
+not currently unlock any billing, payer, invoice, or claim workflow
+(confirmed by the S1A audit — no such data exists anywhere in this
+schema). Not built this phase.
+
+===========================================================================
+SUMMARY WINDOW
+===========================================================================
+Locked to YESTERDAY only, in the organization's local timezone — the
+Brief's Proof-of-Service block never summarizes Today or Last 7 Days.
+Confirmed by direct source inspection: `getYesterdayProofOfServiceResults`
+(trip-proof-of-service.ts) is named for, and only ever computes,
+Yesterday's bounds via the file's own existing private
+`computeYesterdayBoundsUtc` helper (already established in S1C, reused
+unchanged here — never re-implemented). The Brief's own "Review/View
+proof of service" action always routes to `/operations/proof-of-service`
+with no `?window=` param, which itself already defaults to Yesterday
+(S1D) — the two windows are kept in sync by both independently defaulting
+to the same value, not by one passing a parameter to the other.
+
+===========================================================================
+WHOLE-WINDOW AUTHORITY
+===========================================================================
+`getYesterdayProofOfServiceResults` fetches and evaluates EVERY completed
+Trip in the window — never derived from `getProofOfServiceReview`'s
+paginated page-1 result. Empirically validated (not merely asserted):
+with exactly 30 completed Trips fixtures in Yesterday's window, the
+Brief reported `needsReviewCount=3` and a "From 30 completed trips
+yesterday" total that exactly matched an independent aggregation across
+BOTH of the S1D review page's own pages (25 + 5 = 30, `needsReview` 3 —
+see COUNT MATCH below) — proving the summary is genuinely whole-window,
+not page-1-limited.
+
+===========================================================================
+SUMMARY CONTRACT
+===========================================================================
+`OperationsBriefProofOfServiceSummary` (operations-brief-core.ts):
+  completedTripCount: number
+  readyForReviewCount: number
+  needsReviewCount: number
+  evidenceIntegrityGapCount: number
+Deliberately does NOT include `missingVehicleCount`/`openExceptionCount`
+— per this phase's own explicit §5/§17 instruction, the reason breakdown
+belongs on the Proof-of-Service workspace (S1D), not the Brief.
+
+===========================================================================
+QUERY ARCHITECTURE
+===========================================================================
+A SEPARATE query path from `getProofOfServiceReview` (S1D), deliberately
+lighter (§8): no Passenger display name, no Driver/Vehicle name/label
+embeds — the summary only ever needs counts, never presentation labels.
+  1. Trip candidates: `id, completed_at, pickup_description,
+     destination_description, passengers(id)` only — chunked (see SCALE
+     below), each chunk requesting `{ count: "exact" }` so the TRUE
+     window total is known from PostgREST itself.
+  2. Completion assignments: `trip_id, vehicle_id` only, filtered to
+     `end_reason = 'trip_completed'` — the same S1C-established
+     authority, never "active assignment."
+  3. Required lifecycle events: `trip_id, event_type, occurred_at`,
+     pre-filtered to the 6 `REQUIRED_LIFECYCLE_EVENT_TYPES`.
+  4. Open exceptions: `trip_id` only, `status = 'open'`.
+Composed via the SAME pure functions S1B/S1C already established
+(`evaluateLifecycleEventChain`, `classifyCompletionAssignmentCardinality`,
+`deriveTripProofOfService`) — no second Proof-of-Service evaluator exists
+anywhere in this codebase (§7, confirmed by direct source inspection: the
+whole-window path imports these exact same functions from
+trip-proof-of-service-core.ts/trip-proof-of-service-evidence.ts, never
+reimplementing any of their logic).
+
+===========================================================================
+SCALE / CHUNKING
+===========================================================================
+`supabase/config.toml` confirms this project's configured `max_rows =
+1000` — PostgREST silently caps ANY query's returned rows at this value
+regardless of what `.range()` requests, so an unbounded single
+`.select()` was never assumed safe (§9's own explicit warning heeded).
+  - Trip candidates are fetched in pages of `WHOLE_WINDOW_TRIP_PAGE_SIZE
+    = 1000` (matching the server's own configured cap exactly), looping
+    via `.range()` until a page returns fewer rows than requested.
+  - The first page's own `{ count: "exact" }` result is checked against
+    `WHOLE_WINDOW_SAFETY_CAP = 5000` (a deliberately generous ceiling —
+    docs/product/product-definition.md's own small/mid NEMT operator
+    framing puts any real organization nowhere near this volume in a
+    single day) BEFORE any further fetching occurs; exceeding it returns
+    `{ status: "unavailable" }` immediately rather than truncating and
+    reporting a false count.
+  - Evidence queries (2-4) are issued once PER ID-CHUNK of
+    `WHOLE_WINDOW_ID_CHUNK_SIZE = 150` Trip ids (never once per Trip —
+    this is chunking, not N+1). 150 was chosen deliberately, not
+    arbitrarily: `trip_events` can return up to 6 rows per Trip under the
+    required-type filter, so 150 × 6 = 900 stays safely under the
+    1000-row cap even before accounting for anomalous duplicate-event
+    data.
+  - A TRUNCATION GUARD backs the chunk-size arithmetic rather than
+    trusting it alone: every evidence query also requests
+    `{ count: "exact" }`, and the returned row count is compared against
+    that SAME query's own authoritative count after every fetch — any
+    mismatch (a silent `max_rows` truncation) fails the whole summary
+    closed to `{ status: "unavailable" }` immediately, per §9's own
+    explicit "truthfulness > convenience" instruction.
+  - The accumulated whole-window Trip count is also cross-checked against
+    the first page's own authoritative `count` after the paging loop
+    completes; any mismatch also fails closed.
+
+===========================================================================
+NO N+1
+===========================================================================
+Confirmed by direct source inspection: no query exists inside a
+per-Trip loop anywhere in `getYesterdayProofOfServiceResults`. Query
+round trips scale with the WINDOW SIZE divided by chunk size, never with
+the Trip count directly: for the 30-Trip fixture set used in local
+validation, this was exactly 1 page-1 Trip query + 1 evidence chunk
+(30 Trips fits in one 150-Trip chunk) × 3 queries (assignments/events/
+exceptions, issued in parallel via `Promise.all`) = 4 total round trips —
+identical in shape to S1D's own already-validated 4-round-trip page-view
+architecture, just scoped to the whole window instead of one page.
+
+===========================================================================
+PURE SUMMARY LOGIC
+===========================================================================
+`deriveProofOfServiceSummary` (operations-brief-core.ts) — pure, no
+Supabase, no React, no runtime import of any kind (matching this file's
+own established "no runtime import" charter exactly: its input type,
+`ProofOfServiceSummaryInputResult`, deliberately restates a minimal
+`{state, reasons}` shape rather than importing
+`TripProofOfServiceResult`/`TripProofOfServiceState` from
+trip-proof-of-service-core.ts, mirroring `RecurringCareSummaryRow`'s own
+established precedent). Reduces an array of already-evaluated results to
+the 4-count summary — no business decision is made here, only counting.
+
+===========================================================================
+ZERO COMPLETED TRIPS
+===========================================================================
+"No completed trips to review from yesterday." — validated directly
+against a genuinely untouched third organization (Harmony Medical
+Transport, which had 2 completed Trips today but none yesterday).
+Confirmed the copy never says "No revenue"/"No billable trips"/
+"Everything is ready" anywhere.
+
+===========================================================================
+ALL READY
+===========================================================================
+"Yesterday's completed trips are ready for review." + "N completed trips
+have the required operational evidence." — implemented exactly per §14;
+validated directly for Org B's own single-Trip, zero-needs-review window
+("Yesterday's completed trips are ready for review." rendered correctly).
+Never says "Ready to bill"/"Claim ready"/"Revenue secured" (confirmed by
+direct source inspection of the copy strings themselves).
+
+===========================================================================
+NEEDS REVIEW
+===========================================================================
+"N completed trips need review" + "From M completed trips yesterday." —
+validated directly against the 30-Trip Org A fixture set: rendered
+exactly "3 completed trips need review" and "From 30 completed trips
+yesterday." No individual Passenger is ever named in this block
+(confirmed by direct source inspection — the component only ever renders
+the 4 numeric counts, never a Trip/Passenger list).
+
+===========================================================================
+EVIDENCE INTEGRITY
+===========================================================================
+"N has/have incomplete service evidence." — added as a restrained extra
+line only when `evidenceIntegrityGapCount > 0`, validated directly
+("1 has incomplete service evidence." rendered for the 1 evidence-
+integrity-gap fixture in the 30-Trip set). No internal data-integrity
+cause is ever exposed (confirmed by direct source inspection — the
+component has no conditional branching on any cause, only the count).
+The block never turns critical-red for this — it uses the SAME
+restrained `text-warning-text`/`text-text-muted` treatment as the rest
+of the block, never `StatusBadge`, never a `critical` category.
+
+===========================================================================
+VISUAL PRIORITY
+===========================================================================
+`ProofOfServiceBlock` mirrors `RecurringCareBlock`'s exact restrained
+styling: no `WarningCircle` icon, no `StatusBadge`, a single
+`text-warning-text` line for the headline count and `text-text-muted` for
+every secondary line — confirmed lower-urgency than Needs Attention
+(which uses a filled `WarningCircle` icon and a `StatusBadge`) and
+visually comparable to Recurring Care/Tomorrow Readiness, per §18's own
+explicit instruction. No alarming red anywhere in this block, confirmed
+by direct source inspection (no `critical` category, no red text class,
+used anywhere in `ProofOfServiceBlock`).
+
+===========================================================================
+BRIEF DENSITY
+===========================================================================
+Overview was audited before adding anything (§19): it already contains
+Needs Attention, Active Now/Next Departures, Driver Snapshot, Requests
+Awaiting Review, Tomorrow Readiness, and Recurring Care. `ProofOfServiceBlock`
+was added as ONE more compact single-row `Panel` block using the EXACT
+SAME layout primitives `TomorrowReadinessBlock`/`RecurringCareBlock`
+already established (`flex flex-wrap items-center justify-between gap-3`,
+one `h3`, 1-3 short `<p>` lines, one `LinkButton`) — no new visual
+pattern, no KPI-card wall, no redesign of Overview's own existing
+structure. Confirmed visually (see the local E2E screenshot) that the
+Brief remains scannable with 7 total blocks stacked, consistent with the
+existing Tomorrow Readiness/Recurring Care precedent already accepted at
+6 blocks.
+
+===========================================================================
+ROUTE DISCOVERY
+===========================================================================
+No sidebar item was added (§20, confirmed by direct source inspection —
+no navigation config file was touched this phase). Operations Brief is
+now the primary contextual discovery path to `/operations/proof-of-service`,
+via the block's own "Review/View proof of service" action — validated
+directly (the link's `href` resolves to exactly that route, and clicking
+through reaches the real page defaulting to Yesterday).
+
+===========================================================================
+ERROR ISOLATION
+===========================================================================
+`getProofOfServiceSummary` (operations-brief.ts) is wrapped in its own
+`.catch(() => null)` in BOTH `getOperationsBrief` and
+`src/app/operations/page.tsx`, mirroring `tomorrowReadinessPromise`/
+`recurringCarePromise`'s own established independent-promise pattern
+exactly — started before the main `Promise.all` so it overlaps in
+wall-clock time, awaited and caught separately so a genuine failure
+degrades only this one block. Additionally, `getYesterdayProofOfServiceResults`
+and `getProofOfServiceSummary` themselves never throw for any internal
+failure (query error, safety-cap trip, or detected truncation) — every
+such path explicitly returns `{ status: "unavailable" }` / `null`, a
+defense-in-depth layer beneath the outer `.catch`.
+
+A live REVOKE-based fault-injection E2E test (mirroring the earlier
+Recurring Care S1F precedent's `revoke select on public.recurring_arrangements`
+technique) was ATTEMPTED and found NOT cleanly isolable to Proof-of-
+Service: `getYesterdayProofOfServiceResults` shares every one of its 4
+source tables (`trips`, `trip_assignments`, `trip_events`,
+`trip_exceptions`) with `getTodaysOperations` (confirmed directly —
+`todays-operations.ts` itself queries all 4 of the same tables, including
+an embedded `trip_assignments` relation). Revoking SELECT on any of them
+crashed the ENTIRE Overview page via `getTodaysOperations`'s own uncaught
+query — a genuine, PRE-EXISTING architectural fact this phase did not
+introduce (that function has no `try`/`catch` of its own, unlike every
+Brief sub-block). Recurring Care's own equivalent test worked cleanly
+only because it has its OWN dedicated table with no such overlap;
+Proof-of-Service deliberately introduces no new table (this phase's own
+explicit "no schema change" mandate), so no equivalently isolated live
+fault-injection target exists without also touching RLS (also explicitly
+forbidden this phase) or restarting the PostgREST container to lower its
+configured `max_rows` (not a targeted, in-place, reversible fault).
+Error isolation was therefore verified at the SOURCE level instead (see
+above) rather than via a live E2E fault demonstration — documented here
+transparently, not silently substituted. See OPEN ISSUES.
+
+===========================================================================
+TRUSTED ORGANIZATION CONTEXT
+===========================================================================
+`getProofOfServiceSummary`/`getYesterdayProofOfServiceResults` take
+`organizationId`/`timezone` as plain parameters, exactly like every other
+Operations Brief data-access function in this codebase — neither calls
+`requireOperationsAccess` internally. The calling page
+(`src/app/operations/page.tsx`) is the trust boundary: it resolves
+`organization.organizationId`/`organization.organizationTimezone` from
+`requireOperationsAccess`'s own trusted result and passes them down —
+confirmed by direct source inspection that no search-param or client
+value ever reaches either function.
+
+===========================================================================
+ORG ISOLATION
+===========================================================================
+EMPIRICALLY validated against real RLS-backed local data: Org A's own
+Brief (30 completed Trips, 3 needing review) never showed Org B's single
+Trip or its own count; Org B's own Brief showed exactly its own single
+Trip's "ready for review" state and never Org A's "30 completed" figure.
+Both directions confirmed, not assumed.
+
+===========================================================================
+DRIVER BOUNDARY
+===========================================================================
+EMPIRICALLY validated: a real local synthetic Driver session
+(`org-a-driver-a@example.test`) navigating directly to `/operations` was
+redirected to `/driver` before the page ever rendered, and the resulting
+page text contained no "Proof of service" wording of any kind — the
+existing, unmodified `requireOperationsAccess` boundary (Organization
+Admin/Dispatcher only) is the enforcement mechanism, not a new one
+introduced by this phase.
+
+===========================================================================
+COUNT MATCH
+===========================================================================
+For the same Org A / Yesterday window: the Brief reported `needsReviewCount
+= 3` and a "From 30 completed trips yesterday" total. Independently
+aggregating the S1D review workspace's OWN paginated pages (page 1: 25
+rows; page 2: the remaining 5 rows) yielded an aggregated total of 30
+rows and an aggregated `needsReviewCount` of 3 — an exact match,
+confirmed by direct E2E comparison rather than assumed from the shared
+evaluator alone. This is the strongest available proof that S1D's own
+page-1-only limitation (the reason this phase exists at all) does not
+propagate into the Brief's own count.
+
+===========================================================================
+LOCAL E2E
+===========================================================================
+`.tmp-qa/s1f-brief-proof-of-service-e2e.mjs` against real local fixtures
+(`.tmp-qa/s1f-fixtures.sh` — 4 "interesting" Org A Yesterday-dated cases
+built via the real `driver_*` RPC chain and backdated exactly 1 day
+(ready, missing-vehicle, open-exception, and one DB-owner-inserted
+evidence-integrity-gap case), 26 additional simple ready Yesterday
+fixtures for the >25 pagination proof, 1 Org A Today-only fixture, 1 Org A
+8-days-ago fixture, and 1 Org B Yesterday fixture — all cleaned up after
+validation): 23/23 PASS, covering every lettered scenario A-N and P this
+phase specified. Scenario O was validated via source-level review rather
+than a live fault-injection demonstration — see ERROR ISOLATION above for
+the full, transparent explanation of why an isolated live-fault target
+does not exist for this specific feature.
+
+===========================================================================
+RESPONSIVE
+===========================================================================
+Validated at the 1024px Operations floor: `document.documentElement.
+scrollWidth <= clientWidth` for the full Overview page including the new
+`ProofOfServiceBlock` — no new overflow introduced (the block uses the
+exact same `Panel`/flex layout every other compact Brief block already
+uses at this width).
+
+===========================================================================
+ACCESSIBILITY
+===========================================================================
+`ProofOfServiceBlock` introduces no new interactive pattern — it is a
+heading (`h3`, correctly nested under the Brief's own `h2`, matching
+every other Brief sub-block), plain text, and one real `LinkButton`
+(never icon-only, always meaningfully labeled "Review/View proof of
+service"). No color-only signal — the amber "need review" line is always
+accompanied by its own text content, never a bare colored dot.
+
+===========================================================================
+APPLICATION TEST RESULTS
+===========================================================================
+tsc --noEmit: PASS (0 errors)
+lint: PASS (0 errors, 41 warnings — one more than the prior phase's 40,
+  entirely accounted for by a leftover unused import in this session's
+  own `.tmp-qa/s1d-proof-of-service-e2e.mjs` scratch script from the
+  PRIOR phase, not anything new in `src/`; zero warnings in `src/`)
+build (`next build`): PASS
+unit (`npm test`): 238/238 PASS (221 baseline + 17 new: 13 for
+  `deriveProofOfServiceSummary`'s own dedicated matrix — 0 Trips, 1
+  READY, 1 NEEDS_REVIEW, mixed, all-READY, all-NEEDS_REVIEW, multi-reason
+  counted once, EVIDENCE_INTEGRITY_GAP count, MISSING_VEHICLE-only,
+  OPEN_EXCEPTION-only, the arithmetic invariant across 6 combinations, the
+  anomalous-NOT_APPLICABLE fail-closed case, an entirely-unrecognized-
+  state fail-closed case, and a stable-result check — plus 3 for
+  `proofOfService`'s new pass-through field on `deriveOperationsBrief`
+  (null, a real value, and non-cross-contamination) — plus 1 pre-existing
+  test-signature update verified across all 23 existing
+  `deriveOperationsBrief` call sites in `operations-brief-core.test.mjs`,
+  all of which still pass unchanged; zero regressions).
+
+===========================================================================
+FILES CREATED
+===========================================================================
+  docs/reports/p1-e3-s1f-operations-brief-proof-of-service-integration.txt
+    (this report)
+
+Local-only, not committed (test tooling): `.tmp-qa/s1f-fixtures.sh`,
+`.tmp-qa/s1f-brief-proof-of-service-e2e.mjs`.
+
+===========================================================================
+FILES MODIFIED
+===========================================================================
+  src/lib/operations/trip-proof-of-service.ts — appended
+    `getYesterdayProofOfServiceResults` (the whole-window, chunked
+    fetch-and-evaluate path) and its supporting types/constants; the
+    existing `getProofOfServiceReview` (S1D) was read, reused (its
+    private `computeYesterdayBoundsUtc` helper), and NOT otherwise
+    changed.
+  src/lib/operations/operations-brief-core.ts — appended
+    `OperationsBriefProofOfServiceSummary`, `ProofOfServiceSummaryInputResult`,
+    `deriveProofOfServiceSummary`; added `proofOfService` to
+    `OperationsBriefData` and as a new parameter to `deriveOperationsBrief`
+    (inserted before the existing trailing `now` parameter). No existing
+    field or exported function was removed.
+  src/lib/operations/operations-brief-core.test.mjs — updated all 23
+    pre-existing `deriveOperationsBrief` call sites to pass a new
+    `NO_PROOF_OF_SERVICE` default constant (mirroring `NO_TOMORROW_READINESS`/
+    `NO_RECURRING_CARE`'s own established convention) at the new
+    parameter position; appended the new Proof-of-Service test section.
+  src/lib/operations/operations-brief.ts — added
+    `getProofOfServiceSummary` (the Brief-facing wrapper, narrowing
+    `getYesterdayProofOfServiceResults`'s output via
+    `deriveProofOfServiceSummary`); wired a new
+    `proofOfServicePromise` into `getOperationsBrief` using the same
+    independent-promise, caught-separately shape as
+    `tomorrowReadinessPromise`/`recurringCarePromise`.
+  src/components/operations/OperationsBrief.tsx — added
+    `ProofOfServiceBlock` and rendered it as the last block in the
+    Brief's own list, after `RecurringCareBlock`.
+  src/app/operations/page.tsx — added the matching
+    `proofOfServicePromise` (mirroring the page's own existing
+    `tomorrowReadinessPromise`/`recurringCarePromise` pattern exactly)
+    and passed the resolved value into its own `deriveOperationsBrief`
+    call.
+
+===========================================================================
+SCHEMA IMPACT
+===========================================================================
+NONE. No migration, table, column, view, RPC, index, or database-type
+change was made or is required — confirmed no such need arose during this
+phase (§31's own explicit "if an RPC/view appears necessary solely for
+performance: STOP and explain" was never triggered; the chunked
+application-layer query architecture proved sufficient).
+
+===========================================================================
+RLS IMPACT
+===========================================================================
+NONE. No policy, grant, or role was touched. RLS remained the sole
+enforcement mechanism for org isolation and every underlying read —
+validated directly (ORG ISOLATION, DRIVER BOUNDARY above), not merely
+assumed.
+
+===========================================================================
+OPEN ISSUES
+===========================================================================
+1. Scenario O (fault-injected proof-summary read failure) was validated
+   via source-level code review rather than a live E2E fault-injection
+   demonstration — see ERROR ISOLATION above for the full explanation.
+   The underlying architectural fact this surfaced (getTodaysOperations
+   has no error boundary of its own around its trips/trip_assignments/
+   trip_events/trip_exceptions query, unlike every individually-
+   `.catch()`-wrapped Brief sub-block) is PRE-EXISTING and outside this
+   phase's own scope to fix — flagged here for visibility, not treated as
+   a blocker, since it does not affect Proof-of-Service's own correctly-
+   implemented error handling.
+2. `WHOLE_WINDOW_SAFETY_CAP = 5000` and the truncation-guard logic were
+   validated at the code-review/architecture level (the reasoning is
+   documented directly in the source) and via the local 30-Trip fixture
+   set (well under the cap, no truncation triggered) — not against a
+   genuinely 1000+/5000+-Trip local dataset, which was judged
+   impractical to construct for this phase's own validation budget. The
+   guard logic itself (compare returned rows against each query's own
+   authoritative `count`) is a direct, mechanical check that does not
+   depend on the specific chunk size chosen, so this is assessed as a
+   low-risk gap, not an unverified assumption about the safety
+   mechanism's own correctness.
+
+===========================================================================
+FINAL STATUS
+===========================================================================
+WHOLE-WINDOW SUMMARY:
+PASS
+
+YESTERDAY:
+PASS
+
+ZERO STATE:
+PASS
+
+ALL READY:
+PASS
+
+NEEDS REVIEW:
+PASS
+
+COUNT MATCH:
+PASS
+
+MORE THAN 25 TRIPS:
+PASS
+
+NO PAGE-1 COUNT BUG:
+PASS
+
+NO N+1:
+PASS
+
+ERROR ISOLATION:
+PASS (source-verified; live fault-injection not isolable to this feature
+— see OPEN ISSUES #1)
+
+ORG ISOLATION:
+PASS
+
+DRIVER BOUNDARY:
+PASS
+
+S1E DOCUMENT:
+DEFERRED
+
+FULL SQL:
+NOT RUN — READ-ONLY/UI PHASE
+
+NEW SCHEMA:
+NO
+
+NEW RLS:
+NO
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+238/238
+
+READY FOR S1G:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E3-S1G — Proof-of-Service Assurance Production Release
+
+Do NOT begin S1G. Do NOT run full SQL regression. Do NOT commit. Do NOT
+push. Do NOT deploy.
+
+STOP.
