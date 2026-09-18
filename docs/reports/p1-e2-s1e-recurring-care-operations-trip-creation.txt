@@ -1,0 +1,803 @@
+P1-E2-S1E — RECURRING CARE OPERATIONS SURFACE
++ CONTROLLED TRIP CREATION INTEGRATION
+COMPLETION REPORT
+
+Baseline HEAD (unchanged throughout this phase): d5df53355c12a74859e24368a8e895fe821de436
+Nothing has been committed, staged, pushed, or deployed during this phase.
+
+Per this phase's own explicit instruction, the complete SQL regression
+battery was NOT run. Only the focused suites named in §33 (plus the two
+new suites this phase itself adds) were run, each against its own fresh
+`supabase db reset`. See FOCUSED SQL RESULTS below — no evidence of a
+broader regression was found, so no wider battery was warranted.
+
+
+INFORMATION ARCHITECTURE
+===========================
+Two routes, matching the existing Trip/Request precedent exactly (a list
+route + a `[id]` detail route, each with its own colocated `actions.ts`):
+
+  /operations/recurring-care              — list
+  /operations/recurring-care/new          — create (own page, mirrors
+                                             trips/new's own precedent —
+                                             audited before choosing this
+                                             over Passengers' own
+                                             inline-Dialog pattern, since
+                                             this form's complexity
+                                             — 6+ fields including a
+                                             weekday selector — matches
+                                             New Trip's own, not
+                                             Passengers' simpler one)
+  /operations/recurring-care/[arrangementId] — detail
+
+No sidebar item, no Operations Brief block (§39 — S1F's own decision).
+Direct route access only, exactly as every other phase before its own
+discovery-integration phase has done in this epic.
+
+
+LIST EXPERIENCE
+===================
+Answers "What standing transportation commitments do I currently have?"
+— a restrained `DataTable` (the same primitive Trips/Requests already
+use, not a new list component), with a rich "Arrangement" primary column
+(Passenger name + pattern + pickup time, stacked) rather than one fact
+per column, Route, Status, and an "Upcoming" column showing the
+assurance summary (missing/scheduled counts + next open date) sourced
+ENTIRELY from `getRecurringArrangementsList`'s own join against the
+existing, unmodified assurance evaluator — never recalculated in the
+component. No scores, no percentages, no adherence/clinical terminology,
+no AI recommendations anywhere (§4's own exclusion list, audited against
+every string this page renders).
+
+RecurringCareStatusTabs mirrors RequestStatusTabs' own exact shape
+(plain shareable-URL `<Link>` segmented control, no client JS) — Active/
+Paused/Ended/All, Active as the omitted-param default. Ended arrangements
+remain fully reachable via their own tab, never hidden (§5).
+
+
+SMALL OPERATOR EXPERIENCE
+============================
+Validated live (real browser, real local Supabase): 0 arrangements (the
+calm "No recurring transportation yet." empty state, §35), 1 arrangement
+(the full create → detail → skip → unskip → create-trip → edit → pause →
+resume → end lifecycle, all on the SAME single arrangement). "3
+arrangements" was not separately re-validated as its own distinct
+scenario — the list page's code path has no branch that varies with
+row count between 1 and 20 (confirmed by direct inspection: `DataTable`
++ a plain `.map()`, no special-casing anywhere), so this would exercise
+byte-identical logic to the already-validated 1-row and 21-row cases.
+
+
+LARGE OPERATOR EXPERIENCE
+============================
+Validated live with 21 real arrangements (20 freshly inserted + 1
+already-existing) in a single organization: same route, same
+`DataTable`, same `RecurringCareStatusTabs`, no separate "enterprise
+mode" — confirmed the list rendered all 20+ active rows without error
+and without any different code path (§7's own explicit requirement).
+No Facility grouping exists anywhere (§7 — correctly out of scope).
+
+
+CREATE ARRANGEMENT FORM
+===========================
+Fields exactly: Passenger, Pickup, Destination, Pickup time, Days of
+week, Start date, End date (optional) — confirmed by direct inspection
+of `createRecurringArrangementAction`'s own FormData reads: there is no
+key for organization_id, timezone, created_by, status, paused_at, or
+ended_at anywhere in the action, so no code path could ever forward a
+forged value for any of them to the RPC (§8). Only ACTIVE Passengers are
+offered (`getActivePassengerOptions`, the exact same `status='active'`
+filter `create_trip`'s own Passenger option list already established for
+New Trip) — a UX convenience, never the authority; `create_recurring_
+arrangement` itself re-validates the identical rule server-side
+regardless (§9).
+
+Live-proven: weekday normalization (clicked Fri, Mon, Wed in that exact
+out-of-order sequence; the created arrangement's detail page rendered
+"Mon / Wed / Fri" — canonical order, never the click order — confirming
+the RPC's own normalization is what the UI actually relies on, not a
+client-side sort).
+
+
+WEEKDAY UX
+============
+No multi-select primitive existed in the design system before this
+phase (confirmed by search across `components/ui` and `components/
+operations`) — `WeekdaySelector` is a small, purpose-built toggle-group:
+real `<button>` elements (full native keyboard operability, never
+`<input type="checkbox">` fighting default browser styling), Monday →
+Sunday visual ordering regardless of the ISO-weekday storage order,
+`aria-pressed` + `aria-label` on every button (never a color-only
+signal, §38), and hidden inputs only for the currently-selected days so
+`FormData.getAll("daysOfWeek")` naturally collects exactly the selected
+ISO weekday numbers — no client-side sorting or dedup, since the RPC
+itself already owns that (§10). At least one day is visually indicated
+as required ("Select at least one day.") though the actual enforcement
+is the RPC's own ZW006 rejection of an empty array — the UI hint is
+advisory, never the authority.
+
+Live-proven: `role="group"`, exactly 7 buttons, every one carrying both
+`aria-pressed` and `aria-label` (browser-verified, not merely read from
+source).
+
+
+TIMEZONE PRESENTATION
+========================
+The operator is never asked to choose a timezone anywhere in the create
+or edit forms (§11) — no such field exists. `create_recurring_
+arrangement` derives the timezone authoritatively from the Organization's
+CURRENT timezone at creation time and stores it as an immutable snapshot
+on the row (established in S1B, reused unmodified here). Every
+subsequent render of that arrangement's own pickup time
+(`formatWallClockTime`, a new presentation helper — see below) treats
+the stored `pickup_time` as a bare wall-clock value, never re-interpreted
+through the browser's or server's own timezone, and never re-derived
+from the Organization's possibly-since-changed current timezone.
+
+
+DETAIL EXPERIENCE
+====================
+Mirrors Trip Detail's/Request Detail's own established shape exactly:
+a manually-rendered `<h2>` (not a second `<h1>` — `AppHeader`'s own
+chrome title is the real one, same convention already established for
+Trip/Request Detail), a breadcrumb `<nav>`, a `StatusBadge` next to the
+heading, `ArrangementLifecycleControls` as the action-bar cluster, and a
+two-column `grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]`
+layout — "Upcoming transportation" (the occurrence list) as the primary
+left-column panel, "Arrangement details" (a `DefinitionList`, the same
+label/value primitive used everywhere else) as the secondary right-column
+panel. The discriminated `{status: "unavailable"|"error"|"ok"}` result
+contract from `getRecurringArrangementDetail` is handled identically to
+`getTripDetail`'s own contract — "unavailable" (no existence oracle,
+covers both nonexistent and foreign-org) renders the same restrained
+`EmptyState` + "Back to Recurring Care" link; "error" (a genuine query
+failure) renders distinct copy.
+
+No occurrence is ever calculated in the page component — `assurance.
+occurrences` is passed straight through from the unmodified
+`RecurringArrangementAssurance` result into `OccurrenceList` (§12's own
+explicit instruction, verified by direct inspection: the page component
+contains no date arithmetic of any kind).
+
+
+OCCURRENCE PRESENTATION
+==========================
+`recurringOccurrenceStateLabel`/`recurringOccurrenceStateCategory` (new
+presentation.ts helpers) map the 3 locked states to human language and
+visual priority exactly as specified: SCHEDULED → "Scheduled" (quiet
+positive confirmation, matching `TripReadinessPanel`'s own "Prepared"
+treatment), MISSING → "Not yet scheduled" (attention-level warning/amber,
+never critical-red by default — §36), SKIPPED → "Skipped" (neutral/
+informational gray). No raw enum string is ever rendered — confirmed by
+grepping every occurrence-rendering component for a bare `occurrence.
+state` string interpolation (none exists; every occurrence goes through
+the label/category helpers).
+
+For SCHEDULED, every qualifying linked Trip is listed as its own row
+(never collapsed into one aggregate, matching the evaluator's own "no
+invented aggregate" contract for a multi-Trip date) with a link to its
+real Trip Detail page and — reusing `TripReadinessPanel`'s exact
+category/label conventions rather than inventing a second readiness
+vocabulary (§13) — a "Prepared"/"Needs preparation" `StatusBadge` plus
+its reason list, sourced directly from `RecurringLinkedTripFact.
+readiness` (the already-computed, structurally-mirrored `TripReadiness
+ResultLike` value S1C's own evaluator already produces for exactly this
+reuse).
+
+
+SKIP / UNSKIP UX
+===================
+Skip: a `Dialog` with a required `Textarea` reason (never a one-click
+destructive-looking action with no context, §15), calling
+`skipRecurringOccurrenceAction` → the real `skip_recurring_occurrence`
+RPC. Unskip: "Restore occurrence" (natural operator wording, per §16's
+own preference) opens a lightweight `ConfirmActionDialog` (no reason
+field — `unskip_recurring_occurrence` itself takes none) requiring an
+explicit confirm click before calling `unskip_recurring_occurrence`.
+Both revalidate and refresh the detail page in place on success — no
+client-side occurrence-state mutation is ever the source of truth
+(§15's own explicit instruction).
+
+Live-proven: Missing → Skip (with a reason) → Skipped (reason visible)
+→ Restore → Missing again (reason no longer shown).
+
+
+EDIT UX
+=========
+A `Dialog` form (not a separate route — chosen for a moderate-complexity,
+6-field-plus-weekday-selector form, consistent with this codebase's own
+Passengers precedent for "edit an existing record inline," scaled up)
+pre-filled with the arrangement's current pickup/destination/pickup-time/
+weekdays/start-date/end-date. No Passenger, timezone, organization, or
+status field exists anywhere in this dialog (§18) — structurally
+unreachable, not merely unused, since `editRecurringArrangementAction`
+has no FormData key for any of them. Explicit, restrained copy: "Changes
+affect future recurring occurrences. Existing trips are not changed."
+(§18's own required framing, verbatim).
+
+
+PAUSE / RESUME UX
+====================
+Both use the shared `ConfirmActionDialog` (no reason field — `pause_
+recurring_arrangement`/`resume_recurring_arrangement` accept none, per
+S1D's own deliberately minimal design) with the exact required copy:
+Pause — "Nemryn will stop expecting new occurrences while this
+arrangement is paused. Existing trips are not cancelled." (§19,
+verbatim); Resume — "Nemryn will resume expecting occurrences from the
+current active pattern. Existing trips remain unchanged." (§20,
+verbatim). Neither implies already-created future Trips disappear or
+change.
+
+
+END UX
+========
+`EndArrangementDialog` mirrors `CancelTripDialog`'s own established
+shape exactly: required `Textarea` reason, `variant="destructive"`
+submit button, `router.refresh()` + close on success. Copy: "Nemryn will
+stop expecting future recurring transportation from {passenger}'s
+arrangement. Existing trips are not changed. This cannot be undone."
+(§21 — never says "delete," never offers a "reopen" affordance anywhere,
+because none exists — ending is genuinely terminal, matching `end_
+recurring_arrangement`'s own locked contract). `ArrangementLifecycleControls`
+renders NO lifecycle buttons at all once `status === "ended"` (§17 —
+"Do not show impossible buttons and rely on RPC errors as UX") — live-
+verified: after ending, zero of Edit/Pause/Resume/End remain in the DOM.
+
+
+SERVER ACTIONS
+=================
+8 actions across 2 files (`new/actions.ts`: create; `[arrangementId]/
+actions.ts`: edit, pause, resume, end, skip, unskip, create-trip-for-
+occurrence) — every one follows the established convention exactly:
+`"use server"`, hand-rolled FormData validation (no Zod anywhere in this
+codebase's server actions, confirmed before writing any of these — none
+introduced here either), `requireOperationsAccess(pathname)` re-derived
+FRESH on every single call (never trusted from how the page rendered),
+`supabase.rpc(...)` only for every lifecycle-sensitive write, `error.
+code` mapped through `mapRecurringArrangementError` (one new, shared
+mapper — `recurring-arrangement-errors.ts` — covering the 4 real codes
+these RPCs actually raise: ZW001/ZW002/ZW004/ZW006, confirmed directly
+against both migrations before writing it, never guessed), and
+`revalidatePath` for every affected route on success (the arrangement
+detail route + the list route always; the Trip's own detail route plus
+`/operations`/`/operations/dispatch` additionally for the create-Trip
+action, mirroring `createTripAction`'s own identical revalidation set).
+No raw SQL, constraint name, PostgREST JSON, or unnecessary UUID is ever
+surfaced to the operator — every error path renders one of 5 fixed,
+safe strings.
+
+
+CONTROLLED TRIP CREATION ARCHITECTURE
+========================================
+New migration:
+supabase/migrations/20260918090000_recurring_occurrence_trip_creation.sql
+
+Audited `create_trip`'s own full current body (20260916110000_request_
+trip_passenger_integrity.sql) before choosing an architecture — found it
+already owns every invariant the new path needs (passenger existence/
+same-org/active; address nonblank/bounded; hard-coded `state='scheduled'`;
+one `trip_events` row; one `audit_events` row). Chose REUSE VIA A PLAIN
+FUNCTION CALL over both (a) extending `create_trip`'s own signature
+(would require `DROP FUNCTION` + re-grant, touching a working, tested,
+already-shipped function for a benefit no greater than option b) and
+(b) reimplementing the same validation/insert logic a second time (pure
+duplication risk). `create_trip_for_recurring_occurrence` therefore:
+locks the arrangement row FOR UPDATE, validates the service date
+against the arrangement's own current facts, checks idempotency, derives
+the exact UTC `scheduled_pickup_at`, then literally calls `public.
+create_trip(...)` (a normal SQL function invocation — Postgres resolves
+it under the CALLING function's own SECURITY DEFINER execution context,
+which owns `create_trip` and therefore needs no separate EXECUTE grant
+to invoke it), and finally sets `recurring_arrangement_id` on the
+resulting row in the SAME transaction. Zero duplicated validation logic;
+`create_trip` itself remains byte-for-byte unchanged (re-verified: its
+own 3 focused test suites — create_trip_tests/create_trip_atomicity_
+tests/create_trip_privilege_tests — all pass unchanged, see FOCUSED SQL
+RESULTS).
+
+`trips.recurring_arrangement_id` remains completely unreachable to any
+client role — this migration adds no GRANT of any kind on that column
+(re-verified via `information_schema.column_privileges` after applying:
+`authenticated` still holds only SELECT+REFERENCES, no UPDATE, exactly
+as it has been since S1B). The ONLY code path in this entire schema that
+ever writes to that column is this one function's own internal UPDATE
+statement, running under its own SECURITY DEFINER privilege.
+
+
+SERVICE-DATE VALIDATION
+==========================
+Every check from §25 implemented and independently proven live (not
+merely inferred from the UI only showing valid dates — §25's own
+explicit "do not accept arbitrary dates merely because the UI only
+normally shows valid ones"): arrangement exists in the authorized
+organization (ZW002, no existence oracle); `service_date >= start_date`;
+`service_date <= end_date` when set; weekday belongs to `days_of_week`;
+not currently skipped; not before the arrangement-local current date
+(resolved via the SAME DST-safe technique described below, never the
+browser's or server's own "today"); before any EFFECTIVE pause/end
+cutoff.
+
+DELIBERATE DIVERGENCE FROM skip_recurring_occurrence, confirmed correct
+by re-reading §25's own exact wording ("before any effective pause/end
+cutoff," a single unified rule symmetric to `isPatternDate`) rather than
+skip's own stricter, asymmetric "ended → reject unconditionally, no
+date carve-out" rule (a deliberate S1D product decision specific to
+DECLARING A NEW SKIP, not to catching up on a historically-legitimate
+missing occurrence): a date strictly BEFORE an arrangement's own ended-
+effective cutoff remains creatable even after the arrangement has since
+been ended — live-proven (TEST RTC-07a/07b): a date on/after the cutoff
+is rejected, but the immediately-preceding day still succeeds, exactly
+mirroring `isPatternDate`'s own ended-case logic.
+
+
+LOCAL TIME -> UTC STRATEGY
+=============================
+Audited existing timezone utilities first (§26's own explicit
+instruction) — found `local-time.ts`'s `organizationLocalToUtc`, already
+proven and tested, but reachable only from TypeScript, with no path from
+SQL. Since the RPC itself must derive `scheduled_pickup_at` under its
+OWN locked, authoritative read of the arrangement's `pickup_time`/
+`timezone` (never a browser- or server-action-supplied timestamp a
+malicious or stale caller could tamper with independently of the row
+this function itself just locked), the identical algorithm was PORTED
+— not reinvented — into a new internal-only SQL function, `_organization_
+local_to_utc(date, time, timezone)`: the same fixed winter/summer
+reference-instant offset-candidate technique, the same round-trip
+validation, the same three-way `ok`/`nonexistent`/`ambiguous` result
+contract. Never Postgres's own bare `timestamp AT TIME ZONE zone`
+construct alone, which resolves a nonexistent or ambiguous local time to
+SOME instant silently, with no indication anything was wrong — exactly
+the outcome §26 forbids.
+
+
+DST BEHAVIOR
+==============
+Empirically verified against Postgres's own live tzdata BEFORE writing
+the helper into the migration (not merely reasoned about): queried
+`America/New_York`'s real 2026 UTC offset across early March and late
+October to find the exact real transition dates (spring-forward:
+2026-03-08, 2:00 AM → 3:00 AM; fall-back: 2026-11-01, 2:00 AM → 1:00 AM),
+then tested the helper directly against those real dates. All 5 DST
+tests pass (see FOCUSED SQL RESULTS, DST-01 through DST-03b): a normal
+date resolves correctly; 2:30 AM on the spring-forward date is correctly
+detected as `nonexistent` (never silently guessed); 1:30 AM/3:30 AM
+immediately before/after that same gap both resolve `ok` with the
+correct, differing UTC offset; 1:30 AM on the fall-back date is
+correctly detected as `ambiguous`; 00:30/03:30 immediately before/after
+that repeated hour both resolve `ok` with the correct, differing UTC
+offset. No safe existing behavior was found lacking, and no ambiguity
+was left for the RPC to guess at — both `nonexistent` and `ambiguous`
+cause `create_trip_for_recurring_occurrence` to raise a clean ZW006
+rather than ever proceeding with a guessed instant.
+
+
+TRIP CREATION IDEMPOTENCY
+============================
+No new UNIQUE(arrangement, date) constraint was added (§28's own
+explicit "why not" — multiple linked Trips per date remain legitimate
+for the domain in general, e.g. future outbound/return workflows).
+Idempotency is enforced PROCEDURALLY, scoped to only this one action:
+under the arrangement row's own lock, a qualifying (non-cancelled,
+dated) linked Trip already satisfying the requested service date (in
+the arrangement's own timezone — the identical rule the pure evaluator's
+own `qualifyingTripsFor` already establishes as authoritative) is
+returned as-is, `created=false`, no new Trip, no new audit event.
+Live-proven (SQL, sequential): TEST RTC-10 — two sequential calls for
+the same arrangement+date produce exactly 1 Trip row, with the second
+call returning the identical `trip_id` and `created=false`.
+
+
+TRIP CREATION CONCURRENCY
+============================
+New file: supabase/tests/recurring_trip_creation_concurrency_test.sh —
+same genuine two-OS-process technique as the S1D concurrency suite
+(never simulated via sequential calls). Session A locks the arrangement
+row (as `postgres`, since `authenticated` holds no UPDATE grant on
+`recurring_arrangements` and Postgres's own `FOR UPDATE` clause requires
+it), holds it ~2s, then switches to `authenticated` and calls
+`create_trip_for_recurring_occurrence`, then commits. Session B, launched
+~0.3s later, calls the SAME RPC for the SAME arrangement+date directly.
+
+Scenario A (no pre-existing Trip): Session B blocked ~1.8s (genuine row-
+lock contention, not a lucky non-overlapping interleaving), then
+correctly observed A's already-committed Trip and took the idempotent
+no-op path — exactly 1 Trip row, exactly 1 `trip_created` audit event,
+exactly 1 `recurring_occurrence_trip_created` audit event, no duplicates
+of either. PASS.
+
+Scenario B (a CANCELLED Trip already exists for the target date):
+Session B blocked ~1.8s, and the race still produced exactly ONE
+replacement Trip — never two — with the pre-existing cancelled Trip
+completely untouched (byte-for-byte, re-verified after the race). PASS.
+
+Per §32, ONLY this new test was run — the full existing concurrency
+suite (S1D's own recurring-arrangement concurrency test, the Trip/
+Request/driver-invite concurrency tests) was NOT re-run, since this
+phase changed no row-lock or transaction semantics in any of them.
+
+
+CANCELLED REPLACEMENT
+========================
+Live-proven twice, independently: SQL (TEST RTC-11/11b — a pre-existing
+cancelled Trip on the target date does not satisfy the idempotency
+check, a genuine replacement Trip is created with a different `trip_id`,
+and the cancelled Trip's own row remains byte-for-byte unmodified
+afterward) and concurrency (Scenario B above — the same guarantee holds
+even under a genuine race). The cancelled Trip is never resurrected,
+never deleted, never rewritten (§29's own explicit three-way
+prohibition).
+
+
+TRIP AUDIT BEHAVIOR
+=====================
+Existing Trip creation audit behavior is completely intact — `create_
+trip`'s own `trip_events`/`audit_events` writes are unchanged (it is
+never modified; its own 3 focused suites confirm this). One additional,
+explicit, minimal `audit_events` row is written by `create_trip_for_
+recurring_occurrence` itself: `entity_type='recurring_arrangement'`,
+`action='recurring_occurrence_trip_created'`, `after_data={trip_id,
+service_date}` — never a duplicate of `create_trip`'s own `trip_created`
+event (that one exists from the Trip's own vantage point; this one keeps
+the standing commitment's OWN audit history complete without requiring
+a cross-reference through `trip_events`/`audit_events` by trip id).
+No RPC anywhere updates or deletes a previous audit_events row (§31/§24
+of S1D, re-verified). Live-proven: TEST RTC-12 — exactly 1 `trip_created`
+event + exactly 1 `recurring_occurrence_trip_created` event per real
+creation, with zero additional events written by the subsequent
+idempotent no-op retry.
+
+
+ERROR ISOLATION
+==================
+Data-load failures on the list/detail pages surface as the SAME
+distinct "error" (not "unavailable," not a silently-empty list) state
+already established for Trip/Request Detail — never rendered as "0
+arrangements" or "everything scheduled" (§34's own explicit "Unknown ≠
+healthy"). Mutation errors stay local to their own dialog/form — every
+dialog's own `state.status === "error"` branch renders inline, never
+navigating away or corrupting the rest of the page.
+
+
+AUTHORIZATION
+================
+Every page and every server action calls `requireOperationsAccess`
+independently — Organization Admin and Dispatcher allowed; a Driver-role
+Membership is redirected to `/driver` before any Recurring Care code
+ever runs (the SAME existing Operations authorization boundary every
+other phase in this epic already uses — no second role system was
+introduced). `organizationId` from the browser is never authority — the
+RPCs' own live `has_org_role` re-derivation remains the actual security
+boundary, matching every prior phase's own documented posture.
+
+
+DRIVER BOUNDARY
+==================
+Live-proven (real browser, real Driver session — `org-a-driver-a@
+example.test`): navigating directly to `/operations/recurring-care`
+redirects to `/driver`; navigating directly to `/operations/recurring-
+care/[arrangementId]` (a real, valid arrangement id) also redirects to
+`/driver` — the Driver-role Membership is caught by `requireOperations
+Access` before either page's own data-fetching logic ever runs, so no
+arrangement pattern is ever exposed to a Driver through any code path.
+Existing individual assigned-Trip access is completely unchanged (no
+file touching Driver-facing Trip UI was modified in this phase).
+
+
+ORG ISOLATION
+================
+Live-proven (real browser, two real Organization Admin sessions — Org A
+and Org B): an Org B admin navigating directly to one of Org A's real
+arrangement detail URLs sees the exact same "Arrangement unavailable"
+notice a nonexistent id would produce (no existence oracle); Org B's own
+list page never shows any of Org A's arrangements. (One test-script bug
+was found and fixed during this validation — an overly-broad CSS
+selector in the E2E harness itself briefly matched the page's own "New
+recurring arrangement" header link instead of a real arrangement row
+link, producing one false failure; re-verified manually against a real
+arrangement id and confirmed the actual application behavior was correct
+throughout — the bug was in the test script, never in the product. See
+OPEN ISSUES.)
+
+
+RESPONSIVE
+============
+Live-proven at 1024px (tablet/narrow desktop, the documented Operations-
+supported floor) on both the list and detail pages: `document.
+documentElement.scrollWidth` does not exceed `clientWidth` (no horizontal
+overflow) on either. The existing mobile guard (Operations does not
+support phone width) was not touched or bypassed.
+
+
+ACCESSIBILITY
+================
+Live-proven: `WeekdaySelector` exposes `role="group"` with an
+`aria-label`, exactly 7 buttons, every one carrying both `aria-pressed`
+(toggle state) and its own `aria-label` (full weekday name, e.g.
+"Monday" — never relying on the visible "Mon" abbreviation alone for
+assistive tech). Every button rendered anywhere in this phase's own new
+UI carries either visible text or an explicit `aria-label` — no
+icon-only lifecycle action exists (§38's own explicit prohibition,
+confirmed by direct DOM inspection, not merely by code review). Every
+dialog uses the existing `Dialog` primitive, which already provides
+`aria-labelledby`/`aria-describedby` and native focus trapping — no new
+modal behavior was introduced. Status is never communicated by color
+alone anywhere (every `StatusBadge` carries a required text `label`).
+
+
+FOCUSED SQL RESULTS
+======================
+New: supabase/tests/recurring_trip_creation_tests.sql — 24/24 PASS,
+0 FAIL (DST-01 through DST-03b: the 5 DST-safety tests for the internal
+`_organization_local_to_utc` helper; RTC-01 through RTC-16: service-date
+validation, core creation behavior, idempotency, cancelled replacement,
+audit exactly-once, authorization, org isolation, function privileges).
+
+Focused regression (per §33's own explicit "do not run all 29/30 files"
+instruction, only the named-relevant suites, each against its own fresh
+reset):
+
+  create_trip_tests.sql:                        20/20 PASS
+  create_trip_atomicity_tests.sql:                2/2 PASS
+  create_trip_privilege_tests.sql:                5/5 PASS
+  request_trip_passenger_integrity_tests.sql:   10/10 PASS
+  recurring_arrangement_foundation_tests.sql:   50/50 PASS
+  recurring_occurrence_exception_tests.sql:     19/19 PASS
+  recurring_arrangement_mutation_tests.sql:     49/49 PASS
+  client_privilege_surface_tests.sql:           18/18 PASS
+  recurring_trip_creation_tests.sql:            24/24 PASS  (NEW)
+  function_privilege_tests.sql:                   7/7 PASS
+
+TOTAL: 204/204 PASS, 0 FAIL, 0 fatal errors, across 10 files. Every
+pre-existing count identical to its S1D1-era baseline — confirming
+`create_trip` and every other reused surface is genuinely untouched. No
+evidence of any broader regression was found, so the full battery was
+not run, per this phase's own explicit instruction (reserved for S1G).
+
+
+FOCUSED CONCURRENCY RESULTS
+==============================
+New: supabase/tests/recurring_trip_creation_concurrency_test.sh —
+2/2 scenarios PASS (see TRIP CREATION CONCURRENCY above for the full
+detail). Per §32/§14, no other concurrency suite was re-run — this
+phase's own migration changes no row-lock or transaction semantics
+anywhere else.
+
+
+APPLICATION TEST RESULTS
+============================
+  - npx tsc --noEmit: clean, 0 errors.
+  - npm run lint: 0 errors, 38 warnings — 36 pre-existing (all confined
+    to .tmp-qa/ scratch scripts, unrelated to this phase) plus 2 new,
+    both in this phase's own scratch E2E validation scripts
+    (unused-var-style warnings), none in src/.
+  - npm run build: succeeded; 3 new routes registered (`/operations/
+    recurring-care`, `/operations/recurring-care/[arrangementId]`,
+    `/operations/recurring-care/new`), all other routes unchanged.
+  - npm test: 153/153 PASS, 0 FAIL — unchanged from the S1D1 baseline.
+    No new pure-core TypeScript logic was added this phase requiring a
+    dedicated unit test (all domain logic continues to live in, and is
+    reused unmodified from, `recurring-care-core.ts`/`trip-readiness-
+    core.ts`); every new file this phase adds is either a thin server
+    read-model/action wrapper or a presentation component, validated
+    live via the E2E matrix below rather than via unit tests, matching
+    this codebase's own established split between pure-core unit
+    coverage and live/E2E coverage for UI-integration work.
+
+
+LOCAL E2E RESULTS
+====================
+Two scripts, real headless Chrome via the Chrome DevTools Protocol
+(the same harness this session has used throughout this project),
+against a freshly-reset local database:
+
+.tmp-qa/s1e-recurring-care-e2e.mjs — 35/35 PASS: LIST (0 arrangements
+empty state) → CREATE (valid arrangement, out-of-order weekday clicks,
+navigation to the new detail page) → DETAIL (pattern/pickup-time/status
+rendering, 14-day occurrence labels) → SKIP → UNSKIP (restored) →
+CREATE TRIP (Missing → Scheduled, exactly one linked-trip link, the
+linked Trip opens normally in real Trip Detail) → EDIT (pattern change
+visible) → PAUSE (status updates) → RESUME (status updates) → END
+(terminal, reason visible, zero lifecycle buttons remain) → LIST
+(Ended tab shows it, Active tab does not).
+
+.tmp-qa/s1e-recurring-care-e2e-2.mjs — 10/10 PASS: LARGE OPERATOR (21
+real arrangements, 20+ rows rendered in the same DataTable, no crash),
+RESPONSIVE (no horizontal overflow at 1024px on list or detail),
+ACCESSIBILITY (WeekdaySelector ARIA shape, no icon-only buttons),
+DRIVER BOUNDARY (both routes redirect a real Driver session to
+`/driver`), ORG ISOLATION (a real Org B admin session sees "unavailable"
+for a real Org A arrangement id; Org B's own list never shows Org A's
+rows).
+
+TOTAL: 45/45 E2E assertions PASS, 0 FAIL.
+
+All fixture data created by both E2E runs (arrangements, their linked
+Trips, trip_events, and audit_events rows) was deleted afterward;
+confirmed via a direct count query that zero recurring_arrangements rows
+remained before the final fresh reset.
+
+
+FILES CREATED
+================
+  - supabase/migrations/20260918090000_recurring_occurrence_trip_creation.sql
+  - supabase/tests/recurring_trip_creation_tests.sql
+  - supabase/tests/recurring_trip_creation_concurrency_test.sh
+  - src/lib/operations/recurring-arrangement-errors.ts
+  - src/lib/operations/recurring-arrangement-options.ts
+  - src/lib/operations/recurring-care-list.ts
+  - src/lib/operations/recurring-arrangement-detail.ts
+  - src/app/operations/recurring-care/page.tsx
+  - src/app/operations/recurring-care/new/page.tsx
+  - src/app/operations/recurring-care/new/actions.ts
+  - src/app/operations/recurring-care/[arrangementId]/page.tsx
+  - src/app/operations/recurring-care/[arrangementId]/actions.ts
+  - src/components/operations/recurring-care/WeekdaySelector.tsx
+  - src/components/operations/recurring-care/NewRecurringArrangementForm.tsx
+  - src/components/operations/recurring-care/RecurringCareStatusTabs.tsx
+  - src/components/operations/recurring-care/ArrangementLifecycleControls.tsx
+  - src/components/operations/recurring-care/EditArrangementDialog.tsx
+  - src/components/operations/recurring-care/EndArrangementDialog.tsx
+  - src/components/operations/recurring-care/ConfirmActionDialog.tsx
+  - src/components/operations/recurring-care/SkipOccurrenceDialog.tsx
+  - src/components/operations/recurring-care/OccurrenceRow.tsx
+  - src/components/operations/recurring-care/OccurrenceList.tsx
+  - docs/reports/p1-e2-s1e-recurring-care-operations-trip-creation.txt (this file)
+
+Scratch/validation only (left in .tmp-qa/ per this session's existing
+convention):
+  - .tmp-qa/s1e-recurring-care-e2e.mjs
+  - .tmp-qa/s1e-recurring-care-e2e-2.mjs
+  - .tmp-qa/s1e-focused-regression.sh
+
+
+FILES MODIFIED
+=================
+  - src/lib/operations/recurring-care.ts — additive refactor only:
+    extracted the existing multi-arrangement query/compose logic into an
+    internal `composeAssuranceForArrangements` helper (byte-identical
+    behavior, confirmed via the unchanged `recurring_arrangement_
+    mutation_tests.sql`/`recurring_occurrence_exception_tests.sql`
+    results and the unit suite), and added the new exported
+    `getRecurringCareAssuranceForArrangement(organizationId,
+    arrangementId, now?)` — a single-arrangement variant that
+    deliberately bypasses the coarse date filter (so a long-ended
+    arrangement's own detail page never 404s) rather than reusing the
+    list-oriented coarse-filtered path.
+  - src/lib/operations/presentation.ts — additive only: `recurring
+    ArrangementStatusLabel`/`Category`, `recurringOccurrenceStateLabel`/
+    `Category`, `recurringWeekdayShortLabel`/`FullLabel`,
+    `formatRecurringPattern`, `formatServiceDateLabel`/`ShortLabel`,
+    `formatWallClockTime`. No existing helper's own behavior was changed.
+  - src/lib/supabase/database.types.ts — regenerated, 21 lines added,
+    0 removed, 100% additive (the 2 new functions' Args/Returns shapes).
+  - .tmp-qa/local-helper.mjs — scratch tooling fix only, not part of the
+    shipped product: `newChromeSession(...).close()` previously closed
+    only the CDP tab, never the underlying spawned Chrome OS process,
+    which left orphaned Chrome instances squatting on the harness's own
+    hardcoded starting debug port across separate script invocations
+    (discovered mid-phase when a second E2E script's browser session
+    collided with the first script's still-running, un-closed Chrome
+    process — see OPEN ISSUES). Fixed by (a) actually SIGKILL-ing the
+    spawned process on `close()`, and (b) randomizing the per-process
+    starting port. Both scripts re-ran clean after the fix.
+
+
+SCHEMA IMPACT
+================
+One new function (`create_trip_for_recurring_occurrence`) and one new
+internal-only helper function (`_organization_local_to_utc`). Zero new
+tables, zero new columns, zero altered columns, zero new indexes, zero
+new constraints. `create_trip` itself is byte-for-byte unchanged (its
+own 3 focused test suites confirm this).
+
+
+RLS IMPACT
+============
+Zero RLS policy changes. Zero new GRANT statements of any kind on
+`trips`, `recurring_arrangements`, or `recurring_occurrence_exceptions`
+— the two new functions are SECURITY DEFINER with their own individual
+EXECUTE grants only (`create_trip_for_recurring_occurrence` → `grant
+execute ... to authenticated`; `_organization_local_to_utc` → no grant
+to any role, internal-only, matching `_is_canonical_days_of_week`'s own
+established convention). `trips.recurring_arrangement_id` remains
+exactly as unreachable to `authenticated` as it was at the end of S1B —
+reconfirmed directly via `information_schema.column_privileges`.
+
+
+MAINTAIN PRIVILEGE CARRY-FORWARD
+====================================
+NOT altered in this phase, per this phase's own explicit §43 instruction.
+Carried forward, unchanged, from the S1D1 report's own OPEN ISSUES: `anon`/
+`authenticated` still inherit the PostgreSQL `MAINTAIN` privilege (letter
+code `m`) from the `postgres`-owner default ACL for schema `public` —
+confirmed still present, unchanged, via direct `pg_default_acl`
+re-inspection during this phase's own privilege audit (no new table this
+phase created was exempted from it, since default-ACL-level fixes apply
+uniformly to future tables regardless of which phase creates them — but
+this phase created no new TABLE at all, only functions, so the point is
+moot for anything this phase itself added). Also carried forward
+unchanged: the `supabase_admin`-owned default ACL entry (granting the
+FULL `arwdDxtm` privilege set to `anon`/`authenticated`/`service_role`
+for any table `supabase_admin` might ever create) remains present and
+still provably inert (no table in this schema has ever been created by
+that role). Neither was touched or reconsidered in this phase. Both
+remain scheduled for the S1G production-release phase's own explicit
+pre-release checklist: verify the linked production PostgreSQL version,
+determine whether `MAINTAIN` exists there, and use a version-safe
+migration if local and production Postgres versions differ.
+
+
+OPEN ISSUES
+=============
+None found that block S1F. Three items worth carrying forward as
+context, none a product defect:
+
+  1. A test-script bug (not a product bug) was found and fixed during
+     ORG ISOLATION validation: an overly-broad CSS selector
+     (`a[href^="/operations/recurring-care/"]`) in the second E2E script
+     matched the list page's own "New recurring arrangement" header
+     action link before any real arrangement row link, since both share
+     the same URL prefix and the header link appears earlier in document
+     order. This produced one false test failure (the script navigated
+     to the create form instead of a real arrangement, so neither the
+     "unavailable" notice nor any real data ever had a chance to appear).
+     Manually re-verified against a real arrangement id BEFORE fixing the
+     script, confirming the actual application behavior was correct the
+     entire time; the script was then fixed (scoped the selector to
+     `table a[href^=...]`) and the full suite re-run clean. Documented
+     here in full per this project's own "identify exactly what
+     happened and why" discipline, not merely noted as "later fixed."
+
+  2. `.tmp-qa/local-helper.mjs` (this session's own shared browser-
+     automation scratch tooling, not part of the shipped product) leaked
+     an OS-level Chrome process on every `close()` call, discovered when
+     a second E2E script's own Chrome instance collided with the first
+     script's still-running one on the same hardcoded starting debug
+     port. Fixed for future phases' own E2E work (see FILES MODIFIED) —
+     flagged here since it affects test tooling reliability across this
+     whole project's remaining phases, not just this one.
+
+  3. MAINTAIN privilege and the `supabase_admin`-owned default ACL
+     entry — both explicitly carried forward from S1D1 per this phase's
+     own §43 instruction, reserved for the S1G production-release
+     checklist. Not re-litigated or touched here.
+
+
+================================================================================
+FINAL RESULTS
+================================================================================
+
+RECURRING CARE LIST:                PASS
+ARRANGEMENT DETAIL:                   PASS
+CREATE ARRANGEMENT:                     PASS
+EDIT ARRANGEMENT:                         PASS
+PAUSE / RESUME:                             PASS
+END:                                          PASS
+SKIP / UNSKIP:                                  PASS
+CREATE TRIP:                                      PASS
+TRIP LINK:                                          PASS
+TRIP CREATION IDEMPOTENCY:                            PASS
+TRIP CREATION CONCURRENCY:                              PASS
+CANCELLED REPLACEMENT:                                    PASS
+ORGANIZATION TIMEZONE:                                      PASS
+DST:                                                          PASS
+ORG ISOLATION:                                                  PASS
+DRIVER BOUNDARY:                                                  PASS
+RESPONSIVE:                                                         PASS
+ACCESSIBILITY:                                                        PASS
+FULL SQL BATTERY:                                                       NOT RUN — FOCUSED REGRESSION RULE
+FOCUSED SQL:                                                              204/204
+TSC:                                                                        PASS
+LINT:                                                                         PASS
+BUILD:                                                                          PASS
+UNIT:                                                                             153/153
+READY FOR S1F:                                                                      YES
+BLOCKERS:                                                                             NONE
+
+NEXT: P1-E2-S1F — Operations Brief Recurring Care Integration
+
+Do NOT begin S1F. Do NOT run the complete SQL regression battery unless
+focused evidence requires it (none did). Do NOT commit. Do NOT push.
+Do NOT deploy.
+
+STOP.

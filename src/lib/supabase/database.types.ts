@@ -429,6 +429,126 @@ export type Database = {
         }
         Relationships: []
       }
+      recurring_arrangements: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          days_of_week: number[]
+          destination_description: string
+          end_date: string | null
+          ended_at: string | null
+          ended_reason: string | null
+          id: string
+          organization_id: string
+          passenger_id: string
+          paused_at: string | null
+          pickup_description: string
+          pickup_time: string
+          start_date: string
+          status: string
+          timezone: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          days_of_week: number[]
+          destination_description: string
+          end_date?: string | null
+          ended_at?: string | null
+          ended_reason?: string | null
+          id?: string
+          organization_id: string
+          passenger_id: string
+          paused_at?: string | null
+          pickup_description: string
+          pickup_time: string
+          start_date: string
+          status?: string
+          timezone: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          days_of_week?: number[]
+          destination_description?: string
+          end_date?: string | null
+          ended_at?: string | null
+          ended_reason?: string | null
+          id?: string
+          organization_id?: string
+          passenger_id?: string
+          paused_at?: string | null
+          pickup_description?: string
+          pickup_time?: string
+          start_date?: string
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recurring_arrangements_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recurring_arrangements_passenger_id_organization_id_fkey"
+            columns: ["passenger_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "passengers"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      recurring_occurrence_exceptions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+          reason: string
+          recurring_arrangement_id: string
+          service_date: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+          reason: string
+          recurring_arrangement_id: string
+          service_date: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+          reason?: string
+          recurring_arrangement_id?: string
+          service_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recurring_occurrence_exceptio_recurring_arrangement_id_org_fkey"
+            columns: ["recurring_arrangement_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "recurring_arrangements"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "recurring_occurrence_exceptions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       request_events: {
         Row: {
           actor_user_id: string | null
@@ -797,6 +917,7 @@ export type Database = {
           passenger_id: string
           pickup_description: string
           pickup_facility_id: string | null
+          recurring_arrangement_id: string | null
           request_id: string | null
           scheduled_pickup_at: string | null
           state: string
@@ -818,6 +939,7 @@ export type Database = {
           passenger_id: string
           pickup_description: string
           pickup_facility_id?: string | null
+          recurring_arrangement_id?: string | null
           request_id?: string | null
           scheduled_pickup_at?: string | null
           state?: string
@@ -839,6 +961,7 @@ export type Database = {
           passenger_id?: string
           pickup_description?: string
           pickup_facility_id?: string | null
+          recurring_arrangement_id?: string | null
           request_id?: string | null
           scheduled_pickup_at?: string | null
           state?: string
@@ -871,6 +994,13 @@ export type Database = {
             columns: ["pickup_facility_id", "organization_id"]
             isOneToOne: false
             referencedRelation: "facilities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "trips_recurring_arrangement_id_org_fkey"
+            columns: ["recurring_arrangement_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "recurring_arrangements"
             referencedColumns: ["id", "organization_id"]
           },
           {
@@ -960,6 +1090,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      _is_canonical_days_of_week: {
+        Args: { p_days: number[] }
+        Returns: boolean
+      }
       _is_valid_trip_transition: {
         Args: { p_from_state: string; p_to_state: string }
         Returns: boolean
@@ -984,6 +1118,13 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      _organization_local_to_utc: {
+        Args: { p_date: string; p_time: string; p_timezone: string }
+        Returns: {
+          status: string
+          utc: string
+        }[]
       }
       assign_trip: {
         Args: { p_driver_id: string; p_trip_id: string; p_vehicle_id?: string }
@@ -1050,6 +1191,25 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      create_recurring_arrangement: {
+        Args: {
+          p_days_of_week: number[]
+          p_destination_description: string
+          p_end_date?: string
+          p_organization_id: string
+          p_passenger_id: string
+          p_pickup_description: string
+          p_pickup_time: string
+          p_start_date: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["recurring_arrangement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       create_trip: {
         Args: {
           p_appointment_at?: string
@@ -1063,6 +1223,20 @@ export type Database = {
           p_pickup_facility_id?: string
           p_request_id?: string
           p_scheduled_pickup_at?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_creation_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_creation_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_trip_for_recurring_occurrence: {
+        Args: {
+          p_arrangement_id: string
+          p_organization_id: string
+          p_service_date: string
         }
         Returns: Database["public"]["CompositeTypes"]["trip_creation_result"]
         SetofOptions: {
@@ -1202,6 +1376,39 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      edit_recurring_arrangement: {
+        Args: {
+          p_arrangement_id: string
+          p_days_of_week: number[]
+          p_destination_description: string
+          p_end_date?: string
+          p_organization_id: string
+          p_pickup_description: string
+          p_pickup_time: string
+          p_start_date: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["recurring_arrangement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      end_recurring_arrangement: {
+        Args: {
+          p_arrangement_id: string
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["recurring_arrangement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       get_driver_invite_preview: {
         Args: { p_token: string }
         Returns: Database["public"]["CompositeTypes"]["driver_invite_preview"]
@@ -1276,6 +1483,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      pause_recurring_arrangement: {
+        Args: { p_arrangement_id: string; p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["recurring_arrangement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       reassign_trip: {
         Args: {
           p_driver_id: string
@@ -1336,6 +1553,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      resume_recurring_arrangement: {
+        Args: { p_arrangement_id: string; p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["recurring_arrangement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       revoke_driver_invite: { Args: { p_invite_id: string }; Returns: boolean }
       signup_create_organization: {
         Args: {
@@ -1348,6 +1575,35 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "organization_signup_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      skip_recurring_occurrence: {
+        Args: {
+          p_arrangement_id: string
+          p_organization_id: string
+          p_reason: string
+          p_service_date: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["recurring_occurrence_exception_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_occurrence_exception_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      unskip_recurring_occurrence: {
+        Args: {
+          p_arrangement_id: string
+          p_organization_id: string
+          p_service_date: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["recurring_occurrence_exception_result"]
+        SetofOptions: {
+          from: "*"
+          to: "recurring_occurrence_exception_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1436,6 +1692,35 @@ export type Database = {
         driver_id: string | null
         organization_id: string | null
         linked: boolean | null
+      }
+      recurring_arrangement_result: {
+        arrangement_id: string | null
+        organization_id: string | null
+        passenger_id: string | null
+        pickup_description: string | null
+        destination_description: string | null
+        pickup_time: string | null
+        days_of_week: number[] | null
+        start_date: string | null
+        end_date: string | null
+        timezone: string | null
+        status: string | null
+        paused_at: string | null
+        ended_at: string | null
+        ended_reason: string | null
+        created_by: string | null
+        created_at: string | null
+        changed: boolean | null
+      }
+      recurring_occurrence_exception_result: {
+        exception_id: string | null
+        arrangement_id: string | null
+        organization_id: string | null
+        service_date: string | null
+        reason: string | null
+        created_by: string | null
+        created_at: string | null
+        changed: boolean | null
       }
       request_creation_result: {
         request_id: string | null

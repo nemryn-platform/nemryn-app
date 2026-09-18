@@ -2,13 +2,20 @@ import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getTodaysOperations } from "./todays-operations";
 import { getTomorrowReadiness } from "./tomorrow-readiness";
+import { getRecurringArrangementsList } from "./recurring-care-list";
 import { isActiveTripState } from "./presentation";
-import { deriveOperationsBrief, countDriversCurrentlyOnTrip, type DriverAssignmentStateRow } from "./operations-brief-core";
+import {
+  deriveOperationsBrief,
+  countDriversCurrentlyOnTrip,
+  deriveRecurringCareSummary,
+  type DriverAssignmentStateRow,
+} from "./operations-brief-core";
 import type {
   OperationsBriefData,
   OperationsBriefDriverSnapshot,
   OperationsBriefRequestSummary,
   OperationsBriefTomorrowSummary,
+  OperationsBriefRecurringCareSummary,
 } from "./operations-brief-core";
 
 export type {
@@ -17,6 +24,7 @@ export type {
   OperationsBriefDriverSnapshot,
   OperationsBriefRequestSummary,
   OperationsBriefTomorrowSummary,
+  OperationsBriefRecurringCareSummary,
 } from "./operations-brief-core";
 
 /**
@@ -196,6 +204,33 @@ export async function getTomorrowReadinessSummary(
 }
 
 /**
+ * Compact Recurring Care summary for Operations Brief (P1-E2-S1F §4/§16)
+ * — reuses `getRecurringArrangementsList` (recurring-care-list.ts)
+ * directly, the SAME 2-round-trip read model `/operations/recurring-care`
+ * itself renders from, then narrows the result down to the 4 facts
+ * `OperationsBriefRecurringCareSummary` needs via the pure
+ * `deriveRecurringCareSummary` (operations-brief-core.ts) — never a
+ * second query architecture, never a second weekday/date evaluator. Per
+ * §16's own explicit instruction, loading each active arrangement's full
+ * assurance object (including its complete 14-date occurrence list) and
+ * discarding the detail here, rather than building a leaner dedicated
+ * query, is the accepted tradeoff — this function's own job is exactly
+ * that discarding step, nothing more.
+ */
+export async function getRecurringCareSummary(
+  organizationId: string,
+  now: Date = new Date(),
+): Promise<OperationsBriefRecurringCareSummary> {
+  const rows = await getRecurringArrangementsList(organizationId, now);
+  return deriveRecurringCareSummary(
+    rows.map((row) => ({
+      status: row.status,
+      assurance: row.assurance ? { missingCount: row.assurance.missingCount, nextMissingDate: row.assurance.nextMissingDate } : null,
+    })),
+  );
+}
+
+/**
  * The one Operations Brief entry point. `organizationId`/`timezone` follow
  * the exact same caller-resolves-context convention getTodaysOperations()
  * already established. `now` defaults to the real current instant but is
@@ -203,12 +238,14 @@ export async function getTomorrowReadinessSummary(
  * createServerSupabaseClient) can pin it — mirrors organizationDayBoundsUtc's
  * own existing `now: Date` parameter shape, not a new pattern.
  *
- * Tomorrow Readiness (P1-E1-S4E) is fetched as its own isolated,
- * best-effort promise — started before the existing Promise.all so it
- * overlaps with those fetches in wall-clock time (S4E §12's own "do not
- * serially delay the page" instruction), but caught independently so a
- * genuine failure there degrades only the Brief's own compact block,
- * never this whole function (S4E §11).
+ * Tomorrow Readiness (P1-E1-S4E) and Recurring Care (P1-E2-S1F §17) are
+ * each fetched as their own isolated, best-effort promise — both started
+ * before the existing Promise.all so they overlap with those fetches in
+ * wall-clock time (S4E §12's own "do not serially delay the page"
+ * instruction, reused unchanged for Recurring Care), but each caught
+ * independently so a genuine failure in either degrades only that one
+ * compact block, never this whole function nor the other block (S4E §11 /
+ * S1F §17 — "Unknown ≠ healthy," never coerced to a zero/covered value).
  */
 export async function getOperationsBrief(
   organizationId: string,
@@ -221,6 +258,10 @@ export async function getOperationsBrief(
     now,
   ).catch(() => null);
 
+  const recurringCarePromise: Promise<OperationsBriefRecurringCareSummary | null> = getRecurringCareSummary(organizationId, now).catch(
+    () => null,
+  );
+
   const [todaysOperations, driverSnapshot, requestSummary] = await Promise.all([
     getTodaysOperations(organizationId, timezone),
     getDriverSnapshot(organizationId),
@@ -228,6 +269,7 @@ export async function getOperationsBrief(
   ]);
 
   const tomorrowReadiness = await tomorrowReadinessPromise;
+  const recurringCare = await recurringCarePromise;
 
-  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, tomorrowReadiness, now);
+  return deriveOperationsBrief(todaysOperations, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, now);
 }

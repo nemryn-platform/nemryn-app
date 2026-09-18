@@ -1,0 +1,555 @@
+P1-E2-S1A1 — RECURRING CARE DOMAIN DECISION LOCK
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Architecture / product-decision reconciliation only. No
+implementation, no SQL, no migration, no UI, no deployment.
+
+Grounding checks performed before locking (read, not written):
+`organizations.timezone` (20260901100000_organization_operational_
+timezone.sql) confirmed as a validated IANA-text column backed by a
+dedicated `is_valid_iana_timezone()` function — the direct precedent
+reused below for the arrangement's own timezone field. Confirmed no
+array-typed column exists anywhere in the current schema (grepped every
+migration) — the days-of-week decision below is flagged as the first
+one, deliberately, not silently. Confirmed the existing "timestamp +
+reason text" pattern for terminal/closing transitions
+(`trips.cancelled_at`/`cancellation_reason`, `trip_assignments.ended_at`/
+`end_reason`) — reused directly for RecurringArrangement's own ended
+state below.
+
+------------------------------------------------------------------------
+LOCKED DOMAIN NAME
+------------------------------------------------------------------------
+Entity: RecurringArrangement
+Table: `recurring_arrangements`
+Route: `/operations/recurring-care`
+No repository naming constraint makes any of these invalid — all three
+are ordinary, available names consistent with existing conventions
+(`transportation_requests`, `trip_assignments`, `/operations/tomorrow`).
+Locked as written; not reopened as a design exercise.
+
+------------------------------------------------------------------------
+AUTHORITATIVE TRIP LINK
+------------------------------------------------------------------------
+Corrected from S1A's own deferred-to-S1E proposal: `trips.
+recurring_arrangement_id uuid null` is now FOUNDATIONAL, part of S1B,
+not a later UI convenience. S1A's own reasoning already established why
+inference (passenger + date + pickup/destination text matching) is
+fragile — a dispatcher entering slightly different pickup wording, or
+creating the linked Trip a day off from the nominal date, would cause
+the evaluator to silently misjudge an occurrence as both "missing" and
+"duplicate." An assurance system whose core claim is "does the Trip that
+should exist actually exist" cannot be built on a match it cannot
+prove.
+
+Nullability is required and permanent, not a temporary MVP relaxation:
+ordinary one-off Trips (the overwhelming majority today and going
+forward) have no arrangement at all; every existing production Trip row
+must remain valid with this column simply `null`; recurrence must never
+become mandatory for Trip, which remains a general-purpose entity.
+
+FK design follows the SAME organization-aware composite-FK discipline
+already used for every other cross-tenant-relevant reference in this
+schema (domain-model.md §N — e.g. `trip_assignments(driver_id,
+organization_id) → drivers(id, organization_id)`): `recurring_
+arrangements` will carry `unique(id, organization_id)`, and `trips`
+will carry `foreign key (recurring_arrangement_id, organization_id)
+references recurring_arrangements(id, organization_id)`. This makes an
+Org A Trip referencing an Org B arrangement a schema-level impossibility,
+not merely something RLS is trusted to catch — identical reasoning to
+every other composite FK already in the model. Not written yet (S1B).
+
+------------------------------------------------------------------------
+OCCURRENCE SATISFACTION RULE
+------------------------------------------------------------------------
+Locked exactly as specified, restated as the authoritative MVP
+definition: an expected occurrence for local service date D (in the
+arrangement's own timezone — see TIMEZONE DECISION) is SATISFIED only
+when at least one Trip exists such that:
+  Trip.organization_id = arrangement.organization_id
+  AND Trip.recurring_arrangement_id = arrangement.id
+  AND Trip.state != 'cancelled'
+  AND Trip.scheduled_pickup_at resolves to local date D in the
+      arrangement's timezone.
+
+A Trip with `scheduled_pickup_at IS NULL` never satisfies a dated
+occurrence — a date cannot be matched against the absence of a date. A
+Trip linked to the arrangement but later moved (rescheduled) to a
+different service date satisfies whichever date it is now actually
+scheduled for, never its previous one — the satisfaction rule is always
+evaluated against the Trip's own current, live `scheduled_pickup_at`,
+never a cached "originally intended for" value. No stored
+`ExpectedOccurrence` table is created for MVP — "expected occurrence" is
+a pure calendar-math derivation (arrangement pattern + horizon → a set
+of dates), computed the same way Tomorrow Readiness already derives
+"tomorrow" from `organizationDayBoundsUtc` without storing it.
+
+Local-date resolution reuses the same exact-timezone technique already
+proven in this codebase (P1-E1-S4C1's `organizationLocalToUtc`/day-
+bounds machinery) — never a `+24h` approximation, never a naive UTC-date
+comparison. Not implemented yet (S1C).
+
+------------------------------------------------------------------------
+MULTIPLE TRIPS PER DATE
+------------------------------------------------------------------------
+Locked: no `UNIQUE(recurring_arrangement_id, service_date)` constraint,
+now or later, without a separate, deliberate product decision. An
+occurrence date may legitimately carry more than one linked Trip —
+outbound + return being the clearest current example, alongside any
+other legitimate future multi-Trip pattern this audit hasn't
+anticipated. The occurrence-satisfaction rule above already only asks
+"does AT LEAST ONE qualifying Trip exist" — it is naturally satisfied
+by one Trip or several, with no special-casing required.
+
+------------------------------------------------------------------------
+RETURN TRANSPORTATION BOUNDARY
+------------------------------------------------------------------------
+Locked: Option A — `return_trip_needed` is OMITTED from
+RecurringArrangement's MVP field set entirely, matching the phase's own
+preferred default.
+
+Reasoning: the MVP assurance evaluator (OCCURRENCE SATISFACTION RULE
+above) only ever asks "does at least one qualifying Trip exist for date
+D" — it has no behavior that would read or act on a `return_trip_needed`
+value even if the field existed, because return-leg assurance is
+explicitly deferred (no `Trip.leg` discriminator exists to truthfully
+tell an outbound Trip from a return Trip — confirmed unchanged by this
+phase; `Trip.leg` is explicitly NOT added here). Adding the field now
+would be dead metadata with zero attached evaluator behavior — the exact
+"never add a field a screen/system doesn't yet use" mistake this
+codebase's own domain model repeatedly avoids elsewhere (e.g., ZD-069's
+own `leg` field staying PROVISIONAL rather than being added speculatively).
+No current workflow requires this metadata immediately — Recurring Care
+Assurance's stated MVP scope is confirming existence of the PRIMARY
+occurrence only; return-leg assurance for recurring arrangements remains
+a real, named future capability, revisited once Trip gains an
+authoritative leg/return discriminator (a decision this phase does not
+make).
+
+------------------------------------------------------------------------
+FINAL MVP FIELD SET
+------------------------------------------------------------------------
+`recurring_arrangements` (illustrative column list — not a migration):
+  id                          uuid, primary key
+  organization_id             uuid, not null, references organizations(id)
+  passenger_id                uuid, not null (composite FK to
+                                 passengers(id, organization_id) per the
+                                 existing cross-tenant-leakage pattern)
+  pickup_description          text, not null
+  destination_description     text, not null
+  pickup_time                 time, not null (wall-clock, paired with
+                                 `timezone` below — never a bare
+                                 timestamptz, since this is a repeating
+                                 local commitment, not one instant)
+  days_of_week                smallint[], not null (see DAYS-OF-WEEK
+                                 REPRESENTATION)
+  start_date                  date, not null
+  end_date                    date, nullable (open-ended when null)
+  timezone                    text, not null (see TIMEZONE DECISION)
+  status                      text, not null, default 'active' (see
+                                 STATUS LIFECYCLE)
+  paused_at                   timestamptz, nullable (see PAUSE SEMANTICS)
+  ended_at                    timestamptz, nullable
+  ended_reason                text, nullable (required by the controlled
+                                 RPC precisely when status is being set
+                                 to 'ended' — not a blanket NOT NULL
+                                 column constraint, since the row is
+                                 valid without it in every other status)
+  created_by                  uuid, references auth.users(id)
+  created_at                  timestamptz, not null, default now()
+  updated_at                  timestamptz, not null, default now()
+  unique(id, organization_id)                        — composite-FK anchor
+
+Explicitly OMITTED from this MVP field set, each per its own locked
+section below: `return_trip_needed` (RETURN TRANSPORTATION BOUNDARY),
+`facility_id` (FACILITY DECISION), `request_id` (REQUEST HUB DECISION).
+`appointment_time` remains in the same OPTIONAL/deferred state S1A
+already placed it in — this phase does not newly lock it either way, not
+having been raised in this phase's own instructions.
+
+------------------------------------------------------------------------
+TIMEZONE DECISION
+------------------------------------------------------------------------
+Locked: Option A — the arrangement stores its own `timezone` snapshot,
+captured from `organizations.timezone` at creation time, never re-read
+live from Organization thereafter.
+
+Reasoning: this is the identical strategy already proven for Trip's own
+pickup/destination address fields (domain-model.md §J's confirmed hybrid
+snapshot strategy) — a `pickup_time` is a repeating LOCAL wall-clock
+commitment, and if the arrangement instead always deferred to the
+organization's CURRENT timezone, a future (rare, but real and already
+supported at the platform level — Organization.timezone is an editable
+column) organization timezone change would silently reinterpret every
+existing standing schedule's own wall-clock meaning without anyone
+having touched the arrangement itself — exactly the kind of "historical
+data silently reinterpreted because a live source changed" failure mode
+this codebase's own snapshot discipline exists to prevent. The
+`timezone` column reuses the SAME validated-IANA-text pattern and the
+SAME `is_valid_iana_timezone()` function already built and proven for
+`organizations.timezone` — not a duplicated concept, a directly reused
+one.
+
+------------------------------------------------------------------------
+DAYS-OF-WEEK REPRESENTATION
+------------------------------------------------------------------------
+Locked: `days_of_week smallint[]`, using Postgres's own ISO weekday
+numbering (1 = Monday … 7 = Sunday — the exact values `EXTRACT(ISODOW
+FROM date)` already returns natively).
+
+This is flagged explicitly as the first array-typed column in this
+schema (confirmed by grep — no other migration uses one). It is chosen
+deliberately over the alternatives, not by default:
+  - Seven separate boolean columns (`monday boolean`, …) — the more
+    "conventional for this codebase" option on its face, but the
+    phase's own stated requirements ("no duplicate weekday,"
+    "deterministic ordering") are meaningless for boolean columns (they
+    have no duplication or ordering concept at all), which is itself
+    evidence the intended shape is a small ordered set, not seven flags.
+    Seven columns is also needlessly verbose for what is fundamentally
+    one fact ("which days").
+  - A bitmask smallint — compact, but opaque/unreadable compared to
+    this codebase's own consistent preference for self-documenting
+    values (`return_trip_needed text check (...)`, `visibility text
+    check (...)`) everywhere else.
+  - `smallint[]` with ISO weekday numbers — chosen because it composes
+    directly, with zero translation layer, with the evaluator's own
+    need to compute "which ISO weekday does candidate date D fall on"
+    (`EXTRACT(ISODOW FROM D)`) and check `ISODOW = ANY(days_of_week)` —
+    the representation and the evaluation logic use the identical
+    vocabulary natively.
+
+Constraints (documented now, enforced in S1B, not written here):
+  - not null, `cardinality(days_of_week) >= 1` (at least one weekday).
+  - every element in `[1, 7]` (no value outside the valid weekday
+    vocabulary).
+  - no duplicate elements (`cardinality(days_of_week) =
+    cardinality(array(select distinct unnest(days_of_week)))`, or an
+    equivalent check).
+  - stored in canonical ascending order (deterministic ordering) —
+    normalized by the controlled creation/edit RPC before write, not
+    left to whatever order a caller happened to submit, so two
+    arrangements with the same days always compare and display
+    identically.
+
+------------------------------------------------------------------------
+STATUS LIFECYCLE
+------------------------------------------------------------------------
+Locked states: `active`, `paused`, `ended`.
+Locked legal transitions: `active → paused`, `paused → active`,
+`active → ended`, `paused → ended`. `ended` is terminal — no transition
+out, no reopening, matching this codebase's own "terminal means
+terminal" discipline already established for Trip (`completed`/
+`cancelled`/`no_show`) and TransportationRequest (`declined`/
+`cancelled`). No compelling product reason to allow reopening an ended
+arrangement has surfaced in this or the prior audit; if one ever does,
+that is a new, deliberate decision, not a default.
+
+Ending reason: LOCKED as mandatory, recorded through the authoritative
+mutation/audit path — mirrors `trips.cancellation_reason` (mandatory)
+and `trip_assignments.end_reason` exactly, both already-established
+precedents for "a terminal/closing transition must explain why."
+
+Pause reason: not explicitly asked by this phase's own instructions: a
+reasoned addition, flagged as such rather than silently assumed —
+recommended OPTIONAL (nullable). Pausing is reversible and lower-stakes
+than ending; no existing precedent in this codebase requires a mandatory
+reason for a reversible status change (Driver/Passenger/Facility
+`status='inactive'` all toggle with no reason field at all) — mandatory
+reasons in this codebase are reserved for genuinely terminal actions.
+This is a recommendation for S1D to confirm, not a hard lock on the
+level of the phase's own explicit instructions.
+
+No generic hard DELETE exists for operator workflows, at any point —
+`ended` is the only "this arrangement is done" representation, matching
+the "deactivate, never delete" discipline already used for Driver,
+Passenger, Vehicle, Facility.
+
+------------------------------------------------------------------------
+PAUSE SEMANTICS
+------------------------------------------------------------------------
+Locked meaning of `status = 'paused'`: from the effective pause instant
+onward, Recurring Care Assurance generates no new expected occurrences
+for this arrangement; already-created Trips (past or already-scheduled
+future ones) are NOT cancelled, edited, or otherwise touched — they
+remain exactly as they are, and their own independent Trip lifecycle
+continues normally; the arrangement's own history (when it was paused,
+by whom, and later resumed) is preserved, never overwritten.
+
+Deterministic effective point: `paused_at timestamptz`, set the instant
+`status` transitions to `paused` and cleared back to null on `resume` —
+this single field both records the audit-relevant "when was this
+paused" fact AND serves as the assurance evaluator's own effective
+cutoff (any expected date on or after the LOCAL calendar date `paused_at`
+falls on, in the arrangement's own timezone, is excluded from
+evaluation while paused). This directly mirrors the existing "timestamp
+IS the effective point" pattern already used for `ended_at`/
+`cancelled_at` elsewhere in this schema, rather than introducing a
+second, separate `pause_effective_date` concept. A genuinely distinct
+"schedule a pause for some future date" capability (pause-now vs.
+pause-later) is a real, separable feature that isn't requested or
+evidenced as needed yet — deferred, not built preemptively; adding it
+later (an additional optional column) would not break this design.
+
+------------------------------------------------------------------------
+EDIT SEMANTICS
+------------------------------------------------------------------------
+Locked, exactly as S1A recommended: pattern edits (pickup_time,
+days_of_week, pickup/destination description, end_date, etc.) affect
+only NOT-YET-CREATED future expected occurrences. Existing Trips —
+whether already completed, already in progress, or already scheduled
+for a future date via `trips.recurring_arrangement_id` — are independent
+operational records and are never silently rewritten by an arrangement
+edit. Past dates are immutable history, unchanged by any edit. No bulk
+Trip rewrite mechanism is built, at any point, for this purpose — an
+edit changes the PATTERN going forward; it never reaches backward into
+already-created rows.
+
+------------------------------------------------------------------------
+MUTATION SECURITY
+------------------------------------------------------------------------
+Corrected from S1A's own imprecise "full CRUD" phrasing, which risked
+being read as generic browser-authoritative table grants. Locked model:
+
+READ: Organization Admin + Dispatcher, same organization only — an
+  ordinary RLS SELECT policy, the same shape already used for Trip/
+  Passenger/Facility read access.
+CREATE / EDIT (future pattern only, per EDIT SEMANTICS) / PAUSE /
+  RESUME / END: exclusively through controlled, server-authoritative
+  RPC boundaries (SECURITY DEFINER functions), mirroring `create_trip`/
+  `assign_trip`/`reassign_trip`'s own established trusted-path
+  discipline exactly — never a direct table-level INSERT/UPDATE policy
+  for any role, including Organization Admin. Each RPC is small and
+  single-purpose (one action, one name), matching the "one action name
+  standing for six different real operations would be exactly the
+  ambiguity this model set out to avoid" principle already recorded
+  elsewhere in this codebase's own decision register.
+DRIVER: no SELECT policy of any kind, no mutation path of any kind — see
+  DRIVER PRIVACY.
+No client-authoritative `organization_id` at any layer (every RPC
+resolves it server-side from the caller's authenticated membership,
+exactly like every existing controlled mutation in this codebase).
+No service-role usage in browser code, ever.
+No generic DELETE workflow for operators — status transitions only (see
+  STATUS LIFECYCLE).
+S1B establishes deny-by-default RLS on this table in the same migration
+that creates it (the same non-negotiable discipline as every other
+tenant-owned table — domain-model.md §R invariant 2), with a real
+adversarial RLS test-file extension before the phase is considered
+complete.
+
+------------------------------------------------------------------------
+AUDIT HISTORY ACCESS
+------------------------------------------------------------------------
+Locked: the existing `audit_events` authorization model is unchanged —
+Dispatcher still gets no generic `audit_events` SELECT access, matching
+the current, already-shipped access matrix exactly. RecurringArrangement
+mutation RPCs (create/edit/pause/resume/end) still WRITE to
+`audit_events` (`entity_type = 'recurring_arrangement'`), exactly the
+same pattern already followed by 7 existing trusted RPCs today — no new
+audit infrastructure, no schema change to that table.
+
+If Dispatcher-facing recurring-arrangement history is ever genuinely
+needed, the correct future shape is a narrowly-scoped, dedicated
+recurring-arrangement-history read path (a small RPC or view returning
+only that entity's own events) — never a broadened generic
+`audit_events` SELECT grant for Dispatcher. This mirrors the same
+"narrow, single-purpose, never a blanket grant" principle already used
+for Platform Admin's own deliberately limited standing read scope
+elsewhere in this codebase's decision register. Not built now — recorded
+as the locked future direction if this need ever materializes.
+
+------------------------------------------------------------------------
+SKIP-DATE STRATEGY
+------------------------------------------------------------------------
+Conceptual requirement locked: Recurring Care Assurance eventually needs
+an explicit occurrence exception for a single date — arrangement +
+service_date + a skip reason/note + actor + timestamp — so a
+deliberately-skipped date is never perpetually misreported as "missing"
+by the evaluator. Not built in this phase.
+
+Sequencing locked per the phase's own stated preference, made explicit:
+this mechanism is Option B — added in S1C, NOT part of S1B. S1B stays
+narrowly scoped to the Arrangement entity itself plus the authoritative
+`trips.recurring_arrangement_id` link (the two structurally
+foundational pieces nothing else can be built without). The skip-date
+mechanism belongs in S1C because it is part of what makes the assurance
+EVALUATOR correct, not part of the base domain foundation — the
+evaluator cannot be considered complete, and Recurring Care Assurance
+cannot ship to any user-facing surface, without it (an evaluator that
+nags about every deliberately-skipped holiday would be actively
+misleading, not merely incomplete). This directly matches, and confirms
+as final, the "skip-date mechanism if required by §11" line already
+present in the phase's own revised S1C slice description — it is
+required.
+
+------------------------------------------------------------------------
+FACILITY DECISION
+------------------------------------------------------------------------
+Locked: `facility_id` is DEFERRED from the RecurringArrangement
+foundation entirely. MVP uses `pickup_description`/
+`destination_description` — plain text, exactly mirroring Trip's own
+immutable execution-description fields (domain-model.md §J). Facility
+grouping (a real, useful future capability — see the prior audit's
+LARGE OPERATOR EXPERIENCE section) can be added later as an additive,
+optional soft reference without changing the arrangement's own identity
+or any already-written row. Facility Coordination / Facility Portal work
+is explicitly not begun here.
+
+------------------------------------------------------------------------
+REQUEST HUB DECISION
+------------------------------------------------------------------------
+Locked: `request_id` is DEFERRED from the RecurringArrangement
+foundation. Initial recurring-arrangement creation is internal/operator-
+owned only (Organization Admin or Dispatcher, direct entry) — no
+coupling to Request Hub's own review lifecycle in S1B. A future "Create
+Recurring Arrangement" action from an accepted, suitable Request remains
+a real, additive integration point for a later phase, not a foundation
+requirement.
+
+------------------------------------------------------------------------
+14-DAY HORIZON
+------------------------------------------------------------------------
+Locked as a product decision, no longer an open question: 14 days,
+rolling. Materially more forward visibility than Tomorrow Readiness's
+own single-day window; exposes multiple real occurrences for the common
+weekly patterns this capability exists for (a Mon/Wed/Fri arrangement
+shows roughly 6 occurrences within the window — enough to see a genuine
+gap with real lead time to act); bounded and inexpensive to compute on
+every read; does not flood a small operator with months of speculative
+future work. To be implemented later as exactly ONE named constant
+(mirroring `NEXT_DEPARTURES_WINDOW_MS`'s own existing convention in this
+codebase), never scattered literal values across multiple call sites.
+
+------------------------------------------------------------------------
+DRIVER PRIVACY
+------------------------------------------------------------------------
+Locked: Driver receives NO direct RecurringArrangement read policy, of
+any shape, under any condition — not even scoped to "the arrangement
+behind a Trip I'm currently assigned to." A Driver continues to see only
+the individual Trip they are assigned to, through the existing
+assignment-scoped mechanisms already governing Trip/TripAssignment
+access today — nothing about the broader recurring pattern (which days,
+how long-standing, when it started) is ever exposed merely because the
+Driver happens to hold one occurrence's assignment. This directly
+extends ZD-080's own "no generic Driver SELECT on Passenger, ever" rule
+to RecurringArrangement by identical reasoning: a standing pattern
+reveals more about a Passenger's routine than any single Trip does, so
+it deserves at least the same protection, not less.
+
+------------------------------------------------------------------------
+REVISED IMPLEMENTATION SLICES
+------------------------------------------------------------------------
+Adopted from the phase's own directed revision, confirmed consistent
+with every decision locked above:
+
+S1B — Recurring Arrangement Domain Foundation
+  `recurring_arrangements` table (FINAL MVP FIELD SET above);
+  `trips.recurring_arrangement_id` (now foundational, not deferred —
+  see AUTHORITATIVE TRIP LINK) with its composite FK; constraints/
+  indexes (including the days_of_week CHECK constraints); deny-by-
+  default RLS with Org Admin/Dispatcher-only SELECT and zero direct
+  mutation policies (see MUTATION SECURITY); explicit absence of any
+  Driver policy (see DRIVER PRIVACY). NO UI.
+
+S1C — Recurring Occurrence Exceptions + Assurance Core
+  The skip-date mechanism (now confirmed required here, see SKIP-DATE
+  STRATEGY); pure expected-date generation (pattern + 14-day horizon →
+  dates, mirroring Tomorrow Readiness's own pure-core discipline); the
+  existence evaluator implementing the OCCURRENCE SATISFACTION RULE
+  exactly; a secured server-only read model. NO UI.
+
+S1D — Arrangement Lifecycle Mutations
+  create / edit-future-pattern / pause / resume / end, each its own
+  small controlled RPC (see MUTATION SECURITY); `audit_events` writes
+  from every one of them (see AUDIT HISTORY ACCESS); no major UI if a
+  clean create/edit form can be deferred to S1E without blocking this
+  slice's own testability.
+
+S1E — Recurring Care Operations Surface
+  Internal operator creation/management UI; the assurance list (small +
+  large operator, one component set, mirroring S4D's own established
+  restraint); "Create Trip for this expected occurrence" action, writing
+  the authoritative `recurring_arrangement_id` link at Trip-creation
+  time (no longer a separate later integration — the link itself is
+  already foundational per S1B, this slice is where a real Trip first
+  gets created carrying it).
+
+S1F — Operations Brief Integration
+  The compact third Brief block (see the prior audit's OPERATIONS BRIEF
+  RELATIONSHIP section) — not implemented until S1C/S1D/S1E exist to
+  reuse.
+
+S1G — Security / Regression / Production Release
+  Full SQL/RLS/concurrency battery extension + production release,
+  mirroring the S4F precedent exactly.
+
+Dependency preserved exactly as instructed: the authoritative Trip
+linkage (S1B) exists structurally before the assurance evaluator (S1C)
+is built — S1C's own OCCURRENCE SATISFACTION RULE is meaningless without
+`trips.recurring_arrangement_id` already existing.
+
+------------------------------------------------------------------------
+REMAINING OPEN DECISIONS
+------------------------------------------------------------------------
+Everything the phase asked this session to decide has been locked above.
+What remains genuinely open, carried forward explicitly rather than
+silently assumed:
+  1. Pause-reason mandatoriness (recommended optional — see STATUS
+     LIFECYCLE — a reasoned addition, not an explicit instruction from
+     this phase, so flagged for S1D to confirm rather than treated as
+     locked at this phase's own level of authority).
+  2. `appointment_time` on the arrangement — still exactly where S1A
+     left it (OPTIONAL/deferred); this phase did not raise it, so it is
+     not newly decided here either way.
+  3. Whether a future "schedule a pause for a future date" capability
+     (distinct from `paused_at`'s own "pause takes effect now" model) is
+     ever wanted — explicitly deferred, not designed.
+  4. The exact RPC names for create/edit/pause/resume/end (S1D's own
+     naming, not decided here).
+  5. Return-leg assurance's own future design, once Trip gains an
+     authoritative leg/return discriminator — remains a named, real,
+     future capability, not designed in this phase (see RETURN
+     TRANSPORTATION BOUNDARY).
+None of the above block S1B.
+
+============================================================
+RECURRING ARRANGEMENT ENTITY:
+LOCKED
+
+TRIP LINK:
+FOUNDATIONAL
+
+RETURN ASSURANCE:
+DEFERRED
+
+TIMEZONE MODEL:
+LOCKED
+
+DAYS-OF-WEEK MODEL:
+LOCKED
+
+STATUS LIFECYCLE:
+LOCKED
+
+CONTROLLED MUTATIONS:
+LOCKED
+
+SKIP-DATE STRATEGY:
+LOCKED
+
+14-DAY HORIZON:
+LOCKED
+
+DRIVER DIRECT ACCESS:
+NO
+
+READY FOR S1B:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E2-S1B — Recurring Arrangement Domain Foundation

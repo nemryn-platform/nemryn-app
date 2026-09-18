@@ -1,0 +1,768 @@
+P1-E2-S1A — RECURRING CARE ASSURANCE PRODUCT / DATA FOUNDATION AUDIT
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Product-model / workflow / data-capability audit. No
+implementation, no migration, no UI, no deployment.
+
+------------------------------------------------------------------------
+METHOD
+------------------------------------------------------------------------
+Read in full: docs/product/domain-model.md, docs/product/lifecycle-
+model.md. Grepped and read the relevant sections of docs/product/
+decision-register.md (268KB — too large to read whole; searched for
+recurr*/leg/return_trip/ZD-045/ZD-069/dialysis/frequency/standing) and
+docs/product/scope-register.md (ZS-012/ZS-016). Read the live migration
+SQL directly (source of truth over any aspirational doc) for `trips`,
+`transportation_requests`, `passengers`, `facilities`, `audit_events`,
+and the `create_trip`/request-mutation RPCs. Grepped the entire `src/`
+and `supabase/` trees for recurr*/repeat/series/frequency/standing/
+dialysis/rehabilitation and confirmed every hit either irrelevant
+(generic UI/CSS/unrelated-decision text) or already accounted for above.
+Confirmed empirically (grep) that no recurrence concept exists in
+LogRequestForm.tsx or NewTripForm.tsx. Local Supabase/docker was not
+running this session (audit-only phase, no live queries needed) — every
+schema claim below is sourced from the actual migration files, not
+assumption.
+
+------------------------------------------------------------------------
+CURRENT MODEL
+------------------------------------------------------------------------
+`transportation_requests`: one row per inbound ask. Schedule-adjacent
+fields are exactly `preferred_date date` (nullable, single date),
+`preferred_time time` (nullable, single time), and `return_trip_needed
+text check (yes|no|not_sure)` (a binary "is there also a return leg,"
+never a repetition count or pattern). No `facility_id` column exists on
+this table at all (confirmed by reading the live migration directly —
+domain-model.md's own aspirational text mentions a soft facility
+reference on the Request that was never actually implemented; the real
+facility linkage lives only on Trip). Lifecycle: `pending → accepted |
+declined | cancelled` — system-driven acceptance on first Trip creation,
+terminal states never revisited, child Trip outcomes never write back
+onto Request.state (lifecycle-model.md §B, verified verbatim).
+
+`trips`: `request_id uuid` nullable (1:N Request→Trip by design, ZD-045),
+`passenger_id` not null, a single `scheduled_pickup_at timestamptz`, no
+`leg` column (ZD-069's own optional `leg` label remains PROVISIONAL,
+never added — confirmed by the live schema carrying no such column and
+by this session's own prior S4-epic work noting "trips.leg is NOT
+added" in multiple migration headers), no series/recurrence identifier
+of any kind. `create_trip` (the sole trusted creation RPC) accepts
+exactly one `p_scheduled_pickup_at` per call — there is no batch/pattern
+parameter; creating "Monday/Wednesday/Friday for 8 weeks" today means a
+dispatcher calling this RPC (via the New Trip form) 24 separate times by
+hand, with zero system-recorded relationship between those 24 rows
+beyond whatever `passenger_id`/`request_id` the dispatcher happens to
+reuse — nothing enforces or even suggests they should.
+
+`passengers`: `display_name`, `phone`, `assistance_notes`, `status`
+(active/inactive) only — no care-type, diagnosis, condition, or
+frequency field of any kind. `facilities`: `name`, `address_line1/2`,
+`city`, `state`, `postal_code`, `status` only — a plain directory entry,
+no relationship to TransportationRequest, no relationship to any
+recurrence concept.
+
+`audit_events`: already a live, generic, actively-written table
+(`organization_id`, `entity_type`, `entity_id`, `action`, `actor_user_id`,
+`before_data`/`after_data` jsonb, `reason`) — confirmed written today by
+7 separate existing trusted RPCs (trip mutations, trip creation,
+reassignment, driver invites, signup, request/trip/passenger
+integrity). This pattern requires no schema change to extend to a new
+entity type.
+
+No recurrence, series, standing-order, frequency, or days-of-week
+concept exists anywhere in the schema, any RPC, any RLS policy, or any
+UI form in this codebase today. This was verified by direct schema
+inspection, not inferred from the mere existence of the Request→Trip
+1:N relation.
+
+------------------------------------------------------------------------
+WHAT RECURRING CARE MEANS FOR NEMT
+------------------------------------------------------------------------
+Dialysis, rehabilitation, and therapy transportation runs on a
+predictable cadence indefinitely — missing one ride is not a minor
+inconvenience the way a missed one-off appointment ride might be; it can
+mean a missed treatment. The operator's actual job is narrower than
+"manage the patient's care" — it is "make sure the TRANSPORTATION side
+of a standing commitment never silently lapses." Nemryn already answers
+"is this Trip prepared" (Trip Readiness) and "is this Trip executing
+correctly" (Trip Assurance) — but both of those only ever evaluate Trips
+that already exist as rows. Nothing today answers a layer above that:
+"does a Trip even exist yet for the ride we should expect next
+Wednesday?" That is a scheduling-EXISTENCE question, not a preparation
+or execution question — the genuine, previously-unaddressed gap.
+
+Refined core question: *for each active recurring transportation
+commitment, has the operator actually created the Trip that should exist
+for its next expected occurrence — and if not, is that visible before it
+becomes a missed ride?*
+
+Of the candidate questions listed in the phase prompt, the ones
+appropriate for MVP:
+  - "What recurring transportation commitments do we have?" — YES, the
+    core inventory view.
+  - "Has each expected occurrence been scheduled?" — YES, the central
+    assurance check.
+  - "Which upcoming occurrences are missing?" — YES, the same fact
+    stated as the actionable alert.
+  - "What needs attention before the next expected ride?" — YES, the
+    composed actionable surface (existing Trip Readiness for an
+    occurrence that already has a Trip; a new "not yet scheduled" signal
+    for one that doesn't).
+  - "Which recurring care pattern has been interrupted?" — PARTIALLY.
+    Useful only as a purely SCHEDULING fact ("N consecutive expected
+    occurrences never got a Trip") — never as a claim about why, and
+    never phrased as anything resembling a clinical/adherence judgment.
+    Nemryn only ever knows whether a Trip row was created and executed,
+    never whether care was actually received.
+
+Explicitly excluded, confirmed by the schema's own total absence of any
+clinical field: adherence scoring, missed-treatment inference, any
+language implying a clinical outcome. This is transportation-existence
+assurance, nothing more.
+
+------------------------------------------------------------------------
+REQUEST / TRIP LIMITATIONS
+------------------------------------------------------------------------
+Overloading the existing Request→Trip 1:N relation for recurrence would
+be semantically unsafe, and the risk is concrete, not hypothetical: a
+Request with 2 Trips today already has a legitimate, established meaning
+— outbound + return (ZD-069) — that has nothing to do with recurrence.
+If a recurring series were also represented as "many Trips sharing one
+request_id," a Request with 8 Trips would be genuinely ambiguous: is
+that a recurring series of 8 rides, or 4 round-trip visits, or some
+mixture a dispatcher happened to attach to one request? No stored fact
+distinguishes these cases today, and piling a third meaning onto the
+same nullable FK with no discriminator would make every future query
+("how many recurring visits has this passenger had") unanswerable
+without external, undocumented knowledge of how each request happened
+to be used. **This is explicitly stated: Request→Trip 1:N is not a safe
+foundation for recurrence. A distinct identifier is required.**
+
+------------------------------------------------------------------------
+RECURRING ARRANGEMENT CONCEPT
+------------------------------------------------------------------------
+Three concepts, kept explicitly separate, matching the layering the
+phase itself proposes and confirmed to fit the existing domain model
+cleanly:
+
+  RecurringArrangement (new)  — the STANDING INTENT: "Mrs. Cole needs
+    dialysis transport Mon/Wed/Fri, 8:00 AM, Cascade Dialysis Center,
+    until further notice." A pattern, not a Trip, not a Request.
+  Expected Occurrence (derived, not stored — see MATERIALIZATION
+    STRATEGY) — "this pattern implies a ride is needed on 2026-09-22."
+    The bridge between pattern and reality.
+  Trip (existing, unchanged) — the actual operational movement, exactly
+    as it exists today.
+
+TransportationRequest's role is unchanged and orthogonal: it remains the
+intake record for how a need was first communicated. A
+RecurringArrangement MAY optionally carry a nullable `request_id`
+provenance link — mirroring Trip's own existing nullable `request_id`
+pattern exactly — but a RecurringArrangement is not a Request. A
+Request is a single inbound ask, reviewed once (pending → accepted/
+declined/cancelled, terminal); a RecurringArrangement is an ONGOING
+commitment that outlives any single review action and needs its own
+lifecycle (active/paused/ended). Return Trip (ZD-069) is unaffected and
+orthogonal — each occurrence of a recurring arrangement may itself
+separately need an outbound+return pair, composing with recurrence
+rather than being conflated with it (recurrence answers "how often";
+return-trip answers "does each ride also come back").
+
+No existing entity can safely own this responsibility:
+  - Request cannot: its lifecycle is a one-time review workflow, already
+    shipped and in production; forcing active/paused/ended semantics
+    onto it would either require a new state on an already-live state
+    machine (real regression risk to Request Hub) or silently overload
+    an existing field with a third meaning — repeating exactly the
+    ambiguity flagged above.
+  - Trip cannot: a Trip is the occurrence, not the pattern, and by
+    domain-model.md §D's own confirmed rule a Trip only ever exists once
+    created with real minimum data (no draft/placeholder Trip is
+    permitted). The entire point of Recurring Care Assurance is to
+    detect the ABSENCE of a Trip — structurally impossible to represent
+    as a property of a Trip that doesn't exist yet.
+
+A new entity is required. See SCHEMA GAP ANALYSIS.
+
+------------------------------------------------------------------------
+MINIMUM PATTERN DATA
+------------------------------------------------------------------------
+REQUIRED FOR MVP:
+  - organization_id — same tenant-scoping discipline as every table.
+  - passenger_id — who.
+  - pickup_description / destination_description — reuse Trip's own
+    hybrid snapshot strategy (domain-model.md §J) exactly.
+  - pickup_time — a time-of-day, not a date: the pattern's repeating
+    clock time.
+  - days_of_week — the minimum viable frequency model (a small set,
+    e.g. {Mon, Wed, Fri}).
+  - start_date — when the pattern begins being expected.
+  - end_date — nullable (open-ended vs. a known end, e.g. "8 weeks of
+    post-surgical PT").
+  - status — active | paused | ended (the arrangement's own lifecycle,
+    deliberately separate from Request's and Trip's).
+  - return_trip_needed — reuse the EXACT existing `yes|no|not_sure`
+    enum already defined on `transportation_requests`, never a second
+    parallel vocabulary.
+  - request_id — nullable, optional provenance only, mirrors Trip's own
+    nullable `request_id` exactly.
+  - created_by / created_at.
+
+OPTIONAL (real, deferrable past the first MVP slice):
+  - appointment_time (mirrors Trip's own `appointment_at`).
+  - facility_id (structured link vs. free-text pickup/destination) —
+    valuable for later facility-grouped reporting, not required to
+    answer "is next Wednesday scheduled."
+  - assistance_notes/instructions — could simply be read from Passenger
+    at occurrence-creation time instead of duplicated on the pattern.
+  - a human-readable label ("Mrs. Cole's dialysis schedule") — UX
+    convenience, not structurally required.
+
+SHOULD NOT BE MODELED YET (matches §20's exclusion list exactly, and the
+schema's own total absence of any clinical field reinforces this):
+  medical service type/diagnosis/condition, per-occurrence insurance
+  authorization, capacity/vehicle-type requirements, automatic driver
+  pre-assignment across a whole series, billing/claims linkage,
+  multi-passenger shared-ride grouping.
+
+------------------------------------------------------------------------
+OCCURRENCE MODEL
+------------------------------------------------------------------------
+See MATERIALIZATION STRATEGY for the chosen approach. Conceptually: an
+"expected occurrence" is the intersection of a RecurringArrangement's own
+pattern (days_of_week, start/end date, active status) with a specific
+calendar date within the evaluation horizon — never a stored fact on its
+own, purely a derived one (see below).
+
+------------------------------------------------------------------------
+MATERIALIZATION STRATEGY
+------------------------------------------------------------------------
+Evaluated all four options the phase names:
+
+A. Generate ALL future Trip rows automatically, far ahead — REJECTED.
+   Creates speculative Trip rows for occurrences that may never happen
+   (the pattern could be edited/paused/ended before that date arrives),
+   pollutes Trips list/Dispatch/Today's Operations with far-future
+   noise, and any pattern edit would require bulk-rewriting or deleting
+   already-created rows — directly contradicts the "never mutate
+   historical/committed Trip data casually" discipline already
+   established for Trip, and directly matches the phase's own explicit
+   warning against "hundreds of speculative future Trip rows."
+
+B. Materialize only a bounded rolling horizon of real Trip rows
+   automatically — REJECTED for MVP. Still means writing real Trip rows
+   on a schedule, which requires a background/cron job — a genuinely NEW
+   kind of infrastructure this platform does not have anywhere today
+   (every existing mutation in this codebase is a direct, synchronous,
+   user-triggered RPC call, never a scheduled background writer).
+   Introduces a new operational dependency purely to pre-create Trips
+   before anyone asked for them.
+
+C. Create "expected occurrences" as their own concept, computed
+   on-read within a bounded horizon, with a real Trip created
+   (manually, by the dispatcher, exactly as today) only when the
+   operator actually acts — RECOMMENDED. The assurance check becomes:
+   for each date in the horizon the pattern implies, does a real,
+   non-cancelled Trip already exist for this arrangement? If not →
+   surfaced as "not yet scheduled." Critically, "expected occurrence"
+   needs NO new table at MVP — it is a pure calendar-math derivation
+   (pattern + horizon → dates), computed exactly the way Tomorrow
+   Readiness already derives "tomorrow's window" from
+   `organizationDayBoundsUtc` without ever storing a "tomorrow" row.
+   This mirrors this codebase's own proven "pure evaluator over
+   already-fetched facts, nothing stored that doesn't need to be"
+   discipline (Trip Readiness, Tomorrow Readiness) exactly.
+
+D. A full recurrence-rule engine (RRULE/iCal-style) — REJECTED as
+   premature complexity. Dialysis/rehab/therapy transportation
+   overwhelmingly runs on fixed weekday patterns, not complex rules
+   ("every 2nd Tuesday," etc.); a simple days-of-week + start/end date
+   covers the real NEMT use case without the enterprise-scheduling
+   complexity the phase explicitly warns against.
+
+RECOMMENDATION: Option C, computed-on-read, no materialization table at
+MVP. This single choice resolves several other sections cleanly (see
+EDIT SEMANTICS, CANCELLATION SEMANTICS) precisely because nothing is
+ever pre-created speculatively — there is no stale future row to
+reconcile when a pattern changes.
+
+Holiday/date-exception handling: under Option C, "skip this one
+Wednesday" before any Trip exists is simply the operator choosing not to
+create a Trip for that date — but the assurance evaluator needs to know
+that was DELIBERATE, or it will perpetually flag a knowingly-skipped
+date as "missing" forever. A minimal skip-date concept (or, as a
+simpler MVP substitute, a temporary pause of the whole arrangement for
+one date range) is therefore warranted — flagged as OPTIONAL, not
+required for the very first schema slice (see RISKS / OPEN DECISIONS).
+
+------------------------------------------------------------------------
+ASSURANCE MODEL
+------------------------------------------------------------------------
+The phase's own preferred layering fits the current product model
+cleanly and is confirmed as the recommended shape:
+
+  Recurring Care Assurance — "Does the expected recurring transportation
+    exist?" A genuinely NEW evaluator: given (arrangement, horizon, the
+    set of existing non-cancelled Trips), determine for each expected
+    date whether a matching Trip exists.
+  Trip Readiness (existing, S4B — unmodified) — "Is this particular
+    scheduled occurrence prepared?" Reused exactly as-is for any
+    occurrence that already has a Trip — no duplication, no second
+    "is this trip ready" concept.
+  Trip Assurance (existing — unmodified) — "Is this occurrence executing
+    correctly, today?" Reused exactly as-is once a Trip is actually
+    running.
+
+Illustrative reason vocabulary for the new layer (explicitly NOT locked,
+per the phase's own caution — needs real data support before
+finalizing):
+  - NEXT_OCCURRENCE_NOT_SCHEDULED — the next expected date within the
+    horizon has no matching Trip at all.
+  - SCHEDULE_GAP — N consecutive expected dates have gone unscheduled
+    (the pattern-interruption signal).
+  - SERIES_PAUSED — the arrangement is intentionally paused; not
+    evaluated for gaps while paused.
+  UPCOMING_OCCURRENCE_NOT_READY and TRIP_CANCELLED_WITH_FUTURE_CARE_
+  EXPECTED, both named in the phase prompt as examples, should NOT
+  become separate reason codes: the first is simply "a Trip exists for
+  this occurrence AND Trip Readiness already says NEEDS_PREPARATION" —
+  a composition of the two existing layers, not a new fact; the second
+  is the same underlying fact as NEXT_OCCURRENCE_NOT_SCHEDULED (a
+  cancelled Trip means, from the arrangement's perspective, no valid
+  Trip exists for that date) and falls out naturally from "does a real,
+  non-cancelled Trip exist," with no special-casing needed.
+
+Recurring Care Assurance must never re-derive or duplicate Trip
+Readiness's own reason vocabulary (NEEDS_DRIVER, etc.) — when an
+occurrence's Trip exists but isn't prepared, the new layer references
+Trip Readiness's own already-computed result, exactly the same "reuse,
+never re-interpret" discipline S4C already proved when Tomorrow
+Readiness adopted Trip Readiness's evaluator directly rather than
+re-implementing it.
+
+------------------------------------------------------------------------
+RELATIONSHIP TO TRIP READINESS
+------------------------------------------------------------------------
+Strictly compositional, never duplicative — see ASSURANCE MODEL. Trip
+Readiness's own module (`trip-readiness-core.ts`) requires zero changes;
+Recurring Care Assurance is a NEW, separate module that calls Trip
+Readiness for any occurrence with an existing Trip, exactly the pattern
+Tomorrow Readiness already established for reusing it.
+
+------------------------------------------------------------------------
+RELATIONSHIP TO TRIP ASSURANCE
+------------------------------------------------------------------------
+No direct relationship needed at the assurance-evaluation layer — Trip
+Assurance answers a same-day execution question Recurring Care Assurance
+never touches (a days-ahead scheduling-existence question). The only
+overlap risk is presentational (see OPERATIONS BRIEF RELATIONSHIP): the
+same underlying Trip must never generate two independently-worded
+warnings from two different assurance layers on the same screen.
+
+------------------------------------------------------------------------
+HORIZON
+------------------------------------------------------------------------
+Evaluated 7 / 14 / 30 / rolling:
+  - 7 days: too short — a Mon/Wed/Fri pattern shows only ~3 occurrences,
+    insufficient lead time to notice and act on a gap before it's
+    nearly upon the operator; also redundant with the already-shipped
+    Tomorrow Readiness's own "tomorrow" concept.
+  - 30 days: too wide for a small operator — risks exactly the
+    "flooded with months of future Trips" anti-pattern the phase
+    explicitly warns against, and needlessly widens the calendar math
+    every organization's evaluator recomputes on every read.
+  - **RECOMMENDED: 14 days, rolling.** Long enough that even a
+    Mon/Wed/Fri pattern shows ~6 occurrences — enough to clearly reveal
+    "this whole series has nothing scheduled" with real lead time to
+    act — while staying bounded and cheap to compute, mirroring the
+    existing precedent of Tomorrow Readiness's own single bounded
+    window, simply widened. Matches the phase's own worked example
+    ("This week's rides are scheduled. Friday still needs a Driver")
+    comfortably. Should be implemented as a simple, named, trivially
+    adjustable constant — exactly like `NEXT_DEPARTURES_WINDOW_MS`
+    already is in this codebase — not hardcoded inline. This is a
+    recommendation for product/ops confirmation, not a purely technical
+    conclusion (see RISKS / OPEN DECISIONS).
+
+------------------------------------------------------------------------
+SMALL OPERATOR EXPERIENCE
+------------------------------------------------------------------------
+Minimum useful surface: a compact list, one row per active
+RecurringArrangement — Passenger name, pattern summary ("Mon/Wed/Fri,
+8:00 AM"), and a composed assurance state for the near horizon ("This
+week: scheduled" / "Friday: not yet scheduled" / "Needs driver Friday" —
+literally the phase's own worked example). No calendar grid, no
+drag-and-drop, no bulk administration console. Reuse the EXACT same
+compact UI primitives already proven for Tomorrow Readiness (Panel,
+SummaryStrip, StatusBadge, plain divide-y rows) rather than inventing
+new ones — the same restraint discipline that kept the Tomorrow
+Readiness page from becoming "an enterprise dispatch console" for a
+1-2 vehicle operator applies identically here.
+
+------------------------------------------------------------------------
+LARGE OPERATOR EXPERIENCE
+------------------------------------------------------------------------
+Same backend, same evaluator, more rows — a dedicated page (mirroring
+`/operations/tomorrow`'s own precedent) listing every active
+RecurringArrangement, optionally filterable/groupable by Facility (once/
+if `facility_id` is added — see FACILITY RELATIONSHIP) or by
+"needs attention only," using the identical compact per-arrangement row
+already proven at S4D to scale cleanly to 20+ items without becoming a
+different product. Never a separate small/large UI mode.
+
+------------------------------------------------------------------------
+FACILITY RELATIONSHIP
+------------------------------------------------------------------------
+Facility today is CONTEXT ONLY for individual Trips (a soft pickup/
+destination reference) — it has NO relationship to TransportationRequest
+at all (confirmed empirically: no `facility_id` column on that table)
+and no relationship to any recurrence concept, since none exists yet.
+For Recurring Care Assurance, Facility is a natural, useful GROUPING
+DIMENSION — a dialysis center's own coordinator conceptually cares about
+"all our patients' rides this week," which crosses many individual
+RecurringArrangements. An optional `facility_id` on the new
+RecurringArrangement entity (mirroring Trip's own existing soft-
+reference pattern) would enable this later, but is not required for the
+core assurance question and should be deferred (see MINIMUM PATTERN
+DATA/OPTIONAL and RISKS). Facility is explicitly NOT the requester/
+source at the schema level today. Facility Coordination and any Facility
+Portal remain their own, later, separate roadmap capability — already
+correctly deferred per ZS-012/ZS-016 — and this phase does not begin
+that work.
+
+------------------------------------------------------------------------
+REQUEST HUB RELATIONSHIP
+------------------------------------------------------------------------
+Recurring demand should enter Nemryn, for MVP, through its OWN dedicated
+internal-operator workflow — not bolted onto Request Hub's existing
+pending/accepted/declined/cancelled review flow, and not bolted onto Log
+Request's single-occurrence intake form. Request Hub's entire lifecycle
+is a review-one-ask workflow (confirmed verbatim in lifecycle-model.md
+§B); forcing it to also carry "this is actually an ongoing standing
+order" would require either a new state on an already-shipped,
+production state machine, or silently overloading an existing field
+with a third meaning — repeating the exact ambiguity flagged in REQUEST
+/ TRIP LIMITATIONS. A RecurringArrangement's optional `request_id`
+provenance link does let Request Hub eventually offer a "Create
+Recurring Arrangement from this Request" convenience action once an
+accepted Request's transportation turns out to be ongoing — a future,
+additive integration, not a Request Hub redesign, and not built here.
+
+Sources of recurring demand in scope for MVP: internal operator entry
+only, matching the phase's own explicit instruction. Notably, the
+ORIGINAL scope register (ZS-016) bucketed "recurring transport requests"
+entirely under the still-deferred Facility Portal scope (ZS-012) — this
+audit deliberately decouples the two: recurrence-as-an-operational-
+concept needs to exist for internal operator use now, independent of
+whether/when a Facility-initiated intake channel ever ships. This is a
+real scope evolution worth recording explicitly, not a contradiction of
+the earlier register entry.
+
+------------------------------------------------------------------------
+CANCELLATION SEMANTICS
+------------------------------------------------------------------------
+Five distinct actions, each with a non-overlapping meaning:
+  - Cancel ONE occurrence (Trip already exists): the existing,
+    unmodified Trip cancellation flow (lifecycle-model.md §I) — nothing
+    new needed.
+  - Skip ONE date (Trip does not exist yet): a new, lightweight fact
+    scoped to the arrangement — recorded so the assurance evaluator
+    does not perpetually flag a deliberately-skipped date. Not a Trip
+    cancellation (no Trip exists) and not a series pause (the
+    arrangement continues on its other days).
+  - Pause series: `status = 'paused'` (optionally with a resume date).
+    The arrangement and its history persist; the evaluator simply stops
+    expecting new occurrences while paused. Never touches any
+    already-created Trip, past or future.
+  - End series: `status = 'ended'` (terminal, with a mandatory reason,
+    mirroring Trip cancellation's own mandatory-reason discipline).
+    Stops evaluation going forward; never touches historical Trips.
+  - Change future schedule: an edit action, not a cancellation action —
+    see EDIT SEMANTICS.
+
+Two invariants carried through every one of the above, both directly
+inherited from this codebase's own already-established discipline:
+historical, already-completed Trip rows are NEVER mutated by any
+recurring-arrangement action (lifecycle-model.md §Q/§I's "never rewrite
+history"); and cancelling ONE Trip must never cascade into pausing or
+ending the arrangement — independent actions at independent layers,
+exactly the "one entity's status never stands in for another's
+lifecycle" principle domain-model.md/lifecycle-model.md repeatedly
+enforce elsewhere.
+
+------------------------------------------------------------------------
+EDIT SEMANTICS
+------------------------------------------------------------------------
+Directly enabled by the MATERIALIZATION STRATEGY recommendation (Option
+C): because nothing is ever pre-created speculatively, an edit to the
+arrangement's own fields (pickup_time, days_of_week, end_date, etc.)
+takes effect immediately for every NOT-YET-CREATED future occurrence —
+there is no stale future row to reconcile or bulk-rewrite. Past Trips
+are never affected (they are independent, already-real rows, exactly as
+Trip already guarantees today). Today's/already-scheduled future Trips
+are also never retroactively touched by an arrangement edit — once a
+dispatcher has actually created a real Trip for a specific date, that
+Trip becomes a fully independent row from that point forward (edited,
+if at all, only the normal Trip-editing way — which today means largely
+not editable post-creation at all, matching this session's own earlier
+finding that no `scheduled_pickup_at` edit RPC exists). This produces a
+clean, simple rule with no special-casing: an arrangement edit is purely
+prospective/pattern-level, never reaching backward into already-created
+Trip rows.
+
+------------------------------------------------------------------------
+AUDIT / HISTORY
+------------------------------------------------------------------------
+The existing, already-live `audit_events` table (generic `entity_type`/
+`entity_id`/`action`/`before_data`/`after_data`, already actively
+written by 7 separate existing trusted RPCs) is structurally sufficient
+for recurring-arrangement history — created, schedule changed, paused,
+resumed, ended. No new dedicated event/history table is needed; any
+future `create_recurring_arrangement`/`pause_recurring_arrangement`/etc.
+RPC would simply write to `audit_events` with `entity_type =
+'recurring_arrangement'`, exactly the pattern `create_trip`/`assign_trip`
+already follow.
+
+Dispatcher visibility flagged as a genuine open decision, not assumed
+either way: the current domain-model.md access matrix grants AuditEvent
+read to Organization Admin and Platform Admin only — Dispatcher has NO
+AuditEvent read access today. If Dispatcher-level visibility into "who
+paused this series and why" is wanted, that is a real RLS-policy
+decision to make explicitly during implementation (see RISKS / OPEN
+DECISIONS), not something this audit resolves.
+
+------------------------------------------------------------------------
+ROLE / SECURITY MODEL
+------------------------------------------------------------------------
+Organization-scoped, deny-by-default, RLS-protected, no browser-
+authoritative `organization_id`, no service-role client — identical,
+non-negotiable, to every existing tenant-owned table in this codebase;
+nothing about Recurring Care Assurance changes this baseline.
+
+Roles: Organization Admin + Dispatcher get full create/read/update on
+RecurringArrangement within their own org, mirroring the EXISTING
+Trip/TripAssignment/Passenger access tier exactly — no new role
+invented. Driver MUST NOT manage recurring arrangements, matching the
+phase's own explicit instruction and the existing precedent that a
+Driver already cannot create/edit Trips or manage TripAssignment today.
+No evidence found anywhere in the domain-model/lifecycle-model reading
+that a Driver needs anything beyond individual assigned Trips — the
+phase's own default assumption is correct and should be followed as
+written.
+
+------------------------------------------------------------------------
+DRIVER DATA MINIMIZATION
+------------------------------------------------------------------------
+A RecurringArrangement row is, if anything, MORE sensitive than a single
+Trip's own facts: a pattern reveals routine/schedule information a
+single occurrence never discloses (e.g., "this passenger predictably
+isn't home Mon/Wed/Fri mornings" — a real, non-medical, privacy-relevant
+fact beyond what one ride reveals). The exact same ZD-080 discipline
+already governing Passenger (no generic Driver SELECT on the table,
+under any RLS policy shape, ever — driver-required information flows
+only through a controlled, assignment-scoped projection) must extend to
+RecurringArrangement by the identical reasoning: NO Driver read access
+to the RecurringArrangement table itself, under any policy shape. A
+Driver continues to see only the individual Trip they are assigned to —
+unchanged from today — never the broader pattern or "why" it recurs.
+
+------------------------------------------------------------------------
+OPERATIONS BRIEF RELATIONSHIP
+------------------------------------------------------------------------
+Long-term, the natural home for "N recurring schedules need attention"
+is a THIRD compact Brief block, following the exact restrained shape
+already established for the Tomorrow Readiness block (S4E) — never a
+larger dashboard section, never placed above Needs Attention, matching
+the same visual-priority discipline already locked in there. A dedicated
+page (the large-operator analog of `/operations/tomorrow`) is also
+warranted for the same reason Tomorrow Readiness needed one: a compact
+Brief block can only ever summarize; the full per-arrangement list needs
+its own home.
+
+This should NOT be folded into Tomorrow Readiness itself — the two
+answer genuinely different questions at genuinely different layers
+("are today's-plus-one already-scheduled Trips ready" vs. "does an
+expected Trip exist at all, days ahead"). Conflating them would repeat
+exactly the kind of duplicate-warning mistake S4D/S4E deliberately
+avoided between Trip Assurance and Trip Readiness: an occurrence that
+already has a Trip scheduled for tomorrow should surface ONCE, in
+Tomorrow Readiness, exactly as today; Recurring Care Assurance's own
+surface should only ever flag occurrences that lack a Trip, or arrangement-
+level facts (paused, gapped) — never double-counting the same
+underlying gap through two different labels. Not implemented now, per
+the phase's own explicit instruction — recorded here as a documented
+future integration point only.
+
+------------------------------------------------------------------------
+SCHEMA GAP ANALYSIS
+------------------------------------------------------------------------
+CURRENT SCHEMA SUFFICIENT: NO.
+
+Minimum new conceptual entity: exactly ONE new table — a
+RecurringArrangement (name illustrative), TENANT-OWNED, direct
+`organization_id`, carrying the MINIMUM PATTERN DATA fields above.
+
+Why existing Request/Trip cannot safely carry this responsibility
+(restated from RECURRING ARRANGEMENT CONCEPT):
+  - Request's lifecycle is a one-time review workflow, already shipped
+    and in production; overloading it risks either a new state on a
+    live state machine or silently repurposing an existing field with a
+    third meaning.
+  - Trip is the occurrence, not the pattern; by domain-model.md §D's own
+    confirmed "no draft Trip" rule, there is structurally no way to
+    represent a not-yet-existing occurrence as a Trip row — and
+    detecting the ABSENCE of a Trip is the entire point of this
+    capability.
+
+No new event/history table is required (AuditEvent already sufficient —
+see AUDIT / HISTORY). No new occurrence-materialization table is
+required at MVP either, under the recommended Option C (computed-on-
+read) — this deliberately keeps the new schema surface to exactly one
+table.
+
+A likely, but not finally decided, second schema touch: a nullable
+`recurring_arrangement_id` on `trips`, to explicitly link a created Trip
+back to the arrangement/expected-occurrence it fulfills (see RISKS /
+OPEN DECISIONS — explicit link vs. inferred match). This is flagged, not
+concluded, and is properly an S1E-scope decision, not part of the S1B
+schema foundation.
+
+------------------------------------------------------------------------
+IMPLEMENTATION SLICES
+------------------------------------------------------------------------
+Proposed, not built. Renamed/re-sliced from the phase's own illustrative
+list based on this audit's actual findings:
+
+S1B — Recurring Arrangement Domain Foundation
+  Objective: schema for the new `recurring_arrangements` table only.
+  Schema impact: YES — 1 new table (MINIMUM PATTERN DATA REQUIRED
+    fields), composite FKs to Passenger/Organization (and Request/
+    Facility if included), `organization_id`-scoped indexes.
+  RLS impact: YES — new policies (Org Admin/Dispatcher full CRUD within
+    org; explicit absence of any Driver SELECT policy, matching ZD-080's
+    pattern exactly); RLS adversarial test-matrix extension mirroring
+    domain-model.md §O.
+  UI impact: none.
+  Testing: SQL/RLS test file extension (mirrors existing per-table test
+    file convention exactly).
+  Dependency: this audit's own conclusions (entity shape, MVP field
+    list, exclusion list).
+
+S1C — Occurrence Planning + Assurance Evaluator (pure core)
+  Objective: a pure `deriveRecurringCareAssurance`-shaped module —
+    calendar math (pattern + horizon → expected dates) plus a
+    per-occurrence existence/readiness check — and a server-only wrapper
+    querying real arrangements + real Trips.
+  Schema impact: none beyond S1B (reuses the new table + existing Trip
+    queries).
+  RLS impact: none new.
+  UI impact: none.
+  Testing: extensive pure-core unit tests (mirroring
+    trip-readiness-core.ts's own established test discipline) plus live
+    SQL validation against real fixtures.
+  Dependency: S1B; reuses S4B's `deriveTripReadiness` directly (never
+    duplicated).
+
+S1D — Recurring Care Operations Surface
+  Objective: compact list UI (small + large operator, identical
+    components) at a new dedicated route; create/edit/pause/end
+    mutations as their own small, controlled RPCs mirroring
+    `create_trip`'s trusted-path discipline; `audit_events` writes from
+    those RPCs.
+  Schema impact: none beyond S1B.
+  RLS impact: mutation-policy coverage for the new RPCs.
+  UI impact: YES — new route + components, reusing S4D's established
+    Panel/SummaryStrip/StatusBadge patterns.
+  Dependency: S1B, S1C.
+
+S1E — Trip Creation Integration
+  Objective: "Create Trip for this arrangement's next occurrence" action
+    from the Recurring Care surface, resolving the explicit-link-vs-
+    inferred-match open decision (see RISKS).
+  Schema impact: POSSIBLY — one nullable `recurring_arrangement_id` on
+    `trips`, only if explicit linkage is chosen.
+  RLS impact: none new (reuses existing Trip creation authorization).
+  UI impact: YES — Trip-creation flow addition.
+  Dependency: S1B, S1C, S1D; the open decision in RISKS must be resolved
+    first.
+
+S1F — Operations Brief Integration
+  Objective: the third compact Brief block (see OPERATIONS BRIEF
+    RELATIONSHIP), reusing S1C's evaluator exactly as S4E reused S4C's.
+  Schema/RLS impact: none.
+  UI impact: small.
+  Dependency: S1C, S1D (for the linked dedicated page), S4E's own
+    established Brief-block pattern.
+
+S1G — Security / Regression / Production Release
+  Objective: full SQL/RLS/concurrency battery extension + production
+    release, mirroring this epic's own S4F precedent exactly.
+  Dependency: S1B–S1F complete.
+
+------------------------------------------------------------------------
+RISKS / OPEN DECISIONS
+------------------------------------------------------------------------
+1. Explicit Trip↔arrangement link vs. inferred match (passenger + date +
+   pickup/destination) for "which Trip fulfills which expected
+   occurrence." Inferred match is fragile — a dispatcher entering
+   slightly different pickup wording would cause the evaluator to
+   wrongly report the occurrence as still missing. An explicit nullable
+   `recurring_arrangement_id` on `trips` is the safer default
+   recommendation, but is a real schema addition properly scoped to
+   S1E, not decided here as final.
+2. Whether Dispatcher gets `audit_events` read access for recurring-
+   arrangement history — currently Dispatcher has none at all for that
+   table; a genuine RLS-policy decision, not assumed either way.
+3. Skip-date/holiday-exception minimum shape — a full per-date skip list
+   vs. reusing "pause for a date range" as a simpler MVP substitute.
+   Leaning toward the simpler pause-based substitute for the first
+   slice, but flagged, not concluded.
+4. Whether `facility_id` belongs on the arrangement at MVP (S1B) or is
+   deferred to S1D/S1E — leaning optional/deferred, not blocking S1B.
+5. The exact 14-day horizon (see HORIZON) is a recommendation grounded
+   in operational reasoning, not a purely technical constant — needs
+   real product/ops confirmation before S1C locks it in.
+6. Exact route/entity naming (`recurring_arrangements` /
+   `/operations/recurring-care`, etc.) is illustrative throughout this
+   report, not a naming decision.
+
+------------------------------------------------------------------------
+DRIVER TEST ACCOUNT HOUSEKEEPING
+------------------------------------------------------------------------
+Carried forward, not investigated in this audit, per the phase's own
+explicit instruction: the production synthetic Driver credential (from
+`.env.s2h.local`) still does not authenticate — this remains test-
+account housekeeping to resolve before any later pilot Driver
+validation, not something this product-model audit should spend effort
+on.
+
+============================================================
+RECURRING CARE PRODUCT MODEL:
+READY
+
+CURRENT SCHEMA SUFFICIENT:
+NO
+
+NEW DOMAIN ENTITY REQUIRED:
+YES
+
+NEW RLS REQUIRED:
+YES
+
+MVP ASSURANCE MODEL:
+READY
+
+OPEN PRODUCT DECISIONS:
+1. Explicit Trip↔arrangement link vs. inferred match (S1E scope)
+2. Dispatcher AuditEvent read access for recurring-arrangement history
+3. Skip-date vs. pause-for-a-range as the MVP holiday-exception shape
+4. facility_id on the arrangement at S1B vs. deferred to S1D/S1E
+5. Final confirmation of the 14-day evaluation horizon
+6. Entity/route naming (illustrative only throughout this report)
+
+RECOMMENDED NEXT SLICE:
+P1-E2-S1B — Recurring Arrangement Domain Foundation
+
+BLOCKERS:
+NONE

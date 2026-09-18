@@ -1,0 +1,127 @@
+-- P1-E2-S1D1 — Database Client Privilege Surface Hardening.
+--
+-- Security hardening only — no product feature, no domain-model change,
+-- no business-logic change, no RLS change. Removes an unnecessary,
+-- pre-existing (NOT introduced by any migration in this repository)
+-- privilege grant that has been present on every public-schema table
+-- since this project's very first migration.
+--
+-- ── ROOT CAUSE (confirmed by direct pg_default_acl inspection, not
+-- assumed) ───────────────────────────────────────────────────────────
+-- Every table in this schema is owned by the `postgres` role (every
+-- CREATE TABLE in every migration in this repository runs as `postgres`,
+-- confirmed via `select tablename, tableowner from pg_tables where
+-- schemaname='public'` — all 20 rows show `postgres`). The LOCAL
+-- SUPABASE PLATFORM'S OWN bootstrap (part of the Supabase CLI's local
+-- Postgres image initialization — NOT anything in this repository's own
+-- migrations; grep-confirmed: no `GRANT ALL`, no `GRANT TRUNCATE`, no
+-- `GRANT REFERENCES`, no `GRANT TRIGGER`, and no `ALTER DEFAULT
+-- PRIVILEGES` statement of any kind exists anywhere under
+-- supabase/migrations/) has already configured, before any repository
+-- migration ever runs, a default ACL equivalent to:
+--
+--   ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+--     GRANT TRUNCATE, REFERENCES, TRIGGER ON TABLES
+--     TO anon, authenticated, service_role;
+--
+-- (directly confirmed via `select defaclrole::regrole, defaclacl from
+-- pg_default_acl da join pg_namespace n on n.oid=da.defaclnamespace
+-- where n.nspname='public' and defaclobjtype='r'` — the `postgres`-owner
+-- row's ACL string is exactly `anon=Dxtm/postgres,
+-- authenticated=Dxtm/postgres, service_role=Dxtm/postgres` — `D` =
+-- TRUNCATE, `x` = REFERENCES, `t` = TRIGGER, `m` = MAINTAIN — deliberately
+-- NOT `a`/`r`/`w`/`d` (INSERT/SELECT/UPDATE/DELETE), which is why every
+-- table in this schema has always required its own migration to
+-- explicitly `grant select`/`insert`/`update`/`delete` — the platform
+-- default never silently grants DML, only these four).
+--
+-- Every one of this repository's own 20 CREATE TABLE statements has
+-- therefore silently inherited TRUNCATE, REFERENCES, TRIGGER, and
+-- MAINTAIN for anon AND authenticated at the instant of creation —
+-- confirmed empirically across all 20 tables (recurring_arrangements
+-- and recurring_occurrence_exceptions included, exactly as flagged
+-- during S1D), with zero variance: this is a uniform platform default,
+-- not a per-migration mistake, and not something any individual
+-- migration in this history introduced, widened, or could have avoided
+-- without knowing to explicitly counter it.
+--
+-- WHY THIS WAS NOT AN ACTIVE EXPLOIT (context, not an excuse to leave it
+-- unfixed): the application reaches Postgres exclusively through
+-- PostgREST, which exposes no TRUNCATE operation over its REST API at
+-- all, and REFERENCES/TRIGGER both require the ability to run DDL
+-- (CREATE), which anon/authenticated do NOT hold on schema public
+-- (confirmed: `has_schema_privilege('anon'/'authenticated', 'public',
+-- 'CREATE')` both false — see this phase's own report, PUBLIC SCHEMA
+-- CREATE AUDIT). TRUNCATE, however, does NOT require CREATE — it is
+-- directly reachable by any role holding the TRUNCATE table privilege
+-- via a raw Postgres connection, and RLS does not filter it at all
+-- (TRUNCATE bypasses RLS entirely, unlike SELECT/INSERT/UPDATE/DELETE).
+-- This is real, unnecessary attack surface even though this specific
+-- application's own architecture never issues a raw client connection —
+-- least-privilege / deny-by-default is the correct posture regardless
+-- of whether today's specific access pattern happens to route around it.
+--
+-- ── SCOPE ─────────────────────────────────────────────────────────────
+-- ONLY anon and authenticated are touched. service_role is deliberately
+-- left completely unchanged (P1-E2-S1D1 §5's own explicit instruction):
+-- it is never client-facing, already carries BYPASSRLS (confirmed via
+-- pg_roles — by design, the trusted backend/admin bypass role), and
+-- granting it TRUNCATE/REFERENCES/TRIGGER by default is not the same
+-- category of risk as granting a browser-reachable role the same thing.
+-- postgres/supabase_admin (the migration-owner and true superuser roles)
+-- are untouched — their own privileges, and the `supabase_admin`-owner
+-- default ACL entry (a separate, broader `arwdDxtm` default that is
+-- CURRENTLY UNUSED because no table in this schema is ever created by
+-- `supabase_admin` — confirmed via the same pg_tables query above), are
+-- both outside this phase's own scope and are not touched here. No RLS
+-- policy is modified anywhere in this migration. No SELECT/INSERT/
+-- UPDATE/DELETE privilege, table-level or column-level, is touched —
+-- every one of those was independently, deliberately granted per-table
+-- by its own owning migration and works together with RLS exactly as
+-- designed; this migration does not re-derive or second-guess any of
+-- that.
+--
+-- ── WHY NOT RUN AGAINST EACH INDIVIDUAL HISTORICAL MIGRATION ────────────
+-- Editing a deployed/historical migration file is never done in this
+-- repository's own established discipline (every prior remediation —
+-- ZD-092, ZD-101, P1-E3-S8A — added a NEW migration that revokes a
+-- privilege a PRIOR migration granted, never edited the prior file in
+-- place). This migration follows that same convention: one new file,
+-- applied once, covering every currently-existing table AND (via ALTER
+-- DEFAULT PRIVILEGES below) every table any future migration will ever
+-- create under the `postgres` role in schema `public`.
+
+-- =============================================================================
+-- A. Revoke the unnecessary privileges from EVERY currently-existing
+-- public-schema table, for anon and authenticated only.
+-- =============================================================================
+-- `ON ALL TABLES IN SCHEMA public` covers every one of the 20 tables
+-- that exist as of this migration (audited individually beforehand —
+-- see this phase's own report, PRIVILEGE AUDIT / AFFECTED TABLES — all
+-- 20 show the identical Dxtm grant, confirming this single statement is
+-- the correct, complete remediation rather than a per-table list that
+-- would need to be kept in sync by hand).
+revoke truncate, references, trigger
+  on all tables in schema public
+  from anon, authenticated;
+
+-- =============================================================================
+-- B. Harden the default ACL itself, so any table a FUTURE migration
+-- creates (running, like every migration before it, as `postgres`) never
+-- silently reacquires these three privileges again.
+-- =============================================================================
+-- Mirrors the exact role/schema the platform's own pre-existing default
+-- ACL entry already targets (`defaclrole = postgres`, `nspname =
+-- public`) — not guessed: read directly from pg_default_acl before
+-- writing this statement (see this migration's own header). Altering
+-- one's OWN default privileges (this migration runs as `postgres`,
+-- identical to every prior migration) requires no elevated privilege
+-- beyond what every other migration in this repository already runs
+-- with.
+alter default privileges for role postgres in schema public
+  revoke truncate, references, trigger
+  on tables
+  from anon, authenticated;
+
+comment on schema public is
+  'Application schema. As of P1-E2-S1D1, anon/authenticated hold no TRUNCATE/REFERENCES/TRIGGER on any table here, current or future (see 20260917120000_client_privilege_surface_hardening.sql for the full root-cause analysis and remediation) — SELECT/INSERT/UPDATE/DELETE remain exactly as each table''s own owning migration explicitly granted them, unaffected, working together with each table''s own RLS policies exactly as before.';

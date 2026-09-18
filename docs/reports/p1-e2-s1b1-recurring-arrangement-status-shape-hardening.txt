@@ -1,0 +1,256 @@
+P1-E2-S1B1 — RECURRING ARRANGEMENT STATUS-SHAPE HARDENING
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Small correctness hardening of the still-local, still-
+uncommitted S1B foundation. No new product feature, no UI, no RPC, no
+deployment, no commit/push. This report supplements, and does not
+erase or replace, docs/reports/p1-e2-s1b-recurring-arrangement-domain-
+foundation.txt — that report's own evidence (schema shape, Trip link,
+FK protection, RLS, mutation boundary, Driver privacy, etc.) is
+unchanged by this phase and remains the authoritative record for those
+areas.
+
+------------------------------------------------------------------------
+ORIGINAL GAP
+------------------------------------------------------------------------
+S1B's own status-shape constraint enforced only one direction:
+`status <> 'paused' or paused_at is not null` — a paused arrangement
+must record when it was paused, but nothing prevented an ACTIVE
+arrangement from simultaneously carrying a non-null `paused_at`. This
+contradicted the already-locked S1A1 resume semantics (`paused →
+active` clears `paused_at` back to null) — a row shaped
+`status='active', paused_at=<some timestamp>` was schema-legal under
+S1B but represents a state the locked resume transition should never
+actually produce, and nothing at the schema level said so.
+
+Since S1B has never been committed, pushed, or deployed, the correct
+fix is to make the ORIGINAL migration file represent the correct schema
+from the start — not to layer a second migration on top of a mistake
+that never left local development, per this phase's own explicit
+instruction.
+
+------------------------------------------------------------------------
+CORRECTED STATUS SHAPE
+------------------------------------------------------------------------
+`supabase/migrations/20260917090000_recurring_arrangements_foundation.sql`
+edited in place (no new migration file). The three one-directional/
+partial CHECK constraints from the original S1B version were replaced
+with exactly two constraints that together pin down the full locked
+matrix:
+
+  check (
+    (status = 'active' and paused_at is null)
+    or (status = 'paused' and paused_at is not null)
+    or status = 'ended'
+  ),
+  check (
+    (status in ('active', 'paused') and ended_at is null and ended_reason is null)
+    or (status = 'ended' and ended_at is not null and ended_reason is not null and btrim(ended_reason) <> '')
+  ),
+
+Resulting permitted shapes, exactly as locked:
+  ACTIVE: paused_at NULL, ended_at NULL, ended_reason NULL.
+  PAUSED: paused_at NOT NULL, ended_at NULL, ended_reason NULL.
+  ENDED:  ended_at NOT NULL, ended_reason non-blank, paused_at may be
+          NULL or NOT NULL (both a terminal state reached directly from
+          active and one reached directly from paused, retaining
+          paused_at as history, remain valid row shapes — S1A1 never
+          settled which one S1D should produce, and this migration
+          still does not presume an answer).
+
+No trigger and no transition logic was added — this is static row-
+shape integrity only, enforced identically to every other CHECK
+constraint already on this table. `active → paused`, `paused → active`,
+`active → ended`, and `paused → ended` are not implemented anywhere;
+S1D still owns every controlled lifecycle RPC.
+
+------------------------------------------------------------------------
+ACTIVE VALIDATION
+------------------------------------------------------------------------
+Extended `supabase/tests/recurring_arrangement_foundation_tests.sql`
+with RA-36 through RA-39, run live against the corrected constraint:
+  RA-36: active + paused_at NULL -> accepted.
+  RA-37: active + paused_at NOT NULL -> rejected (the exact gap this
+    hardening closes — confirmed closed, not merely reasoned about).
+  RA-38: active + ended_at set -> rejected.
+  RA-39: active + ended_reason set -> rejected.
+All four pass.
+
+------------------------------------------------------------------------
+PAUSED VALIDATION
+------------------------------------------------------------------------
+RA-40 through RA-43:
+  RA-40: paused + paused_at NOT NULL -> accepted.
+  RA-41: paused + paused_at NULL -> rejected (restates RA-14 as part of
+    the locked matrix).
+  RA-42: paused + ended_at set -> rejected.
+  RA-43: paused + ended_reason set -> rejected.
+All four pass.
+
+------------------------------------------------------------------------
+ENDED VALIDATION
+------------------------------------------------------------------------
+RA-44 through RA-49:
+  RA-44: ended + ended_at + non-blank reason + paused_at NULL (ended
+    directly from active) -> accepted.
+  RA-45: ended + ended_at + non-blank reason + paused_at NOT NULL (ended
+    directly from paused, paused_at retained as history) -> accepted —
+    see ENDED-FROM-PAUSED COMPATIBILITY below.
+  RA-46: ended + ended_at NULL -> rejected (restates RA-11).
+  RA-47: ended + ended_reason NULL -> rejected (restates RA-12).
+  RA-48: ended + blank (empty-string) ended_reason -> rejected.
+  RA-49: ended + whitespace-only ended_reason -> rejected.
+RA-50 additionally restates invalid-status rejection (RA-02) as part of
+the same locked-matrix block, for a single place that documents the
+whole shape together. All seven pass.
+
+------------------------------------------------------------------------
+ENDED-FROM-PAUSED COMPATIBILITY
+------------------------------------------------------------------------
+The explicit compatibility requirement — that the schema must continue
+allowing a future S1D flow to end an arrangement directly from paused
+without this phase deciding whether `paused_at` is retained or cleared
+— is satisfied and directly proven by RA-45: a row shaped
+`status='ended', paused_at=<a real prior timestamp>, ended_at=<now>,
+ended_reason='ended from paused'` is accepted by the corrected
+constraint. No schema surgery is required in S1D for either eventual
+procedural choice (clear `paused_at` on end-from-paused, or retain it
+as history) — both produce a row shape this constraint already permits.
+
+------------------------------------------------------------------------
+MIGRATION FILE MODIFIED
+------------------------------------------------------------------------
+`supabase/migrations/20260917090000_recurring_arrangements_foundation.sql`
+— the three status-shape CHECK constraints were replaced with the two
+corrected ones (see CORRECTED STATUS SHAPE); the surrounding doc comment
+was rewritten to explain the exact three-shape matrix and the reasoning
+for leaving `paused_at` unconstrained specifically in the `ended` case.
+No other part of the migration was touched — table field set, `trips.
+recurring_arrangement_id`, days-of-week representation, timezone
+snapshot, RLS, Driver privacy, grants, `created_by` behavior, indexes,
+and every other S1B decision are byte-for-byte unchanged. No new table,
+no new RPC.
+
+------------------------------------------------------------------------
+FOCUSED SQL RESULTS
+------------------------------------------------------------------------
+`recurring_arrangement_foundation_tests.sql`: 50/50 passing (the
+original 35 from S1B plus the 15 new status-shape cases, RA-36 through
+RA-50), 0 failures, on a fresh `supabase db reset`.
+
+------------------------------------------------------------------------
+FULL SQL RESULTS
+------------------------------------------------------------------------
+All 27 maintained files, each against its own fresh reset:
+
+  constraint_tests.sql                          13/13
+  create_trip_atomicity_tests.sql                 2/2
+  create_trip_privilege_tests.sql                 5/5
+  create_trip_tests.sql                         20/20
+  driver_location_tests.sql                     20/20
+  driver_read_authorization_tests.sql           17/17
+  driver_read_history_tests.sql                   8/8
+  driver_read_minimization_tests.sql            13/13
+  driver_read_privilege_tests.sql                 8/8
+  exception_mutation_boundary_tests.sql         20/20
+  function_privilege_tests.sql                    7/7
+  mutation_assignment_tests.sql                 19/19
+  mutation_atomicity_tests.sql                    2/2
+  mutation_authorization_tests.sql                4/4
+  mutation_idempotent_authorization_tests.sql     6/6
+  mutation_lifecycle_tests.sql                  24/24
+  mutation_privilege_tests.sql                    7/7
+  operator_onboarding_tests.sql                 40/40
+  organization_timezone_tests.sql               14/14
+  recurring_arrangement_foundation_tests.sql    50/50
+  request_mutation_atomicity_tests.sql            3/3
+  request_mutation_privilege_tests.sql          18/18
+  request_mutation_tests.sql                    38/38
+  request_trip_passenger_integrity_tests.sql    10/10
+  rls_adversarial_tests.sql                     32/32
+  security_definer_exposure_tests.sql           20/20
+  trip_exception_tests.sql                      16/16
+
+TOTAL: 436/436 assertions passed (up from S1B's own 421/421 baseline —
+the increase of 15 is exactly the new status-shape cases added, no
+other file's count changed), 0 failures, 0 fatal psql errors, across
+all 27 files.
+
+------------------------------------------------------------------------
+CONCURRENCY RESULTS
+------------------------------------------------------------------------
+All 3 maintained concurrency tests re-run, each against its own fresh
+reset: `mutation_concurrency_test.sh` PASS, `driver_invite_concurrency_
+test.sh` PASS, `request_lifecycle_concurrency_test.sh` PASS — all three
+showing genuine ~1.8-2.0s row-lock blocking and correct post-block
+outcomes, unchanged in behavior from the S1B baseline (this phase
+touches no mutation path, RPC, or lock discipline).
+
+------------------------------------------------------------------------
+APPLICATION REGRESSION
+------------------------------------------------------------------------
+`npx tsc --noEmit`: 0 errors. `npm run lint`: 0 errors, 35 warnings, all
+confined to `.tmp-qa/*.mjs` scratch scripts. `npm run build`: succeeded,
+zero route changes. `npm test`: 119/119, unchanged from the S1B
+baseline. No application source file was touched by this phase at all —
+only the migration and its own test file changed.
+
+------------------------------------------------------------------------
+OPEN ISSUES CARRIED FORWARD
+------------------------------------------------------------------------
+Whether `paused_at` is retained or cleared when S1D actually implements
+"end from paused" remains a genuine, deliberately-undecided procedural
+choice — this phase does not decide it, it only confirms the schema
+accommodates either answer without requiring future migration. Every
+other item already carried forward from S1A1/S1B (pause-reason
+mandatoriness, `appointment_time`, a future "schedule a pause for a
+future date" capability, exact S1D RPC names, return-leg assurance's
+own future design, the Platform Admin standing-read-scope discrepancy
+found during S1B's own audit) remains exactly as open as it was.
+
+============================================================
+ACTIVE + PAUSED_AT:
+REJECTED
+
+PAUSED WITHOUT PAUSED_AT:
+REJECTED
+
+ENDED WITH PAUSED_AT:
+ALLOWED
+
+ENDED WITHOUT REASON:
+REJECTED
+
+STATUS SHAPE:
+PASS
+
+FULL SQL:
+436/436
+
+CONCURRENCY:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+119/119
+
+S1B FOUNDATION:
+READY
+
+READY FOR S1C:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E2-S1C — Recurring Occurrence Exceptions + Assurance Core

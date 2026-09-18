@@ -284,3 +284,122 @@ const TRIP_READINESS_REASON_LABEL: Record<TripReadinessReasonCode, string> = {
 export function tripReadinessReasonLabel(code: TripReadinessReasonCode): string {
   return TRIP_READINESS_REASON_LABEL[code];
 }
+
+/**
+ * Recurring Care (P1-E2-S1E) presentation helpers — same "state → screen
+ * label, one place to look" discipline, extended to
+ * RecurringArrangementStatus and RecurringOccurrenceState
+ * (recurring-care-core.ts, P1-E2-S1B/S1C). Never a new vocabulary of its
+ * own — these are pure label/category lookups over the already-locked
+ * domain states, never re-derived or duplicated logic.
+ */
+export function recurringArrangementStatusLabel(status: string): string {
+  if (status === "active") return "Active";
+  if (status === "paused") return "Paused";
+  if (status === "ended") return "Ended";
+  return status;
+}
+
+export function recurringArrangementStatusCategory(status: string): StatusCategory {
+  if (status === "active") return "active";
+  if (status === "paused") return "neutral";
+  if (status === "ended") return "cancelled";
+  return "neutral";
+}
+
+/**
+ * Human language for the 3 occurrence states (P1-E2-S1E §13) — never the
+ * raw enum string. MISSING reads as "Not yet scheduled" (an
+ * attention-level, preparation-oriented framing, never alarming red —
+ * §36) rather than a clinical/negative-sounding label.
+ */
+export function recurringOccurrenceStateLabel(state: string): string {
+  if (state === "SCHEDULED") return "Scheduled";
+  if (state === "MISSING") return "Not yet scheduled";
+  if (state === "SKIPPED") return "Skipped";
+  return state;
+}
+
+/**
+ * Visual priority (§36): MISSING is attention-level (warning/amber), never
+ * critical-red by default — this is planning/assurance work, not an
+ * active incident. SKIPPED is neutral/informational (a deliberate,
+ * already-resolved operator decision). SCHEDULED is a quiet positive
+ * confirmation, matching TripReadinessPanel's own "Prepared" treatment.
+ */
+export function recurringOccurrenceStateCategory(state: string): StatusCategory {
+  if (state === "SCHEDULED") return "positive";
+  if (state === "MISSING") return "warning";
+  if (state === "SKIPPED") return "neutral";
+  return "neutral";
+}
+
+const WEEKDAY_SHORT_LABEL: Record<number, string> = {
+  1: "Mon",
+  2: "Tue",
+  3: "Wed",
+  4: "Thu",
+  5: "Fri",
+  6: "Sat",
+  7: "Sun",
+};
+
+const WEEKDAY_FULL_LABEL: Record<number, string> = {
+  1: "Monday",
+  2: "Tuesday",
+  3: "Wednesday",
+  4: "Thursday",
+  5: "Friday",
+  6: "Saturday",
+  7: "Sunday",
+};
+
+export function recurringWeekdayShortLabel(day: number): string {
+  return WEEKDAY_SHORT_LABEL[day] ?? String(day);
+}
+
+export function recurringWeekdayFullLabel(day: number): string {
+  return WEEKDAY_FULL_LABEL[day] ?? String(day);
+}
+
+/** "Mon / Wed / Fri" style pattern summary — daysOfWeek is already ascending (canonical storage order, P1-E2-S1A1), never re-sorted here. */
+export function formatRecurringPattern(daysOfWeek: number[]): string {
+  return daysOfWeek.map(recurringWeekdayShortLabel).join(" / ");
+}
+
+/**
+ * "Friday, September 25" style formatting for an already-resolved local
+ * date-key string (`YYYY-MM-DD`, e.g. from RecurringOccurrence.serviceDate)
+ * — NEVER re-interpreted through any timezone (the date-key is already
+ * the arrangement-local calendar date; formatting it via `Intl` with
+ * `timeZone: 'UTC'` against a synthetic UTC-midnight instant is a pure
+ * calendar-label operation, not a second timezone conversion — mirrors
+ * the "Date.UTC as scratch calendar calculator" technique already
+ * established in recurring-care-core.ts itself).
+ */
+export function formatServiceDateLabel(dateKey: string): string {
+  const instant = new Date(`${dateKey}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }).format(instant);
+}
+
+/** Short "Fri, Sep 25" style formatting, for tighter list rows. */
+export function formatServiceDateShortLabel(dateKey: string): string {
+  const instant = new Date(`${dateKey}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }).format(instant);
+}
+
+/**
+ * "8:00 AM" style formatting for a bare wall-clock `time` column value
+ * (`HH:mm:ss`, e.g. `recurring_arrangements.pickup_time`) — NOT an
+ * instant, so never passed through `formatOperationsTime` (which expects
+ * a real UTC timestamp + a real IANA zone to resolve against). Formats
+ * against a synthetic UTC-midnight anchor date purely as a calendar-math
+ * scratch value (mirrors formatServiceDateShortLabel's own identical
+ * technique) — the wall-clock hour/minute are preserved exactly since
+ * both the anchor and the formatter use UTC.
+ */
+export function formatWallClockTime(time: string): string {
+  const instant = new Date(`1970-01-01T${time}Z`);
+  if (Number.isNaN(instant.getTime())) return time;
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(instant);
+}

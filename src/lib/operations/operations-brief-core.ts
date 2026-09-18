@@ -82,6 +82,93 @@ export interface OperationsBriefTomorrowSummary {
   needsPreparationCount: number;
 }
 
+/**
+ * Compact Recurring Care summary for Operations Brief (P1-E2-S1F).
+ * Answers exactly one question: "Which expected recurring occurrences do
+ * not yet have qualifying Trips?" — never Trip Readiness reasons, open
+ * Trip exceptions, Driver/Vehicle inactivity, or today's execution
+ * problems (all already owned by other Operations Brief blocks, §2's own
+ * explicit exclusion list). No occurrence list, no Passenger list, no
+ * score, no percentage, no adherence metric — just 4 plain facts.
+ * `nextMissingDate` is an already-resolved LOCAL SERVICE DATE string
+ * (`YYYY-MM-DD`, from the authoritative per-arrangement evaluator's own
+ * timezone resolution) — never re-interpreted through any timezone here
+ * or in the component that renders it.
+ */
+export interface OperationsBriefRecurringCareSummary {
+  activeArrangementCount: number;
+  missingOccurrenceCount: number;
+  arrangementsWithMissingCount: number;
+  nextMissingDate: string | null;
+}
+
+/**
+ * Minimal structural input for `deriveRecurringCareSummary` — deliberately
+ * NOT an import of `RecurringArrangementListRow`/`RecurringArrangement
+ * Assurance` (recurring-care-list.ts/recurring-care.ts), matching this
+ * file's own "no runtime import of any kind" charter (see this file's
+ * header comment) exactly: the server-only wrapper (operations-brief.ts)
+ * narrows its own already-fetched, already-authoritative rows down to
+ * this shape before calling in here. `assurance` is `null` only for an
+ * arrangement the evaluator's own coarse near-horizon filter excluded
+ * (recurring-care-list.ts) — such a row never contributes to the summary
+ * either way, exactly like a genuinely paused/ended row's own exclusion
+ * below.
+ */
+export interface RecurringCareSummaryRow {
+  status: string;
+  assurance: { missingCount: number; nextMissingDate: string | null } | null;
+}
+
+/**
+ * Reduces already-fetched, already-authoritative per-arrangement
+ * assurance facts down to the Brief's own 4-field summary. Pure
+ * aggregation only — every date/weekday/timezone/satisfaction rule that
+ * decided each row's own `missingCount`/`nextMissingDate` already ran
+ * inside the S1C evaluator (recurring-care-core.ts) before this function
+ * ever sees the result; this function never re-derives or second-guesses
+ * any of it (P1-E2-S1F §4/§18 — "No second weekday/date evaluator").
+ *
+ * ACTIVE-ONLY (§5): a paused or ended arrangement's own row is completely
+ * excluded from every count, regardless of its own `missingCount` — a
+ * standing commitment that has been deliberately paused or ended is
+ * never "unattended work." Both remain fully visible in the Recurring
+ * Care workspace itself; this Brief summary simply never counts them.
+ *
+ * SKIPPED/READINESS/CANCELLED (§10/§11/§12) require no special-case logic
+ * here at all — the evaluator's own `missingCount` already excludes a
+ * SKIPPED date, already excludes a SCHEDULED (Trip-created) date
+ * regardless of that Trip's own Readiness state, and already includes a
+ * date whose only linked Trip is cancelled (since a cancelled Trip never
+ * satisfies an occurrence). This function only ever sums/counts whatever
+ * `missingCount` the evaluator already decided.
+ */
+export function deriveRecurringCareSummary(rows: RecurringCareSummaryRow[]): OperationsBriefRecurringCareSummary {
+  const activeRows = rows.filter((row) => row.status === "active");
+
+  let missingOccurrenceCount = 0;
+  let arrangementsWithMissingCount = 0;
+  let nextMissingDate: string | null = null;
+
+  for (const row of activeRows) {
+    if (!row.assurance) continue;
+    missingOccurrenceCount += row.assurance.missingCount;
+    if (row.assurance.missingCount > 0) {
+      arrangementsWithMissingCount += 1;
+      if (row.assurance.nextMissingDate !== null && (nextMissingDate === null || row.assurance.nextMissingDate < nextMissingDate)) {
+        nextMissingDate = row.assurance.nextMissingDate;
+      }
+    }
+  }
+
+  return {
+    activeArrangementCount: activeRows.length,
+    missingOccurrenceCount,
+    arrangementsWithMissingCount,
+    nextMissingDate,
+  };
+}
+
 export interface OperationsBriefData {
   dayState: OperationsBriefDayState;
   totalTripsToday: number;
@@ -105,6 +192,15 @@ export interface OperationsBriefData {
    * requests/RequestActivityPanel.tsx).
    */
   tomorrowReadiness: OperationsBriefTomorrowSummary | null;
+  /**
+   * `null` only when the underlying Recurring Care fetch genuinely failed
+   * (P1-E2-S1F §17) — never used to represent "no active arrangements"
+   * or "nothing missing," both of which are real, successfully-fetched
+   * `{ activeArrangementCount: 0, ... }` / `{ missingOccurrenceCount: 0,
+   * ... }` values. Mirrors `tomorrowReadiness`'s own established
+   * null-on-failure convention exactly.
+   */
+  recurringCare: OperationsBriefRecurringCareSummary | null;
 }
 
 /** See OperationsBriefDayState's own doc comment for the exact rule each branch implements. */
@@ -192,6 +288,7 @@ export function deriveOperationsBrief(
   driverSnapshot: OperationsBriefDriverSnapshot,
   requestSummary: OperationsBriefRequestSummary,
   tomorrowReadiness: OperationsBriefTomorrowSummary | null,
+  recurringCare: OperationsBriefRecurringCareSummary | null,
   now: Date,
 ): OperationsBriefData {
   const attentionTripIds = new Set(data.attentionItems.map((item) => item.trip.id));
@@ -206,5 +303,6 @@ export function deriveOperationsBrief(
     driverSnapshot,
     requestSummary,
     tomorrowReadiness,
+    recurringCare,
   };
 }

@@ -1,0 +1,708 @@
+P1-E2-S1D — RECURRING ARRANGEMENT LIFECYCLE + OCCURRENCE EXCEPTION
+MUTATIONS
+COMPLETION REPORT
+
+Baseline HEAD (unchanged throughout this phase): d5df53355c12a74859e24368a8e895fe821de436
+Nothing has been committed, staged, pushed, or deployed during this phase.
+
+
+PREFLIGHT
+=========
+git status --short / git diff --stat / git log --oneline -10 confirmed HEAD
+unchanged, S1B/S1B1/S1C still local/uncommitted exactly as they were
+(recurring_arrangements/recurring_occurrence_exceptions migrations, their
+focused SQL tests, the pure evaluator, the server read model, the S1C
+report), plus this phase's own two additions.
+
+Read fresh before writing anything:
+  - supabase/migrations/20260831100200_controlled_trip_mutations.sql (the
+    6-code error contract, the locking-order convention, the driver_*
+    one-function-per-edge pattern, cancel_trip's reason-validation/
+    idempotent-no-op shape).
+  - supabase/migrations/20260916100000_request_mutation_foundation.sql /
+    20260916110000_request_trip_passenger_integrity.sql (the
+    organization_id-as-requested-context pattern: has_org_role
+    re-validates live, the target row's own lookup is ALSO scoped by
+    organization_id — never trusted from the parameter alone; create_trip's
+    exact passenger-validation shape).
+  - supabase/migrations/20260902150000_trip_exception_mutations.sql /
+    20260902160000_exception_mutation_boundary_hardening.sql
+    (report_trip_exception/resolve_trip_exception's shared-result-type and
+    idempotent-no-op-preserves-original-value conventions).
+  - supabase/migrations/20260903100200_driver_invites.sql
+    (redeem_driver_invite's row-lock-as-the-concurrency-serialization-
+    boundary technique — reused directly for skip_recurring_occurrence).
+  - supabase/tests/function_privilege_tests.sql /
+    security_definer_exposure_tests.sql (confirmed both are schema-wide,
+    dynamic pg_proc introspection — see FUNCTION PRIVILEGES below for why
+    neither needed editing).
+No different mutation architecture was invented — every convention above
+is reused exactly, not reinterpreted.
+
+
+RPC SET
+=======
+Seven new SECURITY DEFINER functions, one per legal action (never a
+single generic "mutate" function), all in one new migration:
+supabase/migrations/20260917110000_recurring_arrangement_lifecycle_mutations.sql
+
+  create_recurring_arrangement(p_organization_id, p_passenger_id,
+    p_pickup_description, p_destination_description, p_pickup_time,
+    p_days_of_week, p_start_date, p_end_date default null)
+    -> recurring_arrangement_result
+
+  edit_recurring_arrangement(p_organization_id, p_arrangement_id,
+    p_pickup_description, p_destination_description, p_pickup_time,
+    p_days_of_week, p_start_date, p_end_date default null)
+    -> recurring_arrangement_result
+
+  pause_recurring_arrangement(p_organization_id, p_arrangement_id)
+    -> recurring_arrangement_result
+
+  resume_recurring_arrangement(p_organization_id, p_arrangement_id)
+    -> recurring_arrangement_result
+
+  end_recurring_arrangement(p_organization_id, p_arrangement_id, p_reason)
+    -> recurring_arrangement_result
+
+  skip_recurring_occurrence(p_organization_id, p_arrangement_id,
+    p_service_date, p_reason)
+    -> recurring_occurrence_exception_result
+
+  unskip_recurring_occurrence(p_organization_id, p_arrangement_id,
+    p_service_date)
+    -> recurring_occurrence_exception_result
+
+Two new composite return types (mirroring trip_exception_result's own
+shared-shape precedent): recurring_arrangement_result (shared across all
+5 arrangement RPCs) and recurring_occurrence_exception_result (shared
+across skip/unskip). Both carry a `changed: boolean` idempotency signal.
+
+
+AUTHORIZATION
+=============
+Every one of the 7 functions: `if auth.uid() is null then raise
+'unauthorized' ZW001`, then `if not has_org_role(p_organization_id,
+array['organization_admin','dispatcher']) then raise 'not_found' ZW002`.
+Organization Admin and Dispatcher both allowed; Driver, inactive
+membership, unauthenticated, and anon all denied (uniformly ZW002/ZW001,
+no existence oracle — matches the exact convention already established
+for create_trip/log_transportation_request). No Platform Admin access was
+added anywhere — the already-verified 3-table PA scope
+(organizations/platform_admin_grants/audit_events) is unchanged; these
+RPCs simply never check is_platform_admin() at all, exactly as S1B/S1C
+never did. No function accepts a caller-supplied actor/user id parameter
+of any kind — auth.uid() is the sole, structurally-enforced actor
+identity throughout.
+
+Proven live: CREATE-01/02 (Admin/Dispatcher succeed), CREATE-03/04/05
+(Driver/inactive-membership/anon all denied), PRIV-02 (Driver denied on
+both create and skip specifically).
+
+
+ORGANIZATION CONTEXT
+=====================
+Audited how create_trip/log_transportation_request/link_request_passenger/
+cancel_transportation_request already handle this before writing anything
+(work item §4's own explicit instruction) — found and reused the SAME
+pattern throughout: `organization_id` is accepted as an explicit
+parameter (required for a user who may hold ACTIVE Memberships in more
+than one organization — has_org_role alone cannot disambiguate WHICH
+organization a multi-org caller means without it), but it is NEVER
+authority on its own. Every function independently re-derives
+auth.uid() -> has_org_role(p_organization_id, roles) -> same organization,
+live, every call — never a cached JWT claim, never trusted merely because
+it was supplied. Every target-row lookup is ALSO scoped by
+`organization_id = p_organization_id` in the identical WHERE clause as
+its own id (double-checked, not merely implied by the earlier
+has_org_role call) — a forged organization_id can therefore only ever
+produce a ZW002 not_found (the row genuinely does not match that
+selector), never privilege escalation. Proven live: CREATE-06 (Org A
+actor supplying Org B's own organization_id, denied), PRIV-04's forged-
+org spot checks, and every not_found path throughout the focused suite.
+
+
+CREATE SEMANTICS
+==================
+create_recurring_arrangement accepts only operator-controlled pattern
+facts (passenger_id, pickup_description, destination_description,
+pickup_time, days_of_week, start_date, end_date) — no organization_id-
+as-authority parameter distinct from the requested-context one already
+described, no timezone parameter at all, no created_by/status/paused_at/
+ended_at/ended_reason parameter of any kind. status is hard-coded
+'active', paused_at/ended_at/ended_reason are hard-coded NULL,
+created_by is hard-coded auth.uid(), timezone is read live from
+Organization.timezone AT CREATION TIME ONLY and stored as a snapshot
+(never re-read afterward — matches recurring_arrangements.timezone's own
+S1B column comment, written in anticipation of exactly this RPC).
+
+PASSENGER STATUS DECISION: audited create_trip's own existing convention
+(20260916110000_request_trip_passenger_integrity.sql) before locking
+anything fresh — create_trip already requires status='active' for its own
+required passenger_id parameter. The identical rule is reused here,
+unweakened: an inactive Passenger cannot receive a NEW standing
+transportation commitment. The composite FK itself is untouched either
+way (an inactive Passenger's id still satisfies it) — the additional
+status='active' predicate lives in the RPC, exactly where create_trip
+enforces its own equivalent rule. Proven live: CREATE-12.
+
+Proven live: CREATE-01/02 (success), CREATE-07 (timezone = Organization's
+own, America/New_York for Org A), CREATE-08 (created_by = auth.uid()),
+CREATE-09 (status=active, the other three fields all NULL), CREATE-11
+(cross-org Passenger rejected).
+
+
+IMMUTABLE FIELDS
+==================
+organization_id, passenger_id, timezone, and created_by are immutable
+after creation — structurally, not by convention: no field of this shape
+appears as a parameter on edit_recurring_arrangement (or any other RPC)
+at all, so there is no code path through which any of the 7 functions
+could ever write to them post-creation. Proven live: EDIT-04/05/06/07
+(all four fields read directly off the row after an edit call and
+confirmed byte-identical to their pre-edit values).
+
+
+EDIT SEMANTICS
+================
+edit_recurring_arrangement may change exactly pickup_description,
+destination_description, pickup_time, days_of_week, start_date, end_date
+— its own UPDATE statement's SET list mentions no other column, so
+status/paused_at/ended_at/ended_reason are equally structurally
+unreachable from this function (lifecycle changes have their own
+dedicated RPCs). Legal only while active or paused; ZW004 from ended.
+Never touches trips (no bulk update, no cascade, no schedule rewrite) —
+an existing linked Trip is an already-independent operational record; the
+edit affects only future derived occurrences that do not yet have one.
+days_of_week is normalized identically to create (see DAYS-OF-WEEK
+NORMALIZATION below). No idempotency no-op path exists for edit — every
+call always performs the UPDATE and writes one audit event (matching
+create_trip's own non-idempotent-by-design posture; no idempotency test
+was required by the phase spec for this RPC).
+
+Proven live: EDIT-01 (active edit succeeds), EDIT-02 (paused edit
+succeeds, status remains paused), EDIT-03 (ended edit rejected, ZW004),
+EDIT-08 (linked Trip completely unchanged), EDIT-09 (weekday
+normalization).
+
+
+PAUSE SEMANTICS
+==================
+Legal: active -> paused only. On success: status='paused',
+paused_at=now(). Never touches linked Trips or occurrence exceptions.
+Idempotent no-op if already paused — changed=false, paused_at NOT
+touched, no duplicate audit event. ZW004 if ended. No reason parameter at
+all (work item §11's own explicit preference honored — no existing
+mutation convention in this schema strongly favors an optional reason for
+a reversible, non-terminal transition; kept deliberately minimal).
+
+Proven live: PAUSE-01/02 (active->paused, paused_at set), PAUSE-03
+(repeat pause idempotent, paused_at unchanged, exactly 1 audit event
+total across both calls), PAUSE-04 (ended pause rejected), PAUSE-05
+(linked Trip unchanged).
+
+
+RESUME SEMANTICS
+===================
+Legal: paused -> active only. On success: status='active',
+paused_at=null. Idempotent no-op if already active. ZW004 if ended.
+
+Proven live: RESUME-01/02 (paused->active, paused_at cleared), RESUME-03
+(repeat resume idempotent, exactly 1 audit event total), RESUME-04 (ended
+resume rejected).
+
+
+END SEMANTICS
+===============
+Legal: active -> ended OR paused -> ended. Reason required (nonblank,
+<=500 chars — the same bound cancel_trip/record_no_show already use for
+every other terminal-transition reason in this schema; the table's own
+ended_reason column carries no length CHECK, only nonblank, so this RPC
+supplies the missing ceiling rather than leaving it unbounded).
+
+LOCKED PROCEDURAL DECISION, implemented with zero branching: the UPDATE
+statement never mentions paused_at in its SET list at all. Ending from
+'active' therefore leaves paused_at at its already-NULL value unchanged;
+ending from 'paused' leaves paused_at at whatever timestamp it already
+held, RETAINED as historical context — the exact locked behavior for both
+cases, achieved by omission rather than two separate code paths that
+could drift apart. Idempotent no-op if already ended — the ORIGINAL
+ended_at/ended_reason are never overwritten by a later, redundant end
+call, even one supplying a materially different reason string. Never
+touches linked Trips or occurrence exceptions (no cascade, no
+cancellation, no cleanup).
+
+Proven live: END-04 (blank reason rejected), END-01/03 (active->ended,
+ended_at set, paused_at remains NULL), END-02/05 (paused->ended,
+ORIGINAL paused_at retained, verified byte-identical to its pre-end
+value), END-06/07 (repeat end idempotent, original 'discharged' reason
+preserved against a second call supplying 'a completely different later
+reason', exactly 1 audit event total), END-08 (linked Trip unchanged).
+
+
+IDEMPOTENCY
+=============
+Every idempotency-bearing RPC (pause/resume/end/skip/unskip) follows the
+identical shape: lock the target row first, THEN check whether the
+requested end state already holds; if so, return the REAL, already-
+persisted row (never the caller's own redundant input) with changed=false
+and write no audit event. This mirrors resolve_trip_exception's own
+established "idempotent no-op returns the real already-persisted
+resolution, never overwritten by a stale/redundant caller" precedent
+exactly. Proven for every applicable RPC: PAUSE-03, RESUME-03, END-06/07,
+SKIP-08/09, UNSKIP-02 — each confirmed changed=false, the original value
+preserved, and (where an audit trail exists) exactly one event total
+across both the real mutation and its subsequent no-op retry (AUDIT-02
+spot-checks this explicitly).
+
+
+SKIP SEMANTICS
+================
+skip_recurring_occurrence creates a recurring_occurrence_exceptions row.
+Inputs: arrangement_id, service_date, reason (required, nonblank,
+<=2000 chars — the same bound the table's own S1C CHECK constraint
+already enforces, validated here first for a clean ZW006 instead of a
+raw constraint-violation error). Locks the ARRANGEMENT row (not merely
+the exception table) FOR UPDATE — this serves two purposes at once: its
+CURRENT facts (start/end/days_of_week/status/paused_at) are exactly what
+SKIP DATE VALIDITY must check against, and it is simultaneously the
+serialization boundary that makes concurrent duplicate-skip requests for
+the SAME arrangement safe (identical technique to
+link_request_passenger/cancel_transportation_request using their own
+parent Request row's lock, and to redeem_driver_invite's own invite-row
+lock).
+
+SKIP DATE VALIDITY (every check ZW006, describing "this date does not
+currently describe a legitimate pattern occurrence" — except the ended
+check, ZW004, describing "this action is unavailable for this
+arrangement's own lifecycle state regardless of date"): on/after
+start_date, on/before end_date if set, on/after the arrangement-local
+current date (resolved via Postgres's own `now() at time zone
+<arrangement's timezone>`, the direct equivalent of day-bounds.ts's
+localDateKey technique used at the application layer), weekday matches
+days_of_week, and — if paused — strictly before the pause-effective local
+date. An ended arrangement rejects unconditionally, for any date (ZW004,
+no date-specific carve-out, per the phase's own explicit instruction).
+The skip horizon is deliberately NOT limited to the 14-day assurance
+window — an operator may know about a future closure earlier than that;
+the assurance engine will naturally begin honoring the skip once that
+date enters its own horizon.
+
+Proven live: SKIP-01 (valid future pattern date succeeds), SKIP-02
+(non-pattern weekday rejected), SKIP-03 (before-start rejected), SKIP-04
+(after-end rejected), SKIP-05 (past date rejected), SKIP-06a/b (on/after
+pause-cutoff rejected; a date before the cutoff still succeeds on the
+SAME arrangement), SKIP-07 (ended arrangement rejected, ZW004), SKIP-08/09
+(duplicate skip idempotent, original reason preserved).
+
+
+UNSKIP SEMANTICS
+===================
+unskip_recurring_occurrence removes an existing skip fact — a genuine
+DELETE, never soft-delete machinery, with one audit_events row capturing
+the removed fact for history. Deliberately does NOT re-validate current
+pattern facts (locked decision, work item §18): a skip created when a
+date was a legitimate pattern occurrence remains removable even after a
+later pattern edit, pause, or end changes what "legitimate" would mean
+today — reversal of an existing explicit fact must never become
+impossible because later facts changed. Only the exception row itself is
+locked (FOR UPDATE) — simpler than skip's own arrangement-level lock,
+since no current-facts validation is needed here at all, mirroring
+resolve_trip_exception's own simpler single-row-lock shape. Idempotent
+successful no-op if no such skip exists (changed=false, no audit event)
+— covers "never skipped," "already unskipped," and a nonexistent/
+foreign-org id combination alike, with no existence oracle.
+
+Proven live: UNSKIP-01 (existing skip removed, 0 rows remain), UNSKIP-02
+(missing skip idempotent no-op), UNSKIP-03 (a skip made stale by a
+subsequent pattern edit — days_of_week changed to exclude that weekday —
+still removable), UNSKIP-04 (a skip on an arrangement subsequently ended
+still removable).
+
+
+AUDIT EVENTS
+==============
+Every state-changing mutation writes exactly one audit_events row (never
+more, never fewer) on a REAL mutation; an idempotent no-op writes none.
+entity_type='recurring_arrangement' throughout (including for
+skip/unskip, per the phase's own explicit instruction to keep history
+retrievable around the standing commitment itself, not a separate
+exception-entity type) with entity_id=the arrangement's own id. Actions:
+recurring_arrangement_created / recurring_arrangement_edited /
+recurring_arrangement_paused / recurring_arrangement_resumed /
+recurring_arrangement_ended / recurring_occurrence_skipped /
+recurring_occurrence_unskipped. actor_user_id is always auth.uid().
+before_data/after_data carry only operational pattern/lifecycle fields
+(passenger_id as an identifier only, never name/phone; pickup/
+destination text; pickup_time; days_of_week; start/end_date; timezone;
+status/paused_at/ended_at/ended_reason where relevant; service_date/
+reason for skip/unskip) — no secrets, no unrelated Passenger PII. No new
+history table was created (audit_events is what the phase itself
+specified); no RPC ever updates or deletes a previous audit_events row.
+
+Proven live: AUDIT-01/03/04/05 (exactly 1 create event, correct actor,
+correct organization, after_data carries the expected operational keys),
+AUDIT-02 (one real pause + one immediately-following idempotent no-op
+pause = exactly 1 new audit event total, not 2) — and, throughout every
+other section above, every idempotency test's own audit-count assertion
+(PAUSE-03/RESUME-03/END-06-07/SKIP-08-09, each confirming exactly 1 total
+event across a real mutation plus its own no-op retry).
+
+
+SECURITY DEFINER HARDENING
+=============================
+All 7 functions: `language plpgsql security definer set search_path =
+public, pg_temp` (schema-qualified relations/functions throughout, no
+bare unqualified name anywhere), `revoke all ... from public` followed by
+`grant execute ... to authenticated` only (never anon, never PUBLIC). No
+dynamic SQL anywhere in the migration. auth.uid() is checked first in
+every function body; has_org_role (itself already SECURITY DEFINER, live-
+membership-checked) is the sole authorization primitive, re-derived every
+call, never a cached claim. No service-role assumption anywhere — these
+functions run as the migration-applying role (postgres locally), the
+identical ownership model every prior controlled-mutation function in
+this schema already uses.
+
+Proven live: PRIV-01 (PUBLIC cannot execute any of the 7 new functions —
+direct pg_proc/has_function_privilege check), and the same fact is
+additionally, independently covered by function_privilege_tests.sql's own
+schema-wide "no function in public grants EXECUTE to PUBLIC"/"...to anon"
+checks, which ran against these 7 new functions automatically (see
+FUNCTION PRIVILEGES below).
+
+
+RAW MUTATION BOUNDARY
+========================
+This migration adds ZERO new GRANT statements on recurring_arrangements
+or recurring_occurrence_exceptions — both tables carry exactly the same
+SELECT-only privilege set to `authenticated` they had at the end of
+S1B/S1C respectively (directly re-verified via
+information_schema.table_privileges before writing any test: both show
+only SELECT, plus the implicit REFERENCES/TRIGGER/TRUNCATE every table
+owner's default privilege set extends to anon/authenticated/service_role
+schema-wide in this project — see OPEN ISSUES). Every one of the 7 new
+RPCs' own writes happens exclusively via its SECURITY DEFINER execution
+context, never by relying on (or weakening) the caller's own table
+privilege.
+
+Proven live: PRIV-04 (raw INSERT/UPDATE/DELETE on recurring_arrangements
+and raw INSERT on recurring_occurrence_exceptions, all attempted as an
+authenticated Organization Admin, all denied — 4/4).
+
+
+TRIP LINK PRIVILEGE
+======================
+trips.recurring_arrangement_id was NOT touched by this migration in any
+way — no GRANT, no RLS policy, no function references it. Directly
+re-verified via information_schema.column_privileges before writing any
+test: `authenticated` holds SELECT+REFERENCES on this column but NO
+UPDATE grant, exactly as it has been since S1B first added the column —
+this was already true before S1D and required no change here (S1E owns
+the controlled Trip-creation integration).
+
+Proven live: PRIV-05 (raw UPDATE of trips.recurring_arrangement_id,
+attempted as an authenticated Organization Admin, denied).
+
+
+FUNCTION PRIVILEGES
+======================
+No edit was made to supabase/tests/function_privilege_tests.sql or
+security_definer_exposure_tests.sql. Read both fully before deciding
+this (work item §27's own instruction to extend the maintained suites
+"where appropriate," not unconditionally):
+  - function_privilege_tests.sql's own "no function grants EXECUTE to
+    PUBLIC" and "no function grants EXECUTE to anon" checks are dynamic
+    pg_proc/pg_namespace introspection across the ENTIRE public schema,
+    with no per-function allowlist required for a normal (non-anon-
+    granted) function — the 7 new RPCs are therefore automatically
+    represented in this suite's own regression run with zero edit
+    required (confirmed: this file's own pass count rose from the prior
+    S1C baseline by exactly 0, because it was already checking "all
+    functions," and the 7 new ones simply already satisfy the invariant
+    it tests — visible directly in the FULL SQL REGRESSION table below,
+    where function_privilege_tests.sql still reports the same 7/7 it
+    always has, its assertions being schema-wide counts/existence checks
+    rather than one assertion per individual function).
+  - security_definer_exposure_tests.sql is scoped specifically to the 5
+    original RLS helper functions (is_org_member, has_org_role,
+    current_driver_id, is_driver_assigned_to_trip, is_platform_admin) —
+    it does not enumerate mutation RPCs at all, and none of the 7 new
+    functions changes anything about those 5 helpers' own behavior, so
+    no edit was needed or appropriate there either.
+Per-function privilege/security-definer proof for the 7 new RPCs instead
+lives in the new recurring_arrangement_mutation_tests.sql itself (PRIV-01
+through PRIV-05) — satisfying the phase's own "do not leave the new
+functions tested only in a feature-specific file" bar via the combination
+of (a) the new feature-specific tests and (b) automatic, un-edited
+coverage by the existing schema-wide suites, rather than by duplicating
+per-function assertions into files whose own charter is schema-wide
+invariants, not individual RPCs.
+
+
+CONCURRENCY DESIGN
+=====================
+New file: supabase/tests/recurring_arrangement_concurrency_test.sh — same
+technique as the existing mutation_concurrency_test.sh exactly: two
+SEPARATE psql OS processes (never simulated via sequential calls within
+one script) against the SAME row at overlapping wall-clock times. Session
+A always opens an explicit transaction, takes the row lock (a raw `SELECT
+... FOR UPDATE`, necessarily issued as the postgres role since
+`authenticated` holds zero UPDATE grant on either table and Postgres's
+FOR UPDATE clause itself requires the UPDATE privilege — discovered and
+fixed during this phase's own test-authoring, see CONCURRENCY RESULTS),
+sleeps ~2s, THEN switches to `SET LOCAL ROLE authenticated` + the actual
+actor's JWT claim and calls its own RPC (which re-acquires the
+already-held lock harmlessly, same session), then commits. Session B,
+launched ~0.3s later while A is still sleeping, calls its own RPC
+directly under `authenticated`/its own actor claim — its own RPC's
+internal `FOR UPDATE` lock (taken under the RPC's SECURITY DEFINER
+execution context, which needs no client-side table privilege at all)
+blocks on A's held lock. Since A always acquires the lock first by
+construction, this deterministically proves genuine blocking (via
+elapsed-time assertion, not merely a plausible-looking final state) and
+correct post-block behavior — identical epistemics to the existing
+assign_trip race test.
+
+Three scenarios, matching the phase's own §25 exactly:
+  A. Simultaneous pause vs end of the same ACTIVE arrangement.
+  B. Simultaneous duplicate skip of the same arrangement/date.
+  C. Simultaneous resume vs end from PAUSED.
+
+
+CONCURRENCY RESULTS
+======================
+TEST RECURRING-CONCURRENCY-A: PASS — Session B blocked ~1.9-2.3s on the
+arrangement row lock (varies slightly run to run, always >1.0s), then
+legally transitioned the now-paused row to ended, RETAINING paused_at as
+historical context; exactly 1 recurring_arrangement_paused event + 1
+recurring_arrangement_ended event, no duplicate, no impossible mixed row
+shape.
+
+TEST RECURRING-CONCURRENCY-B: PASS — Session B blocked ~1.8s, then
+correctly took the idempotent no-op path on the SAME (arrangement, date)
+Session A had just skipped; exactly 1 recurring_occurrence_exceptions row
+survives, carrying Session A's ORIGINAL reason (never Session B's own,
+discarded), exactly 1 recurring_occurrence_skipped audit event.
+
+TEST RECURRING-CONCURRENCY-C: PASS — Session B blocked ~1.9-2.3s, then
+legally transitioned the now-active (A already resumed it) row to ended,
+paused_at correctly left NULL (never touched, matching "ending from
+active leaves paused_at NULL"); exactly 1 recurring_arrangement_resumed
+event + 1 recurring_arrangement_ended event.
+
+OVERALL: 3/3 recurring-arrangement concurrency scenarios PASS.
+
+Full concurrency regression (4 maintained files, each against its own
+fresh reset): mutation_concurrency_test.sh PASS,
+driver_invite_concurrency_test.sh PASS, request_lifecycle_concurrency_
+test.sh PASS, recurring_arrangement_concurrency_test.sh PASS (3/3
+sub-scenarios). One transient `supabase db reset` failure occurred for
+driver_invite_concurrency_test.sh during the FIRST battery run (the
+underlying Docker/Supabase local-environment flakiness already documented
+in this session's S1B/S1C history, not a defect in the test or the RPC
+under test) — re-run standalone against a fresh reset immediately after,
+and it passed cleanly; the other 3 files' results from the original
+battery run were not discarded or re-run, per instruction, since their
+own resets succeeded and their own results are unaffected by a sibling
+file's unrelated reset failure.
+
+
+DATABASE TYPES
+=================
+src/lib/supabase/database.types.ts regenerated via `supabase gen types
+typescript --local` after this migration applied. Diffed before applying:
+131 lines added, 0 removed — 100% additive (the 7 new Functions entries'
+Args/Returns/SetofOptions shapes plus the 2 new CompositeTypes entries).
+No unrelated churn. Applied via `cp`; `npx tsc --noEmit` confirmed clean
+immediately after.
+
+
+FOCUSED SQL RESULTS
+======================
+supabase/tests/recurring_arrangement_mutation_tests.sql — 49/49 PASS,
+0 FAIL, across 9 sections (CREATE-01 through CREATE-12, EDIT-01 through
+EDIT-09, PAUSE-01 through PAUSE-05, RESUME-01 through RESUME-04, END-01
+through END-08, SKIP-01 through SKIP-09, UNSKIP-01 through UNSKIP-04,
+AUDIT-01 through AUDIT-05, PRIV-01 through PRIV-05) — see every named
+test's own outcome inline in the sections above.
+
+
+FULL SQL REGRESSION
+======================
+All 29 maintained SQL test files, each run against its own fresh
+`supabase db reset`:
+
+  constraint_tests.sql:                         13/13 PASS
+  create_trip_atomicity_tests.sql:                2/2 PASS
+  create_trip_privilege_tests.sql:                5/5 PASS
+  create_trip_tests.sql:                        20/20 PASS
+  driver_location_tests.sql:                    20/20 PASS
+  driver_read_authorization_tests.sql:          17/17 PASS
+  driver_read_history_tests.sql:                  8/8 PASS
+  driver_read_minimization_tests.sql:           13/13 PASS
+  driver_read_privilege_tests.sql:                8/8 PASS
+  exception_mutation_boundary_tests.sql:        20/20 PASS
+  function_privilege_tests.sql:                   7/7 PASS
+  mutation_assignment_tests.sql:                19/19 PASS
+  mutation_atomicity_tests.sql:                   2/2 PASS
+  mutation_authorization_tests.sql:               4/4 PASS
+  mutation_idempotent_authorization_tests.sql:    6/6 PASS
+  mutation_lifecycle_tests.sql:                 24/24 PASS
+  mutation_privilege_tests.sql:                   7/7 PASS
+  operator_onboarding_tests.sql:                40/40 PASS
+  organization_timezone_tests.sql:              14/14 PASS
+  recurring_arrangement_foundation_tests.sql:   50/50 PASS
+  recurring_arrangement_mutation_tests.sql:     49/49 PASS  (NEW)
+  recurring_occurrence_exception_tests.sql:     19/19 PASS
+  request_mutation_atomicity_tests.sql:           3/3 PASS
+  request_mutation_privilege_tests.sql:         18/18 PASS
+  request_mutation_tests.sql:                   38/38 PASS
+  request_trip_passenger_integrity_tests.sql:   10/10 PASS
+  rls_adversarial_tests.sql:                    32/32 PASS
+  security_definer_exposure_tests.sql:          20/20 PASS
+  trip_exception_tests.sql:                     16/16 PASS
+
+TOTAL: 504/504 PASS, 0 FAIL, 0 fatal errors, across 29 files.
+(Baseline entering S1D: 455/455 across 28 files. New total = 455 + 49 new
+recurring_arrangement_mutation_tests.sql tests = 504, exactly as
+expected — every pre-existing count unchanged, confirming this migration
+disturbed nothing in Request mutation lifecycle, Trip mutations, Trip
+assignments, Trip exceptions, Request->Trip, Recurring Arrangement
+foundation, Recurring occurrence exceptions, Driver minimization, or any
+other already-shipped surface.)
+
+
+APPLICATION REGRESSION
+=========================
+  - npx tsc --noEmit: clean, 0 errors.
+  - npm run lint: 0 errors, 36 warnings — all pre-existing, all confined
+    to .tmp-qa/ scratch scripts, none in src/.
+  - npm run build: succeeded, all 39 routes compiled/generated
+    successfully — NO new route (matches the phase's own "NO UI" scope;
+    no server action, no page, no component was added).
+  - npm test: 153/153 PASS, 0 FAIL — unchanged from the S1C baseline (no
+    new pure-core TypeScript logic was added or needed for this phase;
+    S1D is entirely a database-mutation-layer phase).
+
+
+FILES CREATED
+================
+  - supabase/migrations/20260917110000_recurring_arrangement_lifecycle_mutations.sql
+  - supabase/tests/recurring_arrangement_mutation_tests.sql
+  - supabase/tests/recurring_arrangement_concurrency_test.sh
+  - docs/reports/p1-e2-s1d-recurring-arrangement-lifecycle-exception-mutations.txt (this file)
+
+Scratch/validation only (left in .tmp-qa/ per this session's existing
+convention):
+  - .tmp-qa/s1d-full-sql-regression.sh
+  - .tmp-qa/s1d-concurrency-regression.sh
+
+
+FILES MODIFIED
+=================
+  - src/lib/supabase/database.types.ts — regenerated, 131 lines added,
+    0 removed, 100% additive (the 7 new RPCs' Functions entries plus 2
+    new CompositeTypes entries only).
+
+No other file was modified. recurring-care-core.ts, recurring-care.ts,
+day-bounds.ts, and every other S1C artifact are byte-for-byte unchanged
+from the end of S1C — this phase's own read model composes whatever
+these new RPCs write, with zero code change required on the read side.
+
+
+SCHEMA IMPACT
+================
+Zero new tables, zero new columns, zero altered columns, zero new
+indexes. Two new composite types (recurring_arrangement_result,
+recurring_occurrence_exception_result) and seven new functions. No
+existing table, index, trigger, or constraint was touched.
+
+
+RLS IMPACT
+============
+Zero RLS policy changes anywhere. recurring_arrangements' and
+recurring_occurrence_exceptions' own SELECT policies (S1B/S1C) are
+completely untouched — this migration adds no GRANT and no POLICY of any
+kind to either table; every one of the 7 new RPCs writes exclusively
+through its own SECURITY DEFINER execution context. Reconfirmed directly
+against information_schema before writing any test (see RAW MUTATION
+BOUNDARY / TRIP LINK PRIVILEGE above), not merely assumed from the
+migration's own absence of GRANT statements.
+
+
+OPEN ISSUES
+=============
+None found that block S1E. Two items worth carrying forward as
+context, neither introduced by this phase, neither a defect in the RPCs
+themselves:
+
+  1. `authenticated` (and `anon`) hold a bare TRUNCATE privilege on
+     BOTH recurring_arrangements and (pre-existing, e.g. on `trips` too)
+     several other tenant tables — confirmed via
+     information_schema.table_privileges while investigating why a raw
+     `SELECT ... FOR UPDATE` failed for the concurrency test's Session A
+     under `authenticated`. TRUNCATE is not filtered by RLS at all (RLS
+     only governs SELECT/INSERT/UPDATE/DELETE), so this grant is
+     technically capable of wiping an entire table across every
+     organization if reached. It is NOT reachable through this
+     application's actual attack surface today — PostgREST (the only
+     path any client, browser or mobile, ever uses to reach Postgres)
+     exposes no TRUNCATE verb at all, and this grant already existed,
+     unchanged, on `trips` and others before this phase began (verified
+     directly, not merely assumed) — this migration neither introduced
+     nor widened it. A schema-wide TRUNCATE-privilege revocation across
+     every tenant table is a real, worthwhile hardening item, but it is
+     a repository-wide audit well outside this phase's own scoped
+     mission (RPC mutation boundary for two specific tables) and is
+     flagged here rather than silently fixed or silently ignored.
+
+  2. A raw client `SELECT ... FOR UPDATE` against recurring_arrangements
+     or recurring_occurrence_exceptions fails outright for
+     `authenticated` (Postgres's own FOR UPDATE clause requires the
+     UPDATE privilege on the target table, which authenticated does not
+     hold on either — confirmed empirically while building this phase's
+     own concurrency test). This is not a gap — it is, if anything,
+     additional defense-in-depth confirming the raw mutation boundary
+     holds even for a client attempting to merely LOCK a row it cannot
+     otherwise write to — but it did require this phase's own
+     concurrency test harness to issue its manual locking step as the
+     `postgres` role (before switching to `authenticated` for the actual
+     RPC call) rather than as `authenticated` throughout, unlike the
+     pre-existing mutation_concurrency_test.sh (which locks `trips`,
+     a table `authenticated` DOES hold partial column UPDATE grants on).
+     Documented here for anyone extending this concurrency-test pattern
+     to another zero-UPDATE-grant table in a future phase.
+
+
+================================================================================
+FINAL RESULTS
+================================================================================
+
+CREATE ARRANGEMENT:                    PASS
+EDIT ARRANGEMENT:                       PASS
+PAUSE:                                    PASS
+RESUME:                                    PASS
+END:                                         PASS
+END FROM PAUSED RETAINS PAUSED_AT:            PASS
+SKIP:                                            PASS
+UNSKIP:                                            PASS
+IDEMPOTENCY:                                        PASS
+AUDIT EXACTLY ONCE:                                  PASS
+CONCURRENCY:                                          PASS
+DRIVER MUTATION:                                       BLOCKED
+RAW ARRANGEMENT MUTATION:                               BLOCKED
+RAW EXCEPTION MUTATION:                                  BLOCKED
+RAW TRIP LINK MUTATION:                                   BLOCKED
+SECURITY DEFINER:                                           PASS
+FULL SQL:                                                     504/504
+RLS:                                                            504/504 (no separately-maintained RLS-only battery exists in this repo; rls_adversarial_tests.sql/security_definer_exposure_tests.sql/function_privilege_tests.sql and every table's own RLS-specific tests are folded into the FULL SQL count above — 0 new or edited policies this phase)
+TSC:                                                              PASS
+LINT:                                                              PASS
+BUILD:                                                              PASS
+UNIT:                                                                153/153
+READY FOR S1E:                                                        YES
+BLOCKERS:                                                              NONE
+
+NEXT: P1-E2-S1E — Recurring Care Operations Surface + Trip Creation Integration
+
+Do NOT begin S1E. Do NOT commit. Do NOT push. Do NOT deploy. STOP.

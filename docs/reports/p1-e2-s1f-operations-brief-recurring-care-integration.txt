@@ -1,0 +1,504 @@
+P1-E2-S1F — OPERATIONS BRIEF RECURRING CARE INTEGRATION
+COMPLETION REPORT
+
+Baseline HEAD (unchanged throughout this phase): d5df53355c12a74859e24368a8e895fe821de436
+Nothing has been committed, staged, pushed, or deployed during this phase.
+
+Per this phase's own explicit instruction, the complete SQL regression
+battery was NOT run — this phase is read-only/UI integration and touched
+no database schema, RPC, RLS, or grant. Confirmed via `supabase gen types
+typescript --local`, diffed byte-for-byte against the current
+`database.types.ts`: zero difference, proving no schema/RPC drift
+occurred anywhere in this phase.
+
+
+INTEGRATION STRATEGY
+=======================
+Audited current source fresh before writing anything: `src/app/
+operations/page.tsx`, `OperationsBrief.tsx`, `operations-brief-core.ts`,
+`operations-brief.ts`, the existing `operations-brief-core.test.mjs`
+suite, and both Recurring Care read-model files (`recurring-care.ts`,
+`recurring-care-list.ts`). Found the EXACT precedent to mirror already
+established by Tomorrow Readiness (P1-E1-S4E): a compact summary type
+(`OperationsBriefTomorrowSummary`) added to the pure core, a narrow
+server-only summary function (`getTomorrowReadinessSummary`) that reuses
+an already-authoritative larger read model and discards detail, and an
+independent best-effort promise in `getOperationsBrief`/`page.tsx`
+(started before the existing `Promise.all`, caught separately so a
+failure degrades only its own block). Recurring Care Brief integration
+follows this same shape in every particular — `OperationsBriefRecurring
+CareSummary`, `getRecurringCareSummary`, and a `recurringCarePromise`
+mirroring `tomorrowReadinessPromise` line-for-line. No new architecture
+was introduced; Overview itself was not redesigned.
+
+
+DOMAIN OWNERSHIP
+===================
+The new block answers exactly one question: "Which expected recurring
+occurrences do not yet have qualifying Trips?" Confirmed by direct
+inspection of every string this phase's own code renders: it never
+mentions Trip Readiness reasons, open Trip exceptions, Driver/Vehicle
+inactivity, or today's execution problems — all already owned by Needs
+Attention, Tomorrow Readiness, and Driver Snapshot respectively. No
+duplicate warning is ever shown for the same underlying fact.
+
+
+SUMMARY CONTRACT
+===================
+```
+export interface OperationsBriefRecurringCareSummary {
+  activeArrangementCount: number;
+  missingOccurrenceCount: number;
+  arrangementsWithMissingCount: number;
+  nextMissingDate: string | null;
+}
+```
+Exactly the 4 recommended fields, nothing more — no occurrence list, no
+Passenger list, no score, no percentage, no adherence metric (confirmed
+by direct inspection of the type and every consumer of it).
+
+
+DATA AUTHORITY
+=================
+Zero recurrence/date/weekday/timezone logic was added anywhere in this
+phase. `getRecurringCareSummary` (operations-brief.ts) calls
+`getRecurringArrangementsList` (recurring-care-list.ts) — the SAME
+2-round-trip read model `/operations/recurring-care` itself renders from,
+which itself composes the unmodified S1C evaluator
+(`deriveRecurringCareAssurance`, recurring-care-core.ts) — then reduces
+the result via a new PURE function, `deriveRecurringCareSummary`
+(operations-brief-core.ts). This pure function performs aggregation only
+(filter-by-status, sum, count, earliest-date) — every date/weekday/
+timezone/skip/readiness/cancellation rule that produced each row's own
+`missingCount`/`nextMissingDate` already ran inside the S1C evaluator
+before this function ever sees a row. No second weekday/date evaluator,
+no duplicate timezone arithmetic anywhere in this phase's own code
+(confirmed: `operations-brief-core.ts` still has zero runtime imports of
+any kind, per its own long-standing header charter, extended, not
+violated, by this phase).
+
+
+ZERO ARRANGEMENTS
+====================
+`activeArrangementCount === 0` renders the restrained discovery state
+exactly as specified: "Recurring care" (fixed heading) / "No recurring
+transportation set up" / "Set up recurring care" → `/operations/
+recurring-care`. Never framed as an error or warning. Live-verified: no
+"0 missing"/"0 scheduled" number ever appears in this state (a direct
+regex check against the full page text confirmed no such string exists).
+
+
+ALL COVERED
+=============
+`activeArrangementCount > 0 && missingOccurrenceCount === 0` renders
+"Recurring care is covered" / "All expected rides in the next 14 days
+have trips scheduled." — deliberately never "will run successfully,"
+since Trip Readiness/execution are separate concerns this block does not
+speak to (confirmed absent from every rendered string). Live-verified
+with a real Wednesday-only arrangement whose both near-horizon pattern
+dates were covered by real Trips created through the actual
+`create_trip_for_recurring_occurrence` RPC.
+
+
+MISSING OCCURRENCES
+======================
+`missingOccurrenceCount > 0` renders factual planning language exactly
+matching the phase's own examples: singular "1 recurring ride needs
+scheduling" (live-verified, exact string match) and plural "N recurring
+rides need scheduling" (live-verified with a real 14-missing-occurrence
+daily arrangement, N=14). "Across M arrangement(s)" renders with correct
+singular/plural, and "· Next gap: <date>" renders only when a
+`nextMissingDate` exists. No occurrence or Passenger is ever listed in
+this block — confirmed by direct inspection: the component renders only
+the 4 summary numbers/derived strings, nothing per-occurrence.
+
+
+SKIPPED BEHAVIOR
+===================
+Live-verified: an arrangement with one pattern date deliberately skipped
+and its other pattern date covered by a real Trip shows "Recurring care
+is covered" (0 missing) — the SKIPPED date never contributes to
+`missingOccurrenceCount`, because the S1C evaluator's own
+`expectedCount = patternDateCount - skippedCount` already excludes it
+upstream, and this phase's own aggregation performs no re-derivation of
+that rule (`deriveRecurringCareSummary`'s own unit tests independently
+confirm this pass-through contract too — see TEST RESULTS).
+
+
+SCHEDULED-BUT-NOT-READY BOUNDARY
+====================================
+Live-verified with a real Trip created for BOTH of a Wednesday-only
+arrangement's pattern dates, deliberately left with no Driver/Vehicle
+assignment: the Operations Brief shows "Recurring care is covered" (0
+missing), while the SAME arrangement's own detail page independently
+confirms the linked Trip genuinely shows "Needs preparation" — proving
+the underlying NEEDS_PREPARATION fact is real (not merely absent from
+the Brief) and that Recurring Care Brief correctly does NOT double-count
+it as missing. This is treated as a hard semantic boundary, exactly as
+specified — Tomorrow Readiness/Trip Readiness own preparation, Recurring
+Care Brief never does.
+
+
+CANCELLED TRIP BEHAVIOR
+==========================
+Live-verified: an arrangement with one pattern date's only linked Trip
+cancelled (no replacement) and its other pattern date covered shows "1
+recurring ride needs scheduling" — the cancelled-only date correctly
+counts as missing, entirely because the S1C evaluator's own
+`qualifyingTripsFor` rule (a cancelled Trip never satisfies an occurrence)
+already decided this upstream. Zero cancellation-specific code exists
+anywhere in this phase's own new files — confirmed by direct inspection.
+
+
+VISUAL PRIORITY
+==================
+`RecurringCareBlock` mirrors `TomorrowReadinessBlock`'s own compact,
+single-Panel, fixed-title/varying-description shape exactly — no
+WarningCircle icon, no StatusBadge, no red/critical tone anywhere. The
+one deliberate departure from Tomorrow Readiness's own fully neutral
+styling: the missing-count line uses `text-warning-text` (a warm amber
+text tone, no icon, no badge) as the "restrained attention styling" the
+phase's own §13 explicitly asks for — visually distinct from Tomorrow
+Readiness's own zero-emphasis treatment, but far below Needs Attention's
+own WarningCircle+StatusBadge hierarchy. Needs Attention remains the
+strictly stronger current-execution signal; Recurring Care and Tomorrow
+Readiness both read as planning/support signals beneath it.
+
+
+BRIEF DENSITY
+================
+No new card/KPI row, no new grid section. `RecurringCareBlock` is
+inserted into the SAME existing vertical stack of compact single-row
+Panels Driver Snapshot/Requests Awaiting Review/Tomorrow Readiness
+already occupy — one more Panel of identical visual footprint, placed
+immediately after Tomorrow Readiness. No new layout primitive, no new
+dashboard system. Live-verified at 20+ arrangements: exactly one
+`<h3>Recurring care</h3>` heading renders regardless of how many
+arrangements or missing occurrences exist underneath it — the block
+never expands proportional to data volume.
+
+
+ROUTE DISCOVERY
+==================
+No permanent sidebar item was added (§15's own preferred default) — the
+Brief itself is the primary contextual discovery path to `/operations/
+recurring-care`, exactly as the phase specifies. The navigation audit
+found no evidence Recurring Care becomes "practically undiscoverable"
+after this integration: it is reachable from Overview in every one of
+the 4 Brief states (a link/button appears in all of them — "Set up
+recurring care" / "View recurring care" / "Review recurring care"), so
+no STOP-and-document-navigation-argument condition was triggered.
+
+
+QUERY EFFICIENCY
+===================
+Zero new queries were written. `getRecurringCareSummary` calls
+`getRecurringArrangementsList` exactly once — the SAME already-bounded,
+already-documented 2-round-trip read model (1 direct arrangement query
++ `getRecurringCareAssurance`'s own already-bounded 4 queries, run
+concurrently via `Promise.all` inside that existing function) the
+Recurring Care workspace itself uses. No query per arrangement, no
+second database query architecture. Per §16's own explicit instruction,
+loading each active arrangement's full assurance object (its complete
+14-date occurrence list) and discarding the detail in a thin summary
+wrapper — rather than building a leaner, dedicated aggregate query — was
+the deliberate, accepted tradeoff; this phase's own `getRecurringCare
+Summary` is exactly that discarding step and nothing more. Live-verified
+at 20+ real arrangements: the Overview page loaded normally with no
+observable N+1 behavior (a single Brief render, no per-row fetch).
+
+
+ERROR ISOLATION
+==================
+`getRecurringCareSummary(...).catch(() => null)` is started as its own
+independent promise BEFORE the existing `Promise.all` (mirroring
+`tomorrowReadinessPromise`'s own exact position and shape), so it
+overlaps in wall-clock time with the other fetches but is caught
+completely independently. Live-verified via genuine fault injection (not
+simulated): `revoke select on public.recurring_arrangements from
+authenticated;` was run directly against the local database, the
+Overview page was loaded, and:
+  - The Recurring Care block alone showed "Recurring care unavailable."
+  - It did NOT fall back to "No recurring transportation," "Recurring
+    care is covered," or any 0-count — confirmed by direct string
+    absence checks, not merely visual inspection.
+  - Needs Attention, Driver Snapshot, Requests awaiting review, and
+    Tomorrow readiness all continued to render their own real data —
+    the whole Overview page remained fully usable.
+The grant was then restored (`grant select on public.recurring_
+arrangements to authenticated;`) and the page was reloaded, confirming
+the Recurring Care block returned to normal rendering. This was the
+ONLY fault injection performed in this phase, and it was fully reversed
+immediately after — no permanent schema/grant change resulted (re-
+confirmed via the `database.types.ts` zero-diff check above, and via a
+fresh `supabase db reset` at the end of this phase's own validation).
+
+
+COUNT MATCH
+==============
+Live-verified: with a real arrangement carrying exactly 1 missing
+occurrence, the Operations Brief's own "1 recurring ride needs
+scheduling" and the `/operations/recurring-care` workspace list's own
+"1 not yet scheduled" summary text were checked in the SAME browser
+session against the SAME underlying data — both report the identical
+count, because both are derived from the identical `getRecurringCare
+Assurance`/`getRecurringArrangementsList` call chain, never two
+independent computations. `arrangementsWithMissingCount` was also
+independently unit-tested against constructed multi-arrangement inputs
+(see TEST RESULTS) to confirm it counts DISTINCT arrangements with at
+least one missing occurrence, not total missing occurrences.
+
+
+SMALL OPERATOR
+=================
+Validated live, in this exact order (matching real operator behavior —
+fixtures added incrementally to the SAME organization, never a synthetic
+combined scenario the UI could not actually reach):
+  0 arrangements → 1 arrangement, covered → 1 arrangement, one missing
+  → 2 arrangements, mixed (1 covered + 1 with one missing, correctly
+  reporting exactly 1 missing overall, not 2).
+Every state reads as "anything recurring I forgot to schedule?" — plain
+counts and dates, no enterprise terminology, no scores.
+
+
+LARGE OPERATOR
+==================
+Validated live with 20 real freshly-inserted active arrangements (Mon/
+Wed/Fri pattern each, all with missing occurrences) in the same
+organization: the Overview page loaded normally, and the Recurring Care
+block remained exactly one compact Panel — same size, same shape, same
+single heading — regardless of the 20-arrangement volume underneath it.
+
+
+AUTHORIZATION
+================
+No new access path was created. `/operations` already gates through
+`requireOperationsAccess` — unchanged, not touched by this phase.
+Live-verified: a real Driver session navigating to `/operations` is
+redirected to `/driver` before the page (or any of its Brief blocks,
+including the new Recurring Care one) ever renders. The recurring
+summary is never exposed through the Driver app — no Driver-facing file
+was modified in this phase.
+
+
+LOCAL E2E
+============
+New file: .tmp-qa/s1f-brief-e2e.mjs — 26/26 assertions PASS, 0 FAIL,
+covering every scenario A through N from §27:
+  A. Zero arrangements — discovery state, no 0-count numbers.
+  B. One fully covered active arrangement — "is covered" state.
+  C. One active arrangement, one missing — exact singular copy.
+  D. Multiple missing occurrences (14, from a real daily-pattern
+     arrangement) — exact plural copy with the correct count.
+  E. Several arrangements, only some missing — aggregate correctly
+     reflects exactly the missing ones, not inflated by the covered one.
+  F. Skipped date excluded — a skip+covered arrangement reads fully
+     covered.
+  G. Scheduled-but-not-ready remains non-missing — cross-checked against
+     the arrangement's own detail page independently confirming the real
+     "Needs preparation" fact exists but is correctly not counted.
+  H. Cancelled-only occurrence becomes missing.
+  I. Brief count equals the Recurring Care workspace's own count, same
+     session, same data.
+  J. "Review recurring care" link resolves to exactly `/operations/
+     recurring-care`.
+  K. Genuine fault injection (real `REVOKE`/`GRANT` against the local
+     database, not simulated) proves error isolation, then is fully
+     reversed.
+  L. A real Org B admin session's own Brief reflects only Org B's own
+     fixture, never Org A's.
+  M. A real Driver session is redirected away from `/operations`
+     entirely.
+  N. 20+ real arrangements — the block stays exactly one compact Panel.
+
+All fixture data (arrangements, their linked Trips, trip_events, and
+audit_events rows, all tagged with a `BRIEF %` pickup-description prefix
+for safe, precise cleanup) was deleted after each scenario; a final fresh
+`supabase db reset` was additionally run at the end of this phase's own
+validation to guarantee a clean starting state for S1G.
+
+
+RESPONSIVE
+============
+Live-verified at 1024px (tablet/narrow desktop, the documented
+Operations-supported floor): `document.documentElement.scrollWidth` does
+not exceed `clientWidth` on `/operations` with the new Recurring Care
+block present. No new mobile behavior was introduced; the existing
+mobile guard is untouched.
+
+
+ACCESSIBILITY
+================
+The new block's only interactive element is `LinkButton` (already an
+established, accessible primitive — real `<a>` semantics, visible text
+label, never icon-only). Live-verified: the rendered link text is always
+one of "Set up recurring care" / "View recurring care" / "Review
+recurring care" — never "Click here" or an icon alone. The "Recurring
+care is covered" / "N recurring rides need scheduling" states are
+communicated entirely through visible text; the one color accent used
+for the missing-count line (`text-warning-text`) is decorative emphasis
+on top of already-clear wording, never the sole signal (confirmed: the
+exact same information is fully present in the text content regardless
+of color, satisfying "status not color-only").
+
+
+TEST RESULTS
+===============
+New unit tests appended to the existing `operations-brief-core.test.mjs`
+(same file, same pure-core-only import convention, no new test file
+created): 16 new tests covering `deriveRecurringCareSummary` (zero
+arrangements; all covered; one missing; multiple missing summed
+correctly; multiple arrangements with mixed missing counts, including
+the earliest-`nextMissingDate`-wins rule; a skipped-date input reflected
+as non-missing; a scheduled-but-not-ready input reflected as non-missing;
+a cancelled-only input reflected as missing; a PAUSED arrangement's own
+missing occurrences excluded; an ENDED arrangement's own missing
+occurrences excluded; a row with `assurance: null`, i.e. one the
+evaluator's own coarse filter excluded, correctly contributing to
+`activeArrangementCount` but nothing else) plus `deriveOperationsBrief`'s
+own pass-through contract for the new `recurringCare` field (a real
+summary passes through unchanged; `null` — a genuine fetch failure —
+passes through unchanged, never coerced to a zero/covered value;
+independence from every other field, no cross-contamination; every
+pre-existing field's own behavior unchanged by this field's addition).
+
+Also updated: all 18 pre-existing `deriveOperationsBrief(...)` call
+sites across this same test file were mechanically extended with a new
+`NO_RECURRING_CARE` "not under test" default argument (a legitimate
+"zero arrangements, zero missing" result, mirroring `NO_TOMORROW_
+READINESS`'s own established role exactly) — this was REQUIRED, not
+optional, since `deriveOperationsBrief`'s own signature grew by one
+positional parameter (matching exactly how `tomorrowReadiness` was added
+as a new trailing parameter in P1-E1-S4E); every one of the 18
+pre-existing tests was re-run and confirmed still passing unchanged
+after this mechanical update.
+
+  - npx tsc --noEmit: clean, 0 errors.
+  - npm run lint: 0 errors, 39 warnings — 38 pre-existing (unrelated
+    .tmp-qa/ scratch scripts) plus 1 new, in this phase's own scratch
+    E2E validation script, none in src/.
+  - npm run build: succeeded; ZERO new routes (correct — this phase adds
+    no route, only integrates into the existing `/operations` page).
+  - npm test: 169/169 PASS, 0 FAIL (153 baseline + 16 new).
+
+
+MAINTAIN PRIVILEGE CARRY-FORWARD
+====================================
+NOT touched in this phase, per its own explicit §25 instruction. Carried
+forward unchanged from S1D1/S1E: `anon`/`authenticated` still inherit
+the PostgreSQL `MAINTAIN` privilege from the `postgres`-owner default ACL
+for schema `public`; the `supabase_admin`-owned default ACL entry
+(granting the full `arwdDxtm` set, still provably inert — no table in
+this schema has ever been created by that role) also remains untouched.
+Neither was inspected further in this phase (no reason to — this phase
+added no table, no function, no grant of any kind). Both remain scheduled
+for S1G's own explicit pre-release checklist: verify the linked
+production PostgreSQL version, inspect production privilege/default-ACL
+state, determine whether `MAINTAIN` is present there, and apply a
+version-safe remediation only if appropriate.
+
+
+FILES CREATED
+================
+  - docs/reports/p1-e2-s1f-operations-brief-recurring-care-integration.txt (this file)
+
+Scratch/validation only (left in .tmp-qa/ per this session's existing
+convention):
+  - .tmp-qa/s1f-brief-fixtures.sh
+  - .tmp-qa/s1f-brief-e2e.mjs
+
+No migration was created. No RPC was created. No new application route
+was created — this phase is a pure integration into existing files.
+
+
+FILES MODIFIED
+=================
+  - src/lib/operations/operations-brief-core.ts — additive only: new
+    `OperationsBriefRecurringCareSummary` type, new `RecurringCareSummary
+    Row` structural input type, new pure `deriveRecurringCareSummary`
+    function, one new field (`recurringCare`) on `OperationsBriefData`,
+    and one new trailing parameter on `deriveOperationsBrief` (mirroring
+    exactly how `tomorrowReadiness` was added in P1-E1-S4E). No existing
+    field's own computation was changed.
+  - src/lib/operations/operations-brief.ts — additive only: new
+    `getRecurringCareSummary` function (reuses `getRecurringArrangements
+    List` + `deriveRecurringCareSummary`, zero new queries), and the new
+    `recurringCarePromise` wired into `getOperationsBrief` following the
+    exact `tomorrowReadinessPromise` shape. `getDriverSnapshot`/
+    `getRequestSummary`/`getTomorrowReadinessSummary` are all completely
+    unchanged.
+  - src/components/operations/OperationsBrief.tsx — additive only: one
+    new `RecurringCareBlock` component (mirrors `TomorrowReadinessBlock`'s
+    own exact shape) rendered once, at the end of the existing block
+    stack. No existing block's own rendering logic was changed.
+  - src/app/operations/page.tsx — additive only: the new
+    `recurringCarePromise`, awaited alongside the existing
+    `tomorrowReadinessPromise`, and passed into `deriveOperationsBrief`.
+    No existing section of this page (Needs Attention, Upcoming Trips,
+    Active Trips, Activity Log, the onboarding checklist banner) was
+    touched.
+  - src/lib/operations/operations-brief-core.test.mjs — the 18
+    pre-existing `deriveOperationsBrief` call sites were mechanically
+    extended with `NO_RECURRING_CARE` (required by the signature change
+    above, not an optional edit); 16 new tests were appended in a new,
+    clearly-delineated section at the end of the file. Every pre-existing
+    test's own assertions are unchanged.
+  - src/lib/operations/presentation.ts, src/lib/operations/day-bounds.ts,
+    src/lib/supabase/database.types.ts — carried over from S1B-S1E,
+    genuinely untouched by this phase (re-confirmed: `database.types.ts`
+    diffs byte-for-byte identical to a fresh `supabase gen types`
+    regeneration; `presentation.ts`/`day-bounds.ts` were not opened for
+    editing in this phase at all — `formatServiceDateLabel`, the one
+    S1E-era helper this phase reuses, already existed unchanged).
+
+
+SCHEMA IMPACT
+================
+None. Zero new tables, columns, functions, indexes, constraints, or
+migrations. Confirmed via the `database.types.ts` zero-diff check.
+
+
+RLS IMPACT
+============
+None, permanently. The ONE temporary, fully-reversed `REVOKE`/`GRANT`
+pair used for fault-injection QA (ERROR ISOLATION above) was never
+written to a migration file, never persisted past the single validation
+run it was used for, and was independently re-confirmed reversed by a
+final fresh `supabase db reset` at the end of this phase.
+
+
+OPEN ISSUES
+=============
+None found that block S1G.
+
+
+================================================================================
+FINAL RESULTS
+================================================================================
+
+RECURRING CARE BRIEF:               PASS
+ZERO STATE:                            PASS
+ALL COVERED:                             PASS
+MISSING COUNT:                             PASS
+SKIPPED EXCLUDED:                            PASS
+READINESS NOT DOUBLE-COUNTED:                  PASS
+COUNT MATCH:                                     PASS
+ERROR ISOLATION:                                   PASS
+ORG ISOLATION:                                       PASS
+DRIVER BOUNDARY:                                       PASS
+SMALL OPERATOR:                                          PASS
+LARGE OPERATOR:                                            PASS
+FULL SQL BATTERY:                                             NOT RUN — READ-ONLY/UI PHASE
+TSC:                                                             PASS
+LINT:                                                              PASS
+BUILD:                                                               PASS
+UNIT:                                                                  169/169
+READY FOR S1G:                                                           YES
+BLOCKERS:                                                                  NONE
+
+NEXT: P1-E2-S1G — Recurring Care Security, Regression + Production Release
+
+Do NOT begin S1G. Do NOT run the full SQL regression battery in S1F
+(none was). Do NOT commit. Do NOT push. Do NOT deploy.
+
+STOP.

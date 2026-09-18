@@ -43,8 +43,15 @@ import { organizationLocalToUtc } from "./local-time";
  * table, no dependency added.
  */
 
-/** `YYYY-MM-DD`, the organization-local calendar date containing `instant`. */
-function localDateKey(instant: Date, timezone: string): string {
+/**
+ * `YYYY-MM-DD`, the organization-local calendar date containing `instant`.
+ * Exported (P1-E2-S1C) for reuse by recurring-care.ts, which needs the
+ * identical instant->local-date-key conversion for "today," for each
+ * linked Trip's own service date, and for an arrangement's paused_at/
+ * ended_at effective dates — never a second, independently-drifting
+ * copy of this exact formatting logic.
+ */
+export function localDateKey(instant: Date, timezone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
@@ -54,7 +61,7 @@ function localDateKey(instant: Date, timezone: string): string {
 }
 
 /**
- * `dateKey`'s own calendar successor, as a `YYYY-MM-DD` string — pure
+ * `dateKey` plus `days` calendar days, as a `YYYY-MM-DD` string — pure
  * calendar-digit arithmetic, never timezone-sensitive (the intermediate
  * `Date.UTC` value here is used only as a scratch calendar calculator,
  * exactly like `formatRequestServiceDate`'s own established use of
@@ -63,11 +70,17 @@ function localDateKey(instant: Date, timezone: string): string {
  * overflow behavior (e.g. day 32 of a 31-day month correctly rolls into
  * the 1st of the next month, Dec 31 correctly rolls into Jan 1 of the
  * next year) means no manual end-of-month/leap-year logic is needed here.
+ * Exported (P1-E2-S1C) so recurring-care.ts can resolve the exact UTC
+ * instant bounding its 14-day horizon without duplicating this technique.
  */
-function nextDateKey(dateKey: string): string {
+export function addDaysToDateKey(dateKey: string, days: number): string {
   const [year, month, day] = dateKey.split("-").map(Number);
-  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  const next = new Date(Date.UTC(year, month - 1, day + days));
   return new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(next);
+}
+
+function nextDateKey(dateKey: string): string {
+  return addDaysToDateKey(dateKey, 1);
 }
 
 /**
@@ -88,8 +101,12 @@ function nextDateKey(dateKey: string): string {
  * at a hypothetical future timezone with a midnight transition) — it
  * throws a clear, diagnosable error instead, matching this codebase's own
  * "never fabricate a result" discipline.
+ *
+ * Exported (P1-E2-S1C) so recurring-care.ts can resolve the exact UTC
+ * bounds of its own 14-day per-arrangement horizon without duplicating
+ * this technique.
  */
-function localMidnightUtc(dateKey: string, timezone: string): Date {
+export function localMidnightUtc(dateKey: string, timezone: string): Date {
   const result = organizationLocalToUtc({ date: dateKey, time: "00:00" }, timezone);
   if (result.status !== "ok") {
     throw new Error(

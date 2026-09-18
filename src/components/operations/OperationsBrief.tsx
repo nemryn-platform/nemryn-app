@@ -4,7 +4,7 @@ import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LinkButton } from "@/components/ui/LinkButton";
-import { formatOperationsTime, formatOperationsLongDate, assuranceStatusCategory } from "@/lib/operations/presentation";
+import { formatOperationsTime, formatOperationsLongDate, formatServiceDateLabel, assuranceStatusCategory } from "@/lib/operations/presentation";
 import type { OperationsBriefData } from "@/lib/operations/operations-brief-core";
 import type { TodaysOperationsTrip, TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { typography } from "@/design/typography";
@@ -46,7 +46,8 @@ export interface OperationsBriefProps {
  * the day-state-gated Trip sections above).
  */
 export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
-  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot, requestSummary, tomorrowReadiness } = brief;
+  const { dayState, attention, activeNow, nextDepartures, unassignedCount, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare } =
+    brief;
 
   const isQuiet = dayState === "NO_TRIPS" && activeNow.length === 0 && attention.length === 0;
   const isAllComplete = dayState === "ALL_COMPLETE";
@@ -89,6 +90,7 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
       <DriverSnapshotBlock snapshot={driverSnapshot} />
       <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
       <TomorrowReadinessBlock summary={tomorrowReadiness} />
+      <RecurringCareBlock summary={recurringCare} />
     </div>
   );
 }
@@ -405,6 +407,103 @@ function TomorrowReadinessBlock({ summary }: { summary: OperationsBriefData["tom
       </div>
       <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
         Review tomorrow
+      </LinkButton>
+    </Panel>
+  );
+}
+
+/**
+ * Recurring Care (P1-E2-S1F) — mirrors TomorrowReadinessBlock's own
+ * compact single-row shape and fixed-title/varying-description structure
+ * exactly (same Panel layout, same "Recurring care" heading in every
+ * state — never a state-dependent heading, matching every other Brief
+ * block's own convention of keeping the h3 identity label constant and
+ * varying only the body copy, so a screen-reader heading-level scan
+ * always sees the same fixed set of Brief sub-headings regardless of
+ * data). Answers exactly "Which expected recurring occurrences do not
+ * yet have qualifying Trips?" (§2) — never Trip Readiness reasons, open
+ * Trip exceptions, Driver/Vehicle inactivity, or today's execution
+ * problems, all already owned by other blocks above.
+ *
+ * `summary` is `null` only on a genuine fetch failure (§17 — "Unknown ≠
+ * healthy") and renders "Recurring care unavailable," never silently
+ * falling back to a covered/zero appearance. `activeArrangementCount
+ * === 0` is a real discovery state (§6), not an error — restrained
+ * "Set up recurring care" copy, no 0-missing/0-scheduled numbers shown.
+ * `missingOccurrenceCount === 0` (with active arrangements) is a calm,
+ * factual "covered" state (§7) — deliberately never claims recurring
+ * care "will run successfully," since Trip Readiness/execution are
+ * separate concerns this block does not speak to. `missingOccurrenceCount
+ * > 0` uses restrained attention styling (a warm text tone on the count
+ * line only — no WarningCircle icon, no StatusBadge, §13) — visually
+ * quieter than Needs Attention's own stronger current-execution
+ * hierarchy, consistent with Recurring Care being forward planning, not
+ * an active incident. `nextMissingDate` (already an authoritative LOCAL
+ * SERVICE DATE string from the evaluator's own per-arrangement timezone
+ * resolution) is rendered via `formatServiceDateLabel` — the same
+ * date-key-only formatter the Recurring Care workspace itself uses,
+ * never re-interpreted through the browser's timezone.
+ */
+function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurringCare"] }) {
+  if (summary === null) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Recurring care unavailable</p>
+        </div>
+        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+          View recurring care
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  const { activeArrangementCount, missingOccurrenceCount, arrangementsWithMissingCount, nextMissingDate } = summary;
+
+  if (activeArrangementCount === 0) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>No recurring transportation set up</p>
+        </div>
+        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+          Set up recurring care
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  if (missingOccurrenceCount === 0) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Recurring care is covered</p>
+          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>All expected rides in the next 14 days have trips scheduled.</p>
+        </div>
+        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+          View recurring care
+        </LinkButton>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
+        <p className={cn(typography.bodySmall, "mt-1 text-warning-text")}>
+          {missingOccurrenceCount} recurring {missingOccurrenceCount === 1 ? "ride" : "rides"} need{missingOccurrenceCount === 1 ? "s" : ""} scheduling
+        </p>
+        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+          Across {arrangementsWithMissingCount} {arrangementsWithMissingCount === 1 ? "arrangement" : "arrangements"}
+          {nextMissingDate && ` · Next gap: ${formatServiceDateLabel(nextMissingDate)}`}
+        </p>
+      </div>
+      <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+        Review recurring care
       </LinkButton>
     </Panel>
   );

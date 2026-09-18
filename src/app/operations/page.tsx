@@ -4,8 +4,12 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTodaysOperations, type TodaysOperationsTrip, type TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { getOnboardingChecklist } from "@/lib/operations/onboarding-checklist";
-import { getDriverSnapshot, getRequestSummary, getTomorrowReadinessSummary } from "@/lib/operations/operations-brief";
-import { deriveOperationsBrief, type OperationsBriefTomorrowSummary } from "@/lib/operations/operations-brief-core";
+import { getDriverSnapshot, getRequestSummary, getTomorrowReadinessSummary, getRecurringCareSummary } from "@/lib/operations/operations-brief";
+import {
+  deriveOperationsBrief,
+  type OperationsBriefTomorrowSummary,
+  type OperationsBriefRecurringCareSummary,
+} from "@/lib/operations/operations-brief-core";
 import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
 import { OperationsBrief } from "@/components/operations/OperationsBrief";
@@ -51,6 +55,14 @@ export default async function OperationsOverviewPage() {
     organization.organizationTimezone,
     now,
   ).catch(() => null);
+  // Recurring Care summary (P1-E2-S1F §17) — same independent, best-effort,
+  // caught-separately shape as Tomorrow Readiness immediately above; a
+  // genuine failure here degrades only the Brief's own Recurring Care
+  // block, never the rest of this page.
+  const recurringCarePromise: Promise<OperationsBriefRecurringCareSummary | null> = getRecurringCareSummary(
+    organization.organizationId,
+    now,
+  ).catch(() => null);
 
   const data = await getTodaysOperations(organization.organizationId, organization.organizationTimezone);
   // Operations Brief (P1-E1-S1C) is derived from this SAME already-fetched
@@ -63,7 +75,8 @@ export default async function OperationsOverviewPage() {
     getRequestSummary(organization.organizationId),
   ]);
   const tomorrowReadiness = await tomorrowReadinessPromise;
-  const brief = deriveOperationsBrief(data, driverSnapshot, requestSummary, tomorrowReadiness, now);
+  const recurringCare = await recurringCarePromise;
+  const brief = deriveOperationsBrief(data, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, now);
   const timezone = organization.organizationTimezone;
 
   const attentionColumns: DataTableColumn<TodaysOperationsAttentionItem>[] = [

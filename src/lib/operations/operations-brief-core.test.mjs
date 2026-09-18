@@ -12,9 +12,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { computeDayState, deriveNextDepartures, deriveOperationsBrief, countDriversCurrentlyOnTrip } = await import(
-  "./operations-brief-core.ts"
-);
+const { computeDayState, deriveNextDepartures, deriveOperationsBrief, countDriversCurrentlyOnTrip, deriveRecurringCareSummary } =
+  await import("./operations-brief-core.ts");
 
 function makeTrip(overrides = {}) {
   return {
@@ -64,6 +63,8 @@ const NO_DRIVERS = { totalActiveDrivers: 0, driversCurrentlyOnTrip: 0 };
 const NO_PENDING_REQUESTS = { pendingRequestCount: 0, oldestPendingRequestCreatedAt: null };
 /** A legitimate "zero trips scheduled tomorrow" result — used as the default "not under test" value throughout this file's PRE-EXISTING test cases below, exactly like NO_DRIVERS/NO_PENDING_REQUESTS are each other's "not under test" defaults. Deliberately NOT `null` (which means a genuine fetch failure, P1-E1-S4E §11) — the dedicated Tomorrow Readiness section further down exercises `null` and real non-zero summaries explicitly. */
 const NO_TOMORROW_READINESS = { totalScheduledTrips: 0, readyCount: 0, needsPreparationCount: 0 };
+/** A legitimate "no active arrangements have any missing occurrences" result (P1-E2-S1F) — used as the default "not under test" value throughout this file's pre-existing test cases below, exactly like NO_TOMORROW_READINESS. Deliberately NOT `null` (which means a genuine fetch failure) — the dedicated Recurring Care section further down exercises `null` and real non-zero summaries explicitly. */
+const NO_RECURRING_CARE = { activeArrangementCount: 0, missingOccurrenceCount: 0, arrangementsWithMissingCount: 0, nextMissingDate: null };
 
 // ---------------------------------------------------------------------
 // A. ZERO TRIPS
@@ -71,7 +72,7 @@ const NO_TOMORROW_READINESS = { totalScheduledTrips: 0, readyCount: 0, needsPrep
 
 test("deriveOperationsBrief — zero trips today: NO_TRIPS, everything empty", () => {
   const data = makeTodaysOperationsData({ todayTrips: [] });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.dayState, "NO_TRIPS");
   assert.deepEqual(result.attention, []);
   assert.deepEqual(result.activeNow, []);
@@ -83,7 +84,7 @@ test("deriveOperationsBrief — zero trips today: NO_TRIPS, everything empty", (
 test("deriveOperationsBrief — zero trips today still reports real driver counts", () => {
   const data = makeTodaysOperationsData({ todayTrips: [] });
   const drivers = { totalActiveDrivers: 3, driversCurrentlyOnTrip: 0 };
-  const result = deriveOperationsBrief(data, drivers, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, drivers, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.driverSnapshot, drivers);
 });
 
@@ -150,7 +151,7 @@ test("deriveOperationsBrief — a scheduled trip inside the window AND in attent
     needsAssignmentTrips: [trip],
     attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
   });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, now);
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, now);
   assert.equal(result.nextDepartures.length, 0);
   assert.equal(result.attention.length, 1);
   assert.equal(result.attention[0].trip.id, "t-dup");
@@ -163,13 +164,13 @@ test("deriveOperationsBrief — a scheduled trip inside the window AND in attent
 test("deriveOperationsBrief — unassignedCount reflects needsAssignmentTrips length", () => {
   const unassigned = [makeTrip({ id: "u1" }), makeTrip({ id: "u2" })];
   const data = makeTodaysOperationsData({ todayTrips: unassigned, needsAssignmentTrips: unassigned });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.unassignedCount, 2);
 });
 
 test("deriveOperationsBrief — no duplicate unassigned-row collection exists on the result", () => {
   const data = makeTodaysOperationsData();
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal("unassignedTrips" in result, false);
   assert.equal("unassigned" in result, false);
 });
@@ -181,7 +182,7 @@ test("deriveOperationsBrief — no duplicate unassigned-row collection exists on
 test("deriveOperationsBrief — activeNow is exactly the input activeTrips (same reference, no re-filtering)", () => {
   const active = [makeTrip({ id: "a1", state: "en_route_to_pickup" })];
   const data = makeTodaysOperationsData({ activeTrips: active });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.activeNow, active);
 });
 
@@ -304,21 +305,21 @@ test("countDriversCurrentlyOnTrip — empty rows -> 0", () => {
 test("deriveOperationsBrief — requestSummary: zero pending requests passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { pendingRequestCount: 0, oldestPendingRequestCreatedAt: null };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.requestSummary, summary);
 });
 
 test("deriveOperationsBrief — requestSummary: one pending request passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { pendingRequestCount: 1, oldestPendingRequestCreatedAt: "2026-09-14T08:00:00.000Z" };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.requestSummary, summary);
 });
 
 test("deriveOperationsBrief — requestSummary: multiple pending requests passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { pendingRequestCount: 7, oldestPendingRequestCreatedAt: "2026-09-10T08:00:00.000Z" };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, summary, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.requestSummary, summary);
 });
 
@@ -327,7 +328,7 @@ test("deriveOperationsBrief — requestSummary is independent of dayState/attent
   const data = makeTodaysOperationsData({ todayTrips: [trip] });
   const drivers = { totalActiveDrivers: 5, driversCurrentlyOnTrip: 2 };
   const summary = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-12T08:00:00.000Z" };
-  const result = deriveOperationsBrief(data, drivers, summary, NO_TOMORROW_READINESS, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, drivers, summary, NO_TOMORROW_READINESS, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.dayState, "ALL_COMPLETE");
   assert.deepEqual(result.driverSnapshot, drivers);
   assert.deepEqual(result.requestSummary, summary);
@@ -341,7 +342,7 @@ test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepart
     needsAssignmentTrips: [trip],
     attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
   });
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, now);
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, now);
   assert.equal(result.dayState, "ACTIVE_DAY");
   assert.equal(result.nextDepartures.length, 0);
   assert.equal(result.attention.length, 1);
@@ -362,34 +363,34 @@ test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepart
 test("deriveOperationsBrief — tomorrowReadiness: zero trips passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { totalScheduledTrips: 0, readyCount: 0, needsPreparationCount: 0 };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.tomorrowReadiness, summary);
 });
 
 test("deriveOperationsBrief — tomorrowReadiness: all ready passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { totalScheduledTrips: 4, readyCount: 4, needsPreparationCount: 0 };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.tomorrowReadiness, summary);
 });
 
 test("deriveOperationsBrief — tomorrowReadiness: one needs-preparation trip passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { totalScheduledTrips: 3, readyCount: 2, needsPreparationCount: 1 };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.tomorrowReadiness, summary);
 });
 
 test("deriveOperationsBrief — tomorrowReadiness: multiple needs-preparation trips passes through unchanged", () => {
   const data = makeTodaysOperationsData();
   const summary = { totalScheduledTrips: 25, readyCount: 18, needsPreparationCount: 7 };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, summary, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.deepEqual(result.tomorrowReadiness, summary);
 });
 
 test("deriveOperationsBrief — tomorrowReadiness: null (genuine fetch failure) passes through unchanged, never coerced to a zero/ready value", () => {
   const data = makeTodaysOperationsData();
-  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, null, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, null, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.tomorrowReadiness, null);
 });
 
@@ -399,7 +400,7 @@ test("deriveOperationsBrief — tomorrowReadiness is independent of dayState/att
   const drivers = { totalActiveDrivers: 5, driversCurrentlyOnTrip: 2 };
   const requestSummary = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-12T08:00:00.000Z" };
   const tomorrow = { totalScheduledTrips: 10, readyCount: 6, needsPreparationCount: 4 };
-  const result = deriveOperationsBrief(data, drivers, requestSummary, tomorrow, new Date("2026-09-15T10:00:00.000Z"));
+  const result = deriveOperationsBrief(data, drivers, requestSummary, tomorrow, NO_RECURRING_CARE, new Date("2026-09-15T10:00:00.000Z"));
   assert.equal(result.dayState, "ALL_COMPLETE");
   assert.deepEqual(result.driverSnapshot, drivers);
   assert.deepEqual(result.requestSummary, requestSummary);
@@ -416,11 +417,187 @@ test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepart
   });
   const requestSummary = { pendingRequestCount: 1, oldestPendingRequestCreatedAt: "2026-09-14T08:00:00.000Z" };
   const tomorrow = { totalScheduledTrips: 2, readyCount: 1, needsPreparationCount: 1 };
-  const result = deriveOperationsBrief(data, NO_DRIVERS, requestSummary, tomorrow, now);
+  const result = deriveOperationsBrief(data, NO_DRIVERS, requestSummary, tomorrow, NO_RECURRING_CARE, now);
   assert.equal(result.dayState, "ACTIVE_DAY");
   assert.equal(result.nextDepartures.length, 0);
   assert.equal(result.attention.length, 1);
   assert.equal(result.unassignedCount, 1);
   assert.deepEqual(result.activeNow, []);
   assert.deepEqual(result.requestSummary, requestSummary);
+});
+
+// ---------------------------------------------------------------------
+// J. RECURRING CARE SUMMARY (P1-E2-S1F) — deriveRecurringCareSummary is
+// pure aggregation only: every date/weekday/timezone/skip/readiness/
+// cancellation rule that decided each row's own `missingCount`/
+// `nextMissingDate` already ran inside the S1C evaluator
+// (recurring-care-core.ts) before this function ever sees a row — these
+// tests prove the AGGREGATION is correct (active-only filtering, sum,
+// arrangement-with-missing count, earliest-next-missing-date), never
+// re-derive or second-guess what the evaluator itself already decided
+// (§10/§11/§12's own tests below construct an INPUT that already
+// reflects what the authoritative evaluator would have produced for
+// those scenarios, exactly like the tomorrowReadiness/requestSummary
+// pass-through tests above prove pass-through rather than re-deriving
+// Tomorrow Readiness's own evaluator).
+// ---------------------------------------------------------------------
+
+test("deriveRecurringCareSummary — zero arrangements: everything zero, nextMissingDate null", () => {
+  const result = deriveRecurringCareSummary([]);
+  assert.deepEqual(result, { activeArrangementCount: 0, missingOccurrenceCount: 0, arrangementsWithMissingCount: 0, nextMissingDate: null });
+});
+
+test("deriveRecurringCareSummary — active arrangements, all covered (missingCount 0 everywhere)", () => {
+  const rows = [
+    { status: "active", assurance: { missingCount: 0, nextMissingDate: null } },
+    { status: "active", assurance: { missingCount: 0, nextMissingDate: null } },
+  ];
+  const result = deriveRecurringCareSummary(rows);
+  assert.deepEqual(result, { activeArrangementCount: 2, missingOccurrenceCount: 0, arrangementsWithMissingCount: 0, nextMissingDate: null });
+});
+
+test("deriveRecurringCareSummary — one arrangement, one missing occurrence", () => {
+  const rows = [{ status: "active", assurance: { missingCount: 1, nextMissingDate: "2026-09-25" } }];
+  const result = deriveRecurringCareSummary(rows);
+  assert.deepEqual(result, { activeArrangementCount: 1, missingOccurrenceCount: 1, arrangementsWithMissingCount: 1, nextMissingDate: "2026-09-25" });
+});
+
+test("deriveRecurringCareSummary — one arrangement, multiple missing occurrences, sums correctly", () => {
+  const rows = [{ status: "active", assurance: { missingCount: 4, nextMissingDate: "2026-09-18" } }];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.missingOccurrenceCount, 4);
+  assert.equal(result.arrangementsWithMissingCount, 1);
+});
+
+test("deriveRecurringCareSummary — multiple arrangements with missing occurrences: counts sum, arrangement count reflects distinct arrangements", () => {
+  const rows = [
+    { status: "active", assurance: { missingCount: 2, nextMissingDate: "2026-09-25" } },
+    { status: "active", assurance: { missingCount: 1, nextMissingDate: "2026-09-19" } },
+    { status: "active", assurance: { missingCount: 0, nextMissingDate: null } },
+  ];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.activeArrangementCount, 3);
+  assert.equal(result.missingOccurrenceCount, 3);
+  assert.equal(result.arrangementsWithMissingCount, 2);
+  assert.equal(result.nextMissingDate, "2026-09-19", "the EARLIEST next-missing date across all arrangements with missing occurrences");
+});
+
+test("deriveRecurringCareSummary — a SKIPPED date is never counted as missing (already excluded from the evaluator's own missingCount before this function ever sees it)", () => {
+  // The evaluator's own expectedCount = patternDateCount - skippedCount,
+  // and missingCount only ever counts truly MISSING expected dates — a
+  // row reflecting "1 pattern date, 1 skipped, 0 missing" (exactly what
+  // the S1C evaluator would produce for an arrangement whose only
+  // near-horizon pattern date was deliberately skipped) must never
+  // surface as a missing occurrence here.
+  const rows = [{ status: "active", assurance: { missingCount: 0, nextMissingDate: null } }];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.missingOccurrenceCount, 0);
+  assert.equal(result.arrangementsWithMissingCount, 0);
+});
+
+test("deriveRecurringCareSummary — a SCHEDULED occurrence whose Trip needs preparation is still not missing (Trip Readiness is a separate concern this function never touches)", () => {
+  // A Trip with Readiness=NEEDS_PREPARATION still SATISFIES its occurrence
+  // at the Recurring Care layer (P1-E2-S1E's own locked rule) — the
+  // evaluator's own missingCount already reflects this (the occurrence is
+  // SCHEDULED, not MISSING), so a row like this must never be counted.
+  const rows = [{ status: "active", assurance: { missingCount: 0, nextMissingDate: null } }];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.missingOccurrenceCount, 0, "a scheduled-but-not-ready occurrence must never inflate missingOccurrenceCount");
+});
+
+test("deriveRecurringCareSummary — a date whose only linked Trip is cancelled is reflected as missing, through the authoritative evaluator's own input, with no special-case cancellation logic in this function", () => {
+  // Mirrors exactly what the S1C evaluator itself produces when the only
+  // linked Trip for a date is cancelled (a cancelled Trip never satisfies
+  // an occurrence, so it remains MISSING) — this function performs no
+  // cancellation-specific logic of its own; it simply counts whatever
+  // missingCount the evaluator already decided.
+  const rows = [{ status: "active", assurance: { missingCount: 1, nextMissingDate: "2026-09-20" } }];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.missingOccurrenceCount, 1);
+  assert.equal(result.nextMissingDate, "2026-09-20");
+});
+
+test("deriveRecurringCareSummary — a PAUSED arrangement's own missing occurrences never contribute (§5 — active-only)", () => {
+  const rows = [
+    { status: "active", assurance: { missingCount: 1, nextMissingDate: "2026-09-25" } },
+    { status: "paused", assurance: { missingCount: 3, nextMissingDate: "2026-09-18" } },
+  ];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.activeArrangementCount, 1, "the paused row is excluded from the active count too");
+  assert.equal(result.missingOccurrenceCount, 1, "the paused arrangement's own 3 missing occurrences never contribute");
+  assert.equal(result.arrangementsWithMissingCount, 1);
+  assert.equal(result.nextMissingDate, "2026-09-25", "never the paused arrangement's own earlier date");
+});
+
+test("deriveRecurringCareSummary — an ENDED arrangement's own missing occurrences never contribute (§5 — active-only)", () => {
+  const rows = [{ status: "ended", assurance: { missingCount: 5, nextMissingDate: "2026-09-18" } }];
+  const result = deriveRecurringCareSummary(rows);
+  assert.deepEqual(result, { activeArrangementCount: 0, missingOccurrenceCount: 0, arrangementsWithMissingCount: 0, nextMissingDate: null });
+});
+
+test("deriveRecurringCareSummary — a row with assurance=null (excluded by the evaluator's own coarse near-horizon filter) contributes to activeArrangementCount but not to any missing count", () => {
+  const rows = [
+    { status: "active", assurance: null },
+    { status: "active", assurance: { missingCount: 2, nextMissingDate: "2026-09-22" } },
+  ];
+  const result = deriveRecurringCareSummary(rows);
+  assert.equal(result.activeArrangementCount, 2);
+  assert.equal(result.missingOccurrenceCount, 2);
+  assert.equal(result.arrangementsWithMissingCount, 1);
+});
+
+test("deriveOperationsBrief — recurringCare: zero-arrangement summary passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { activeArrangementCount: 0, missingOccurrenceCount: 0, arrangementsWithMissingCount: 0, nextMissingDate: null };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.recurringCare, summary);
+});
+
+test("deriveOperationsBrief — recurringCare: a real missing summary passes through unchanged", () => {
+  const data = makeTodaysOperationsData();
+  const summary = { activeArrangementCount: 3, missingOccurrenceCount: 4, arrangementsWithMissingCount: 2, nextMissingDate: "2026-09-25" };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, summary, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.recurringCare, summary);
+});
+
+test("deriveOperationsBrief — recurringCare: null (genuine fetch failure) passes through unchanged, never coerced to a zero/covered value", () => {
+  const data = makeTodaysOperationsData();
+  const result = deriveOperationsBrief(data, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, null, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.recurringCare, null);
+});
+
+test("deriveOperationsBrief — recurringCare is independent of dayState/attention/driverSnapshot/requestSummary/tomorrowReadiness (no cross-contamination)", () => {
+  const trip = makeTrip({ id: "t1", state: "completed" });
+  const data = makeTodaysOperationsData({ todayTrips: [trip] });
+  const drivers = { totalActiveDrivers: 5, driversCurrentlyOnTrip: 2 };
+  const requestSummary = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-12T08:00:00.000Z" };
+  const tomorrow = { totalScheduledTrips: 10, readyCount: 6, needsPreparationCount: 4 };
+  const recurring = { activeArrangementCount: 1, missingOccurrenceCount: 1, arrangementsWithMissingCount: 1, nextMissingDate: "2026-09-20" };
+  const result = deriveOperationsBrief(data, drivers, requestSummary, tomorrow, recurring, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "ALL_COMPLETE");
+  assert.deepEqual(result.driverSnapshot, drivers);
+  assert.deepEqual(result.requestSummary, requestSummary);
+  assert.deepEqual(result.tomorrowReadiness, tomorrow);
+  assert.deepEqual(result.recurringCare, recurring);
+});
+
+test("deriveOperationsBrief — existing behavior (dayState/attention/nextDepartures/unassignedCount/activeNow/requestSummary/tomorrowReadiness) unchanged by recurringCare's addition", () => {
+  const now = new Date("2026-09-15T10:00:00.000Z");
+  const trip = makeTrip({ id: "t-dup", scheduledPickupAt: "2026-09-15T10:30:00.000Z" });
+  const data = makeTodaysOperationsData({
+    todayTrips: [trip],
+    needsAssignmentTrips: [trip],
+    attentionItems: [makeAttentionItem(trip, "NEEDS_ASSIGNMENT")],
+  });
+  const requestSummary = { pendingRequestCount: 1, oldestPendingRequestCreatedAt: "2026-09-14T08:00:00.000Z" };
+  const tomorrow = { totalScheduledTrips: 2, readyCount: 1, needsPreparationCount: 1 };
+  const recurring = { activeArrangementCount: 2, missingOccurrenceCount: 0, arrangementsWithMissingCount: 0, nextMissingDate: null };
+  const result = deriveOperationsBrief(data, NO_DRIVERS, requestSummary, tomorrow, recurring, now);
+  assert.equal(result.dayState, "ACTIVE_DAY");
+  assert.equal(result.nextDepartures.length, 0);
+  assert.equal(result.attention.length, 1);
+  assert.equal(result.unassignedCount, 1);
+  assert.deepEqual(result.activeNow, []);
+  assert.deepEqual(result.requestSummary, requestSummary);
+  assert.deepEqual(result.tomorrowReadiness, tomorrow);
 });

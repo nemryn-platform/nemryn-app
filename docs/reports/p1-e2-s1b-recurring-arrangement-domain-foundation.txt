@@ -1,0 +1,587 @@
+P1-E2-S1B — RECURRING ARRANGEMENT DOMAIN FOUNDATION
+============================================================
+PROJECT: /Users/datamatics/ZenWard
+DATE: 2026-09-17
+PHASE TYPE: Database/domain/security foundation. No user-facing UI, no
+recurrence evaluator, no lifecycle mutation RPCs, no skip-date table, no
+production deployment, no commit/push.
+
+------------------------------------------------------------------------
+PREFLIGHT
+------------------------------------------------------------------------
+`git status --short` / `git diff --stat` / `git log --oneline -10`
+confirmed HEAD at the required `d5df53355c12a74859e24368a8e895fe821de436`
+(S4F release commit) before any change. Every pre-existing untracked
+file classified before touching anything: `.tmp-qa/*` (QA scratch, never
+staged), the unrelated historical reports (g0/g1/n0/p0/p1-ux-prefixed,
+plus `p1-e1-r1-...`, `p1-e1-s1d-...`, `p1-e1-s2h-...-continuation`), and
+the S4F/S1A/S1A1 reports (left exactly as they were — this phase does
+not touch, stage, or reference them as its own deliverables).
+
+Read directly (source of truth, never inferred from a report alone):
+`organizations.sql`, `passengers.sql`, `trips.sql`,
+`transportation_requests.sql`, `audit_events.sql`,
+`rls_helper_functions.sql`, `rls_policies.sql` (the full 442-line
+policy/grant migration), `organization_operational_timezone.sql` (for
+`is_valid_iana_timezone`), `trip_assignments.sql` (composite-FK shape),
+and `controlled_trip_mutations.sql` (internal-helper-function naming/
+revoke convention: underscore-prefixed, `revoke all ... from public`,
+never granted to `authenticated`). Every `references auth.users (id)`
+column across every migration was enumerated (`grep`) to determine the
+`created_by` convention empirically (see CREATED_BY DECISION).
+
+------------------------------------------------------------------------
+MIGRATION
+------------------------------------------------------------------------
+One migration: `supabase/migrations/20260917090000_recurring_
+arrangements_foundation.sql`. Contains the `recurring_arrangements`
+table, its days-of-week validator function, and the `trips.
+recurring_arrangement_id` link together — a single atomic foundation,
+matching this repository's own established convention of one migration
+per coherent structural change (e.g. `20260830131000_trips.sql` created
+the table, its triggers, its indexes, and enabled RLS all in one file;
+`20260901100000_organization_operational_timezone.sql` created its
+validator function and the column it backs together). Grants/RLS
+policies for the new table are included in the SAME migration (deny-by-
+default is a same-migration requirement, not a follow-up).
+
+------------------------------------------------------------------------
+RECURRING ARRANGEMENT TABLE
+------------------------------------------------------------------------
+`public.recurring_arrangements` created with exactly the locked
+conceptual columns (id, organization_id, passenger_id,
+pickup_description, destination_description, pickup_time, days_of_week,
+start_date, end_date, timezone, status, paused_at, ended_at,
+ended_reason, created_by, created_at, updated_at) — no `facility_id`,
+`request_id`, `return_trip_needed`, `appointment_time`, or any medical/
+capacity/billing/Driver-assignment field, exactly per the exclusion list.
+`updated_at`/`prevent_organization_id_change` triggers attached, using
+the existing shared trigger functions unmodified — confirmed (§12 audit)
+that every durable mutable tenant table in this schema uses this exact
+trigger, with no repository precedent for explicit RPC-set `updated_at`
+anywhere; the established convention is followed, not assumed. RLS
+enabled in this same migration, immediately after table creation — no
+window where the table exists without it.
+
+------------------------------------------------------------------------
+TRIP LINK
+------------------------------------------------------------------------
+`trips.recurring_arrangement_id uuid` added, permanently nullable, with
+a composite FK `(recurring_arrangement_id, organization_id) references
+recurring_arrangements(id, organization_id)` and a partial index
+mirroring `trips_request_id_idx`'s own exact shape (`where
+recurring_arrangement_id is not null`). No uniqueness constraint of any
+kind on `(recurring_arrangement_id, service_date)` or similar — verified
+live that multiple Trips, including on the identical service date, may
+share one arrangement (RA-20/21). Every existing Trip row remains valid
+(RA-19: confirmed 22 pre-existing seed Trip rows all carry `NULL` post-
+migration with no error).
+
+------------------------------------------------------------------------
+CREATED_BY DECISION
+------------------------------------------------------------------------
+Audited every `references auth.users (id)` column across every
+migration in this schema before choosing a shape (not assumed): three
+distinct patterns exist —
+  1. Identity-owning tables (`user_profiles.id`, `memberships.user_id`,
+     `platform_admin_grants.user_id`) use `ON DELETE CASCADE` — these
+     tables ARE the identity layer, so they vanish if the auth user
+     truly vanishes.
+  2. `drivers.user_id` uses `ON DELETE SET NULL` — explicitly documented
+     in domain-model.md §H as Driver's own distinct case (a Driver row
+     must survive intact even if login access is fully removed, since
+     historical Trip/TripAssignment references `Driver.id`, never
+     `user_id`).
+  3. Every actor/provenance reference (`trip_assignments.assigned_by`,
+     `trip_exceptions.created_by`/`resolved_by`, `trip_events.
+     actor_user_id`, `trip_notes.author_user_id`, `audit_events.
+     actor_user_id`, `driver_invites.invited_by`/`accepted_by`) uses a
+     bare `references auth.users (id)` with NO `on delete` clause at
+     all (Postgres default `NO ACTION`) — seven precedents, unanimous.
+
+`recurring_arrangements.created_by` follows pattern 3 exactly: nullable,
+bare reference, no `on delete` clause — it is provenance/history
+(durable operational record, per this phase's own explicit
+characterization), not identity, so pattern 1 does not apply; it is not
+a distinct, separately-justified case like Driver, so pattern 2 does not
+apply either. This does not block legitimate auth-user
+cleanup/deletion any differently than the other seven precedents already
+accept for the identical reason. The future S1D create RPC derives this
+value from `auth.uid()` server-side; the browser never supplies it
+(no client INSERT path exists at all in this phase — see MUTATION
+BOUNDARY).
+
+------------------------------------------------------------------------
+ORGANIZATION-AWARE FKS
+------------------------------------------------------------------------
+`recurring_arrangements` carries `unique (id, organization_id)`, the
+same composite-FK anchor shape every other tenant table uses. The
+Passenger reference is a composite FK — `(passenger_id, organization_id)
+references passengers (id, organization_id)` — verified live to reject
+an Org A arrangement naming an Org B passenger (RA-16: `foreign_key_
+violation`, not merely an RLS-level denial). The Trip link (see TRIP
+LINK above) uses the identical composite-FK shape in the other
+direction. `organization_id` itself references `organizations (id)`
+directly, matching every other tenant table's own top-level FK exactly
+(no special deletion behavior invented for this table).
+
+------------------------------------------------------------------------
+DAYS-OF-WEEK VALIDATION
+------------------------------------------------------------------------
+PostgreSQL cannot contain a subquery directly inside a `CHECK (...)`
+expression — a hard syntactic restriction (confirmed before writing any
+SQL, not assumed), not merely a style preference. The dedup/sort/range
+logic therefore lives inside a small, pure, `IMMUTABLE` SQL helper,
+`public._is_canonical_days_of_week(smallint[])`, and the table's own
+CHECK constraint calls it as a single function-call expression —
+`check (public._is_canonical_days_of_week(days_of_week))`. Underscore-
+prefixed, `revoke all ... from public`, never granted to `authenticated`
+— no legitimate direct-client code path calls it (the table has no
+authenticated INSERT/UPDATE grant at all this phase, and any future S1D
+RPC runs `SECURITY DEFINER`, evaluating this CHECK under its own owner
+privilege, not the caller's — the same reasoning already documented for
+`is_valid_iana_timezone`'s own grant note).
+
+ISO weekday numbering (1=Monday..7=Sunday) reused deliberately — the
+exact vocabulary `EXTRACT(ISODOW FROM date)` already returns natively,
+so the future S1C evaluator composes with zero translation layer.
+Verified against every example the phase specified, both via the bare
+function and via live INSERT attempts against the real CHECK constraint:
+
+  {}              -> reject   (RA-04, and direct function call)
+  {1}              -> accept  (direct function call)
+  {1,3,5}          -> accept  (direct function call)
+  {5,3,1}          -> reject  (RA-06, unsorted — never silently normalized)
+  {1,1,3}          -> reject  (RA-05, duplicate)
+  {0,1}            -> reject  (RA-07, out of range)
+  {7,8}            -> reject  (direct function call, out of range)
+  {1,2,3,4,5,6,7}  -> accept  (direct function call)
+
+All 8 cases confirmed both by calling `_is_canonical_days_of_week`
+directly and, for the cases the required test list names explicitly, via
+a real `INSERT` against the live table.
+
+------------------------------------------------------------------------
+TIMEZONE VALIDATION
+------------------------------------------------------------------------
+No second validator introduced. `recurring_arrangements.timezone` reuses
+`public.is_valid_iana_timezone(text)` exactly as already built and
+proven for `organizations.timezone` — `check (public.
+is_valid_iana_timezone(timezone))`, no default, `not null`. Verified
+live: `'EST'` rejected (RA-03, `check_violation`), a genuine IANA zone
+(`America/New_York`) accepted (RA-01/13/15/etc.). No server/session
+timezone default of any kind — the future S1D create RPC derives the
+snapshot from `organizations.timezone` at creation time; S1B establishes
+only the valid storage contract, per the phase's own explicit
+instruction.
+
+------------------------------------------------------------------------
+STATUS INTEGRITY
+------------------------------------------------------------------------
+Vocabulary locked to exactly `active`/`paused`/`ended`
+(`recurring_arrangements_status_check`, verified RA-02 rejects any other
+value). Four targeted constraints, each independently verified live:
+  - `paused` requires `paused_at is not null` (RA-14). The REVERSE
+    direction — does a non-paused status require `paused_at` to be
+    null — is deliberately NOT constrained: P1-E2-S1A1 did not settle
+    whether `paused_at` is retained or cleared when an arrangement is
+    ended directly from a paused state, and this migration does not
+    presume an answer (carried forward explicitly, see OPEN ISSUES).
+  - Non-`ended` status must not carry `ended_at`/`ended_reason` (RA-11/
+    RA-12 exercise the inverse: `ended` without one or the other is
+    rejected) — this direction IS explicitly locked by this phase's own
+    instructions and is enforced.
+  - `ended` requires both `ended_at` and a non-blank `ended_reason`
+    (RA-11, RA-12, RA-13 for the valid shape) — mirrors `trips.
+    cancellation_reason`/`trip_assignments.end_reason`'s own existing
+    mandatory-reason precedent for terminal/closing transitions exactly.
+No lifecycle TRANSITION is implemented or enforced here (no trigger
+walks active→paused→ended) — only the STATIC SHAPE each status implies,
+precisely matching the phase's own "design the constraint so future S1D
+legal transitions can be implemented without schema surgery; do not
+implement transitions themselves" instruction.
+
+------------------------------------------------------------------------
+TEXT / DATE CONSTRAINTS
+------------------------------------------------------------------------
+`pickup_description`/`destination_description`: nonblank
+(`btrim(...) <> ''`, rejects whitespace-only per RA-09/RA-10, not only
+the empty string) and length-bounded at 2000 characters — matching
+`create_trip`'s own existing runtime validation of the identical two
+fields exactly (`20260916110000_request_trip_passenger_integrity.sql`:
+`btrim` nonblank, `length(...) > 2000` rejected). Enforced at the TABLE
+level here (Trip's own equivalent validation lives only in the RPC, not
+a table CHECK) — a deliberate strengthening, not an inconsistency: S1B's
+own charter is a structural foundation that must reject malformed data
+even before any RPC exists to validate it first, and the CHOSEN bound
+(2000) is not a new number invented for this table, it is Trip's own
+already-established number, reused.
+
+`end_date is null or end_date >= start_date` (RA-08) — no maximum
+duration invented, per the explicit instruction not to.
+
+------------------------------------------------------------------------
+INDEXES
+------------------------------------------------------------------------
+  recurring_arrangements_organization_id_idx (organization_id) —
+    baseline tenant-scoped retrieval, matching every other table.
+  recurring_arrangements_org_status_idx (organization_id, status) —
+    supports S1C's own primary evaluator query shape: "active
+    arrangements for my org."
+  recurring_arrangements_org_passenger_idx (organization_id,
+    passenger_id) — supports "arrangements for this passenger" and the
+    composite-FK's own natural query direction.
+  trips_recurring_arrangement_id_idx (recurring_arrangement_id) WHERE
+    recurring_arrangement_id IS NOT NULL — mirrors trips_request_id_idx's
+    own exact partial-index shape.
+No GIN index on `days_of_week` — a 14-day evaluator operates over an
+already-bounded set of active arrangements per organization; adding GIN
+indexing now would be premature optimization for a query pattern S1C
+has not written yet, per the phase's own explicit instruction.
+
+------------------------------------------------------------------------
+RLS MODEL
+------------------------------------------------------------------------
+`grant select on public.recurring_arrangements to authenticated;` — no
+INSERT/UPDATE/DELETE grant to `authenticated` at all, matching the exact
+precedent already established for `trip_events`/`audit_events` (both
+structurally similar: real lifecycle/security semantics, deliberately
+not client-writable until a controlled RPC mechanism exists). One SELECT
+policy: `has_org_role(organization_id, array['organization_admin',
+'dispatcher'])` — same organization only. Verified live: Org A admin and
+Org A dispatcher both see the fixture (RA-22/23); Org B admin sees zero
+Org A rows (RA-24); an inactive-membership actor sees zero rows despite
+belonging to the right organization (RA-27); anonymous is denied outright
+at the grant level, no rows returned even attempted (RA-26,
+`permission denied for table recurring_arrangements` — not an empty
+result set, a genuine privilege denial, since `anon` has no grant at
+all).
+
+------------------------------------------------------------------------
+DRIVER PRIVACY
+------------------------------------------------------------------------
+No Driver policy of any kind exists on this table — verified live (RA-25:
+a real Driver-role account, `org-a-driver-a@example.test`'s underlying
+user id, sees zero rows). Mirrors ZD-080's own "no generic Driver SELECT
+on Passenger, ever" rule by identical reasoning (a standing recurring
+pattern reveals more about a Passenger's routine than any single Trip
+does). A Driver continues to see only the individual Trip they are
+assigned to, through the existing, completely unmodified,
+`trips_select_assigned_driver` policy — this migration does not touch
+that policy or any Driver-facing access path at all.
+
+------------------------------------------------------------------------
+MUTATION BOUNDARY
+------------------------------------------------------------------------
+Verified live, for every relevant actor, that no raw client mutation of
+any kind exists on `recurring_arrangements`:
+  - Org Admin raw INSERT: denied (RA-28, `permission denied`).
+  - Dispatcher raw INSERT: denied (RA-29).
+  - Raw UPDATE (Org Admin, on a row RLS would otherwise let them SELECT):
+    denied (RA-30).
+  - Raw DELETE: denied (RA-31).
+  - Driver raw mutation: denied (RA-32).
+  - A forged `organization_id` (Org A actor attempting to INSERT a row
+    claiming Org B): denied (RA-33) — subsumed by the blanket no-grant
+    boundary, verified explicitly anyway per the phase's own instruction.
+Every denial occurs at the GRANT level (`permission denied for table
+recurring_arrangements`), not merely at the RLS-policy level — meaning
+even a future policy-authoring mistake (e.g. someone later adding an
+overly permissive INSERT policy) would still not expose a raw mutation
+path unless the grant itself were also separately widened. This is the
+same defense-in-depth shape already used for `trip_events`/
+`audit_events`.
+
+------------------------------------------------------------------------
+TRIP COLUMN PRIVILEGE
+------------------------------------------------------------------------
+The HARD security requirement (§15) — verified two ways, not assumed:
+  - Static introspection (RA-34): `has_column_privilege('authenticated',
+    'public.trips', 'recurring_arrangement_id', 'UPDATE')` returns
+    `false`. Postgres column-level GRANTs are additive and explicit —
+    adding a new column to `trips` does not automatically add it to the
+    pre-existing narrow `grant update (scheduled_pickup_at,
+    appointment_at, pickup_description, destination_description,
+    assistance_notes, instructions, pickup_facility_id,
+    destination_facility_id) on public.trips to authenticated;` list
+    from `20260830131700_rls_policies.sql` — this migration does not
+    touch that GRANT statement at all, so it retains its exact original
+    8-column scope, unchanged.
+  - Live confirmation (RA-34b): an authenticated Org Admin attempting a
+    real `UPDATE trips SET recurring_arrangement_id = ...` is denied
+    (`permission denied for table trips`) — not merely theoretically
+    unprivileged, empirically denied.
+  - Regression check (RA-35): the pre-existing, already-granted
+    `instructions` column remains genuinely updatable by the same actor
+    — confirming this migration narrowed nothing it shouldn't have and
+    widened nothing it shouldn't have.
+
+------------------------------------------------------------------------
+PLATFORM ADMIN AUDIT
+------------------------------------------------------------------------
+No Platform Admin access was invented for this table. Audited the
+ACTUALLY-IMPLEMENTED RLS policies directly (not domain-model.md's own
+access-matrix text, which lists a future-tense aspiration) — a real
+discrepancy was found and is recorded honestly: `is_platform_admin()`
+backs a SELECT policy on exactly THREE tables today — `organizations`,
+`platform_admin_grants`, `audit_events` — never `memberships`, even
+though domain-model.md's matrix lists "Platform Admin: C, R, U (all)"
+for Membership. No shipped policy implements that yet. `recurring_
+arrangements` is kept inside the same "specific, controlled, audited
+support action, never a blanket policy" set every other tenant-
+operational table already uses — no repository-wide invariant conflicts
+with the S1A1 lock (Organization Admin + Dispatcher, same organization,
+read-only), so no conflict is reported and no policy change was made.
+
+------------------------------------------------------------------------
+DATABASE TYPES
+------------------------------------------------------------------------
+Regenerated via `supabase gen types typescript --local`, written to the
+REAL, actively-imported path (`src/lib/supabase/database.types.ts` —
+confirmed via `grep` that this, not `docs/data/schema.md`'s own stale
+`src/types/database.ts` reference, is what `src/lib/supabase/server.ts`/
+`client.ts`/every Driver route actually imports). Diffed against the
+prior committed file before applying: 89 insertions, 0 deletions, 100%
+attributable to exactly the three new surfaces (the `recurring_
+arrangements` table's Row/Insert/Update/Relationships shape, `trips.
+recurring_arrangement_id` plus its new FK relationship entry, and
+`_is_canonical_days_of_week`'s function signature) — no unrelated churn,
+confirmed before applying, per the phase's own explicit "STOP and
+investigate" instruction. `npx tsc --noEmit` re-run clean after applying.
+
+------------------------------------------------------------------------
+FOCUSED SQL RESULTS
+------------------------------------------------------------------------
+`supabase/tests/recurring_arrangement_foundation_tests.sql` (new): 35/35
+passing, 0 failures, on the first real run against a fresh reset.
+Every required case named in the phase's own test list (§21) is present:
+14 table/constraint tests (RA-01 through RA-14), 7 tenancy/FK tests
+(RA-15 through RA-21, with RA-20/21 combined into one assertion since
+they test the identical "multiple Trips, same arrangement, same date"
+fact), 6 RLS/read tests (RA-22 through RA-27), 6 mutation-boundary tests
+(RA-28 through RA-33), and 3 Trip-column-privilege tests (RA-34, RA-34b,
+RA-35).
+
+------------------------------------------------------------------------
+RLS ADVERSARIAL RESULTS
+------------------------------------------------------------------------
+`rls_adversarial_tests.sql` itself re-run unmodified: 32/32, unchanged
+from the S4F baseline — this migration does not touch any policy that
+file exercises. A dedicated new extension was NOT appended to that file:
+audited the established pattern first (every table added since the
+original P1-E2-S1 domain foundation — driver_invites, transportation_
+requests mutations, trip_exception, organization_timezone, etc. — got
+its OWN dedicated test file, never an addition to the single
+letter-labeled `rls_adversarial_tests.sql`), and followed that same
+established convention rather than guessing. `recurring_arrangement_
+foundation_tests.sql`'s own RA-22 through RA-33 block already
+explicitly proves, in the exact adversarial shape this phase asks for:
+Driver gets zero rows (RA-25), Org B gets zero Org A rows (RA-24), an
+inactive membership gets zero rows despite correct organization (RA-27),
+changing/forging `organization_id` does not bypass the boundary (RA-33),
+and no raw mutation exists for any actor (RA-28 through RA-32).
+
+------------------------------------------------------------------------
+FULL SQL REGRESSION
+------------------------------------------------------------------------
+All 27 maintained files (the pre-existing 26 plus the new one), each
+against its own fresh `supabase db reset`:
+
+  constraint_tests.sql                          13/13
+  create_trip_atomicity_tests.sql                 2/2
+  create_trip_privilege_tests.sql                 5/5
+  create_trip_tests.sql                         20/20
+  driver_location_tests.sql                     20/20
+  driver_read_authorization_tests.sql           17/17
+  driver_read_history_tests.sql                   8/8
+  driver_read_minimization_tests.sql            13/13
+  driver_read_privilege_tests.sql                 8/8
+  exception_mutation_boundary_tests.sql         20/20
+  function_privilege_tests.sql                    7/7
+  mutation_assignment_tests.sql                 19/19
+  mutation_atomicity_tests.sql                    2/2
+  mutation_authorization_tests.sql                4/4
+  mutation_idempotent_authorization_tests.sql     6/6
+  mutation_lifecycle_tests.sql                  24/24
+  mutation_privilege_tests.sql                    7/7
+  operator_onboarding_tests.sql                 40/40
+  organization_timezone_tests.sql               14/14
+  recurring_arrangement_foundation_tests.sql    35/35
+  request_mutation_atomicity_tests.sql            3/3
+  request_mutation_privilege_tests.sql          18/18
+  request_mutation_tests.sql                    38/38
+  request_trip_passenger_integrity_tests.sql    10/10
+  rls_adversarial_tests.sql                     32/32
+  security_definer_exposure_tests.sql           20/20
+  trip_exception_tests.sql                      16/16
+
+TOTAL: 421/421 assertions passed, 0 failures, 0 fatal psql errors, 0
+reset failures, across all 27 files.
+
+------------------------------------------------------------------------
+CONCURRENCY REGRESSION
+------------------------------------------------------------------------
+All 3 maintained genuine (two-separate-psql-process) concurrency tests
+re-run, each against its own fresh reset: `mutation_concurrency_test.sh`
+(Trip assignment/reassignment) PASS, `driver_invite_concurrency_test.sh`
+PASS, `request_lifecycle_concurrency_test.sh` PASS — all three showing
+genuine ~1.9s row-lock blocking and correct post-block outcomes, byte-
+identical in behavior to the S4F baseline. No new readiness/recurrence
+concurrency test was invented — this phase introduces no readiness
+mutation of any kind (S1B is read-only to the application), so there is
+nothing new to race.
+
+------------------------------------------------------------------------
+APPLICATION REGRESSION
+------------------------------------------------------------------------
+`npx tsc --noEmit`: 0 errors (both before and after applying the
+regenerated database types). `npm run lint`: 0 errors, 34 warnings, all
+confined to `.tmp-qa/*.mjs` scratch scripts. `npm run build`: succeeded,
+zero route changes (confirmed — S1B ships no UI, per its own charter).
+`npm test`: 119/119, unchanged from the S4F baseline (no TypeScript
+source file touched by this phase beyond the regenerated types).
+
+Live CDP regression against the running dev server, fresh-reset data,
+signed in as a real Org A Admin and a real Org A Driver account: Operations
+Overview + Operations Brief + Tomorrow Readiness Brief block, Request
+Hub, Trips list, Dispatch, Trip Detail (a real Trip with `recurring_
+arrangement_id` still NULL, exactly as expected for every existing Trip),
+Tomorrow Readiness page, Drivers page, and the Driver surface itself —
+10/10 checks passing, no "Application error," no regression. Trip
+assignment/reassignment and Trip lifecycle mutation correctness are
+additionally covered by the full SQL regression (`mutation_assignment_
+tests.sql` 19/19, `mutation_lifecycle_tests.sql` 24/24) and the live
+concurrency test above, rather than re-exercised manually in the
+browser — this migration touches no application code path those tests
+depend on.
+
+------------------------------------------------------------------------
+FILES CREATED
+------------------------------------------------------------------------
+  supabase/migrations/20260917090000_recurring_arrangements_foundation.sql
+  supabase/tests/recurring_arrangement_foundation_tests.sql
+  docs/reports/p1-e2-s1b-recurring-arrangement-domain-foundation.txt (this report)
+
+------------------------------------------------------------------------
+FILES MODIFIED
+------------------------------------------------------------------------
+  src/lib/supabase/database.types.ts — regenerated via `supabase gen
+    types typescript --local`; 89 insertions, 0 deletions, entirely
+    attributable to the new table/column/function (see DATABASE TYPES).
+
+No other file was created or modified. No application source (`.ts`/
+`.tsx` beyond the generated types), no RPC, no existing RLS policy, no
+existing migration was touched.
+
+------------------------------------------------------------------------
+SCHEMA IMPACT
+------------------------------------------------------------------------
+YES. One new table (`recurring_arrangements`, 17 columns, 4 indexes, 9
+CHECK constraints, 2 triggers, 1 new helper function) and one new
+nullable column on an existing table (`trips.recurring_arrangement_id`,
+1 composite FK, 1 partial index). No existing table's own columns,
+constraints, or triggers were altered.
+
+------------------------------------------------------------------------
+RLS IMPACT
+------------------------------------------------------------------------
+YES, but additive only. One new table with RLS enabled and exactly one
+SELECT policy (Organization Admin + Dispatcher, same organization). No
+existing RLS policy on any other table was modified, and no INSERT/
+UPDATE/DELETE policy of any kind exists on the new table — mutation
+remains entirely out of reach of the application until S1D.
+
+------------------------------------------------------------------------
+OPEN ISSUES
+------------------------------------------------------------------------
+1. Whether `paused_at` is retained or cleared when an arrangement is
+   ended directly from a paused state (without first resuming) remains
+   genuinely undecided — S1A1 did not settle it, and this migration
+   deliberately does not presume an answer at the schema level (only the
+   "paused requires paused_at" direction is enforced). S1D must decide
+   and enforce this procedurally.
+2. The Platform Admin standing-read-scope discrepancy found during this
+   phase's own audit (domain-model.md's access matrix lists Membership;
+   the shipped policies do not include it) is recorded here as a fact
+   discovered, not a defect this phase is scoped to fix — flagged for
+   whoever next touches `memberships` RLS or updates domain-model.md's
+   own matrix to match shipped reality.
+3. Everything already carried forward as open from P1-E2-S1A1
+   (pause-reason mandatoriness, `appointment_time`, a future "schedule a
+   pause for a future date" capability, exact S1D RPC names, return-leg
+   assurance's own future design) remains exactly as open as it was —
+   none of it was in this phase's own scope to resolve.
+None of the above block S1C.
+
+============================================================
+RECURRING ARRANGEMENT TABLE:
+PASS
+
+TRIP LINK:
+PASS
+
+CROSS-ORG FK PROTECTION:
+PASS
+
+DAYS-OF-WEEK:
+PASS
+
+TIMEZONE:
+PASS
+
+STATUS CONSTRAINTS:
+PASS
+
+DRIVER DIRECT READ:
+BLOCKED
+
+RAW ARRANGEMENT MUTATION:
+BLOCKED
+
+RAW TRIP LINK MUTATION:
+BLOCKED
+
+ORG ISOLATION:
+PASS
+
+NEW TABLE:
+YES
+
+NEW TRIP COLUMN:
+YES
+
+NEW RLS:
+YES
+
+NEW MUTATION RPC:
+NO
+
+FULL SQL:
+421/421
+
+RLS:
+32/32
+
+CONCURRENCY:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+119/119
+
+READY FOR S1C:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E2-S1C — Recurring Occurrence Exceptions + Assurance Core

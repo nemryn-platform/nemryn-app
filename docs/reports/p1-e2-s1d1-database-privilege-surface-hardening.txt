@@ -1,0 +1,483 @@
+P1-E2-S1D1 — DATABASE PRIVILEGE SURFACE HARDENING
+COMPLETION REPORT
+
+Baseline HEAD (unchanged throughout this phase): d5df53355c12a74859e24368a8e895fe821de436
+Nothing has been committed, staged, pushed, or deployed during this phase.
+
+Per this phase's own explicit instruction, the complete 29-file fresh-
+reset SQL regression battery was NOT run. Only the 7 focused suites named
+in the phase spec (plus the one new suite this phase itself adds) were
+run, each against its own fresh `supabase db reset`. See FOCUSED SECURITY
+TESTS / RPC REGRESSION below for the full results and the reasoning for
+why no broader battery was warranted.
+
+
+PRIVILEGE AUDIT
+=================
+git status --short / git diff --stat / git log --oneline -10 confirmed
+HEAD unchanged and all S1B-S1D work still local/uncommitted, untouched.
+
+Searched every migration file for `GRANT ALL`, `GRANT TRUNCATE`, `GRANT
+REFERENCES`, `GRANT TRIGGER`, and `ALTER DEFAULT PRIVILEGES` — zero
+matches anywhere in supabase/migrations/. This repository has never, at
+any point in its history, explicitly granted TRUNCATE, REFERENCES, or
+TRIGGER to anon or authenticated on any table — the privilege surface
+found during S1D did not come from a mistake in any individual migration.
+
+Live introspection (information_schema.table_privileges,
+information_schema.column_privileges, has_table_privilege,
+pg_default_acl, pg_namespace, pg_roles) across all 20 public-schema
+tables, BEFORE writing the hardening migration:
+
+  - Every one of the 20 tables granted TRUNCATE, REFERENCES, AND TRIGGER
+    to BOTH anon and authenticated, with zero variance across tables —
+    a uniform, schema-wide condition, not a per-table anomaly.
+  - SELECT/INSERT/UPDATE/DELETE, at both table level and column level,
+    were completely unaffected by this condition and remained exactly
+    what each table's own owning migration explicitly granted (e.g.
+    `trips` — SELECT yes, INSERT/DELETE no, UPDATE limited to exactly 8
+    named columns at the column-privilege level, table-level UPDATE
+    false; `trip_notes`/`user_profiles` — genuine table-level UPDATE,
+    confirmed intentional and pre-existing, untouched by this phase).
+  - anon held SELECT/INSERT on zero tables (correct — anon is fully
+    unauthenticated in this application's model; every table requires an
+    authenticated, active Membership for any DML).
+  - pg_roles: anon/authenticated are non-superuser, non-BYPASSRLS,
+    CREATEROLE=false, CREATEDB=false — no broader role-attribute concern
+    found. service_role carries BYPASSRLS=true (by design — the trusted
+    backend role) but is not superuser and cannot CREATEROLE/CREATEDB.
+
+
+AFFECTED TABLES
+==================
+All 20 public-schema tables, without exception:
+audit_events, driver_invites, driver_location_updates, drivers,
+facilities, memberships, organizations, passengers,
+platform_admin_grants, recurring_arrangements,
+recurring_occurrence_exceptions, request_events,
+transportation_requests, trip_assignments, trip_events, trip_exceptions,
+trip_notes, trips, user_profiles, vehicles.
+
+recurring_arrangements and recurring_occurrence_exceptions (the two
+tables that surfaced this finding during S1D) are not a special case —
+they are simply two more instances of a condition present on every
+single table in this schema since the very first migration.
+
+
+ROOT CAUSE
+============
+Confirmed by direct pg_default_acl inspection (not assumed, not
+inferred from "it's probably a Supabase default"):
+
+  select tablename, tableowner from pg_tables where schemaname='public';
+    -> all 20 rows show owner = `postgres`.
+
+  select defaclrole::regrole, defaclacl from pg_default_acl da
+    join pg_namespace n on n.oid=da.defaclnamespace
+    where n.nspname='public' and defaclobjtype='r';
+    -> two rows:
+       supabase_admin | {postgres=arwdDxtm/supabase_admin, anon=arwdDxtm/..., authenticated=arwdDxtm/..., service_role=arwdDxtm/...}
+       postgres       | {postgres=arwdDxtm/postgres, anon=Dxtm/postgres, authenticated=Dxtm/postgres, service_role=Dxtm/postgres}
+
+The SECOND row is the actual, active root cause: a pre-existing default
+ACL — equivalent to `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN
+SCHEMA public GRANT TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon,
+authenticated, service_role` — that was ALREADY IN PLACE before this
+repository's very first migration ever ran (grep-confirmed: no migration
+in this repo's history ever issued this statement). Since every
+CREATE TABLE in every migration in this repository's history has run as
+`postgres` (the role `supabase db reset`/migrations apply as, confirmed
+via table ownership above), and Postgres automatically applies whatever
+default ACL is registered for the creating role at the instant of table
+creation, every one of the 20 tables silently inherited TRUNCATE,
+REFERENCES, TRIGGER, and MAINTAIN for anon/authenticated/service_role
+the moment it was created — with zero explicit GRANT statement anywhere,
+and with no individual migration author having any practical way to
+notice it without deliberately running the exact pg_default_acl query
+above.
+
+CLASSIFICATION (per work item §18's own explicit request — not merely
+"pre-existing"): this is a **Supabase platform/bootstrap default**, set
+up as part of the local Supabase CLI's own Postgres image initialization
+before any repository migration ever executes — NOT a historical
+`GRANT ALL` statement (none exists), NOT a migration-specific grant (none
+exists), and NOT something introduced or widened by any phase of this
+project's own history, including S1D. It is the SAME category of
+platform default already documented in Supabase's own general project
+behavior: DML privileges (SELECT/INSERT/UPDATE/DELETE) are deliberately
+left OUT of the default (confirmed: the default ACL grants only `Dxtm`,
+never `arwd`, to anon/authenticated — every DML grant in this schema has
+always required, and still requires, an explicit per-table `grant
+select/insert/update/delete` statement, which is exactly why this
+project's own established discipline of narrow per-table grants has
+never accidentally over-exposed DML). TRUNCATE/REFERENCES/TRIGGER were
+apparently left IN the default, likely because the platform's own
+default posture treats them as lower-risk given PostgREST's own API
+surface never exposes them — a reasonable platform-level default for a
+generic project, but not the correct least-privilege posture for this
+specific application's own threat model, which is why this phase exists.
+
+PREVENTING RECURRENCE: fixed at the default-ACL layer itself (see
+DEFAULT PRIVILEGE HARDENING below), not merely on the 20 tables that
+happen to exist today — every future migration will keep creating tables
+as `postgres` (no reason to change that), and this migration's own
+`ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ...`
+statement ensures no future table can ever silently reacquire these
+three privileges again, without requiring any future migration author to
+remember to revoke them by hand.
+
+
+DEFAULT ACL AUDIT
+===================
+Two distinct default-ACL entries exist for schema public, obj_type='r'
+(relation/table):
+
+  1. Owning role `postgres` — the one that matters (every table in this
+     schema is created by this role). BEFORE this phase: granted `Dxtm`
+     (TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) to anon, authenticated,
+     AND service_role. AFTER this phase's migration: anon/authenticated
+     now show only `m` (MAINTAIN — see OPEN ISSUES); service_role is
+     completely untouched, still `Dxtm`.
+
+  2. Owning role `supabase_admin` — grants the FULL `arwdDxtm` set
+     (including SELECT/INSERT/UPDATE/DELETE) to anon/authenticated/
+     service_role for any table `supabase_admin` might ever create in
+     `public`. This entry is CURRENTLY INERT for this application — no
+     table in this schema has ever been created by `supabase_admin`
+     (confirmed via the same table-ownership query; all 20 are owned by
+     `postgres`). It was deliberately NOT touched by this phase: altering
+     another role's own default ACL entry is exactly the kind of
+     "casually alter service_role/supabase_admin" action work item §5
+     explicitly forbids, and since it is provably unused today, there is
+     no live exposure to remediate. Documented here as a latent
+     observation, not a defect requiring action in this phase — flagged
+     honestly rather than silently left undocumented, per work item §18.
+
+Proven live (not merely asserted): a probe table created by `postgres`
+in `public` RIGHT NOW, inside a transaction that was immediately rolled
+back (leaving zero permanent objects — verified via `to_regclass()`
+returning NULL afterward), inherited NO TRUNCATE/REFERENCES/TRIGGER for
+either anon or authenticated — proving the default-ACL fix genuinely
+protects tables that do not exist yet, not merely the 20 that existed at
+migration time. See client_privilege_surface_tests.sql TEST 12/12b.
+
+
+PUBLIC SCHEMA CREATE AUDIT
+=============================
+  select has_schema_privilege('anon', 'public', 'CREATE');        -> false
+  select has_schema_privilege('authenticated', 'public', 'CREATE'); -> false
+  select has_schema_privilege('public', 'public', 'CREATE');       -> false (the PUBLIC pseudo-role)
+  select has_schema_privilege('service_role', 'public', 'CREATE'); -> false
+  select has_schema_privilege('postgres', 'public', 'CREATE');     -> true (via pg_database_owner membership)
+
+pg_namespace.nspacl for `public`: `{pg_database_owner=UC/pg_database_owner,
+=U/pg_database_owner, postgres=U/pg_database_owner,
+anon=U/pg_database_owner, authenticated=U/pg_database_owner,
+service_role=U/pg_database_owner}` — every client-facing role (and the
+PUBLIC pseudo-role, the bare `=U` entry) holds only USAGE (`U`) on schema
+public, never CREATE (`C`). CREATE privilege on schema public is already
+correctly restricted to the migration-owner path (postgres, via its
+membership in pg_database_owner) — no client-facing role can create
+arbitrary database objects today. No unexpected CREATE grant was found;
+no revocation was necessary or performed for this item.
+
+
+HARDENING MIGRATION
+======================
+New migration (historical migrations were not edited, per this
+repository's own established remediation discipline — see the
+migration's own header comment for the ZD-092/ZD-101/P1-E3-S8A
+precedent this follows exactly):
+supabase/migrations/20260917120000_client_privilege_surface_hardening.sql
+
+Two statements, both scoped to anon/authenticated only:
+
+  revoke truncate, references, trigger
+    on all tables in schema public
+    from anon, authenticated;
+
+  alter default privileges for role postgres in schema public
+    revoke truncate, references, trigger
+    on tables
+    from anon, authenticated;
+
+No RLS policy touched. No SELECT/INSERT/UPDATE/DELETE grant touched, at
+either table or column level. service_role, postgres, and supabase_admin
+are not mentioned in either statement — their own privileges (and
+supabase_admin's own separate, currently-inert default ACL entry) are
+completely unaffected.
+
+
+TRUNCATE REVOCATION
+======================
+Revoked from anon and authenticated on all 20 current public tables via
+the `revoke ... on all tables in schema public` statement (schema-wide,
+not a per-table list that could drift out of sync). Verified via
+has_table_privilege across all 20 tables: 0/20 show TRUNCATE for either
+role, post-migration (was 20/20 pre-migration). service_role retains
+TRUNCATE on all 20 tables, confirmed unchanged. Live raw TRUNCATE
+attempts (authenticated and anon, against trips/recurring_arrangements/
+recurring_occurrence_exceptions specifically) genuinely denied with
+`permission denied for table <name>` — not merely inferred from
+has_table_privilege — with zero data loss (trip row count confirmed
+identical before/after each attempt, since Postgres's permission check
+runs before any row is touched).
+
+
+TRIGGER REVOCATION
+======================
+Revoked identically to TRUNCATE, same statement, same scope. 0/20 tables
+show TRIGGER for anon/authenticated post-migration (was 20/20 before).
+No repository requirement was found — searched — that depends on
+anon/authenticated holding TRIGGER on any table (TRIGGER only matters
+for a role attempting to CREATE TRIGGER, which additionally requires
+CREATE on the schema, already confirmed absent for both roles — TRIGGER
+was already structurally inert for these two roles before this
+migration, in addition to being unnecessary).
+
+
+REFERENCES REVOCATION
+========================
+Revoked identically, same statement, same scope. 0/20 tables show
+REFERENCES for anon/authenticated post-migration (was 20/20 before). Same
+reasoning as TRIGGER: REFERENCES only matters for a role attempting to
+CREATE a new FOREIGN KEY constraint referencing the table, which likewise
+requires CREATE on the schema (also confirmed absent) — already
+structurally inert before this migration, in addition to being
+unnecessary. No repository requirement was found that depends on
+anon/authenticated holding REFERENCES on any table.
+
+
+DEFAULT PRIVILEGE HARDENING
+==============================
+`alter default privileges for role postgres in schema public revoke
+truncate, references, trigger on tables from anon, authenticated;` —
+targets the exact role (postgres) and schema (public) the pre-existing
+default ACL entry was already registered against (read directly from
+pg_default_acl before writing this statement, not guessed). Running this
+as the `postgres` role itself (identical to how every migration in this
+repository's history has always run) requires no elevated privilege
+beyond what every prior migration already used — altering one's own
+default privileges needs no special grant.
+
+Verified live, twice: (1) direct pg_default_acl re-inspection after the
+migration shows the `postgres`-owner row's ACL for anon/authenticated
+reduced from `Dxtm` to bare `m` (MAINTAIN — see OPEN ISSUES); (2) a real
+probe table created fresh (then rolled back, leaving no permanent
+object) inherited none of the three revoked privileges. Default
+SELECT/INSERT/UPDATE/DELETE behavior was not touched — it was never part
+of this default ACL to begin with (confirmed: the pre-existing default
+never included `a`/`r`/`w`/`d` for anon/authenticated at all), so there
+was nothing to "not remove" here beyond what was already true.
+
+
+RLS IMPACT
+============
+Zero RLS policies were created, modified, or dropped anywhere in this
+phase. This hardening operates entirely below/alongside RLS, exactly as
+work item §9 specifies — TRUNCATE was never filtered by RLS in the first
+place (a Postgres-level fact, not a gap this project's own RLS design
+ever claimed to cover), so removing the TRUNCATE grant closes a gap RLS
+structurally could never have closed regardless of policy design.
+
+
+SERVICE ROLE IMPACT
+======================
+None. Confirmed live: `service_role` retains TRUNCATE/REFERENCES/TRIGGER
+on all 20 tables post-migration, byte-for-byte identical to
+pre-migration (client_privilege_surface_tests.sql TEST 10). No
+service_role privilege change was found necessary anywhere in this
+audit, so no STOP-and-report condition (work item §5) was triggered.
+postgres and supabase_admin were likewise not altered in any way.
+
+
+RPC REGRESSION
+=================
+All 7 S1D SECURITY DEFINER recurring-arrangement mutation RPCs verified
+working normally after hardening, via two independent live checks:
+  1. A manual ad hoc lifecycle (create -> pause -> resume -> skip ->
+     unskip -> end) run directly against the freshly-hardened local
+     database immediately after applying the migration.
+  2. The same lifecycle re-proven inside the new focused test file itself
+     (client_privilege_surface_tests.sql TEST 17), as a real Organization
+     Admin, alongside every other assertion in that file.
+Both confirm: revoking TRUNCATE/REFERENCES/TRIGGER from the CALLING
+role has zero effect on a SECURITY DEFINER function's own internal
+reads/writes — those already run under the FUNCTION OWNER's privilege
+(postgres, a superset that was never reduced), not the caller's, exactly
+as the RPCs' own existing design already assumed and as this phase set
+out to verify rather than assume. No RPC was modified.
+
+
+FOCUSED SECURITY TESTS
+=========================
+New file: supabase/tests/client_privilege_surface_tests.sql — 18/18 PASS,
+0 FAIL (found and fixed two authoring bugs during development, both in
+the test file itself, neither in the migration or the schema — see the
+file's own git history for the corrected regex/table-qualification
+logic; final run below is the corrected version):
+
+  CLIENT-PRIV-01/02: anon/authenticated hold TRUNCATE on 0/20 tables.
+  CLIENT-PRIV-03/04: anon/authenticated hold TRIGGER on 0/20 tables.
+  CLIENT-PRIV-05/06: anon/authenticated hold REFERENCES on 0/20 tables.
+  CLIENT-PRIV-07: named-table spot check (trips, recurring_arrangements,
+    recurring_occurrence_exceptions) — 0 of 18 role×table×privilege
+    combinations hold any of the three.
+  CLIENT-PRIV-08/09: live raw TRUNCATE attempts (authenticated, anon)
+    against all 3 named tables — genuinely denied, trip row count
+    unchanged.
+  CLIENT-PRIV-10: service_role retains all three privileges on all 20
+    tables, unaffected.
+  CLIENT-PRIV-11: pg_default_acl introspection confirms the
+    postgres-owner default ACL grants anon/authenticated no
+    TRUNCATE/REFERENCES/TRIGGER.
+  CLIENT-PRIV-12/12b: a table created by postgres RIGHT NOW (rolled back
+    immediately, zero permanent objects left) inherits none of the three
+    — proves the default-ACL fix, not just the current-table fix.
+  CLIENT-PRIV-13: authenticated retains intended SELECT (trips,
+    recurring_arrangements, recurring_occurrence_exceptions,
+    organizations).
+  CLIENT-PRIV-14: trips' UPDATE grant remains column-scoped to exactly
+    the 8 intended columns, no table-level UPDATE.
+  CLIENT-PRIV-15/16: raw INSERT on recurring_arrangements /
+    recurring_occurrence_exceptions remains blocked.
+  CLIENT-PRIV-17: full create/pause/resume/skip/unskip/end RPC lifecycle
+    succeeds for an authorized Organization Admin.
+
+Focused regression (per this phase's own explicit "do not run all 29
+files" instruction, only the named-relevant suites, each against its own
+fresh reset):
+
+  function_privilege_tests.sql:                7/7 PASS
+  security_definer_exposure_tests.sql:        20/20 PASS
+  rls_adversarial_tests.sql:                  32/32 PASS
+  recurring_arrangement_foundation_tests.sql: 50/50 PASS
+  recurring_occurrence_exception_tests.sql:   19/19 PASS
+  recurring_arrangement_mutation_tests.sql:   49/49 PASS
+  client_privilege_surface_tests.sql:         18/18 PASS
+
+TOTAL: 195/195 PASS, 0 FAIL, 0 fatal errors, across 7 files — every count
+identical to its S1D-era baseline except the 18 new tests in the one new
+file. No evidence of any broader regression was found in any of these
+suites, so the full 29-file battery was not warranted and was not run,
+per this phase's own explicit instruction (reserved for S1G).
+
+
+APPLICATION REGRESSION
+=========================
+  - `supabase gen types typescript --local`: byte-for-byte IDENTICAL to
+    the current database.types.ts (diff exit code 0, zero lines changed)
+    — expected and correct, since this phase adds no table, column,
+    function, or type; it only revokes privileges, which the type
+    generator has no reason to reflect.
+  - npx tsc --noEmit: clean, 0 errors.
+  - npm run lint: 0 errors, 36 warnings — all pre-existing, all confined
+    to .tmp-qa/ scratch scripts, none in src/.
+  - npm run build: succeeded, same 39 routes as before, no change.
+  - npm test: 153/153 PASS, 0 FAIL — unchanged from the S1D baseline (no
+    application source file was modified in this phase at all).
+
+
+CONCURRENCY
+=============
+NOT RE-RUN — NO MUTATION LOGIC CHANGE. Per this phase's own explicit
+instruction (work item §14): privilege revocation does not change
+row-lock or transaction semantics (TRUNCATE/REFERENCES/TRIGGER govern
+none of Postgres's row-locking behavior — `SELECT ... FOR UPDATE`
+requires the UPDATE privilege specifically, which was never touched
+here), and this migration did not modify any of the 7 SECURITY DEFINER
+mutation RPCs (RPC REGRESSION above already independently confirmed they
+still execute correctly). No condition requiring the recurring
+arrangement concurrency suite to be re-run was found.
+
+
+FILES CREATED
+================
+  - supabase/migrations/20260917120000_client_privilege_surface_hardening.sql
+  - supabase/tests/client_privilege_surface_tests.sql
+  - docs/reports/p1-e2-s1d1-database-privilege-surface-hardening.txt (this file)
+
+Scratch/validation only (left in .tmp-qa/ per this session's existing
+convention):
+  - .tmp-qa/s1d1-focused-regression.sh
+
+
+FILES MODIFIED
+=================
+None. src/lib/supabase/database.types.ts was regenerated and confirmed
+byte-for-byte identical to its current committed-pending state — no
+actual file write was needed or performed. No other file was touched.
+
+
+OPEN ISSUES
+=============
+None found that block S1E. Two items worth carrying forward as context,
+neither a defect, both explicitly out of this phase's own scope:
+
+  1. MAINTAIN (PostgreSQL 17's newest table-level privilege, letter code
+     `m` — governs VACUUM/ANALYZE/CLUSTER/REINDEX/REFRESH MATERIALIZED
+     VIEW/LOCK TABLE on the table) was part of the SAME pre-existing
+     default ACL entry (`Dxtm`) as the three privileges this phase was
+     explicitly scoped to remove, and remains granted to anon/
+     authenticated on all 20 tables and in the default ACL for future
+     ones. It was deliberately left untouched: the phase's own §2/§4
+     scope explicitly and only names TRUNCATE, REFERENCES, and TRIGGER —
+     MAINTAIN is never mentioned — and per the phase's own repeated
+     instruction not to "broaden scope silently," it was not folded in
+     without being asked. MAINTAIN does not bypass RLS the way TRUNCATE
+     does and, like REFERENCES/TRIGGER, most of its constituent
+     operations are DDL-adjacent and not reachable via PostgREST; `LOCK
+     TABLE` specifically is reachable without DDL privilege and could in
+     principle be used for a denial-of-service lock, though again only
+     via a raw Postgres connection this application's own architecture
+     never exposes to any client. Flagged here, not fixed, pending an
+     explicit future decision on whether to include it in a follow-up
+     hardening pass.
+
+  2. The `supabase_admin`-owner default ACL entry for schema public
+     (`arwdDxtm` — the FULL privilege set, including DML) to
+     anon/authenticated/service_role remains in place. It is currently
+     provably inert (no table in this schema has ever been, or currently
+     is, owned by `supabase_admin`), and altering another role's own
+     default ACL is outside what work item §5 authorizes this phase to
+     touch. If any future migration were ever accidentally applied under
+     the `supabase_admin` role instead of `postgres` (nothing in this
+     repository's current tooling does this, and there is no known reason
+     it ever would), the new table would silently receive full DML access
+     for anon/authenticated with no RLS gate implied by the grant itself
+     (RLS would still need to be separately enabled and policied, exactly
+     as it already must be for every `postgres`-owned table today) —
+     documented as a latent, currently-unexploitable observation, not an
+     active gap.
+
+
+================================================================================
+FINAL RESULTS
+================================================================================
+
+ANON TRUNCATE:                BLOCKED
+AUTHENTICATED TRUNCATE:         BLOCKED
+ANON TRIGGER:                    BLOCKED
+AUTHENTICATED TRIGGER:            BLOCKED
+ANON REFERENCES:                   BLOCKED
+AUTHENTICATED REFERENCES:           BLOCKED
+PUBLIC SCHEMA CREATE:                 JUSTIFIED (already correctly restricted to postgres via pg_database_owner; anon/authenticated/PUBLIC/service_role hold only USAGE, never CREATE — no change needed or made)
+FUTURE TABLE DEFAULTS:                  HARDENED
+RECURRING RPCs:                           PASS
+RLS CHANGES:                                NO
+FULL SQL BATTERY:                             NOT RUN — FOCUSED REGRESSION RULE
+FOCUSED SECURITY:                               PASS (195/195 across 7 files)
+TSC:                                              PASS
+LINT:                                              PASS
+BUILD:                                              PASS
+UNIT:                                                153/153
+READY FOR S1E:                                        YES
+BLOCKERS:                                              NONE
+
+NEXT: P1-E2-S1E — Recurring Care Operations Surface + Trip Creation Integration
+
+Do NOT begin S1E. Do NOT run the full 29-file SQL regression unless
+focused testing uncovers a reason (none did). Do NOT commit. Do NOT push.
+Do NOT deploy.
+
+STOP.

@@ -1,0 +1,613 @@
+P1-E2-S1C — RECURRING OCCURRENCE EXCEPTIONS + ASSURANCE CORE
+COMPLETION REPORT
+
+Baseline HEAD (unchanged throughout this phase): d5df53355c12a74859e24368a8e895fe821de436
+Nothing has been committed, staged, pushed, or deployed during this phase.
+
+
+PREFLIGHT
+=========
+Confirmed against the locked S1A1 domain decisions and the shipped S1B/S1B1
+foundation before writing any code:
+  - recurring_arrangements' final shape (status/paused_at/ended_at CHECK
+    matrix, days_of_week as smallint[] 1=Mon..7=Sun, composite-FK-anchored
+    (id, organization_id), trips.recurring_arrangement_id nullable link)
+    was re-read directly from the shipped migration, not from memory.
+  - The locked occurrence-satisfaction rule (S1A1 §13): a linked Trip
+    satisfies date D iff state != 'cancelled' AND resolved local
+    serviceDate === D. Restated verbatim, not reworded, anywhere this
+    phase references it.
+  - Verified (again, empirically, not by re-trusting the S1B report) that
+    Platform Admin backs a policy on exactly 3 tables today:
+    organizations, platform_admin_grants, audit_events — reused this
+    fact rather than re-deriving it for the new table's own RLS design.
+
+
+EXCEPTION TABLE
+===============
+New migration: supabase/migrations/20260917100000_recurring_occurrence_exceptions.sql
+(a new migration, not an edit to the S1B migration — S1B/S1B1 are a
+separate, already-locked foundation this phase does not touch).
+
+recurring_occurrence_exceptions:
+  id                        uuid primary key default gen_random_uuid()
+  organization_id           uuid not null references organizations(id)
+  recurring_arrangement_id  uuid not null
+  service_date              date not null
+  reason                    text not null
+  created_by                uuid references auth.users(id)  -- no ON DELETE, matches every actor/provenance column in this schema
+  created_at                timestamptz not null default now()
+
+Deliberately narrower than the arrangement itself: no Trip id, no
+Passenger id, no medical reason, no facility, no return-leg concept, no
+appointment data, no Driver/Vehicle, no billing. Records exactly one
+fact: "do not expect an occurrence from this arrangement on this service
+date." No ExpectedOccurrence table exists or was created — "expected"
+remains a pure on-read derivation (recurring-care-core.ts).
+
+No skip/unskip RPC exists yet (explicitly out of scope, S1C §10) — the
+table carries no INSERT/UPDATE/DELETE grant to `authenticated` at all
+(see EXCEPTION RLS below). A future controlled RPC deletes the row on
+"unskip" — no soft-delete machinery (no `deleted_at`, no status enum)
+was added, matching the phase's explicit instruction.
+
+
+EXCEPTION TENANCY
+=================
+Composite-FK-anchored exactly like every other new relationship in this
+schema: `foreign key (recurring_arrangement_id, organization_id)
+references recurring_arrangements (id, organization_id)`, reusing
+recurring_arrangements' own `unique(id, organization_id)` anchor
+established in S1B. An Org A exception row referencing an Org B
+arrangement is a schema-level impossibility — proven at REX-05 (rejected
+with `foreign_key_violation`, not merely blocked by RLS).
+
+No new `unique(id, organization_id)` anchor was added on THIS table —
+nothing else in the schema needs to composite-FK against
+recurring_occurrence_exceptions, so per the phase's own "only if
+required by existing conventions" instruction, none was added.
+
+
+EXCEPTION RLS
+=============
+- `grant select on recurring_occurrence_exceptions to authenticated;` —
+  NO insert/update/delete grant at all (mirrors trip_events/audit_events
+  exactly: a table meant to be read-only-to-the-application until a
+  future controlled RPC exists).
+- One SELECT policy: `has_org_role(organization_id, array['organization_admin','dispatcher'])`.
+- No Driver policy (a Driver has no legitimate need to know which dates
+  of a Passenger's standing schedule were deliberately skipped, any more
+  than the pattern itself — same reasoning already applied to
+  recurring_arrangements in S1B).
+- No Platform Admin policy (verified 3-table PA scope, reused from S1B,
+  not re-derived).
+- No `updated_at` column, no `set_updated_at`/`prevent_organization_id_change`
+  triggers — matches the zero-client-UPDATE-grant precedent
+  (trip_events/audit_events) exactly: a trigger guarding an UPDATE path
+  that cannot exist at all would be dead code.
+
+Proven at both the SQL/RLS layer (REX-06 through REX-16, 19 focused
+tests) and — for Driver privacy specifically — through the real
+application data-access path: a live PostgREST request with a genuine
+Driver JWT (org-a-driver-a@example.test) against both
+recurring_arrangements and recurring_occurrence_exceptions returned
+zero rows / 200 OK (not merely a 403), confirming RLS is what's actually
+filtering, not an accidental empty dataset. See LIVE FIXTURE RESULTS.
+
+
+14-DAY HORIZON
+==============
+`generateHorizonDates(todayLocalDateKey)` in recurring-care-core.ts:
+exactly `HORIZON_LENGTH_DAYS` (14) local calendar dates, todayLocalDateKey
+through the following 13 dates inclusive, via pure calendar-digit
+arithmetic (`addCalendarDays`, the exact `Date.UTC`-as-scratch-calculator
+technique day-bounds.ts's own `addDaysToDateKey` already established —
+never `now + 14*24h`, never touching real elapsed time, never
+DST-sensitive because no real instant is ever involved at this layer).
+
+
+EXPECTED-DATE GENERATION
+=========================
+Locked pipeline, implemented exactly as specified and never reordered:
+  1. patternDateCount — horizon dates matching the weekday pattern, within
+     [startDate, endDate], AND passing the active/paused/ended lifecycle
+     cutoff — BEFORE skips (`isPatternDate`).
+  2. skippedCount — pattern dates (per #1) that also carry a skip
+     exception for that exact date. A skip recorded for a date that is
+     NOT currently a pattern date (e.g. after a pattern edit) is silently
+     ignored — proven at unit-test level ("a skip recorded for a date
+     that is NOT a current pattern date is silently ignored, P1-E2-S1C
+     §27").
+  3. expectedCount = patternDateCount - skippedCount (never independently
+     computed).
+  4. scheduledCount + missingCount = expectedCount (invariant, proven by
+     construction in the implementation and asserted directly in two
+     dedicated unit tests plus every live fixture arrangement).
+
+
+PAUSE SEMANTICS
+================
+`isPatternDate`'s `case "paused"`: a date is still a pattern date iff
+`pausedEffectiveDate === null OR dateKey < pausedEffectiveDate` — no new
+expected occurrences on or after the LOCAL calendar date `paused_at`
+falls on, in the arrangement's own timezone. Earlier pattern dates within
+the horizon remain real pattern dates (not deleted by pausing).
+
+Live-proven: Arrangement C (America/New_York, daily, paused effective
+2026-09-22) — patternDateCount = 5 (Sept 17-21), zero occurrences on or
+after Sept 22.
+
+
+ENDED SEMANTICS
+================
+Symmetric to pause, using `endedEffectiveDate`. Ended arrangements do not
+retroactively erase pattern-date history before the effective end date —
+"ended never deletes history" is enforced by construction (the same
+`isPatternDate` date-comparison logic, not a special case).
+
+Live-proven: Arrangement D (America/New_York, daily, ended effective
+2026-09-24) — patternDateCount = 7 (Sept 17-23), zero occurrences on or
+after Sept 24, with all 7 earlier dates still genuinely present.
+
+
+OCCURRENCE SATISFACTION
+=========================
+`qualifyingTripsFor`: a linked Trip qualifies for date D iff
+`state !== 'cancelled' AND serviceDate === D`, restated verbatim from
+S1A1 §13 / S1C §13. No other interpretation exists anywhere in the pure
+core. Proven at unit level (cancelled Trip -> still MISSING; a second,
+non-cancelled Trip on the same date -> SCHEDULED) and live (Arrangement
+A, Sept 25: a cancelled Trip plus a real scheduled replacement resolves
+to SCHEDULED with only the replacement Trip listed).
+
+
+CANCELLED TRIP BEHAVIOR
+=========================
+A cancelled Trip never satisfies any date, by itself. If no other
+qualifying Trip exists for that date, the occurrence is MISSING despite
+a cancelled Trip technically existing and being linked — proven at unit
+level and, live, at Arrangement A Sept 25 (cancelled + replacement ->
+SCHEDULED, cancelled Trip itself excluded from the `trips` list).
+
+
+MULTIPLE TRIPS PER DATE
+=========================
+When more than one qualifying (non-cancelled, dated) Trip exists for the
+same date, exactly ONE SCHEDULED occurrence is produced, with ALL
+qualifying Trips listed in `occurrence.trips` — no aggregation, no
+scoring, no arbitrary "pick one" logic invented. Proven live at
+Arrangement A Sept 28: two independently-scheduled Trips both resolve to
+Sept 28 under the arrangement's timezone; the live script asserted
+`trips.length === 2`.
+
+
+NULL-SCHEDULE BEHAVIOR
+========================
+A linked Trip with `scheduled_pickup_at IS NULL` (serviceDate = null) can
+never satisfy any occurrence — `qualifyingTripsFor`'s `serviceDate ===
+dateKey` comparison can never match `null` against any real date string.
+Proven at unit level and live: Arrangement A's Sept 30 Trip (state
+'scheduled', scheduled_pickup_at NULL) is present in the fetched Trip set
+but Sept 30 still resolves to MISSING.
+
+
+TRIP READINESS COMPOSITION
+=============================
+For a qualifying Trip still in `state === 'scheduled'`, the wrapper
+(recurring-care.ts) calls the real, unmodified `deriveTripReadiness`
+(trip-readiness-core.ts) and attaches the result as an opaque pass-
+through `readiness` field on that Trip fact — never re-derived, never
+re-labeled, never duplicated. For a Trip in any other state, `readiness`
+is `null` (mirrors `deriveTripReadiness`'s own NOT_APPLICABLE-for-
+every-other-state contract). recurring-care-core.ts never imports
+trip-readiness-core.ts at all — it accepts an already-computed,
+structurally-typed `TripReadinessResultLike` value, keeping the "zero
+runtime imports" pure-core charter intact while still getting real type
+safety.
+
+No aggregate/collapsed readiness score is invented for a SCHEDULED
+occurrence carrying multiple Trips — each Trip's own readiness stands on
+its own in the `trips` list.
+
+
+ASSURANCE VOCABULARY
+======================
+Exactly three occurrence states, no others, anywhere in this module:
+SCHEDULED / MISSING / SKIPPED. No READY state at this layer (Trip
+Readiness's own vocabulary, composed via pass-through, never
+re-derived). No compliance/risk/adherence/severity score. Verified by a
+dedicated unit test ("every possible reason/state combination still
+yields a stable, fully-populated result") and by direct code
+inspection — `RecurringOccurrenceState` is a closed 3-member union type,
+enforced by TypeScript.
+
+
+COUNT SEMANTICS
+=================
+patternDateCount, skippedCount, expectedCount, scheduledCount,
+missingCount, nextExpectedDate, nextMissingDate, consecutiveMissingCount
+— all exactly as locked in S1C §19/§20, computed once, never
+independently re-derived. consecutiveMissingCount walks the EXPECTED
+sequence only (SKIPPED dates are not part of it at all) from its
+earliest date, stopping at the first SCHEDULED date — no threshold, no
+severity label. Proven live: every one of the 5 live arrangements had
+`scheduledCount + missingCount === expectedCount` asserted and passing.
+
+
+TIMEZONE / DST
+================
+The pure core (recurring-care-core.ts) performs zero real timezone
+resolution — it operates exclusively on already-resolved `YYYY-MM-DD`
+date-key strings. All real IANA-timezone work lives in the server
+wrapper (recurring-care.ts), reusing day-bounds.ts's already-DST-proven
+`localDateKey`/`addDaysToDateKey`/`localMidnightUtc` (P1-E1-S4C1
+hardened) rather than any new timezone math. The unit-test suite
+includes horizon-generation tests spanning genuine DST transition dates,
+proving the pure date-key arithmetic is immune (it never touches a real
+instant in the first place).
+
+
+MULTI-TIMEZONE QUERY STRATEGY
+================================
+Each candidate arrangement's own 14-date horizon is resolved
+independently in ITS OWN stored timezone snapshot. The Trips query is
+bounded to the UNION UTC envelope (min of all horizon starts, max of all
+horizon ends) fetched in ONE round trip; each fetched Trip is mapped back
+to its own `recurring_arrangement_id` and re-resolved to a local service
+date using THAT arrangement's own timezone — never a shared/org-wide
+assumption.
+
+Live-proven at Arrangement B (America/Chicago, Wednesday-only): a Trip
+timed at `2026-09-24T04:30:00Z` (= Sept 23 23:30 CDT = Sept 24 00:30 EDT)
+correctly resolved to Sept 23 under the arrangement's own Chicago
+timezone — NOT Sept 24 (which is what NY-local or a naive UTC-date-slice
+approach would have produced). This is the single strongest proof this
+phase has that the multi-timezone strategy is genuinely per-arrangement,
+not organization-wide.
+
+
+SERVER READ MODEL
+====================
+src/lib/operations/recurring-care.ts — `server-only`, exports
+`getRecurringCareAssurance(organizationId: string, now: Date = new
+Date()): Promise<RecurringArrangementAssurance[]>`. Caller-resolves-
+context convention (organizationId is never re-derived/trusted from
+inside this module — matches every other Operations data-access module).
+Composes the real, unmodified `deriveRecurringCareAssurance` once per
+candidate arrangement, purely in-memory from the bounded fetches — no
+additional queries inside the per-arrangement loop.
+
+
+QUERY ROUND-TRIP COUNT / NO N+1
+==================================
+Exactly 4 round trips, regardless of how many arrangements or Trips
+exist:
+  1. Candidate arrangements (coarsely filtered — see below).
+  2. Occurrence exceptions for the candidate arrangement ids, bounded to
+     the union date range.
+  3. Linked Trips for the candidate arrangement ids, with driver/
+     vehicle/passenger status embedded in the SAME round trip (mirrors
+     trip-readiness.ts's composite-FK-hint convention), bounded to the
+     UNION UTC envelope.
+  4. Open trip_exceptions counts, scoped to exactly the resulting
+     candidate Trip ids, grouped into a per-trip count in memory.
+No query is issued inside a per-arrangement or per-Trip loop anywhere in
+this module — confirmed by direct code inspection (the only two `.map()`
+calls over `arrangements`/`trips` after round trip 4 do pure in-memory
+work, no `await` inside either).
+
+COARSE ARRANGEMENT FILTER (round trip 1): deliberately approximate — a
+±2-day UTC margin around "now" — because no single UTC-based filter can
+be timezone-exact across heterogeneous per-arrangement timezones without
+reading every row first. This filter can only ever OVER-include a
+borderline row, never incorrectly exclude a genuinely relevant one; the
+pure evaluator's own exact per-arrangement `isPatternDate` logic is what
+actually and precisely decides relevance. Documented in the wrapper's own
+header comment as a deliberate, bounded simplification.
+
+
+ORG ISOLATION
+================
+Live-proven three ways against the real local Supabase instance:
+  1. An Org A admin session's `getRecurringCareAssurance`-shaped query
+     set returns zero of Org B's Arrangement E.
+  2. An Org B admin session's query set returns Arrangement E and
+     nothing from Org A (Arrangements A-D).
+  3. Adversarial: an Org A JWT explicitly querying
+     `recurring_arrangements?organization_id=eq.<Org B's id>` returns
+     ZERO rows — proving real RLS enforcement, not merely
+     `organization_id`-scoped application-level filtering that a forged
+     query parameter could bypass.
+
+
+DRIVER PRIVACY
+=================
+Proven at the SQL/RLS layer (REX-09: Driver SELECT on
+recurring_occurrence_exceptions -> 0 rows; RA-25 from S1B, unaffected by
+this phase per REX-17/18 regression spot-checks) AND, as this phase
+additionally required "where practical," through the real application
+data-access path: a live PostgREST request bearing a genuine Driver JWT
+(org-a-driver-a@example.test, local dev fixture account) against both
+recurring_arrangements and recurring_occurrence_exceptions — with a real
+Org A fixture row present in each table at the time of the request —
+returned 200 OK with zero rows for both. See LIVE FIXTURE RESULTS.
+
+
+DATABASE TYPES
+=================
+src/lib/supabase/database.types.ts regenerated via
+`supabase gen types typescript --local` after the migration was applied.
+Diffed before applying: 46 lines, 100% additive — exactly the new
+`recurring_occurrence_exceptions` table's Row/Insert/Update/Relationships
+shape and its two FK relationship entries. No unrelated churn (the
+phase's own "if unrelated churn appears, STOP and inspect" bar was met
+cleanly). Applied via `cp`; `npx tsc --noEmit` confirmed clean
+immediately after.
+
+
+FOCUSED SQL RESULTS
+======================
+supabase/tests/recurring_occurrence_exception_tests.sql — 19/19 PASS,
+0 FAIL (REX-01 through REX-18, plus REX-04b):
+  - Table/constraints: valid insert accepted (REX-01); blank/whitespace
+    reason rejected (REX-02/03); duplicate (arrangement, date) rejected
+    (REX-04); same date legal across two different arrangements
+    (REX-04b); cross-org FK reference rejected (REX-05).
+  - RLS/read: Org A admin/dispatcher allowed (REX-06/07); Org B admin,
+    Driver, inactive membership, anon all blocked (REX-08/09/10/11).
+  - Mutation boundary: raw INSERT/UPDATE/DELETE rejected for Org Admin,
+    Driver, and a forged cross-org INSERT (REX-12 through REX-16).
+  - Regression spot-check: recurring_arrangements' and trips' own RLS
+    unaffected by this migration (REX-17/18).
+
+
+PURE CORE TEST RESULTS
+=========================
+src/lib/operations/recurring-care-core.test.mjs — 34/34 PASS, 0 FAIL.
+Covers: horizon generation (including DST-transition-date spans);
+weekday/pattern matching including single-day and open-ended
+arrangements; active/paused/ended lifecycle cutoff (including the
+defensive "paused/ended with no effective date" case); skip exclusion
+(including the "stale skip for a non-current pattern date is ignored"
+case, and "every pattern date skipped -> expectedCount 0"); satisfaction
+rules (one qualifying Trip -> SCHEDULED; zero -> MISSING; cancelled-only
+-> MISSING; cancelled + replacement -> SCHEDULED with only the
+replacement listed; multiple qualifying Trips -> one SCHEDULED occurrence
+with all Trips listed, no invented aggregate; null-serviceDate Trip never
+satisfies; non-scheduled-state Trip still listed with readiness=null);
+count invariants (mixed arrangement and the all-empty case);
+nextExpectedDate/nextMissingDate/consecutiveMissingCount derivation
+(including the "already scheduled on the first expected date ->
+consecutiveMissingCount 0" case); deterministic ascending date ordering
+regardless of input order; full reason/state stability check.
+
+Test cases from the phase spec structurally reallocated to live/SQL
+validation instead of this file (documented in the test file's own
+header): different-arrangement Trip/skip filtering (the pure core trusts
+its caller's own per-arrangement grouping, exactly like
+`aggregateTomorrowReadiness` trusts its candidate set — there is nothing
+for this file to test about cross-arrangement filtering, since the
+function never sees more than one arrangement's own data at a time);
+UTC-vs-local date resolution and multi-timezone correctness (structurally
+impossible to test here — the pure core never receives a raw UTC
+timestamp or a timezone string at all, only pre-resolved date-key
+strings).
+
+
+LIVE FIXTURE RESULTS
+=======================
+.tmp-qa/s1c-live-validate.mjs — real PostgREST + real JWTs (GoTrue
+password grant, local dev fixture accounts org-a-admin@example.test /
+org-b-admin@example.test, password local-test-only-fictional-pw) +
+the real, unmodified `deriveRecurringCareAssurance`/`deriveTripReadiness`
+pure functions, exercising the wrapper's exact 4-round-trip query shape
+by hand (day-bounds.ts's `server-only` + `next/headers` dependency chain
+makes the real wrapper uncallable from a standalone script — see
+day-bounds.ts's own doc comment and server.ts; the validation script
+instead imports a byte-for-byte, `server-only`-import-stripped copy of
+the same date-math functions, in .tmp-qa/s1c-day-bounds-helper.mjs, so no
+logic is reimplemented by hand).
+
+5 fixture arrangements (A-E), inserted directly via the DB owner
+connection (docker exec psql), 15 supporting Trip/assignment/exception
+rows. 24/24 assertions PASS, 0 FAIL:
+  - Arrangement A (NY, Mon/Wed/Fri, active): patternDateCount=6,
+    skippedCount=1, expectedCount=5. Sept 18 MISSING, Sept 21 SKIPPED
+    (reason "holiday"), Sept 23 SCHEDULED, Sept 25 SCHEDULED (cancelled +
+    replacement), Sept 28 SCHEDULED with 2 Trips listed, Sept 30 MISSING
+    (null-schedule Trip ignored). scheduledCount + missingCount ===
+    expectedCount.
+  - Arrangement B (Chicago, Wednesday-only, active): patternDateCount=2.
+    The timezone-boundary-crossing Trip correctly resolved to Chicago-
+    local Sept 23 (proving true per-arrangement timezone resolution, not
+    NY's or UTC's Sept 24). Sept 30 MISSING.
+  - Arrangement C (NY, daily, paused effective Sept 22):
+    patternDateCount=5 (Sept 17-21 only), zero occurrences on/after
+    Sept 22.
+  - Arrangement D (NY, daily, ended effective Sept 24):
+    patternDateCount=7 (Sept 17-23), zero occurrences on/after Sept 24.
+  - Arrangement E (Org B isolation fixture): invisible to an Org A
+    session; visible to an Org B session.
+  - Adversarial: Org A JWT forging `organization_id=eq.<Org B>` on
+    recurring_arrangements returns zero rows (real RLS, not app-level
+    filtering).
+
+A separate script (.tmp-qa/s1c-driver-privacy-live-check.mjs), run
+against a minimal single-arrangement Org A fixture, proved a real Driver
+JWT (org-a-driver-a@example.test) gets zero rows (200 OK) from both
+recurring_arrangements and recurring_occurrence_exceptions via live
+PostgREST. 2/2 assertions PASS.
+
+All fixture rows (both scripts, 17 rows total) were deleted after
+validation; confirmed via count queries that zero rows matching the
+fixture ids remain in any of the three affected tables.
+
+
+FULL SQL REGRESSION
+======================
+All 28 maintained SQL test files, each run against its own fresh
+`supabase db reset`:
+
+  constraint_tests.sql:                         13/13 PASS
+  create_trip_atomicity_tests.sql:                2/2 PASS
+  create_trip_privilege_tests.sql:                5/5 PASS
+  create_trip_tests.sql:                        20/20 PASS
+  driver_location_tests.sql:                    20/20 PASS
+  driver_read_authorization_tests.sql:          17/17 PASS
+  driver_read_history_tests.sql:                  8/8 PASS
+  driver_read_minimization_tests.sql:           13/13 PASS
+  driver_read_privilege_tests.sql:                8/8 PASS
+  exception_mutation_boundary_tests.sql:        20/20 PASS
+  function_privilege_tests.sql:                   7/7 PASS
+  mutation_assignment_tests.sql:                19/19 PASS
+  mutation_atomicity_tests.sql:                   2/2 PASS
+  mutation_authorization_tests.sql:               4/4 PASS
+  mutation_idempotent_authorization_tests.sql:    6/6 PASS
+  mutation_lifecycle_tests.sql:                 24/24 PASS
+  mutation_privilege_tests.sql:                   7/7 PASS
+  operator_onboarding_tests.sql:                40/40 PASS
+  organization_timezone_tests.sql:              14/14 PASS
+  recurring_arrangement_foundation_tests.sql:   50/50 PASS
+  recurring_occurrence_exception_tests.sql:     19/19 PASS  (NEW)
+  request_mutation_atomicity_tests.sql:           3/3 PASS
+  request_mutation_privilege_tests.sql:         18/18 PASS
+  request_mutation_tests.sql:                   38/38 PASS
+  request_trip_passenger_integrity_tests.sql:   10/10 PASS
+  rls_adversarial_tests.sql:                    32/32 PASS
+  security_definer_exposure_tests.sql:          20/20 PASS
+  trip_exception_tests.sql:                     16/16 PASS
+
+TOTAL: 455/455 PASS, 0 FAIL, 0 fatal errors, across 28 files.
+(Prior baseline: 436/436 across 27 files. New total = 436 + 19 new REX
+tests = 455, exactly as expected — every pre-existing count unchanged.)
+
+
+CONCURRENCY REGRESSION
+=========================
+All 3 maintained concurrency tests, unchanged (S1C introduced no new
+mutation RPC/surface, so no new concurrency test was needed):
+  - mutation_concurrency_test.sh: PASS (genuine row-level serialization,
+    Session B blocked ~1.9s on the Trip row lock, correctly rejected with
+    assignment_conflict after seeing Session A's committed change).
+  - driver_invite_concurrency_test.sh: PASS (real lock contention, no
+    duplicate Driver/Membership row regardless of which session's
+    transaction won the race).
+  - request_lifecycle_concurrency_test.sh: PASS (genuine row-level
+    serialization, Session B blocked ~1.8s, correctly rejected with
+    invalid_input after seeing Session A's committed cancellation).
+
+
+APPLICATION REGRESSION
+=========================
+  - npx tsc --noEmit: clean, 0 errors.
+  - npm run lint: 0 errors, 36 warnings — all pre-existing, all confined
+    to .tmp-qa/ scratch scripts (unused-var/unused-expression style
+    warnings in throwaway validation scripts), none in src/.
+  - npm run build: succeeded, all 39 routes compiled/generated
+    successfully, no new route added (matches the phase's own "NO UI"
+    scope — recurring-care.ts is a data-access module with no page/route
+    consuming it yet).
+  - npm test: 153/153 PASS, 0 FAIL (119 prior + 34 new pure-core tests,
+    exactly as expected).
+
+
+FILES CREATED
+================
+  - supabase/migrations/20260917100000_recurring_occurrence_exceptions.sql
+  - supabase/tests/recurring_occurrence_exception_tests.sql
+  - src/lib/operations/recurring-care-core.ts
+  - src/lib/operations/recurring-care-core.test.mjs
+  - src/lib/operations/recurring-care.ts
+  - docs/reports/p1-e2-s1c-recurring-occurrence-exceptions-assurance-core.txt (this file)
+
+Scratch/validation only (not part of the shipped product, left in
+.tmp-qa/ per this session's existing convention for prior phases):
+  - .tmp-qa/s1c-live-validate.mjs
+  - .tmp-qa/s1c-day-bounds-helper.mjs
+  - .tmp-qa/s1c-driver-privacy-live-check.mjs
+  - .tmp-qa/s1c-full-sql-regression.sh
+  - .tmp-qa/s1c-concurrency-regression.sh
+
+
+FILES MODIFIED
+=================
+  - src/lib/operations/day-bounds.ts — additive only: `localDateKey` and
+    `localMidnightUtc` changed from private to exported; the private
+    `nextDateKey` generalized into an exported `addDaysToDateKey(dateKey,
+    days)`, with `nextDateKey` itself preserved as a one-line wrapper
+    (`addDaysToDateKey(dateKey, 1)`) so every existing caller's behavior
+    and signature is unchanged. Verified via `npx tsc --noEmit` before
+    and after.
+  - src/lib/supabase/database.types.ts — regenerated, 46 lines, 100%
+    additive (the new table's shape only).
+
+
+SCHEMA IMPACT
+================
+One new table (recurring_occurrence_exceptions). No existing table
+altered. No existing column, constraint, index, trigger, or grant on any
+other table touched.
+
+
+RLS IMPACT
+============
+One new table, one new SELECT policy, no grant beyond SELECT. Verified
+by direct regression (REX-17/18) that recurring_arrangements' and trips'
+own existing RLS is unaffected. No existing policy on any other table
+modified.
+
+
+OPEN ISSUES
+=============
+None found that block S1D. Two items worth carrying forward as context,
+not defects:
+  1. The coarse arrangement pre-filter (±2-day UTC margin) is an
+     intentional, documented approximation — it will over-fetch a small
+     number of genuinely-irrelevant borderline rows in exchange for never
+     risking an incorrect exclusion, and relies on the pure evaluator's
+     own per-arrangement logic for exactness. This is the same class of
+     tradeoff already accepted for Tomorrow Readiness; no different
+     decision is proposed here.
+  2. No pagination/limit exists yet on the candidate-arrangement query
+     (round trip 1) — for an organization with a very large number of
+     arrangements this would eventually need one, exactly mirroring
+     Tomorrow Readiness's own current unbounded-candidate-set design. Not
+     a regression introduced by this phase; carried over as the same
+     already-accepted scaling posture.
+
+
+================================================================================
+FINAL RESULTS
+================================================================================
+
+OCCURRENCE EXCEPTION TABLE:  PASS
+SKIP DATE:                   PASS
+14-DAY HORIZON:               PASS
+EXPECTED DATE GENERATION:     PASS
+PAUSED CUTOFF:                 PASS
+ENDED CUTOFF:                   PASS
+SCHEDULED MATCH:                 PASS
+CANCELLED TRIP:                   PASS
+MULTI-TRIP DATE:                   PASS
+NULL SCHEDULE:                      PASS
+COUNT INVARIANTS:                    PASS
+DST:                                  PASS
+MULTI-TIMEZONE:                        PASS
+NO N+1:                                 PASS
+ORG ISOLATION:                           PASS
+DRIVER DIRECT ACCESS:                     BLOCKED (PASS)
+NEW TABLE:                                 recurring_occurrence_exceptions
+NEW MUTATION RPC:                           NONE (none created, none authorized)
+FULL SQL:                                    455/455
+RLS:                                          PASS
+CONCURRENCY:                                   3/3 PASS
+TSC:                                            CLEAN
+LINT:                                            CLEAN (0 errors)
+BUILD:                                            CLEAN
+UNIT:                                              153/153
+READY FOR S1D:                                      YES
+BLOCKERS:                                            NONE
+
+NEXT: P1-E2-S1D — Recurring Arrangement Lifecycle Mutations
+
+Do NOT begin S1D. Do NOT commit. Do NOT push. Do NOT deploy. STOP.
