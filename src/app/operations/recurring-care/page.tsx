@@ -3,6 +3,7 @@ import { Plus, Repeat } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getRecurringArrangementsList, type RecurringArrangementListRow } from "@/lib/operations/recurring-care-list";
+import { flattenMissingOccurrences, type MissingOccurrenceSourceRow } from "@/lib/operations/recurring-care-bulk-core";
 import {
   formatRecurringPattern,
   formatWallClockTime,
@@ -44,6 +45,19 @@ export default async function RecurringCareListPage({
 
   const allArrangements = await getRecurringArrangementsList(organization.organizationId);
   const rows = state === "all" ? allArrangements : allArrangements.filter((a) => a.status === state);
+
+  const missingSourceRows: MissingOccurrenceSourceRow[] = allArrangements
+    .filter((a) => a.assurance !== null)
+    .map((a) => ({
+      arrangementId: a.id,
+      passengerDisplayName: a.passengerDisplayName,
+      pickupDescription: a.pickupDescription,
+      destinationDescription: a.destinationDescription,
+      pickupTime: a.pickupTime,
+      timezone: a.timezone,
+      occurrences: a.assurance!.occurrences,
+    }));
+  const missingCount = flattenMissingOccurrences(missingSourceRows).length;
 
   const columns: DataTableColumn<RecurringArrangementListRow>[] = [
     {
@@ -116,9 +130,16 @@ export default async function RecurringCareListPage({
         title="Recurring Care"
         description="Standing transportation commitments you repeatedly need to keep covered."
         actions={
-          <LinkButton href="/operations/recurring-care/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
-            New recurring arrangement
-          </LinkButton>
+          <>
+            {missingCount > 0 && (
+              <LinkButton href="/operations/recurring-care/create-missing" variant="secondary">
+                {missingCount === 1 ? "Review 1 missing ride" : `Review ${missingCount} missing rides`}
+              </LinkButton>
+            )}
+            <LinkButton href="/operations/recurring-care/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
+              New recurring arrangement
+            </LinkButton>
+          </>
         }
       />
 

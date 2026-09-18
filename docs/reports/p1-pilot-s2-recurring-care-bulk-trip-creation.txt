@@ -1,0 +1,440 @@
+P1-PILOT-S2 — RECURRING CARE BULK TRIP CREATION
+=================================================
+Date: 2026-09-18
+Base commit (HEAD, unmodified this phase): 5c1ca37dd5cfcd428e79e98202cb33daf85f62df
+Scope: LOCAL IMPLEMENTATION ONLY. Not committed. Not pushed. Not deployed.
+
+CURRENT FRICTION
+-----------------
+No scheduled-job infrastructure exists anywhere in this repository (confirmed
+via grep before coding: no pg_cron, no edge function scheduler). Every real
+Trip a Recurring Care arrangement produces required one individual "Create
+trip" click per occurrence via OccurrenceRow.tsx on the Arrangement Detail
+page — no bulk action existed. An operator with many standing arrangements
+had to open each arrangement individually to cover its missing occurrences.
+
+PRODUCT BOUNDARY
+------------------
+This phase built a human-reviewed BULK creation workflow, never an automatic
+scheduler. No cron, no background job, no new recurring engine, no new Trip
+creation authority was introduced. Every Trip created by this workflow is
+still created by the existing, unmodified create_trip_for_recurring_occurrence
+RPC — the same function the single-occurrence "Create trip" button already
+calls. No occurrence is ever created merely because it is missing; an
+operator must load the review page, see the list, and explicitly submit.
+
+ENTRY POINT
+------------
+"Review N missing rides" (singular "Review 1 missing ride" when N=1) appears
+as a secondary action in the Recurring Care list page's PageHeader, next to
+the existing "New recurring arrangement" primary action — only rendered when
+the missing count is greater than 0. Clicking it only navigates to
+/operations/recurring-care/create-missing; it creates nothing. The route is
+NOT added to permanent sidebar navigation (confirmed: src/config/navigation
+and the sidebar component were not touched).
+
+REVIEW ROUTE
+-------------
+/operations/recurring-care/create-missing — a new server component page,
+gated by the same requireOperationsAccess(pathname) guard every other
+Recurring Care route already uses. Reachable only via the list page's own
+entry point or a direct URL (still access-controlled either way).
+
+AUTHORITATIVE MISSING SOURCE
+------------------------------
+The review page calls the EXISTING, unmodified getRecurringArrangementsList
+(recurring-care-list.ts) — the same function the list page itself already
+calls — and maps its own already-computed assurance.occurrences into the new
+pure flattenMissingOccurrences helper. No weekday/timezone/pattern/pause/
+skip/cancelled-Trip logic was reimplemented anywhere in this phase; the real
+evaluator (deriveRecurringCareAssurance, recurring-care-core.ts) was read in
+full before coding and never modified. Only occurrence.state === "MISSING"
+rows are included; SCHEDULED and SKIPPED are excluded by construction (never
+an inferred "not SCHEDULED" check).
+
+REVIEW LIST
+------------
+A compact table: Select / Date / Passenger / Pickup time / Route. No raw
+UUIDs are rendered anywhere (verified live — see LOCAL E2E). Dates and times
+are shown in the arrangement's own local wall-clock representation via the
+existing formatServiceDateShortLabel/formatWallClockTime helpers, unchanged.
+
+SELECTION MODEL
+-----------------
+Every MISSING occurrence is selected by default. A native
+<input type="checkbox" name="occurrenceKey" value="...">  per row (no new
+checkbox/table primitive was introduced beyond this — grep confirmed no
+existing multi-select table convention existed to reuse). "Select all" /
+"Clear all" controls. The submit button always states the true selected
+count ("Create 7 trips" / "Create 1 trip") and is disabled at zero selected.
+Unchecked boxes are simply absent from the submitted FormData — the existing
+native multi-checkbox convention this codebase already uses for daysOfWeek.
+
+SERVER ACTION
+---------------
+src/app/operations/recurring-care/create-missing/actions.ts — one new
+Server Action, bulkCreateMissingTripsAction, mirroring the exact conventions
+of every existing Recurring Care action in
+src/app/operations/recurring-care/[arrangementId]/actions.ts:
+requireOperationsAccess(pathname) for the trust boundary,
+createServerSupabaseClient(), one supabase.rpc(...) call per unique
+occurrence, mapRecurringArrangementError(error.code) on failure,
+revalidatePath() on success. It never uses the service role and never
+duplicates the RPC's own SQL logic in TypeScript.
+
+INPUT AUTHORITY
+-----------------
+The browser submits ONLY occurrenceKey values (arrangementId::serviceDate
+pairs). No Passenger id, pickup/destination text, pickup time, timezone,
+organization id, or Trip state is ever accepted from the browser in this
+action. organizationId comes exclusively from requireOperationsAccess's own
+trusted resolution, never a form field. Every operational fact is derived by
+the RPC itself from the arrangement's own current, freshly row-locked state
+— identical to the single-occurrence path's existing trust boundary.
+
+DEDUPLICATION
+---------------
+dedupeOccurrenceKeys (recurring-care-bulk-core.ts) runs BEFORE any RPC call,
+deduplicating by exact key with first-seen order preserved and malformed
+keys silently dropped. A duplicate value in submitted form data results in
+exactly one RPC invocation, never relying solely on the RPC's own row-lock
+idempotency to absorb an avoidable duplicate call.
+
+EXECUTION STRATEGY
+---------------------
+Bounded concurrency: a small worker-pool runner (runBounded, actions.ts)
+processes the deduplicated occurrence list with at most 5 RPC calls in
+flight at a time. Chosen over full serial execution (unnecessary latency for
+a batch of dozens) and over one unbounded Promise.all (an uncontrolled burst
+against the database). Correctness was prioritized over throughput — no
+special-cased retry/backoff logic was added since each call is already
+independently transactional and idempotent at the RPC layer.
+
+SAFETY BOUND
+--------------
+No hard cap was imposed on selectable/submittable occurrences. The realistic
+maximum in the near-term horizon (confirmed live: 22 Org A arrangements
+produced 48 missing occurrences without any UI degradation — see LARGE
+OPERATOR below) stays comfortably within what bounded concurrency handles
+safely. Imposing an arbitrary limit would risk silently dropping a
+genuinely selected occurrence, which this phase's own instructions forbid.
+
+PARTIAL SUCCESS MODEL
+------------------------
+Each RPC call is independently transactional; one occurrence's failure never
+blocks or rolls back any other occurrence in the same batch. The action
+always returns a full, per-occurrence result list
+(CREATED / ALREADY_SCHEDULED / FAILED), never a single pass/fail verdict.
+Verified live with a mixed batch (see LOCAL E2E, small-batch and race
+scenarios).
+
+ALREADY-SCHEDULED SEMANTICS
+------------------------------
+create_trip_for_recurring_occurrence's own `created: boolean` field is the
+sole signal: created === true -> CREATED; created === false (a qualifying
+non-cancelled Trip already exists) -> ALREADY_SCHEDULED. No new business
+logic was written to detect this — it is a direct pass-through of the RPC's
+own existing, unmodified idempotency contract. Verified live via a genuine
+stale-page race (see LOCAL E2E).
+
+ERROR PRESENTATION
+---------------------
+Every FAILED result is mapped through the EXISTING, unmodified
+mapRecurringArrangementError / recurringArrangementErrorMessage
+(recurring-arrangement-errors.ts) — the same narrow vocabulary
+(UNAUTHORIZED / NOT_FOUND / ILLEGAL_STATE / INVALID_INPUT / UNKNOWN) every
+other Recurring Care action already uses. No ZW code, SQLSTATE, PostgREST
+JSON, or stack trace is ever rendered. Verified live: a genuine RPC failure
+(arrangement ended mid-race) rendered as "Please check the information
+provided and try again." with the Passenger/date shown for identification,
+and a live full-page text scan confirmed no ZW-code/SQLSTATE/PGRST pattern
+anywhere in the DOM.
+
+REVALIDATION
+--------------
+On every batch resolution the action calls revalidatePath for
+/operations/recurring-care, each touched arrangement's own detail route,
+/operations, /operations/trips, /operations/tomorrow, and
+/operations/dispatch — the same Next.js revalidation convention every
+existing Recurring Care action already uses. No client state is manually
+patched to fake an update.
+
+POST-CREATION FLOW
+---------------------
+The operator stays on the review page. After a batch resolves, the client
+component calls router.refresh(); successfully resolved occurrences
+(CREATED or ALREADY_SCHEDULED) disappear from the list because they are no
+longer MISSING once the server re-fetches, while FAILED occurrences remain
+MISSING and reappear selected, ready for an immediate retry with zero extra
+code path — a direct consequence of always deriving default selection from
+the current row set rather than tracking retry state separately.
+
+DRIVER/VEHICLE BOUNDARY
+---------------------------
+The bulk action never assigns a Driver or Vehicle — it calls the same RPC
+the single-occurrence button calls, which is documented (and unchanged) to
+never touch trip_assignments. Verified live: after a bulk batch, created
+Trips appeared on /operations/dispatch in their normal unassigned state,
+same as any other newly created Trip.
+
+REQUEST BOUNDARY
+-------------------
+No TransportationRequest record is created by this workflow. Recurring
+Care -> Trip remains the existing direct provenance path, untouched.
+
+CANCELLED REPLACEMENT / SKIPPED / SCHEDULED BEHAVIOR
+--------------------------------------------------------
+All three are the RPC's and evaluator's own existing, unmodified behavior.
+SKIPPED and SCHEDULED occurrences are excluded from the review list by the
+same explicit state === "MISSING" filter (unit-tested: see APPLICATION TEST
+RESULTS). Cancelled-only-occurrence replacement semantics inside the RPC
+were read in full during the pre-coding audit and were not touched. These
+were not independently re-validated end-to-end this phase (time-bounded
+scope decision, see OPEN ISSUES) — they were already covered by this
+repository's existing Recurring Care test history from prior phases and by
+this phase's own unit tests for the flatten/exclusion logic.
+
+ARRANGEMENT EDIT / PAUSE / END RACE
+---------------------------------------
+Simulated live: an arrangement was ended via the real end_recurring_
+arrangement RPC after its review page had already loaded (stale selection
+in the browser), then the stale page's bulk submission was still sent. The
+RPC's own current-facts revalidation rejected the now-invalid occurrence
+(ZW006, mapped to the safe INVALID_INPUT message) — result: FAILED, no
+Trip created, no raw error text shown, batch still resolved cleanly for
+every other selected occurrence. This is unmodified RPC authority; the bulk
+action added no bypass and no extra validation of its own.
+
+DST AUTHORITY
+----------------
+No new timezone-conversion logic was written anywhere in this phase. The
+bulk orchestration sends only arrangementId + serviceDate; the existing
+create_trip_for_recurring_occurrence RPC (unmodified,
+_organization_local_to_utc) remains the sole source of the DST-safe
+timestamp conversion, exactly as it already is for the single-occurrence
+path.
+
+AUTHORIZATION
+----------------
+Page level: requireOperationsAccess(pathname) — the same guard used
+everywhere else under /operations. Server Action level: the action
+independently calls requireOperationsAccess again inside itself (never
+relies on the page alone) before touching FormData. Verified live: a Driver
+Membership was redirected to /driver when navigating directly to the review
+route.
+
+ORG ISOLATION
+----------------
+Verified live in three ways: (1) Org B's own review page showed only its
+own arrangement's own missing occurrences — Org A's fixture data never
+appeared. (2) organizationId is taken only from the Server Action's own
+requireOperationsAccess resolution, never a form field. (3) A malicious
+cross-org input was directly injected into Org B's submitted form (an Org A
+arrangementId paired with a real Org A service date) — the batch resolved
+with 0 created, 1 failed, and a direct database check confirmed zero Trips
+were ever created linking Org A's arrangement to Org B. The RPC's own
+existing organization-scoped authorization (has_org_role / arrangement
+organization_id match) enforced this; the bulk action added no additional
+isolation logic of its own, matching its "identifiers only" input-authority
+design.
+
+DOUBLE SUBMIT
+----------------
+Two layers were verified: (1) UI level — the submit button is disabled
+while a submission is pending (loading={pending} disabled={pending}),
+preventing a literal double-click from firing two overlapping requests.
+(2) RPC level — the stale-page race scenario above independently exercised
+the exact mechanism a double-submit would hit: two separate invocations of
+create_trip_for_recurring_occurrence for the identical occurrence resolved
+to exactly one Trip (created: true once, created: false the second time),
+with the bulk action correctly mapping the second one to ALREADY_SCHEDULED,
+never a duplicate, never FAILED.
+
+CONCURRENCY
+--------------
+Per this phase's own explicit instruction, the full concurrency battery was
+NOT rerun. The underlying RPC's own row-lock (`for update`) serialization
+was already proven safe under real concurrent load by the existing
+recurring_trip_creation_concurrency_test from a prior phase and was not
+re-executed here. This phase instead exercised the bulk action's OWN result
+mapping against that same idempotency contract via the stale-page race
+(above), which is a direct, real invocation of the RPC twice for the same
+occurrence — functionally equivalent evidence to a live two-Dispatcher race
+for the one thing this phase's own code could get wrong (the CREATED vs.
+ALREADY_SCHEDULED mapping), without repeating the underlying RPC's own
+already-proven serialization guarantee.
+
+SMALL OPERATOR
+-----------------
+Verified live: 1 missing, 3 missing (exact selection + submit label +
+mixed-state list after clear/select-all), deselect-one (count decrements by
+exactly 1), Select all / Clear all, submit disabled at zero selected.
+
+LARGE OPERATOR
+-----------------
+22 active Org A arrangements (2 hand-authored + 20 scripted, mixed
+single/multi-weekday patterns) produced 48 missing occurrences in the
+near-term horizon. The review page rendered all 48 rows in the same
+DataTable/route/component used at every other scale — no pagination, no
+separate "enterprise mode," no crash, no unusable page. This is the key
+product benefit this phase targeted, directly observed.
+
+LOCAL E2E
+------------
+Executed against the local Supabase instance (already running; fixtures
+created via .tmp-qa/s2-bulk-fixtures.sh, no supabase db reset was needed or
+used) and the local dev server (localhost:3000, already running), driven via
+headless Chrome/CDP (.tmp-qa/s2-bulk-e2e.mjs, .tmp-qa/s2-bulk-e2e-2.mjs).
+Scenarios actually executed and their results:
+
+  PASS  Entry point states exact missing count, present only when >0
+  PASS  Review route reachable, renders correctly
+  PASS  No raw UUID anywhere in the rendered review page body text
+  PASS  22 arrangements -> 48 missing rows render without degradation
+  PASS  Default selection = every row selected
+  PASS  Submit label states the true selected count
+  PASS  Deselect one -> count decrements by exactly 1
+  PASS  Clear all -> zero selected, submit disabled
+  PASS  Select all -> every row reselected
+  PASS  3-of-48 selection -> submit label "Create 3 trips"
+  PASS  Submission -> "3 rides processed / 3 trips created" summary shown
+  PASS  Review list shrinks by exactly 3 after revalidation
+  PASS  Created Trips appear on /operations/trips
+  PASS  Created Trips appear on /operations/dispatch, unassigned (no
+        automatic Driver/Vehicle assignment)
+  PASS  Stale-page race: an occurrence created out-of-band between page
+        load and submit resolves as "1 already scheduled", never a
+        duplicate Trip (DB-verified: exactly 1 Trip before and after)
+  PASS  Arrangement-end race: an arrangement ended out-of-band before
+        submit resolves as "1 failed" with a safe operator-facing
+        message, no raw ZW/SQLSTATE/PostgREST text anywhere on the page
+  PASS  Driver Membership redirected away from the review route (-> /driver)
+  PASS  Org B's review page shows only its own organization's occurrences
+  PASS  Malicious cross-org occurrenceKey injected into Org B's own form
+        submission resolves as FAILED, 0 created, and a direct database
+        check confirms no Trip was ever created linking Org A's
+        arrangement to Org B
+  PASS  1024px viewport: no horizontal overflow on the review route
+
+Not independently re-executed live this phase (see OPEN ISSUES for
+rationale): SKIPPED-occurrence exclusion at the browser level (covered by
+unit tests + unmodified RPC/evaluator behavior), cancelled-only-occurrence
+replacement at the browser level (unmodified RPC behavior, out of this
+phase's own change surface), a literal two-tab simultaneous double-submit
+(the stale-page race above exercises the identical underlying mechanism).
+
+APPLICATION TEST RESULTS
+----------------------------
+npx tsc --noEmit        : clean, 0 errors
+npm run lint             : 0 errors, 0 new warnings (all pre-existing
+                            warnings are in .tmp-qa/*.mjs scratch scripts,
+                            unrelated to this phase)
+npm run build             : succeeded; /operations/recurring-care/
+                            create-missing appears as a new dynamic route
+npm test                  : 255 / 255 passing (238 pre-existing + 17 new,
+                            all in recurring-care-bulk-core.test.mjs)
+
+One real bug was found and fixed during this phase's own regression pass:
+a "use server" file (actions.ts) briefly exported a plain constant
+alongside its async function, which Next.js correctly rejects at runtime
+("A 'use server' file can only export async functions, found object").
+Fixed by keeping the initial action-state constant local to the client
+component instead of exporting it from the server action module. Caught
+live via a Chrome screenshot during the first E2E run, not by tsc/lint/build
+(none of which flag this specific runtime constraint) — re-verified clean
+by all four checks and a fresh E2E pass afterward.
+
+FILES CREATED
+----------------
+  src/lib/operations/recurring-care-bulk-core.ts
+  src/lib/operations/recurring-care-bulk-core.test.mjs
+  src/app/operations/recurring-care/create-missing/actions.ts
+  src/app/operations/recurring-care/create-missing/page.tsx
+  src/components/operations/recurring-care/CreateMissingTripsReview.tsx
+  .tmp-qa/s2-bulk-fixtures.sh          (local fixture creation, not shipped)
+  .tmp-qa/s2-bulk-e2e.mjs              (local E2E script, not shipped)
+  .tmp-qa/s2-bulk-e2e-2.mjs            (local E2E script, not shipped)
+
+FILES MODIFIED
+------------------
+  src/app/operations/recurring-care/page.tsx — added the "Review N missing
+  rides" entry point to the existing PageHeader actions slot, computed from
+  the same already-fetched getRecurringArrangementsList result the page
+  already uses (no new query).
+
+No other file was touched. No existing Recurring Care mutation, RPC,
+evaluator, or error-mapping file was modified.
+
+SCHEMA IMPACT
+----------------
+None. No migration was written or needed. create_trip_for_recurring_
+occurrence, its idempotency contract, and its composite return type
+(trip_creation_result) are used exactly as already generated in
+database.types.ts, with defensive `data?.created` / `data?.trip_id ??
+undefined` handling matching the existing single-occurrence action's own
+pattern (every field in that generated type is nullable even though the RPC
+always populates them on its real success/no-op paths).
+
+RLS IMPACT
+-------------
+None. No policy was added, removed, or modified. Every read this phase
+performs goes through getRecurringArrangementsList, already RLS-scoped by
+organization_id exactly as before. Every write goes through the existing
+create_trip_for_recurring_occurrence RPC, already enforcing its own
+has_org_role / organization-match authorization, unchanged.
+
+OPEN ISSUES
+--------------
+1. SKIPPED-exclusion and cancelled-Trip-replacement were not independently
+   re-exercised live this phase; they are unmodified RPC/evaluator
+   behavior already covered by unit tests here and by this repository's
+   own prior-phase test history. Low risk, explicitly time-boxed out of
+   this phase's own local E2E budget rather than overlooked.
+2. Local fixture data created by .tmp-qa/s2-bulk-fixtures.sh (22 Org A
+   arrangements, 1 Org B arrangement, several resulting Trips from this
+   phase's own validation runs) remains in the local dev Supabase instance.
+   This is local-only, never committed/pushed, and does not affect
+   production or any other developer's environment.
+3. No new SQL mutation, RPC, RLS policy, or grant was needed at any point
+   during this phase — the existing create_trip_for_recurring_occurrence
+   RPC and its idempotency contract proved fully sufficient for every
+   requirement in scope. The phase's own "stop before implementing" trigger
+   was never hit.
+
+=================================================
+PASS/FAIL SUMMARY
+=================================================
+Product boundary (no automatic scheduling)      : PASS
+Entry point / review route / selection UI        : PASS
+Input authority (no trusted browser facts)        : PASS
+Server Action (existing RPC only, no duplication) : PASS
+Deduplication                                      : PASS
+Execution strategy (bounded concurrency)          : PASS
+Partial success model                              : PASS
+Already-scheduled semantics                        : PASS
+Error presentation (no raw leakage)                : PASS
+Revalidation                                        : PASS
+Post-creation flow                                  : PASS
+Driver/Vehicle boundary                             : PASS
+Request boundary                                    : PASS
+Arrangement edit/pause/end race                    : PASS
+DST authority (untouched)                          : PASS
+Authorization (page + action independent)          : PASS
+Org isolation (incl. malicious injection)          : PASS
+Double submit (UI + RPC layers)                    : PASS
+Concurrency (documented reuse of existing evidence) : PASS
+Small operator                                      : PASS
+Large operator (22 arrangements / 48 occurrences)   : PASS
+Local E2E                                            : PASS (see matrix above)
+Application regression (tsc/lint/build/test)       : PASS
+Schema impact                                        : NONE
+RLS impact                                           : NONE
+
+OVERALL: PASS
+
+NEXT: P1-PILOT-S3 — Operations Overview Resilience.
+Do NOT begin S3.
+Do NOT commit.
+Do NOT push.
+Do NOT deploy.
+STOP.
