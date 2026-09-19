@@ -1,0 +1,730 @@
+P1-PILOT-S4B — PILOT WEBSITE INTAKE PRODUCTION HARDENING, ACTIVATION +
+REQUEST HUB E2E
+================================================================================
+Date: 2026-09-19
+Scope: Harden S4A's public-intake foundation into a production-safe path for
+the first pilot organization; close the direct-RPC bypass; add durable
+anti-abuse/rate limiting; tighten CORS; build controlled integration
+provisioning; extend security tests; validate locally; commit; activate in
+production; connect the actual pilot website. See Parts 1-16 below for exact
+status against the phase brief.
+
+================================================================================
+1. SUMMARY
+================================================================================
+S4A's public-intake foundation is now hardened to the level this phase
+requires, and every LOCAL gate passes cleanly (SQL/RLS/privilege tests,
+concurrency tests, application unit tests, a full real-HTTP local E2E
+rehearsal, tsc, lint, build, and a secret/client-bundle scan). S4A + S4B are
+committed and pushed to `main` (Part 12).
+
+PRODUCTION ACTIVATION (Part 13) IS BLOCKED, NOT FAILED: this repository's
+production Vercel environment has no `SUPABASE_SERVICE_ROLE_KEY` configured,
+and this agent has no Vercel CLI or dashboard access in this environment (the
+same gap flagged, unresolved, throughout this entire multi-phase engagement).
+Every other Part-13 step is ready to execute the moment that one variable is
+set by a human with Vercel access. Because this is a "cannot yet activate,"
+not a "material security gate failed," Part 12's own release decision was NOT
+blocked by it — the code itself is safe to ship (it fails closed with no
+credential configured; nothing insecure deploys). Parts 14/15 (actual pilot
+website connection, production E2E) are consequently also not yet executed —
+correctly, per the phase's own sequencing.
+
+The actual pilot website WAS identified and inspected (Part 7), and a
+material, useful finding came out of that inspection: `Zenward-Web` already
+has its own fully-specified, previously-written contract document for
+exactly this integration
+(`docs/architecture/nemryn-trusted-request-intake-contract.md`), and it does
+**not** match what S4A/S4B actually built. Section 9 below documents the
+mismatch and the recommended reconciliation (adapt Zenward-Web's own adapter
+— its own docs call this "the swappable seam" — rather than rebuild Nemryn's
+already-hardened, already-proven endpoint). No Zenward-Web file was edited;
+this phase only read it, per Part 7's own "inspect before editing" and Part
+14's "only after production Nemryn-side validation passes."
+
+================================================================================
+2. PART 1 — CLOSING THE DIRECT-RPC ABUSE BYPASS
+================================================================================
+S4A granted `submit_public_transportation_request` EXECUTE to `anon` and
+`authenticated` directly (callable via raw PostgREST, bypassing every
+anti-abuse control this phase adds at the HTTP layer). Closed as follows:
+
+- `supabase/migrations/20260919120000_public_intake_ingress_hardening.sql`,
+  Section A: `revoke all ... from public, anon, authenticated; grant execute
+  ... to service_role;` on the RPC.
+- New privileged client: `src/lib/supabase/service-role-server.ts` — the ONE
+  privileged Supabase client in this codebase. `import "server-only"` at the
+  top (build-time guard against accidental client-bundle inclusion). Reads
+  `process.env.SUPABASE_SERVICE_ROLE_KEY` directly (not via the shared
+  `src/lib/supabase/env.ts`, deliberately — `env.ts` is imported by the
+  client-side `client.ts` and must stay free of anything privileged).
+  Exactly two legitimate callers: `website-intake.ts` (submission) and
+  `rate-limit.ts` / `cors.ts` (the two other server-only helpers this route
+  uses). No generic "admin database" helper exists or was introduced.
+- The RPC's own internal authority — integration/organization resolution,
+  field bounds, allowed state (`pending`), allowed provenance (`web`),
+  idempotency, no-auto-Passenger, no-auto-Trip, cross-tenant integrity — is
+  completely UNCHANGED. This migration changes only WHO may invoke the
+  function, never WHAT it is allowed to do. Verified by re-running S4A's own
+  full test suite unmodified in substance (only the `set local role` lines
+  needed updating from `anon` to `service_role` to keep calling the RPC
+  through its own now-correct path — see Part 8).
+
+Proof (SQL): TEST S4B-1 / S4B-2 (anon / authenticated get
+`insufficient_privilege` calling the RPC directly), TEST S4B-3 and TEST 20
+(exact privilege shape: `service_role=true, anon=false, authenticated=false,
+public=false`), `function_privilege_tests.sql` (anon holds EXECUTE on
+nothing in the public schema except the one pre-existing, unrelated
+`get_driver_invite_preview` exception — `submit_public_transportation_request`
+is no longer listed as an exception at all, because it no longer needs to
+be).
+Proof (HTTP, real route): local E2E B / B2 — a raw fetch to
+`${SUPABASE_URL}/rest/v1/rpc/submit_public_transportation_request` with the
+anon key returns a non-2xx status and creates zero rows.
+
+================================================================================
+3. PART 2 — DURABLE, ATOMIC RATE LIMITING
+================================================================================
+New table `public_intake_rate_limit_events` (append-only; one row per
+allowed attempt) + `check_and_record_public_intake_rate_limit(text, text)`,
+`security definer`, service_role-only. Atomicity is via two transaction-scoped
+`pg_advisory_xact_lock`s (one keyed on the integration, one on the client) —
+never an in-memory Map, never a process-local counter, never browser-only
+throttling, never a disabled-button-as-sole-control. Locks are released
+automatically on commit/rollback; no manual cleanup needed.
+
+Thresholds (hard-coded, reviewable, documented in the migration's own
+comment — not env-configured, not a multi-window scheme, both deliberate
+pilot-scale simplifications):
+  - PER-CLIENT: 8 attempts / rolling hour
+  - PER-INTEGRATION: 120 attempts / rolling hour
+Counts every attempt that passes the check, including ones that later fail
+validation — deliberate (a flood of garbage is rate-limited exactly like a
+flood of valid submissions).
+
+Client identity: `src/lib/public-intake/rate-limit-core.ts` resolves the
+caller's IP from trusted Vercel request-metadata headers only
+(`x-forwarded-for` first entry, then `x-real-ip`, then the literal string
+`"unknown"` — never null, never skips the check), then hashes it with
+SHA-256 + a documented non-secret salt (`node:crypto`, one-way) BEFORE it
+ever reaches Postgres. The raw IP is never stored, logged, or transmitted to
+the database in any form.
+
+Throttled responses stay inside the existing generic-error philosophy: HTTP
+429, but the JSON body is the SAME generic `{ok:false,
+error:"invalid_request", ...}` shape used for every other rejection — no
+counter, threshold, or rate-limit-specific wording is ever exposed.
+
+Proof (SQL): `public_intake_rate_limit_tests.sql` — 8/8, incl. per-client
+threshold (12 attempts → exactly 8 allowed), per-integration threshold (125
+distinct clients → exactly 120 allowed), integration-limiter isolation (one
+integration's attempts never touch another's counter), anon/authenticated
+denied direct RPC access, and the underlying table closed to anon/
+authenticated SELECT.
+Proof (concurrency): `public_intake_rate_limit_concurrency_test.sh` — 15
+genuinely concurrent OS processes race the SAME client key against the
+8/hour threshold; result is EXACTLY 8 allowed / 7 denied / 8 durably
+recorded rows, proving the advisory lock closes the classic
+count-then-insert read-before-write race a naive `SELECT count(*) ... IF ...
+THEN INSERT` pair would be vulnerable to.
+Proof (HTTP, real route): local E2E K/K2 — a burst of 12 real POSTs from one
+spoofed `X-Forwarded-For` client allows exactly 8, then 429s.
+
+================================================================================
+4. PART 3 — CORS / ORIGIN
+================================================================================
+S4A's wildcard `Access-Control-Allow-Origin: *` is replaced with an explicit
+allow-list: `src/lib/public-intake/cors.ts`'s `resolveAllowedCorsOrigin`
+queries the UNION of every currently-ACTIVE integration's own
+`allowed_origins` array (the OPTIONS preflight carries no JSON body to
+identify one specific integration ahead of time, so a per-request union is
+the smallest workable design at pilot scale) and returns the caller's exact
+Origin only if it is a member — never a reflected arbitrary origin, never a
+wildcard. `Vary: Origin` is set on every response (POST and OPTIONS alike),
+including error responses. When there is no match, no
+`Access-Control-Allow-Origin` header is set at all (verified: browsers block
+the response client-side).
+
+This required its own privilege grant: `service_role` needed to SELECT from
+`request_intake_integrations` for this query, and — the SAME class of bug as
+Part 1's own original EXECUTE gap — `service_role`'s BYPASSRLS attribute did
+NOT imply that grant. This was caught during local E2E validation (P2 failed
+with a missing header; root-caused to `permission denied for table
+request_intake_integrations` via a direct `SET ROLE service_role; SELECT
+...` probe) and fixed with Section A2 of the same migration: `grant select
+on public.request_intake_integrations to service_role;` — SELECT only, no
+write grant (provisioning remains exclusively a direct-SQL, `postgres`-role
+operation). A permanent regression test (`TEST BONUS-A3
+service-role-select-only-on-integrations-table`) now asserts this exact
+grant shape so this class of bug cannot silently regress again.
+
+Origin remains, exactly as required, a SECONDARY, browser-only courtesy
+control. The RPC's own independent `p_origin` check (S4A, unchanged) is the
+actual authoritative tenant/origin boundary and stays safe even if a caller
+forges or omits the Origin header entirely — proven by TEST BONUS-B1 (wrong
+Origin rejected), BONUS-B2 (correct Origin accepted), and the newly-added
+BONUS-B3 (missing Origin header against an origin-locked integration is also
+rejected — fail CLOSED, not fail open, once an integration has any
+`allowed_origins` configured; this test was referenced by the section's own
+pre-existing comment but had never actually been written until this phase).
+
+Proof (HTTP, real route): local E2E O/O2 (wrong Origin → 400, no ACAO
+header), P/P2 (correct Origin → 200, exact ACAO echo, never wildcard), and
+newly-added U/U2/U3 (safe OPTIONS preflight: 204, empty body, same
+allow-list resolution, `Vary: Origin` present alongside Next.js's own
+internal RSC vary tokens).
+
+================================================================================
+5. PART 4 — INTEGRATION PROVISIONING
+================================================================================
+S4A's no-UI decision is kept. Provisioning mechanism:
+`.tmp-qa/s4b-provision-integration.sh` (local-only, never staged/committed,
+per this session's established "never ship `.tmp-qa/`" convention) —
+`create` / `inspect` / `activate` / `disable` actions, `TARGET=local|prod`
+switch (`docker exec psql` locally, `supabase db query --linked` for
+production — the same safe, credential-free Management-API path used
+throughout this engagement). No new RPC, no new UI, no new
+authenticated-reachable surface. Smoke-tested through a full
+create→inspect→activate→disable cycle locally; the smoke-test row was then
+deleted.
+
+Every integration row carries: `organization_id` (FK), `integration_type`
+('website', CHECK-constrained), `external_id` (opaque, UNIQUE), `is_active`
+(boolean, defaults `false`), `allowed_origins` (text[], nullable = no origin
+restriction), `created_at`. New integrations begin **disabled**; activation
+is a deliberate, separate step (`is_active = true` set explicitly, never as
+a side effect of creation). Internal organization UUIDs are never exposed to
+a tenant website — the website only ever holds the opaque `external_id`.
+
+Kill switch: setting `request_intake_integrations.is_active = false` for a
+given row immediately and completely stops that integration's HTTP path
+from succeeding (every submission attempt for a disabled integration gets
+the same generic ZW006 rejection as a nonexistent one — no existence
+oracle), with zero effect on previously-received Requests. Proven directly
+(TEST 9 `disabled-integration`, local E2E M) and by the provisioning
+script's own `disable` action.
+
+================================================================================
+6. PART 5 — PUBLIC CONTRACT
+================================================================================
+S4A's payload contract is preserved unchanged: `integrationExternalId`,
+`idempotencyKey`, `requesterName`, `requesterRelationship`,
+`requesterPhone`, `requesterEmail?`, `passengerName?`, `pickupDescription`,
+`destinationDescription`, `preferredDate?`, `preferredTime?`,
+`returnTripNeeded`, `assistanceNotes?`, `additionalNotes?` — a closed
+`ALLOWED_KEYS` set (`website-intake-core.ts`); an unrecognized top-level key
+(including any attempt to smuggle `organizationId`, `passengerId`, `state`,
+`source`, `driverId`, `vehicleId`, or `tripId`) is rejected outright, never
+silently dropped (unit tests + TEST 13 `no-protected-field-override` +
+local E2E R). No PHI/insurance/diagnosis/Medicaid/mobility/medical-condition
+field exists or was added. The idempotency key is browser-supplied and must
+be a fresh cryptographically strong value per NEW submission, reused only on
+a genuine retry of the SAME submission — enforced server-side by the
+partial unique index + `ON CONFLICT DO NOTHING` (S4A, unchanged), proven
+safe under real concurrency (Part 8).
+
+================================================================================
+7. PART 6 — REQUEST HUB
+================================================================================
+Not redesigned. The existing lifecycle is untouched: website submission →
+Request in `pending` / "awaiting review" → operator review → operator links
+an existing Passenger → operator clicks Create Trip → existing Trip
+lifecycle takes over. No code path anywhere in S4A or S4B auto-creates a
+Trip, auto-creates or auto-merges a Passenger, or auto-assigns a Driver/
+Vehicle. The existing "Website" provenance badge
+(`RequestDetailsPanel.tsx`, `requestProvenanceLabel`) is unchanged from
+S4A. Proven end-to-end by local E2E D through I (correct tenant receipt →
+badge → operator review → Passenger link → manual Trip creation → zero
+Trips exist at the Request's own creation instant) and SQL TEST 14-15
+`no-side-effect-writes`.
+
+================================================================================
+8. PART 7 — PILOT WEBSITE CONNECTION (IDENTIFICATION + INSPECTION ONLY)
+================================================================================
+Three sibling repositories exist under `/Users/datamatics/`:
+`Nemryn-Landing`, `Nemryn-Web` (the Nemryn PLATFORM's own marketing site —
+not the pilot tenant), and `Zenward-Web` ("The public marketing and
+acquisition website for Zenward Mobility... built to generate
+transportation requests"). `Zenward-Web` is unambiguously the pilot
+website: its own README names Zenward Mobility explicitly, and it already
+has a working `/request-transportation` page and form.
+
+Per the phase's own explicit instruction, this phase INSPECTED
+`Zenward-Web` (read-only — no file in that repository was modified) and did
+NOT edit it, because Part 14 requires production-side Nemryn validation to
+pass FIRST, and that validation is currently blocked (Part 13). What was
+found:
+
+- `Zenward-Web`'s public form (`/request-transportation`) already submits
+  through a Server Action → a swappable "adapter" seam
+  (`src/lib/request-intake/adapter.ts`) exactly as Part 7 hoped ("prefer
+  connecting the tenant's EXISTING Request Transportation experience").
+  Today it runs in `stub` mode: it validates and normalizes the submission,
+  but persists nothing and delivers nothing anywhere — by design, until a
+  real endpoint exists.
+- `Zenward-Web` ALSO already contains its own fully-written specification
+  for exactly this integration:
+  `docs/architecture/nemryn-trusted-request-intake-contract.md` — written
+  in advance of Nemryn's endpoint existing, describing the contract
+  Zenward-Web's own (already-implemented, mock-tested) `platform` adapter
+  mode expects to call.
+- That pre-written spec does **not** match what S4A/S4B actually built. See
+  Section 9 for the exact mismatch and the recommended reconciliation. This
+  is flagged as a material finding of this phase, not a blocker to
+  anything in Parts 1-12 (which are entirely Nemryn-side and unaffected by
+  it) — it is a Part 14 concern.
+
+No other repository was invented, guessed at, or touched.
+
+================================================================================
+9. ZENWARD-WEB CONTRACT MISMATCH (FINDING) + RECOMMENDED RECONCILIATION
+================================================================================
+Zenward-Web's pre-written spec expects:
+  - Bearer-token auth: `Authorization: Bearer <PLATFORM_INTAKE_TOKEN>`
+    (a single shared secret selecting the tenant).
+  - A versioned envelope: `{schemaVersion, submissionId, submittedAt,
+    source, request: {...12 fields...}}`, with `submissionId` doubling as
+    an `Idempotency-Key` HTTP header.
+  - A success body `{ "accepted": true, "referenceId": "ZW-7F3K9Q" }` on
+    `200`/`201`, and a `409`-with-`referenceId` form of idempotent replay.
+
+What S4A/S4B actually built:
+  - No bearer token at all — tenant resolution is via the opaque, per-
+    integration `integrationExternalId` sent INSIDE the flat JSON body
+    (not a header, not a secret — deliberately, per this phase's own Part
+    4 design: "each integration needs... opaque external ID").
+  - A flat JSON body (no envelope wrapper, no `schemaVersion`, no
+    `Idempotency-Key` header — `idempotencyKey` is a body field).
+  - A minimal response: `{ok:true}` / `{ok:false, error, message}` — no
+    `referenceId` of any kind (deliberate: this phase's own "no existence
+    oracle" / generic-error philosophy, ZW006 collapsing every distinct
+    failure into one code).
+
+Recommendation (not yet implemented — Part 14 scope, gated on Part 13):
+adapt Zenward-Web's OWN adapter to Nemryn's actual, already-hardened
+contract, rather than rebuilding Nemryn's endpoint to match a speculative
+pre-written contract. Reasons: (1) Nemryn's endpoint is fully proven — 26
+SQL tests, 2 independent concurrency proofs, a full 33-file regression, and
+a 28-check real-HTTP local E2E rehearsal all pass against the contract as
+built; reopening it now to add bearer-token auth and a `referenceId`
+generator would touch security-critical, already-verified surface for zero
+net security benefit. (2) Zenward-Web's own architecture doc explicitly
+calls its adapter "the swappable seam" and states "No page, form component,
+or Server Action needs to change" when the destination changes — this is
+precisely the situation that seam was designed for. (3) Part 5 of this
+phase's own brief says to preserve S4A's contract "unless proven necessary
+to change," and nothing here proves it necessary.
+
+Concretely, when Part 14 is reached: `PlatformRequestIntakeAdapter` would
+need to (a) send Zenward-Web's own validated 12-field submission as
+Nemryn's flat body shape, with `integrationExternalId` set to the
+Zenward-Web pilot integration's own opaque external id (provisioned via
+`.tmp-qa/s4b-provision-integration.sh`, NOT a bearer secret) and
+`idempotencyKey` set to Zenward-Web's own already-generated `submissionId`
+(no change needed there — it is already a stable-across-retries UUID,
+exactly matching Nemryn's own idempotency-key requirement); (b) treat
+Nemryn's `{ok:true}` as `delivered:true` and, since Nemryn deliberately
+returns no `referenceId`, either mint a Zenward-Web-local display reference
+the way `StubRequestIntakeAdapter` already does (`ZW-<base36 timestamp>`,
+already implemented) or accept that Zenward-Web's copy says "Request
+received" without a quotable reference number; (c) point `PLATFORM_INTAKE_URL`
+at `https://app.nemryn.com/api/public-intake/website` and drop
+`PLATFORM_INTAKE_TOKEN` entirely (Part 5's own contract still forbids any
+privileged/shared secret reaching Zenward-Web). This is intentionally a
+small, additive change confined to `adapter.ts` — no page, form, or Server
+Action in Zenward-Web needs to change, exactly as that repository's own
+docs anticipated.
+
+================================================================================
+10. PART 8 — SECURITY / RLS / PRIVILEGE TESTS (27-ITEM CHECKLIST)
+================================================================================
+Checklist item → proof (all on `supabase/tests/public_request_intake_tests.sql`
+unless noted):
+ 1. anon/authenticated cannot EXECUTE the RPC directly       → S4B-1, S4B-2
+ 2. PUBLIC cannot EXECUTE the RPC                             → S4B-3, TEST 20
+ 3. server-only authorized execution works                    → TEST 5 (and
+                                                                  every other
+                                                                  service_role
+                                                                  call)
+ 4. anon cannot INSERT/SELECT/UPDATE/DELETE
+    transportation_requests directly                          → TEST 1-4
+ 5. organization internally resolved (never client-supplied)  → TEST 5, 8
+ 6. org spoofing via any input is impossible                  → TEST 6-7, 7b
+ 7. Org A's integration cannot create an Org B Request         → TEST 8
+    (integration-scoped-to-own-org)
+ 8. disabled/nonexistent integration cannot submit             → TEST 9, 10
+ 9. replay/idempotency correct                                 → TEST 11
+10. concurrent identical submission → exactly one Request       → public_
+    request_intake_concurrency_test.sh
+11. rate limit enforced                                        → public_
+    intake_rate_limit_tests.sql
+12. rate limit concurrency-safe                                 → public_
+    intake_rate_limit_concurrency_test.sh
+13. one integration cannot consume/alter another's limiter
+    state                                                      → rate_limit_
+    tests.sql (integration-isolation assertion)
+14. public caller cannot bypass HTTP anti-abuse via direct RPC → S4B-1/S4B-2
+    (also local E2E B/B2)
+15. no auto Trip/Passenger/Driver/Vehicle/Membership            → TEST 14-15
+16. existing manual Request flow still functional               → TEST 16
+17. Org A/B isolation                                           → TEST 17, 18
+18. function privilege allowlists correct                       → function_
+    privilege_tests.sql
+19. security-definer exposure correct                           → security_
+    definer_exposure_tests.sql
+
+Plus, added specifically this phase beyond the checklist's own minimum:
+BONUS-A3 (service_role holds EXACTLY SELECT, never write, on
+`request_intake_integrations` — the regression guard for the CORS grant
+bug found and fixed this phase) and BONUS-B3 (an origin-locked integration
+with NO Origin header fails closed — a test the file's own pre-existing
+comment had claimed existed but had not actually been written until now).
+
+No invariant was weakened anywhere to make a test pass. The one test-file
+edit that removed something (`function_privilege_tests.sql`'s S4A-era
+allowlist entry for `submit_public_transportation_request`) made the
+assertion STRICTER, not weaker: anon now must hold zero EXECUTE on that
+function, not "EXECUTE except through this allowlisted exception."
+
+Final counts, all confirmed on a single fresh `supabase db reset` (never
+accumulated across repeated runs against a stale database):
+  - `function_privilege_tests.sql`:            7/7 pass, 0 fail
+  - `public_request_intake_tests.sql`:         26/26 pass, 0 fail
+  - `public_intake_rate_limit_tests.sql`:       8/8 pass, 0 fail
+  - `public_request_intake_concurrency_test.sh`:      PASS
+  - `public_intake_rate_limit_concurrency_test.sh`:   PASS
+A full 33-file, 581-assertion SQL/RLS/privilege regression battery
+(supabase/tests/*.sql, one fresh reset per file) was also run once in full
+earlier in this phase: 0 fail, 0 fatal errors across all 33 files. It was
+NOT re-run in full a second time after the small, narrow CORS-grant
+addition (Section A2) — per this engagement's own established discipline
+against blindly re-running the entire battery — because that addition
+touches only a single, additive SELECT grant on one table that no other
+test file references or depends on; the two directly-relevant files were
+instead re-run individually against a fresh reset and confirmed clean
+(above).
+
+================================================================================
+11. PART 9 — APPLICATION TESTS
+================================================================================
+Pure-core unit tests: `src/lib/public-intake/rate-limit-core.test.mjs` (11
+tests: hashing determinism/distinctness/one-wayness/fixed-length-hex,
+"unknown"-bucket handling, x-forwarded-for parsing incl. whitespace/
+fallback/empty-value cases) and the pre-existing S4A
+`website-intake-core.test.mjs`. 317/317 total unit tests pass (`node --test
+src/**/*.test.mjs`).
+
+Given S4B materially changes ingress/security (server-only RPC boundary,
+durable rate limiting, real CORS resolution), route-level tests against the
+REAL Route Handler were judged valuable this phase, rather than skipped as
+S4A's own local-E2E-sufficed judgment call. Rather than introduce a
+separate mocked-route test harness (a real risk of brittle test theater,
+given how much of this route's behavior depends on real Postgres state),
+the existing real-HTTP local E2E script
+(`.tmp-qa/s4b-local-e2e.mjs`, hits the actual running Next.js dev server
+and actual local Postgres) was extended with three new real-route checks
+that were previously gaps: U (safe OPTIONS preflight: 204, empty body,
+correct CORS resolution), V (malformed JSON body → generic 400, no parser
+error text leaked), and W (oversized payload, 20KB against the route's own
+8KB `MAX_BODY_BYTES` guard, rejected before `JSON.parse` ever runs, generic
+400). Combined with the pre-existing C/D (valid submission), M/N (disabled/
+invalid integration), O/P (Origin enforcement), J/J2 (retry/idempotency),
+E (Website provenance), and T (no internal-error/secret leakage across
+every captured response body), this now covers every item in Part 9's own
+checklist against the real Route Handler, not a mock.
+
+================================================================================
+12. PART 10 — SECRET / CLIENT-BUNDLE VERIFICATION
+================================================================================
+Searched (after a fresh production build): `.next/static/` (the actual
+browser-shipped output), the full `.next/` directory, `public/`, and the
+complete `git diff` of every tracked/staged change — for the literal
+service-role key value, the `SUPABASE_SERVICE_ROLE_KEY` env var name, the
+`service-role-server` module path/name, `createServiceRoleSupabaseClient`,
+and broader secret-shape patterns (`eyJhbGci` JWT prefix, `postgres://`,
+"password", "private key", hardcoded bearer/authorization headers).
+
+RESULT: PASS. Zero matches anywhere in `.next/static/` or the rest of the
+client-reachable build output. The only match anywhere in the tracked diff
+is the expected, safe one: `.env.example`'s names-only, empty-value
+`SUPABASE_SERVICE_ROLE_KEY=` line with its own explanatory comment (never a
+real value). `.env.local` (holding the real local-dev value) is confirmed
+gitignored (`git check-ignore -v .env.local` → `.gitignore:39`) and was not
+staged. `src/lib/supabase/service-role-server.ts` is the only module that
+reads the real env var, is `server-only`-guarded, and is never imported
+(directly or transitively) by any client component.
+
+================================================================================
+13. PART 11 — LOCAL VALIDATION
+================================================================================
+  tsc --noEmit:                  PASS (clean)
+  eslint .:                      PASS (0 errors; 56 pre-existing warnings,
+                                  all confined to unshipped `.tmp-qa/`
+                                  scratch scripts, none in shipped code)
+  node --test (unit):            317/317 PASS
+  next build (production):       PASS (`/api/public-intake/website`
+                                  compiles as a dynamic route)
+  Full SQL/RLS regression:       33/33 files, 581/581 assertions, 0 fail,
+                                  0 fatal (run once this phase; see Part 8)
+  Intake concurrency test:       PASS (exactly 1 Request from 2 genuinely
+                                  concurrent identical submissions)
+  Rate-limit concurrency test:   PASS (exactly 8 allowed / 7 denied from 15
+                                  genuinely concurrent processes racing one
+                                  client key)
+  Local E2E (real HTTP route,
+  real local Postgres, real
+  browser via CDP):              28/28 checks PASS (A-T, U/U2/U3, V, W, and
+                                  every lettered sub-check) — see Part 14
+                                  below for the exact scenario list.
+  Secret/bundle scan:            PASS (Part 10)
+
+================================================================================
+14. PART 11 (CONT'D) — LOCAL SCENARIO-BY-SCENARIO RESULTS
+================================================================================
+ A  Staff-created Request still works unchanged                    PASS
+ B  Direct anon RPC call denied (raw PostgREST, not 2xx)            PASS
+ B2 Direct RPC bypass attempt created zero rows                     PASS
+ C  Real HTTP route valid submission succeeds (200 {ok:true})       PASS
+ D  Correct tenant (Org A) receives the Request                     PASS
+ E  Website provenance badge appears                                PASS
+ F  Operator can review the website Request                         PASS
+ G  Operator links an existing Passenger via the existing workflow  PASS
+ H  Operator creates a Trip via the existing manual workflow        PASS
+ I  Website submission itself created zero Trips                    PASS
+ J  Replay with same idempotency key succeeds, no duplicate         PASS
+ K  Rate threshold (429) triggers within a 12-request burst          PASS
+ K2 ~8/hour per-client threshold allowed before throttling           PASS
+ M  Disabled integration rejected generically                       PASS
+ N  Invalid/nonexistent integration rejected generically             PASS
+ O  Wrong Origin rejected for an origin-locked integration           PASS
+ O2 Wrong-Origin response carries no ACAO header                     PASS
+ P  Correct Origin succeeds for an origin-locked integration         PASS
+ P2 Correct-Origin response echoes the exact origin, never wildcard  PASS
+ U  Safe OPTIONS preflight: 204, empty body                          PASS
+ U2 Preflight echoes the exact matching allow-listed origin          PASS
+ U3 Preflight always carries a Vary: Origin token                    PASS
+ V  Malformed JSON body → generic 400, no parser text leaked          PASS
+ W  Oversized (20KB) payload → generic 400, rejected pre-parse        PASS
+ Q  Org B never sees Org A's website Request                         PASS
+ R  organizationId injection rejected outright (unexpected property) PASS
+ S  Driver still denied from /operations                             PASS
+ T  No raw internal error text or secret material in any response    PASS
+TOTAL: 0 failures.
+
+================================================================================
+15. PART 12 — RELEASE DECISION
+================================================================================
+All local/security gates PASS. Decision: COMMIT AND PUSH.
+
+Staged EXCLUSIVELY the S4A + S4B product/test/report files (never `git add
+.`); the pre-existing backlog of several earlier phases' own uncommitted
+report files (S1 through the pre-S4B S4 gate, all left uncommitted by
+sessions prior to this one) was deliberately left untouched — out of this
+phase's own scope, not something to sweep in.
+
+Files staged (modified):
+  .env.example
+  src/app/operations/requests/[requestId]/page.tsx
+  src/components/operations/requests/RequestDetailsPanel.tsx
+  src/lib/operations/request-detail.ts
+  src/lib/supabase/database.types.ts
+  supabase/tests/function_privilege_tests.sql
+
+Files staged (new):
+  docs/reports/p1-pilot-s4a-tenant-website-intake-foundation.txt
+  docs/reports/p1-pilot-s4b-pilot-website-intake-production-activation.txt
+  src/app/api/public-intake/website/route.ts
+  src/lib/public-intake/cors.ts
+  src/lib/public-intake/rate-limit-core.test.mjs
+  src/lib/public-intake/rate-limit-core.ts
+  src/lib/public-intake/rate-limit.ts
+  src/lib/public-intake/website-intake-core.test.mjs
+  src/lib/public-intake/website-intake-core.ts
+  src/lib/public-intake/website-intake.ts
+  src/lib/supabase/service-role-server.ts
+  supabase/migrations/20260919090000_public_request_intake_foundation.sql
+  supabase/migrations/20260919120000_public_intake_ingress_hardening.sql
+  supabase/tests/public_intake_rate_limit_concurrency_test.sh
+  supabase/tests/public_intake_rate_limit_tests.sql
+  supabase/tests/public_request_intake_concurrency_test.sh
+  supabase/tests/public_request_intake_tests.sql
+
+The staged diff was secret-scanned (Part 10) before committing: clean.
+Commit created on `main`; pushed with an ordinary (non-force) push.
+Pre-S4A/S4B production SHA: 33fee7221877ab80aab512e89447049cf70a1494
+(the S3/S3R "Harden Operations overview resilience" commit — the last
+commit deployed to production per the S4 report).
+S4A+S4B commit SHA: see the commit this report ships with (printed in the
+final chat response alongside this report).
+
+PRODUCTION DEPLOYMENT: not yet confirmed by this agent — see Part 13.
+Pushing to `main` will trigger Vercel's own auto-deploy (per this repo's
+established GitHub integration), but confirming the resulting deployment
+actually went live and serves the new SHA requires either Vercel CLI/
+dashboard access (unavailable to this agent, as throughout this entire
+engagement) or the user's own confirmation.
+
+================================================================================
+16. PART 13 — PRODUCTION ACTIVATION: BLOCKED
+================================================================================
+BLOCKER (genuine, not fabricated, not worked around): production's own
+`SUPABASE_SERVICE_ROLE_KEY` environment variable is not set in this
+project's Vercel Production environment, and this agent has no Vercel CLI
+or dashboard access in this environment to set it. This exact gap was
+flagged, unresolved, at multiple earlier points in this same multi-phase
+engagement (S4's own report). Every S4B server-only code path that needs a
+privileged Supabase client (`submitWebsiteTransportationRequest`,
+`checkAndRecordPublicIntakeRateLimit`, `resolveAllowedCorsOrigin`) throws
+cleanly with no credential configured — the public route will correctly
+502/fail rather than silently misbehave, but it cannot successfully accept
+a real submission in production until a human with Vercel access sets this
+one variable.
+
+This is deliberately NOT treated as a "material security gate failed —
+do not commit/push/deploy" situation: nothing insecure ships as a result
+(the code fails closed), and Parts 1-12 are fully complete and verified
+independent of production credential configuration. It is a "cannot yet
+activate" blocker specific to Part 13 only.
+
+REQUIRED FROM THE USER before Part 13 can proceed:
+  1. In Vercel's Production environment variables for this project, set
+     `SUPABASE_SERVICE_ROLE_KEY` to the REAL production Supabase project's
+     service-role key (Supabase dashboard → Project Settings → API →
+     `service_role` secret — NOT the local/demo key used in this
+     repository's own `.env.local`, which is Supabase's own
+     publicly-documented, non-secret local-dev value and must never be used
+     in production).
+  2. Redeploy (or trigger a new deployment) so the new environment variable
+     takes effect.
+  3. Confirm to this agent (or a future session) that the variable is set,
+     so Part 13's remaining steps (provision one DISABLED pilot
+     integration, verify disabled submission fails in production, configure
+     the real allowed origin, activate deliberately, submit one
+     clearly-labeled SYNTHETIC website Request through the real production
+     HTTP endpoint, confirm receipt/provenance/no-Trip, review + link +
+     create Trip via the real operator UI, confirm cross-tenant isolation
+     and replay safety in production, confirm rate limiting safely rejects
+     abuse-test traffic without excessive production load) can execute.
+
+Parts 14 (actual Zenward-Web connection) and 15 (production E2E) are
+consequently also not yet executed, correctly, per the phase's own
+sequencing ("only after production Nemryn-side validation passes").
+
+================================================================================
+17. PART 16 — ROLLBACK
+================================================================================
+Pre-S4A/S4B production SHA: 33fee7221877ab80aab512e89447049cf70a1494
+S4A+S4B release SHA: this phase's own commit (see chat response)
+
+Migrations introduced this phase (both additive; no destructive schema
+change to any pre-existing table other than two new nullable columns +
+FK on `transportation_requests`, added by S4A):
+  - 20260919090000_public_request_intake_foundation.sql (S4A)
+  - 20260919120000_public_intake_ingress_hardening.sql (S4B)
+Migration rollback is NOT required for an application-code-only rollback:
+both migrations are purely additive (new tables, new nullable columns, new
+functions, grant/revoke changes) and do not need to be reverted merely to
+roll the Next.js application back to its pre-S4A/S4B behavior — the new
+route/tables would simply become unused. A migration rollback would only be
+needed if a future operator wants the OLD (S4A) permissive grants back,
+which is NOT recommended (that reopens the direct-RPC bypass this phase
+closed).
+
+EMERGENCY KILL SWITCH (immediate, does not require a deploy or a
+migration): set `request_intake_integrations.is_active = false` for the
+affected integration's row directly in the production database (via
+`.tmp-qa/s4b-provision-integration.sh disable` with `TARGET=prod`, or any
+equivalent direct-SQL operation). Takes effect immediately for every new
+HTTP request; previously-received Requests are never deleted or altered by
+disabling an integration.
+
+DISCONNECTING A TENANT WEBSITE without deleting historical Requests: set
+that integration's `is_active = false` (or delete only the integration row
+itself, which is safe — `transportation_requests.intake_integration_id` is
+nullable and the FK has no cascade-delete; existing Requests keep their
+`external_submission_ref` and provenance data regardless). Never delete
+rows from `transportation_requests` itself to "disconnect" a website.
+
+ROLLING APPLICATION CODE BACK: a standard `git revert` of the S4A+S4B
+commit (or a Vercel rollback to the prior deployment) is safe — the
+underlying migrations do not need to be reverted alongside it (see above).
+If rolled back, `submit_public_transportation_request` and
+`check_and_record_public_intake_rate_limit` simply become unreachable via
+the old application code paths (S4A's route no longer exists after
+rollback either), while the RPC itself remains locked to `service_role`-
+only, which is strictly safer than the pre-S4A state, not a regression.
+
+================================================================================
+18. STRUCTURED GATE SUMMARY
+================================================================================
+WORKTREE:                                   CLEAN (only S4A+S4B files staged)
+S4A FOUNDATION:                              PASS (present, reviewed, reused)
+DIRECT ANON/AUTHENTICATED RPC EXECUTION:     PASS (denied — S4B-1/S4B-2/S4B-3)
+SERVER-ONLY INTAKE BOUNDARY:                 PASS (service-role-server.ts,
+                                              server-only guarded, 2 callers)
+SERVICE CREDENTIAL CLIENT EXPOSURE:          PASS (zero matches in .next/
+                                              static/, public/, or diff)
+DURABLE RATE LIMIT:                          PASS (Postgres advisory-lock
+                                              based, 8/client + 120/
+                                              integration per hour)
+RATE LIMIT CONCURRENCY:                      PASS (15-process test, exactly
+                                              threshold, no overrun)
+CORS/ORIGIN:                                 PASS (exact allow-listed origin
+                                              only, Vary: Origin always set,
+                                              no wildcard/reflection)
+PILOT INTEGRATION PROVISIONING:              PASS (local-only trusted-
+                                              operator script, no public
+                                              surface)
+DISABLED BY DEFAULT:                         PASS (is_active defaults false)
+KILL SWITCH:                                 PASS (is_active=false, verified)
+IDEMPOTENCY:                                 PASS (partial unique index +
+                                              ON CONFLICT DO NOTHING, proven
+                                              under real concurrency)
+PUBLIC TENANT SPOOF:                         PASS (no org/tenant field
+                                              accepted from the client, ever)
+ANON DIRECT REQUEST INSERT:                  PASS (denied, TEST 1-4)
+NO AUTO TRIP:                                PASS (TEST 14-15, local E2E I)
+NO AUTO PASSENGER:                           PASS (TEST 14-15)
+REQUEST HUB RECEIPT:                         PASS (local E2E C/D/E/F)
+WEBSITE PROVENANCE:                          PASS (local E2E E)
+CROSS-TENANT ISOLATION:                      PASS (TEST 17-18, local E2E Q)
+EXISTING MANUAL REQUEST FLOW:                PASS (TEST 16, local E2E A)
+TSC:                                         PASS
+LINT:                                        PASS (0 errors)
+UNIT:                                        PASS (317/317)
+FULL SQL:                                    PASS (33/33 files, 581/581,
+                                              0 fail, 0 fatal)
+CONCURRENCY:                                 PASS (both scripts)
+BUILD:                                       PASS
+SECRET SCAN:                                 PASS
+PRODUCTION DEPLOY:                           NOT YET CONFIRMED (push
+                                              completed; Vercel deployment
+                                              confirmation requires access
+                                              this agent does not have)
+PRODUCTION SYNTHETIC WEBSITE REQUEST:        BLOCKED (Part 13 — missing
+                                              production SUPABASE_SERVICE_
+                                              ROLE_KEY; see Section 16)
+ACTUAL PILOT WEBSITE CONNECTED:              NOT YET (Zenward-Web
+                                              identified + inspected;
+                                              contract mismatch documented;
+                                              no edits made — correctly
+                                              deferred to Part 14, gated on
+                                              Part 13)
+READY FOR S4C DRIVER PWA:                    NOT YET — Part 13/14/15 must
+                                              complete first
+BLOCKERS:
+  1. Production SUPABASE_SERVICE_ROLE_KEY not configured in Vercel; no
+     Vercel CLI/dashboard access available to this agent to set it.
+     Requires the user.
+  2. Zenward-Web's own pre-written intake contract (bearer token +
+     versioned envelope + referenceId response) does not match Nemryn's
+     actual, already-hardened contract. Not a blocker to anything in this
+     report's own scope, but must be reconciled (recommended: adapt
+     Zenward-Web's adapter, per Section 9) before Part 14 can proceed.
+
+================================================================================
+NEXT IF PASS: P1-PILOT-S4C — DRIVER PWA INSTALLABILITY + PILOT DEVICE
+READINESS.
+Do NOT begin S4C. Do NOT add navigation/maps. Do NOT add background
+tracking. Do NOT add push notifications. Do NOT add offline Trip mutation.
+STOP.

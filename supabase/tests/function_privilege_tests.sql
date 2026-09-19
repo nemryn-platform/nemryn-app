@@ -32,8 +32,20 @@ end $$;
 -- narrow, read-only, token-gated (a 122-bit random UUID is the
 -- credential), and returns only organization_name/display_name/email/
 -- status — never organization_id or any other invite column (see
--- 20260903100200_driver_invites.sql). Any OTHER anon-executable function
--- still fails this test, unchanged.
+-- 20260903100200_driver_invites.sql).
+--
+-- P1-PILOT-S4A originally added submit_public_transportation_request to
+-- this same allowlist (anon/authenticated held EXECUTE on it directly).
+-- P1-PILOT-S4B revoked that grant entirely — the function is now
+-- service_role-only, reachable ONLY through the Nemryn-owned Next.js
+-- Route Handler (see 20260919120000_public_intake_ingress_hardening.sql
+-- and TEST S4B-1/S4B-2/S4B-3 in public_request_intake_tests.sql, which
+-- prove anon/authenticated/PUBLIC all get insufficient_privilege calling
+-- it directly). It is deliberately NOT listed here any longer: this test
+-- now asserts anon holds NO EXECUTE on it at all, the stronger S4B
+-- invariant, not a weaker one.
+--
+-- Any OTHER anon-executable function still fails this test, unchanged.
 do $$
 declare v_bad text;
 begin

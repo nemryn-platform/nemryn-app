@@ -57,6 +57,7 @@ interface RequestRow {
   state: string;
   created_at: string;
   updated_at: string;
+  intake_integration_id: string | null;
   passengers: PassengerRelation;
 }
 
@@ -92,6 +93,8 @@ export interface RequestDetailData {
   preferredTime: string | null;
   returnTripNeeded: string;
   source: string;
+  /** P1-PILOT-S4A — non-null only for a Request created via the public website-intake path. The authoritative provenance signal Request Detail's own UI keys off; never `source === 'web'` alone (see request-intake-integrations' own migration comment). */
+  intakeIntegrationId: string | null;
   assistanceNotes: string | null;
   additionalNotes: string | null;
   passenger: RequestDetailPassenger | null;
@@ -105,7 +108,7 @@ export type RequestDetailResult = { status: "ok"; request: RequestDetailData } |
 const REQUEST_COLUMNS =
   "id, passenger_id, requester_name, requester_relationship, requester_phone, requester_email, " +
   "pickup_description, destination_description, preferred_date, preferred_time, return_trip_needed, " +
-  "assistance_notes, additional_notes, source, state, created_at, updated_at, " +
+  "assistance_notes, additional_notes, source, state, created_at, updated_at, intake_integration_id, " +
   // Two FKs exist from transportation_requests to passengers (plain +
   // composite) — the explicit hint is required, not cosmetic; an
   // unqualified `passengers(...)` embed is genuinely ambiguous to
@@ -198,6 +201,7 @@ export async function getRequestDetail(requestId: string, organizationId: string
     preferredTime: row.preferred_time,
     returnTripNeeded: row.return_trip_needed,
     source: row.source,
+    intakeIntegrationId: row.intake_integration_id,
     assistanceNotes: row.assistance_notes,
     additionalNotes: row.additional_notes,
     passenger: passenger

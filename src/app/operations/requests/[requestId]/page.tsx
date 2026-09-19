@@ -258,6 +258,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
           />
           <RequestDetailsPanel
             source={request.source}
+            intakeIntegrationId={request.intakeIntegrationId}
             assistanceNotes={request.assistanceNotes}
             additionalNotes={request.additionalNotes}
           />

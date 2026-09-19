@@ -1,10 +1,14 @@
 import { Panel } from "@/components/ui/Panel";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { SOURCE_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
+import { requestProvenanceLabel } from "@/lib/public-intake/website-intake-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 export interface RequestDetailsPanelProps {
   source: string;
+  /** P1-PILOT-S4A — pass `request.intakeIntegrationId` through unchanged; `null` for every staff-entered Request. */
+  intakeIntegrationId: string | null;
   assistanceNotes: string | null;
   additionalNotes: string | null;
 }
@@ -16,13 +20,26 @@ export interface RequestDetailsPanelProps {
  * context, not a status signal. assistance_notes/additional_notes are
  * deliberately kept as two separate fields (never collapsed into one),
  * each with an honest "No … notes" placeholder rather than a raw `null`.
+ *
+ * P1-PILOT-S4A adds one small, restrained "Website" badge next to the
+ * existing Source line, shown only when this Request was actually
+ * created via the public intake path (`intakeIntegrationId !== null`) —
+ * never merely because `source === 'web'`, which a staff member can
+ * still select manually for an entirely hand-typed Request. Quiet by
+ * design (a neutral badge, not a warning/status color) — the operator
+ * should simply understand where the Request came from, not be alerted
+ * to it.
  */
-export function RequestDetailsPanel({ source, assistanceNotes, additionalNotes }: RequestDetailsPanelProps) {
+export function RequestDetailsPanel({ source, intakeIntegrationId, assistanceNotes, additionalNotes }: RequestDetailsPanelProps) {
+  const provenanceLabel = requestProvenanceLabel(intakeIntegrationId);
   return (
     <Panel>
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-zw-md">
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Request Details</h3>
-        <span className={cn(typography.metadata, "text-text-muted")}>Source: {selectOptionLabel(SOURCE_OPTIONS, source)}</span>
+        <span className={cn(typography.metadata, "flex items-center gap-1.5 text-text-muted")}>
+          Source: {selectOptionLabel(SOURCE_OPTIONS, source)}
+          {provenanceLabel && <StatusBadge label={provenanceLabel} category="neutral" />}
+        </span>
       </div>
       <div className="mt-zw-md flex flex-col gap-zw-md">
         <div>

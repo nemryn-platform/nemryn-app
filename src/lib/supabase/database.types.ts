@@ -429,6 +429,27 @@ export type Database = {
         }
         Relationships: []
       }
+      public_intake_rate_limit_events: {
+        Row: {
+          client_key: string
+          id: number
+          integration_external_id: string
+          occurred_at: string
+        }
+        Insert: {
+          client_key: string
+          id?: never
+          integration_external_id: string
+          occurred_at?: string
+        }
+        Update: {
+          client_key?: string
+          id?: never
+          integration_external_id?: string
+          occurred_at?: string
+        }
+        Relationships: []
+      }
       recurring_arrangements: {
         Row: {
           created_at: string
@@ -594,13 +615,56 @@ export type Database = {
           },
         ]
       }
+      request_intake_integrations: {
+        Row: {
+          allowed_origins: string[] | null
+          created_at: string
+          external_id: string
+          id: string
+          integration_type: string
+          is_active: boolean
+          organization_id: string
+          updated_at: string
+        }
+        Insert: {
+          allowed_origins?: string[] | null
+          created_at?: string
+          external_id: string
+          id?: string
+          integration_type?: string
+          is_active?: boolean
+          organization_id: string
+          updated_at?: string
+        }
+        Update: {
+          allowed_origins?: string[] | null
+          created_at?: string
+          external_id?: string
+          id?: string
+          integration_type?: string
+          is_active?: boolean
+          organization_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "request_intake_integrations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       transportation_requests: {
         Row: {
           additional_notes: string | null
           assistance_notes: string | null
           created_at: string
           destination_description: string
+          external_submission_ref: string | null
           id: string
+          intake_integration_id: string | null
           organization_id: string
           passenger_id: string | null
           pickup_description: string
@@ -621,7 +685,9 @@ export type Database = {
           assistance_notes?: string | null
           created_at?: string
           destination_description: string
+          external_submission_ref?: string | null
           id?: string
+          intake_integration_id?: string | null
           organization_id: string
           passenger_id?: string | null
           pickup_description: string
@@ -642,7 +708,9 @@ export type Database = {
           assistance_notes?: string | null
           created_at?: string
           destination_description?: string
+          external_submission_ref?: string | null
           id?: string
+          intake_integration_id?: string | null
           organization_id?: string
           passenger_id?: string | null
           pickup_description?: string
@@ -659,6 +727,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "transportation_requests_intake_integration_fkey"
+            columns: ["intake_integration_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "request_intake_integrations"
+            referencedColumns: ["id", "organization_id"]
+          },
           {
             foreignKeyName: "transportation_requests_organization_id_fkey"
             columns: ["organization_id"]
@@ -1156,6 +1231,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      check_and_record_public_intake_rate_limit: {
+        Args: { p_client_key: string; p_integration_external_id: string }
+        Returns: Database["public"]["CompositeTypes"]["rate_limit_check_result"]
+        SetofOptions: {
+          from: "*"
+          to: "rate_limit_check_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       complete_pending_signup: {
         Args: never
         Returns: Database["public"]["CompositeTypes"]["organization_signup_result"]
@@ -1594,6 +1679,31 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      submit_public_transportation_request: {
+        Args: {
+          p_additional_notes?: string
+          p_assistance_notes?: string
+          p_destination_description: string
+          p_idempotency_key: string
+          p_integration_external_id: string
+          p_origin?: string
+          p_pickup_description: string
+          p_preferred_date?: string
+          p_preferred_time?: string
+          p_requester_email?: string
+          p_requester_name: string
+          p_requester_phone: string
+          p_requester_relationship: string
+          p_return_trip_needed: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["public_request_submission_result"]
+        SetofOptions: {
+          from: "*"
+          to: "public_request_submission_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       unskip_recurring_occurrence: {
         Args: {
           p_arrangement_id: string
@@ -1692,6 +1802,12 @@ export type Database = {
         driver_id: string | null
         organization_id: string | null
         linked: boolean | null
+      }
+      public_request_submission_result: {
+        accepted: boolean | null
+      }
+      rate_limit_check_result: {
+        allowed: boolean | null
       }
       recurring_arrangement_result: {
         arrangement_id: string | null

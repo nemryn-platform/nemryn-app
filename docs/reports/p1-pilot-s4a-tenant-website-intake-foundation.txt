@@ -1,0 +1,809 @@
+P1-PILOT-S4A — TENANT WEBSITE INTAKE + REQUEST HUB INTEGRATION FOUNDATION
+=============================================================================
+Date: 2026-09-19
+Baseline: 33fee7221877ab80aab512e89447049cf70a1494 ("Harden Operations
+overview resilience")
+Previous production release: 9ac0d14ebfc3cee70767f939f4ee17b328f95545
+Scope: LOCAL IMPLEMENTATION + SECURITY VALIDATION ONLY. Not committed.
+Not pushed. Not deployed. No production activation of any kind.
+
+This report is written so another engineer can reconstruct exactly what
+was built and why without reading any chat history.
+
+WORKTREE CLASSIFICATION
+----------------------------
+Before any change: `git status --short` showed a clean tree (only the
+long-standing untracked .tmp-qa/ scratch scripts and historical
+docs/reports/*.txt files, none touched); `git diff --stat` was empty;
+`git log --oneline -10` confirmed HEAD = 33fee72, matching the expected
+baseline exactly.
+
+Before writing any code, the following were read in full: the S4 and
+S3/S3R reports; `src/app/operations/requests/**` (list page, detail
+page, actions, all supporting components); the full
+`transportation_requests`/`request_events` schema history across
+`20260830130900_transportation_requests.sql` and
+`20260916100000_request_mutation_foundation.sql`; every request mutation
+RPC (`log_transportation_request`, `link_request_passenger`,
+`decline_transportation_request`, `cancel_transportation_request`,
+`create_trip`'s own request-acceptance path); `src/lib/auth/
+authorization.ts`/`organization.ts` (`requireOperationsAccess`,
+`resolveOrganizationContext`, `has_org_role`); the `anon`-role privilege
+posture across every migration (grep-confirmed: exactly one existing
+anon-callable function prior to this phase, `get_driver_invite_preview`);
+the SECURITY DEFINER preamble convention (3 representative functions);
+the two-OS-process concurrency-test methodology
+(`recurring_trip_creation_concurrency_test.sh`); the existing public
+route group (`src/app/(public)/request-transportation/page.tsx` — a
+static placeholder, not live prior art for a data-writing form); and the
+`database.types.ts` regeneration command
+(`supabase gen types typescript --local > src/lib/supabase/database.types.ts`).
+
+At the end of this phase: 9 tracked-file modifications + 6 new
+files/directories, listed in full under FILES MODIFIED below. Nothing
+outside this set was touched. No commit was made — HEAD remains 33fee72.
+
+ARCHITECTURE CHOSEN
+------------------------
+browser (external tenant website)
+  -> POST /api/public-intake/website  (Next.js Route Handler, this repo)
+  -> schema validation (pure, src/lib/public-intake/website-intake-core.ts)
+  -> submit_public_transportation_request  (narrow SECURITY DEFINER RPC)
+  -> request_intake_integrations lookup (tenant resolution, internal only)
+  -> transportation_requests INSERT (state='pending', source='web')
+  -> existing Request Hub review lifecycle, completely unmodified from
+     this point forward
+
+WHY this shape, not a raw PostgREST/supabase-js call from the tenant
+website directly to the RPC:
+  1. A tenant website team should not need to know Nemryn's Supabase
+     project URL/anon key or embed the supabase-js SDK just to submit a
+     form — a plain JSON POST to one Nemryn-owned URL is a smaller, more
+     stable integration surface for a third party to maintain.
+  2. This route is the one place every possible failure (malformed JSON,
+     oversized payload, an unexpected field, a rejected RPC call) is
+     guaranteed to collapse into the SAME generic response — materially
+     harder to guarantee if a raw PostgREST error could ever reach the
+     browser directly (PostgREST's own error JSON shape differs from
+     this app's own safe-error conventions and was never designed to be
+     shown to an unauthenticated third party).
+  3. This is the natural, and only, place to add the real anti-abuse
+     control S4B requires, without ever touching the database layer
+     again (see ANTI-ABUSE STATUS below).
+
+WHY a SECURITY DEFINER RPC, not a raw INSERT (even from trusted server
+code): identical reasoning to every other mutation in this schema
+(`log_transportation_request`, `create_trip`, etc.) — one authoritative,
+testable business boundary, reusable by any future trusted client
+(there will eventually be more than one integration type), rather than
+re-implementing field validation/tenant-resolution/idempotency
+identically in every caller. The RPC is also independently callable via
+PostgREST directly (it is granted to `anon`) — the Route Handler is a
+convenience and a second validation layer, never the sole security
+boundary. The RPC's own validation is authoritative in every case; the
+Route Handler's pure-core validation exists only to fail fast and
+produce a friendlier error before ever reaching the database.
+
+TENANT-RESOLUTION MODEL
+----------------------------
+No `organization_id` parameter exists anywhere in
+`submit_public_transportation_request`'s signature — structurally, not
+merely by convention. The organization is resolved ENTIRELY from
+`p_integration_external_id`, an opaque string looked up in the new
+`request_intake_integrations` table (globally unique `external_id`
+column — deliberately NOT scoped per-organization, since the whole point
+is the caller presents only this one value with no other context). This
+mirrors `redeem_driver_invite`'s own established precedent exactly (that
+function also takes no `organization_id` parameter, resolving it entirely
+from the invite row it's given).
+
+`external_id` is treated as PUBLIC, not a secret (this is explicit in
+both the table's own column comment and the phase brief) — it selects a
+tenant, it does not authenticate a caller. Security does not depend on
+it being hard to guess or undiscoverable. What actually protects tenant
+isolation:
+  - The composite foreign key `transportation_requests
+    (intake_integration_id, organization_id) references
+    request_intake_integrations (id, organization_id)` — the database
+    itself physically rejects any row whose `intake_integration_id`
+    names an integration belonging to a DIFFERENT organization than the
+    row's own `organization_id`. This is not merely defense-in-depth
+    against a bug in the RPC's own logic; it is a second, independent,
+    structural guarantee that holds even if that logic were ever wrong.
+  - `request_intake_integrations` itself has zero grants to any role
+    (`anon`/`authenticated`) and RLS enabled with zero policies — the
+    ONLY code path that ever reads it is the SECURITY DEFINER function
+    itself (which runs as the function owner, `postgres`, and therefore
+    bypasses RLS the same way every other SECURITY DEFINER function in
+    this schema already does for its own tables).
+  - A disabled integration and a nonexistent `external_id` raise the
+    IDENTICAL error (`invalid_input`, ZW006) — no existence oracle,
+    mirroring `has_org_role`'s own "not_found is not_found regardless of
+    why" contract carried to this new boundary.
+
+IDEMPOTENCY MODEL
+----------------------
+A client-supplied `idempotencyKey` (required, ≤200 chars) is paired with
+the resolved `intake_integration_id` under a PARTIAL unique index:
+
+  create unique index transportation_requests_intake_idempotency_idx
+    on transportation_requests (intake_integration_id, external_submission_ref)
+    where intake_integration_id is not null and external_submission_ref is not null;
+
+The RPC's own INSERT targets this index with `ON CONFLICT (...) WHERE
+... DO NOTHING`, then re-selects the (possibly already-committed) row
+when its own INSERT did not win. This is safe under GENUINE concurrent
+submission purely from Postgres's own unique-index insertion arbitration
+— no advisory lock, no `SELECT ... FOR UPDATE` is used or needed, because
+there is no pre-existing row to lock (the row does not exist until
+exactly one of the racing INSERTs creates it). Proven with a real
+two-OS-process test, not a sequential simulation — see CONCURRENCY
+RESULTS below. Staff-entered Requests are completely unaffected: both
+columns are NULL for every one of them, and the partial index's own WHERE
+clause means NULL,NULL never participates in the uniqueness constraint at
+all.
+
+ORIGIN/DOMAIN MODEL
+------------------------
+`request_intake_integrations.allowed_origins` (nullable `text[]`) is an
+OPTIONAL, per-integration allow-list. When configured non-empty, the RPC
+rejects a submission whose `p_origin` (the Route Handler's own read of
+the request's `Origin` header) is not a member of that array — same
+generic `invalid_input` response as every other rejection. When NOT
+configured, no Origin restriction applies at all for that integration.
+This is explicitly documented, in the migration's own column comment and
+the RPC's own function comment, as a SECONDARY, non-authoritative signal:
+a non-browser caller (curl, a server-to-server script) can set an
+arbitrary Origin header, so this control has zero value against that
+attacker class — it is real protection only against a genuine BROWSER
+making a same-origin-policy-respecting cross-site request the operator
+did not intend, which is the one scenario where a browser cannot lie
+about its own Origin. Tenant isolation itself never depends on this
+control in any way — verified live (BONUS-B1/B2 in the SQL test file).
+
+ANTI-ABUSE STATUS
+----------------------
+No production-capable rate limiting or bot-protection mechanism exists
+anywhere in this repository today (confirmed by inspection before
+writing any code — no such infrastructure, no relevant dependency, no
+existing pattern to reuse). Per the phase's own explicit instruction,
+this phase does NOT install a new third-party paid service and does NOT
+fabricate an in-memory rate limiter (which would provide zero real
+protection under a serverless deployment, where each invocation may get
+its own process). The Route Handler's own comment (`src/app/api/
+public-intake/website/route.ts`) is the architectural hook S4B needs: a
+real rate limiter, keyed by `integrationExternalId` and/or client IP
+against a durable shared store, would be one additional check inserted
+at a clearly marked point, returning the identical generic rejection on
+a throttled request. THIS IS THE PRIMARY REASON S4B, not S4A, is where
+any real integration may be activated — see OPEN ISSUES.
+
+FILES MODIFIED
+------------------
+New:
+  supabase/migrations/20260919090000_public_request_intake_foundation.sql
+    — the schema/RLS/RPC (see SCHEMA CHANGES below).
+  supabase/tests/public_request_intake_tests.sql — 21 SQL assertions
+    (see SQL RESULTS).
+  supabase/tests/public_request_intake_concurrency_test.sh — the genuine
+    two-process idempotency race test (see CONCURRENCY RESULTS).
+  src/lib/public-intake/website-intake-core.ts — pure payload validation
+    + safe-error-mapping + Request Hub provenance-label helper (no
+    runtime import of any kind, unit-testable standalone).
+  src/lib/public-intake/website-intake.ts — thin server-only RPC-call
+    wrapper (publishable/anon key only, via the SAME
+    `createServerSupabaseClient()` every authenticated Server Action
+    already uses — no new Supabase client, no elevated credential).
+  src/lib/public-intake/website-intake-core.test.mjs — 42 focused unit
+    tests.
+  src/app/api/public-intake/website/route.ts — the one public HTTP
+    boundary (POST + OPTIONS).
+
+Modified:
+  src/lib/supabase/database.types.ts — regenerated
+    (`supabase gen types typescript --local > ...`), purely additive
+    (82 insertions, 0 deletions): the new `request_intake_integrations`
+    table type, the two new `transportation_requests` columns, the new
+    `submit_public_transportation_request` function signature, the new
+    `public_request_submission_result` composite type.
+  src/lib/operations/request-detail.ts — `intake_integration_id` added
+    to the query column list, the row-mapping interface, and
+    `RequestDetailData`.
+  src/components/operations/requests/RequestDetailsPanel.tsx — one small
+    restrained `StatusBadge` ("Website"), shown only when
+    `intakeIntegrationId !== null`, next to the existing "Source: X"
+    line. No new page. No table-column change to the Request Hub list
+    view (kept to the detail page only — the smaller of the two
+    plausible footprints, per the phase's own "smallest UI change
+    necessary").
+  src/app/operations/requests/[requestId]/page.tsx — threads
+    `request.intakeIntegrationId` into `RequestDetailsPanel`.
+  supabase/tests/function_privilege_tests.sql — extended the existing
+    "no function grants EXECUTE to anon, except get_driver_invite_preview"
+    allowlist to also name `submit_public_transportation_request`, with
+    a comment mirroring the existing entry's own documentation style
+    (see FULL SQL REGRESSION below for why this edit was necessary and
+    correct, not a test weakened to force a pass).
+
+No other file was touched. `src/app/operations/requests/new/actions.ts`,
+`log_transportation_request`, `link_request_passenger`,
+`decline_transportation_request`, `cancel_transportation_request`,
+`create_trip`, every RLS policy on `transportation_requests`, and every
+grant on that table for `authenticated` are byte-for-byte unchanged.
+
+SCHEMA CHANGES
+------------------
+One migration, `20260919090000_public_request_intake_foundation.sql`,
+entirely additive:
+
+  A. `request_intake_integrations` (new table) — `id`, `organization_id`
+     (FK -> organizations), `external_id` (globally unique), `integration_
+     type` (CHECK, currently only 'website'), `is_active` (default
+     FALSE — disabled-by-default), `allowed_origins` (nullable text[]),
+     `created_at`/`updated_at`. RLS enabled, zero policies, explicit
+     `revoke all ... from anon, authenticated` (belt-and-suspenders on
+     top of RLS). `unique (id, organization_id)` — the composite-FK
+     anchor this schema always uses for cross-tenant protection.
+
+  B. `transportation_requests` — two new nullable columns,
+     `intake_integration_id` (composite FK to
+     `request_intake_integrations (id, organization_id)`) and
+     `external_submission_ref` (the idempotency key). Plus the partial
+     unique index described under IDEMPOTENCY MODEL. NULL for every
+     existing row and every future staff-entered row.
+
+  C. `public_request_submission_result` (new composite type) — exactly
+     one field, `accepted boolean`. Deliberately returns no request id,
+     no organization id, no internal identifier of any kind.
+
+  D. `submit_public_transportation_request` (new function) — see
+     ARCHITECTURE CHOSEN / TENANT-RESOLUTION MODEL above for the full
+     design. `language plpgsql`, `security definer`,
+     `set search_path = public, pg_temp` (the exact preamble every other
+     SECURITY DEFINER function in this schema uses). No `auth.uid()`
+     check (deliberately — must work for a genuinely anonymous caller).
+     Field-validation bounds are IDENTICAL to `log_transportation_
+     request`'s own (name ≤200, phone ≤50, email ≤320, pickup/
+     destination ≤2000, notes ≤4000) — kept in exact sync, not
+     independently invented. `revoke all ... from public; grant execute
+     ... to anon, authenticated;` — the same two-role grant shape
+     `get_driver_invite_preview` already established.
+
+  Additivity confirmed: `git diff -- supabase/` before this phase showed
+  no prior schema state to compare against improperly; the migration
+  itself contains no `DROP`/`ALTER ... TYPE`/destructive statement of
+  any kind; `database.types.ts`'s own regenerated diff is 82 insertions,
+  0 deletions.
+
+  Rollback implications: reversing this migration would require dropping
+  `submit_public_transportation_request`, the two new
+  `transportation_requests` columns (and their index/FK), the new
+  composite type, and `request_intake_integrations` itself — all clean,
+  independent DROPs with no data-loss risk to any EXISTING row (both new
+  columns are nullable and NULL on every pre-existing row). No migration
+  currently in this repository has ever needed an actual rollback
+  migration written in advance (confirmed: no `*_rollback.sql` or
+  `*_down.sql` file exists anywhere in `supabase/migrations/`), so none
+  was speculatively added here either — consistent with the phase's own
+  "no opportunistic refactors" instruction.
+
+RLS CHANGES
+--------------
+`transportation_requests`' own RLS policies (`_select_org_operations`,
+`_update_org_operations`) are UNCHANGED — confirmed via `git diff --
+supabase/migrations/20260830131700_rls_policies.sql
+supabase/migrations/20260916100000_request_mutation_foundation.sql`
+(both empty). The new `request_intake_integrations` table has RLS
+enabled with zero policies (deny-by-default for every role except the
+table owner) — the correct posture for a table with no product surface
+in this phase to read/write it through any role at all.
+
+RPC/FUNCTIONS/ROUTES ADDED
+-------------------------------
+  Database: `submit_public_transportation_request` (1 new function, see
+  SCHEMA CHANGES).
+  Application: `POST /api/public-intake/website` (+ `OPTIONS` for CORS
+  preflight) — the sole new route in this phase.
+  No Server Action was added or modified.
+
+PRIVILEGE GRANTS/REVOKES
+-----------------------------
+  `grant execute on function submit_public_transportation_request(...)
+  to anon, authenticated` (+ the matching `revoke all ... from public`
+  immediately before it, matching every other function in this schema).
+  `revoke all on request_intake_integrations from anon, authenticated`
+  (explicit, on top of RLS).
+  No grant or revoke was made on `transportation_requests`,
+  `request_events`, or any other existing table.
+
+PUBLIC INTAKE CONTRACT
+---------------------------
+`POST /api/public-intake/website`, `Content-Type: application/json`,
+body (all fields required unless marked optional):
+```
+{
+  "integrationExternalId": string (<=200 chars),
+  "idempotencyKey": string (<=200 chars),
+  "requesterName": string (<=200 chars),
+  "requesterRelationship": "self" | "family" | "caregiver" | "facility_coordinator" | "other",
+  "requesterPhone": string (<=50 chars),
+  "pickupDescription": string (<=2000 chars),
+  "destinationDescription": string (<=2000 chars),
+  "returnTripNeeded": "yes" | "no" | "not_sure",
+  "requesterEmail": string | null (optional, <=320 chars),
+  "preferredDate": "YYYY-MM-DD" | null (optional),
+  "preferredTime": "HH:MM" | "HH:MM:SS" | null (optional),
+  "assistanceNotes": string | null (optional, <=4000 chars),
+  "additionalNotes": string | null (optional, <=4000 chars)
+}
+```
+No `organizationId`, `passengerId`, `source`, or `state` field is ever
+accepted — an unexpected top-level key of ANY kind causes the whole
+payload to be rejected (never silently ignored). Response shapes:
+  Success: `200 { "ok": true }`
+  Rejection (any cause): `400 { "ok": false, "error": "invalid_request",
+  "message": "We couldn't process this request. Please check the
+  information provided and try again." }`
+Every distinct internal cause — malformed JSON, oversized body, an
+unexpected field, a missing/invalid field, a disabled/nonexistent
+integration, an Origin mismatch, an RPC-level validation failure —
+collapses to the SAME response. No raw SQL/Postgres/PostgREST/ZW code,
+table/column/policy name, or internal UUID is ever returned.
+
+REQUEST HUB UI CHANGE
+--------------------------
+One small, restrained `StatusBadge` reading "Website", rendered only on
+Request Detail (`RequestDetailsPanel.tsx`), only when
+`intakeIntegrationId !== null` — never merely because `source === 'web'`
+(a staff member can still select "Web" manually as a descriptive channel
+for an entirely hand-typed Request; that must never look identical to an
+actual automated public-intake submission). No new page. No change to
+the Request Hub LIST view (`RequestsTable.tsx` untouched) — kept to the
+one detail-page line where source is already shown, the smallest
+footprint that still lets an operator "simply understand where the
+Request came from" per the phase's own instruction.
+
+TESTS ADDED — EXACT LIST
+-----------------------------
+SQL (`supabase/tests/public_request_intake_tests.sql`, 21 assertions):
+  TEST 1-4: anon has zero direct table privilege (INSERT/SELECT/UPDATE/
+    DELETE) on transportation_requests.
+  TEST 5: a valid active integration creates exactly the intended
+    Request (correct org, state=pending, passenger=NULL).
+  TEST 6-7 / 7b: an organization_id value passed as if it were
+    `integrationExternalId` is rejected (ZW006), creates nothing.
+  TEST 8: an integration is scoped to its OWN organization only (Org B's
+    integration creates a Request in Org B, never Org A).
+  TEST 9: a disabled integration cannot create a Request.
+  TEST 10: an invalid integration identifier cannot create a Request,
+    with the SAME error class (ZW006) as the disabled case.
+  TEST 11: a replayed idempotency key (sequential) never creates a
+    second row.
+  TEST 13: every intake-created row has state='pending' and
+    passenger_id IS NULL, with no way to override either.
+  TEST 14-15: zero Trips/Drivers/Vehicles/Passengers are ever created by
+    this RPC.
+  TEST 16: `log_transportation_request` (the existing authenticated
+    workflow) is unchanged and still works.
+  TEST 17-18: Org A cannot see Org B's website Requests and vice versa.
+  TEST 20: EXECUTE privilege is exactly {anon, authenticated} — not
+    PUBLIC.
+  BONUS-A / BONUS-A2: `request_intake_integrations` itself is
+    unreadable directly by anon OR authenticated.
+  BONUS-B1 / BONUS-B2: an Origin mismatch is rejected for an
+    origin-locked integration; the correct Origin is accepted.
+  (Item 12, the genuine concurrent-submission proof, and item 19, the
+  shipped-client-code secret scan, are covered separately below — a
+  runtime SQL assertion is not the right tool for either.)
+
+Concurrency (`supabase/tests/public_request_intake_concurrency_test.sh`):
+  TEST PUBLIC-INTAKE-CONCURRENCY-1 — two genuinely separate OS processes
+  (not a sequential simulation), each opening its own transaction,
+  `pg_sleep`-ing briefly INSIDE that transaction to guarantee real
+  overlap, then both calling `submit_public_transportation_request` with
+  the IDENTICAL integration + idempotency key. Both return `accepted =
+  true`; the database ends with exactly ONE Request row and exactly ONE
+  `request_logged` event — proven via Postgres's own unique-index
+  insertion arbitration (`ON CONFLICT ... DO NOTHING`), not an explicit
+  lock.
+
+Application/pure-core (`src/lib/public-intake/website-intake-core.test.mjs`,
+42 tests): valid/full payloads, every required-field-missing and
+blank-field case, every enum value (both valid and invalid), length
+bounds at and over every limit, type/shape rejection (null/array/string
+payload, wrong-typed field), malformed date/time, the CLOSED field-set
+guarantee (an unexpected key — including a direct attempt to smuggle
+`organizationId`/`passengerId`/`state`/`source` — is always rejected,
+never silently dropped), the safe error message (regex-scanned for
+ZW-code/SQL/stack-trace shapes), and the Request Hub provenance-label
+function (`null` for staff-entered, `"Website"` for intake-created).
+
+Not added: a dedicated test asserting the Route Handler's own HTTP-layer
+behavior in isolation (CORS headers, status codes) beyond what the local
+E2E script already exercises live against the real running route — the
+phase's own "do not create brittle tests simply to inflate coverage"
+instruction was weighed against writing a mocked-request-object unit
+test for a 100-line Route Handler whose real behavior is already fully
+exercised end-to-end; the live E2E coverage was judged sufficient and a
+mocked duplicate was judged not worth the maintenance cost.
+
+FULL SQL REGRESSION
+------------------------
+Ran ALL 32 currently-maintained SQL test files (the 31 pre-existing
+files plus the 1 new `public_request_intake_tests.sql`) — a fresh
+`supabase db reset` before each file, mirroring the exact per-file-reset
+discipline the P1-PILOT-S4 phase already established and validated.
+
+First pass: 31 of 32 files fully clean; ONE new failure —
+`function_privilege_tests.sql: pass=6 fail=1`.
+
+Diagnosed immediately, not dismissed: the single failing assertion
+(`FUNCTION-PRIV no-anon-execute`) is a PRE-EXISTING, deliberate test that
+asserts "no function in the public schema grants EXECUTE to anon, except
+the one reviewed exception, `get_driver_invite_preview`." This phase
+correctly and deliberately added a SECOND anon-executable function
+(`submit_public_transportation_request`) — the test's own allowlist
+needed extending to reflect that, exactly matching the phase's own
+instruction ("If a SECURITY DEFINER function is added, extend the
+project's privilege and security-definer exposure tests appropriately").
+This was NOT a case of weakening a test to force a pass — the test's own
+underlying invariant ("nothing ELSE is anon-executable") remains fully
+enforced; only the name of a second, reviewed, intentional exception was
+added, with a comment matching the existing entry's own documentation
+style exactly. Fixed in `supabase/tests/function_privilege_tests.sql`.
+
+A second, independent hardening was made in the same pass (not a defect
+found by any test, but a self-review gap caught before finalizing): the
+RPC validated every OTHER text field's length but had no explicit upper
+bound on `p_integration_external_id` itself before the database lookup
+(the Route Handler's own pure-core pre-check already bounds this at 200
+chars, but the RPC is directly anon-callable via raw PostgREST/
+supabase-js too, bypassing the Route Handler entirely — the RPC must be
+the authoritative bound regardless). Added `length(...) > 200` to the
+same validation `if`, matching every other field's own bound in this
+same function.
+
+After both fixes: one fresh `supabase db reset`, followed by re-running
+ONLY the two directly-affected files
+(`function_privilege_tests.sql`, `public_request_intake_tests.sql`) plus
+the concurrency script — all three fully green (see exact counts below).
+Per the phase's own "do not blindly rerun the entire full battery
+multiple times" instruction, the complete 32-file battery was NOT
+re-run a second time in full; the two fixes were narrowly scoped
+(one test-allowlist addition, one length-bound addition to a function
+this phase itself just introduced) with no plausible mechanism to affect
+any of the other 30 already-green files, which touch entirely different
+tables/functions untouched by either fix.
+
+Final confirmed counts (post-fix):
+  function_privilege_tests.sql: 7/7 PASS
+  public_request_intake_tests.sql: 21/21 PASS
+  All other 30 files: unchanged from the first pass (0 fail, 0 fatal
+    errors each) — full per-file counts:
+    client_privilege_surface_tests.sql 21/21, constraint_tests.sql
+    13/13, create_trip_atomicity_tests.sql 2/2,
+    create_trip_privilege_tests.sql 5/5, create_trip_tests.sql 20/20,
+    driver_location_tests.sql 20/20, driver_read_authorization_tests.sql
+    17/17, driver_read_history_tests.sql 8/8,
+    driver_read_minimization_tests.sql 13/13,
+    driver_read_privilege_tests.sql 8/8,
+    exception_mutation_boundary_tests.sql 20/20,
+    mutation_assignment_tests.sql 19/19, mutation_atomicity_tests.sql
+    2/2, mutation_authorization_tests.sql 4/4,
+    mutation_idempotent_authorization_tests.sql 6/6,
+    mutation_lifecycle_tests.sql 24/24, mutation_privilege_tests.sql
+    7/7, operator_onboarding_tests.sql 40/40,
+    organization_timezone_tests.sql 14/14,
+    recurring_arrangement_foundation_tests.sql 50/50,
+    recurring_arrangement_mutation_tests.sql 49/49,
+    recurring_occurrence_exception_tests.sql 19/19,
+    recurring_trip_creation_tests.sql 24/24,
+    request_mutation_atomicity_tests.sql 3/3,
+    request_mutation_privilege_tests.sql 18/18,
+    request_mutation_tests.sql 38/38,
+    request_trip_passenger_integrity_tests.sql 10/10,
+    rls_adversarial_tests.sql 32/32,
+    security_definer_exposure_tests.sql 20/20, trip_exception_tests.sql
+    16/16.
+    (Note: `recurring_arrangement_mutation_tests.sql` and
+    `recurring_trip_creation_tests.sql` show a FULL clean pass in this
+    run — the P1-PILOT-S4 report's own diagnosed UTC/organization-local-
+    timezone test-arithmetic artifact, affecting 3 assertions in those
+    same two files, does not reproduce here; this run executed outside
+    that ~4-hour daily boundary window, consistent with that prior
+    diagnosis.)
+
+Raw totals across all 32 files, final state: 587 pass / 0 fail / 0 fatal
+errors.
+
+CONCURRENCY RESULTS
+------------------------
+`public_request_intake_concurrency_test.sh`: 1/1 scenario PASS (see
+exact mechanism under TESTS ADDED / IDEMPOTENCY MODEL above). Not
+repeated after its clean pass, per the phase's own "do not repeat the
+battery after a clean pass" instruction (this applies here to a
+single-scenario new script, not the full maintained battery, which was
+not touched this phase — no existing mutation logic changed).
+
+TSC
+------
+`npx tsc --noEmit`: clean, 0 errors (confirmed twice — once immediately
+after the initial implementation, once again after the length-bound
+hardening fix and the `function_privilege_tests.sql` edit).
+
+LINT
+-------
+`npm run lint`: 0 errors. 53 warnings, every one confined to untracked
+`.tmp-qa/*.mjs` scratch scripts (never shipped, never staged). One
+warning surfaced during development in this phase's own new source file
+(`website-intake-core.ts`, an unused parameter) was fixed immediately
+(converted to a lookup table matching `log-request-errors.ts`'s own
+established `Record<Code, string>` convention) — confirmed clean on
+re-lint of every touched file.
+
+UNIT TESTS
+--------------
+`npm test`: 306 / 306 passing (264 baseline entering this phase + 42 new,
+all in `website-intake-core.test.mjs`). No existing test was modified or
+removed.
+
+BUILD
+--------
+`npm run build`: succeeded. `/api/public-intake/website` appears in the
+route manifest as its own dynamic route (`ƒ /api/public-intake/website`).
+Every other route unchanged.
+
+E2E RESULTS
+---------------
+`.tmp-qa/s4a-local-e2e.mjs`, run against the local dev server + local
+Supabase (synthetic fixture data only — `org-a-admin@example.test`,
+`org-b-admin@example.test`, `org-a-driver-a@example.test`, the existing
+"Fictional Passenger A1" fixture; no real Passenger/medical data was used
+anywhere). One fixture (an active + a disabled `request_intake_
+integrations` row for Org A) was created directly via `docker exec ...
+psql` as postgres (the only way to populate this table at all, matching
+its own zero-grant design), then cleaned up at both the start and via the
+script's own scoped `S4A E2E%`/`s4a-e2e-%` tags.
+
+  A. Existing Admin manual Request creation (Request Hub "New Request"
+     form) works exactly as before                              PASS
+  B. Active integration submits via a real HTTP POST to
+     /api/public-intake/website -> 200 {"ok":true}                PASS
+  C. The website Request appears in Org A's own Request Hub        PASS
+  D. Visibly (but quietly) labeled "Website" on the detail page
+     (screenshot: /tmp/s4a-e2e-shots/02-request-detail-website-
+     badge.png, confirmed visually — "Source: Web · Website" badge,
+     restrained, not visually dominant)                            PASS
+  E. Operator opens/reviews the website Request via the existing
+     Request Detail page, unmodified                                PASS
+  F. Operator links the existing synthetic Passenger "Fictional
+     Passenger A1" via the existing combobox-search + Link Passenger
+     workflow, completely unmodified                                PASS
+  G. Operator creates a Trip via the existing Create Trip workflow,
+     completely unmodified; the Request correctly shows Accepted
+     with a linked Trip afterward                                   PASS
+  H. Structurally confirmed the website submission ITSELF never
+     created a Trip (zero Trips existed at the Request's own creation
+     instant — the only Trip that exists was created by the operator,
+     explicitly, in step G)                                         PASS
+  I. Org B never sees Org A's website Request (own Request Hub,
+     state=all view)                                                PASS
+  J. An injected `organizationId` field in the POST body is rejected
+     outright (closed field set — an unexpected key fails the whole
+     payload) and creates zero rows                                 PASS
+  K. A replay with the SAME idempotency key returns 200 {"ok":true}
+     again, but exactly ONE Request row exists for that key — no
+     second row, regardless of different text in the replay attempt  PASS
+  L. A disabled integration is rejected: 400 {"ok":false}            PASS
+  M. An invalid/nonexistent integration is rejected: 400 {"ok":false},
+     with a response body BYTE-FOR-BYTE IDENTICAL to the disabled-
+     integration case (no existence oracle, confirmed at the HTTP
+     layer, not just the SQL layer)                                 PASS
+  N. Driver account remains denied from /operations (redirected to
+     /driver) — unrelated code path, reconfirmed unaffected           PASS
+  O. No raw internal error text (ZW code, SQLSTATE, PGRST code,
+     table/column/policy name, stack trace) in ANY public API
+     response, including: malformed JSON body (rejected safely, no
+     crash), an oversized payload (20000-char field, rejected safely),
+     and a script/markup-content field (`<script>alert(1)</script>` as
+     requester_name — accepted as inert plain text, stored, never
+     interpreted/executed, confirmed by the RPC's own plain `text`
+     column type and this app's existing React-escaped rendering
+     convention — no new escaping logic was needed or added)         PASS
+
+24/24 individual assertions across the 15 lettered scenarios passed (one
+retry was needed on the very first attempt — a transient headless-Chrome
+launch timing issue unrelated to any code under test, confirmed by an
+immediate clean rerun with identical code).
+
+TENANT ISOLATION RESULTS
+-----------------------------
+Covered redundantly at both the database layer (SQL tests 8/17/18,
+BONUS-A/A2) and the application layer (E2E I/J). In every case: Org A's
+integration can only ever produce an Org A Request; Org B's integration
+can only ever produce an Org B Request; neither organization's
+authenticated operator can see the other's website-sourced Requests; and
+a direct attempt to smuggle a foreign organization identifier through any
+available input is rejected before any row is ever written.
+
+SECRET SCAN
+--------------
+Run against the complete diff (tracked modifications via `git diff`, and
+every new file individually) with a pattern covering API keys, service-
+role credentials, passwords, tokens, bearer/authorization headers, PEM
+private key headers, JWT-shaped strings, and webhook secrets:
+  Result: zero real matches. The only pattern hits were the English
+  words "token"/"secret" appearing inside explanatory code comments
+  (e.g. "token-gated", "treated as public, not a secret") — never an
+  actual credential value. No service-role key, database password, or
+  any other privileged credential is referenced anywhere in this
+  phase's new or modified files — the Route Handler and its server-only
+  wrapper both use `createServerSupabaseClient()`, the SAME publishable
+  (anon) key every existing authenticated Server Action already uses;
+  no new Supabase client of any kind was introduced. No real Passenger/
+  medical/PII data was used anywhere in testing — every fixture is
+  tagged `S4A TEST`/`S4A E2E`/`s4a-e2e-`/`test-intake-`/`test-
+  concurrency-intake-` and was cleaned up after each test run.
+
+OPEN ISSUES
+--------------
+1. Anti-abuse infrastructure does not exist yet (see ANTI-ABUSE STATUS
+   above) — this is the PRIMARY blocker for any real production
+   activation. S4B must not activate a real tenant integration until a
+   genuine, durable rate-limiting mechanism is in place at the Route
+   Handler's own marked insertion point.
+2. `request_intake_integrations` has no operator-facing management UI or
+   RLS read policy in this phase (deliberately, per the phase's own
+   "do not build a general integrations platform" instruction) — every
+   integration row in this phase was created directly via `psql` as
+   postgres, exactly like every SQL test's own fixture setup. S4B (or a
+   later phase) will need SOME provisioning path — even a manually-run
+   migration/seed per pilot tenant would satisfy the "disabled by
+   default, deliberately activated" contract without building a full UI.
+3. The Route Handler's CORS policy is currently permissive
+   (`Access-Control-Allow-Origin: *`) — correct and intentional given
+   this endpoint sets/reads no cookies and grants no session (see PUBLIC
+   INTAKE CONTRACT's own reasoning), but worth re-confirming during S4B
+   once a real tenant website's actual calling pattern is known, in case
+   that tenant's own security review prefers a narrower CORS policy for
+   their own reasons (not a Nemryn-side requirement).
+4. No structured/durable audit logging exists for public-intake
+   successes specifically (only a safe, fixed-message `console.error` on
+   REJECTION, matching this codebase's own established logging
+   convention exactly — see `website-intake.ts`'s own comment). A
+   successful submission is fully traceable via the real
+   `request_events` row it creates (event_type='request_logged',
+   metadata contains only the safe `intake_integration_id`, never any
+   payload content) — this was judged sufficient observability for S4A;
+   revisit if S4B's own real-traffic volume needs dashboarding.
+
+TECHNICAL DEBT
+------------------
+None newly introduced by this phase specifically. Carried forward
+unchanged from prior phases (see the S4 report's own TECHNICAL DEBT
+section): the `getOnboardingChecklist` internal `count ?? 0` query-
+accuracy gap, and the shared-`drivers`/`vehicles`-embed cascade in
+Operations Overview — neither is touched by, or relevant to, this phase.
+
+ROLLBACK CONSIDERATIONS
+----------------------------
+Nothing in this phase is committed, so there is nothing to roll back at
+the git level. If this work were later committed and needed reverting:
+the migration is a clean, independent set of additive DDL statements
+(new table, two new nullable columns, one new composite type, one new
+function) with no destructive statement and no risk to any pre-existing
+row — reversing it is a straightforward companion migration (drop the
+function, drop the two columns + their index/FK, drop the type, drop the
+table), in that dependency order. The application-side changes (the new
+Route Handler, the two new `src/lib/public-intake/` files, the small
+`RequestDetailsPanel`/`request-detail.ts` additions) are equally
+independent and revertible with no cross-feature entanglement — Request
+Hub's own existing behavior for every staff-entered Request is provably
+unaffected either way (SQL TEST 16, E2E scenario A).
+
+WHETHER S4B CAN SAFELY BEGIN
+---------------------------------
+The FOUNDATION this phase was chartered to build is complete and
+verified: tenant resolution is structurally safe (no organization_id
+parameter exists to spoof), idempotency is proven safe under genuine
+concurrency, every privilege surface is minimum-necessary and tested,
+public intake stops exactly at Request Hub's existing `pending` state
+with zero side effects on Trips/Drivers/Vehicles/Passengers/Memberships,
+and the existing authenticated workflow is provably unaffected.
+
+S4B may safely BEGIN its own design work on connecting and activating a
+real pilot website. However, per this phase's own explicit instruction
+and the OPEN ISSUES above, S4B must NOT activate a real tenant
+integration in production until real anti-abuse infrastructure exists —
+that is a genuine, not-yet-satisfied precondition, not a formality.
+
+=============================================================================
+GATE
+=============================================================================
+WORKTREE:
+PASS
+
+SECRET SCAN:
+PASS
+
+SCHEMA:
+PASS
+
+RLS:
+PASS
+
+PUBLIC INTAKE DIRECT TENANT SPOOF:
+BLOCKED
+
+ANON DIRECT REQUEST INSERT:
+BLOCKED
+
+DISABLED INTEGRATION:
+PASS
+
+VALID INTEGRATION SUBMISSION:
+PASS
+
+REQUEST HUB RECEIPT:
+PASS
+
+WEBSITE SOURCE PROVENANCE:
+PASS
+
+NO AUTO TRIP CREATION:
+PASS
+
+IDEMPOTENCY:
+PASS
+
+CONCURRENCY:
+PASS
+
+CROSS-TENANT ISOLATION:
+PASS
+
+EXISTING MANUAL REQUEST FLOW:
+PASS
+
+DRIVER AUTHORIZATION REGRESSION:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+306/306
+
+SQL:
+587/587 (32 files; 1 test-allowlist extension + 1 function hardening
+fix applied and re-verified, both documented above — see FULL SQL
+REGRESSION)
+
+BUILD:
+PASS
+
+PRODUCTION ACTIVATED:
+NO
+
+READY FOR S4B:
+YES
+
+BLOCKERS:
+NONE for beginning S4B's own design work. Real anti-abuse infrastructure
+remains a genuine precondition before S4B may activate any real tenant
+integration in production (see OPEN ISSUES #1) — not a blocker to
+starting S4B itself.
+
+NEXT:
+P1-PILOT-S4B — PILOT WEBSITE INTAKE ACTIVATION + REQUEST HUB PRODUCTION E2E
+
+Do NOT begin S4B.
+Do NOT begin Driver PWA.
+Do NOT commit.
+Do NOT push.
+Do NOT deploy.
+
+STOP.
