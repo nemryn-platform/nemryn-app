@@ -1,6 +1,6 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { getTodaysOperations } from "./todays-operations";
+import { getTodaysOperations, type TodaysOperationsData } from "./todays-operations";
 import { getTomorrowReadiness } from "./tomorrow-readiness";
 import { getRecurringArrangementsList } from "./recurring-care-list";
 import { getYesterdayProofOfServiceResults } from "./trip-proof-of-service";
@@ -299,10 +299,42 @@ export async function getOperationsBrief(
     now,
   ).catch(() => null);
 
+  // Today's Operations (P1-PILOT-S3) — caught independently, exactly like
+  // Tomorrow Readiness/Recurring Care/Proof of Service above: a genuine
+  // failure here must degrade only the Brief's own today's-operations-
+  // derived fields (dayState/attention/activeNow/nextDepartures/
+  // unassignedCount all become `null` via deriveOperationsBrief), never
+  // this whole function. Started here (not inside the Promise.all below)
+  // so a rejection doesn't reject that Promise.all before driverSnapshot/
+  // requestSummary can settle.
+  const todaysOperationsPromise: Promise<TodaysOperationsData | null> = getTodaysOperations(organizationId, timezone).catch(() => {
+    // Mirrors requests-list.ts's own safe logging convention: a fixed,
+    // non-dynamic message only — getTodaysOperations wraps the
+    // underlying Postgres/PostgREST error's own `.message` into its
+    // thrown Error's message, which can occasionally echo back filter
+    // values, so it is never logged here.
+    console.error("[operations-brief] getTodaysOperations failed");
+    return null;
+  });
+
+  // Driver Snapshot / Request Summary (P1-PILOT-S3R) — each caught
+  // independently, exactly like every other promise above: a genuine
+  // failure in either must degrade only its own Brief block (both fields
+  // become `null` — see OperationsBriefData/deriveOperationsBrief), never
+  // this whole function or any other block.
+  const driverSnapshotPromise: Promise<OperationsBriefDriverSnapshot | null> = getDriverSnapshot(organizationId).catch(() => {
+    console.error("[operations-brief] getDriverSnapshot failed");
+    return null;
+  });
+  const requestSummaryPromise: Promise<OperationsBriefRequestSummary | null> = getRequestSummary(organizationId).catch(() => {
+    console.error("[operations-brief] getRequestSummary failed");
+    return null;
+  });
+
   const [todaysOperations, driverSnapshot, requestSummary] = await Promise.all([
-    getTodaysOperations(organizationId, timezone),
-    getDriverSnapshot(organizationId),
-    getRequestSummary(organizationId),
+    todaysOperationsPromise,
+    driverSnapshotPromise,
+    requestSummaryPromise,
   ]);
 
   const tomorrowReadiness = await tomorrowReadinessPromise;

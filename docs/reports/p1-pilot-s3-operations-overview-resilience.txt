@@ -1,0 +1,499 @@
+P1-PILOT-S3 — OPERATIONS OVERVIEW RESILIENCE
+================================================
+Date: 2026-09-19
+Scope: LOCAL IMPLEMENTATION ONLY. Not committed. Not pushed. Not deployed.
+
+BASELINE
+-----------
+git log --oneline -5 (before coding):
+  9ac0d14  Add recurring care bulk trip creation
+  5c1ca37  Add Proof of Service Assurance
+  14d4357  Add Recurring Care Assurance
+  d5df533  Add Trip and Tomorrow Readiness
+  87940c2  Complete Request Hub operating workflow
+HEAD matched the expected baseline commit exactly: 9ac0d14ebfc3cee70767f939f4ee17b328f95545.
+git status --short showed no unrelated tracked modifications — only the
+expected long-standing untracked .tmp-qa/ scratch scripts and historical
+docs/reports/*.txt files, neither altered as part of this baseline check.
+
+PREVIOUS FAILURE MODE
+-------------------------
+src/app/operations/page.tsx (read fresh before any change) called
+`const data = await getTodaysOperations(...)` as a plain, un-caught await
+— unlike the three sibling promises immediately above it
+(tomorrowReadinessPromise/recurringCarePromise/proofOfServicePromise),
+each already wrapped in `.catch(() => null)`. A genuine getTodaysOperations
+failure (any thrown Error from its 4 internal query round trips) would
+propagate uncaught out of the Server Component, taking down the entire
+/operations route with Next.js's generic route-level error boundary —
+not a contained, informative degradation.
+
+Additionally, `deriveOperationsBrief(data, ...)` (operations-brief-core.ts)
+took `data: TodaysOperationsData` as a required, non-nullable first
+parameter — so even the Operations Brief's own already-independent-looking
+Tomorrow Readiness/Recurring Care/Proof of Service/Driver Snapshot/Requests
+blocks could never render at all in a getTodaysOperations failure, because
+`brief` itself could never be computed in the first place.
+
+A second, currently-dormant call site of the identical bug was found during
+the audit: `getOperationsBrief()` (operations-brief.ts, a fully-composed
+alternative entry point with zero current callers) had the exact same
+un-caught `getTodaysOperations(...)` call inside its own `Promise.all`,
+sitting right next to the same three already-caught sibling promises.
+
+TODAY'S OPERATIONS DEPENDENCIES
+-----------------------------------
+`getTodaysOperations(organizationId, timezone)` (src/lib/operations/
+todays-operations.ts) touches, across its 2 internal round-trip phases:
+  trips, passengers, trip_assignments, drivers, vehicles (all via one
+    TRIP_COLUMNS embed used for both the "today" and "active" trip
+    queries), trip_events (+ nested trips/passengers embed, activity log),
+    trip_exceptions (open-exception counts, only queried when
+    candidateIds.length > 0), driver_location_updates (via
+    getLatestLocationsByTrip, only queried for trips in an
+    eligible-tracking state).
+
+Its single return value, `TodaysOperationsData`, feeds:
+  1. `src/app/operations/page.tsx` directly — `data.summary.*` (the
+     SummaryStrip's 4 numbers), `data.attentionItems` (Needs Attention
+     panel), `data.todayTrips` (Upcoming Trips panel), `data.activeTrips`
+     (Active Trips panel), `data.activityLog` (Activity Log panel).
+  2. `deriveOperationsBrief(data, ...)` (operations-brief-core.ts) — which
+     derives `dayState`, `totalTripsToday`, `attention`, `activeNow`,
+     `nextDepartures`, and `unassignedCount` — the Operations Brief's own
+     Needs Attention / Active Now / Next Departures blocks
+     (src/components/operations/OperationsBrief.tsx).
+
+No other section on /operations reads `getTodaysOperations`'s return value
+— traced field-by-field, not assumed.
+
+INDEPENDENT OVERVIEW DEPENDENCIES
+-------------------------------------
+Fetched via their own separate functions, each already (or now) caught
+independently of `getTodaysOperations`:
+  - OnboardingChecklistBanner  <- getOnboardingChecklist (organization
+    setup-progress tables, unrelated to trips)
+  - Driver Snapshot            <- getDriverSnapshot (drivers,
+    trip_assignments only — confirmed via grep, no `vehicles`/
+    `trip_events` reference anywhere in its query)
+  - Requests awaiting review   <- getRequestSummary (transportation_requests
+    only)
+  - Tomorrow readiness         <- getTomorrowReadinessSummary (trips,
+    trip_exceptions, AND an embedded `vehicles`/`drivers` status check —
+    see SHARED-TABLE BEHAVIOR)
+  - Recurring care             <- getRecurringCareSummary
+    (recurring_arrangements, recurring_occurrence_exceptions, trips,
+    trip_exceptions, AND an embedded `vehicles`/`drivers` status check —
+    see SHARED-TABLE BEHAVIOR)
+  - Proof of service           <- getProofOfServiceSummary ->
+    getYesterdayProofOfServiceResults (trips, trip_assignments,
+    trip_events, trip_exceptions, AND an embedded `vehicles` reference —
+    see SHARED-TABLE BEHAVIOR)
+
+FAILURE CONTRACT
+--------------------
+`OperationsBriefDayState` extended with a 4th value, `"UNAVAILABLE"`
+(operations-brief-core.ts), alongside the existing NO_TRIPS/ALL_COMPLETE/
+ACTIVE_DAY — never conflated with NO_TRIPS, which is a real, successfully-
+fetched "zero trips" answer.
+
+`OperationsBriefData`'s today's-operations-derived fields were changed
+from non-nullable to nullable, mirroring the exact `T | null` convention
+already established for tomorrowReadiness/recurringCare/proofOfService:
+  totalTripsToday: number | null
+  attention: TodaysOperationsAttentionItem[] | null
+  activeNow: TodaysOperationsTrip[] | null
+  nextDepartures: TodaysOperationsTrip[] | null
+  unassignedCount: number | null
+
+`deriveOperationsBrief`'s first parameter became `data: TodaysOperationsData
+| null`. When `null`, it returns `dayState: "UNAVAILABLE"` with every one
+of the 5 fields above set to `null` — never `0`/`[]` — while still passing
+`driverSnapshot`/`requestSummary`/`tomorrowReadiness`/`recurringCare`/
+`proofOfService` through completely unchanged. `getTodaysOperations` ITSELF
+was not rewritten into a nullable data source — it remains the single
+authoritative read model, still throwing on a genuine failure exactly as
+before; only its two callers (the page, and the dormant `getOperationsBrief`)
+decide how to catch and represent that failure.
+
+PAGE-LEVEL ISOLATION
+------------------------
+src/app/operations/page.tsx: `getTodaysOperations(...)` is now started
+immediately (before the existing `Promise.all`), chained through
+`.then((data) => ({ status: "ok", data })).catch(() => ({ status:
+"unavailable" }))` — the exact conceptual shape specified in this phase's
+own brief — and awaited alongside the pre-existing independent promises,
+never serially. `getOnboardingChecklist`/`getDriverSnapshot`/
+`getRequestSummary` remain in their own pre-existing, un-caught
+`Promise.all` (unchanged — see OPEN ISSUES).
+
+Rendering: `<OperationsBrief brief={brief} .../>` always renders (its own
+internal UNAVAILABLE handling covers the compact summary). Below it, the
+SummaryStrip + the 2-column grid of Needs Attention/Upcoming
+Trips/Active Trips/Activity Log — the entire tightly-coupled group that
+depends on `data` — is now gated behind one single conditional: `data ===
+null` renders ONE contained `<EmptyState>` panel; otherwise the exact
+pre-existing markup renders unchanged, using the now-guaranteed-non-null
+`data`.
+
+UNKNOWN VS ZERO
+-------------------
+Verified by construction and by live fault injection: a genuine
+getTodaysOperations failure never produces "0 active trips" / "No trips
+scheduled today" / "Nothing needs attention" anywhere on the page. Both the
+Brief's compact block and the page's own larger detail region render the
+explicit "Today's operations unavailable" treatment instead. Unit-tested
+directly (operations-brief-core.test.mjs, new tests) that `attention`/
+`activeNow`/`nextDepartures` are `null` — never `[]` — and
+`unassignedCount`/`totalTripsToday` are `null` — never `0` — whenever
+`data` is `null`.
+
+UNAVAILABLE PRESENTATION
+----------------------------
+Exact copy, appearing in two places (once compact, in the Brief; once
+larger, in the page's own detail region) — reusing the existing `Panel`/
+`EmptyState` primitives verbatim, no new UI component:
+  Title: "Today's operations unavailable"
+  Description: "We couldn't load today's trip activity. Refresh the page
+  to try again."
+No raw Supabase error, SQL text, PostgREST JSON, PGRST/ZW code, or stack
+trace is ever rendered — confirmed both by code inspection (the `.catch`
+branches discard the real error entirely before it ever reaches JSX) and
+by a live regex scan of the fully-rendered faulted page's body text
+(pattern covering ZW-codes/SQLSTATE/PGRST/stack-trace shapes — zero
+matches).
+
+SHARED-TABLE BEHAVIOR
+-------------------------
+Empirically discovered during fault injection (going beyond the static
+`grep '.from('` dependency map, per this phase's own "trace every field,
+do not assume names" instruction): `vehicles` is embedded via
+`trip_assignments!...vehicles!...` in FOUR different query modules, not
+just `todays-operations.ts` —tomorrow-readiness.ts, recurring-care.ts, and
+trip-proof-of-service.ts each also embed a `vehicles` relation for their
+own active/completion-assignment enrichment. `trip_events` is similarly
+shared between todays-operations.ts (activity log) and
+trip-proof-of-service.ts (lifecycle-event-chain verification).
+
+Live result of revoking SELECT on `vehicles` (see FAULT INJECTION RESULTS):
+Today's Operations AND Tomorrow Readiness AND Recurring Care all degraded
+to their own independent "unavailable" states, while Proof of Service
+happened to remain healthy in this specific run — not because it is
+truly independent of `vehicles`, but because the local fixture data had
+zero completed trips from yesterday, so its own vehicles-embedding query
+branch was never actually evaluated against a row that needed it. This is
+exactly the accepted "shared table reality" this phase anticipates (§12):
+the correctness property that matters is that EVERY affected block failed
+containedly and the route never crashed, not that the blocks were
+perfectly independent — they demonstrably are not, and this report
+documents that rather than asserting a false independence.
+
+FAULT INJECTION METHOD
+---------------------------
+Local-only, reversible, no migration:
+  docker exec -i supabase_db_ZenWard psql -U postgres -d postgres \
+    -c "revoke select on public.vehicles from authenticated;"
+Chosen after mapping dependencies (above) as the table with the narrowest
+blast radius among Today's Operations' own dependencies while still
+guaranteed to trigger a real failure (`vehicles` is embedded directly in
+TRIP_COLUMNS, used by both the "today" and "active" trip queries — a
+revoked embed causes PostgREST to fail the entire row-select for the
+affected tables, mirroring the "real failure...observed during prior
+controlled local fault injection" this phase's mission cites).
+
+FAULT INJECTION RESULTS
+----------------------------
+Verified live against the local dev server (localhost:3000) and local
+Supabase (docker), via headless Chrome/CDP
+(.tmp-qa/s3-ops-e2e.mjs, 3 modes: healthy / faulted / restored):
+
+  HEALTHY (before fault):
+    PASS  /operations renders normally, not redirected
+    PASS  PageHeader/sidebar present
+    PASS  No raw error text
+    PASS  Real "Operations Brief" content shown, no unavailable text
+    PASS  Driver redirected away from /operations
+    PASS  No horizontal overflow at 1024px
+
+  FAULTED (SELECT revoked on vehicles):
+    PASS  /operations still renders and returns successfully (no crash,
+          no 500, no route-level error boundary)
+    PASS  PageHeader/sidebar/navigation fully intact
+    PASS  Brief's compact block shows "Today's operations unavailable"
+    PASS  Page's own larger detail region shows the SAME contained
+          unavailable panel in place of SummaryStrip + the 4-panel grid
+    PASS  Driver Snapshot renders normally ("On trip now: 1 of 2 active
+          drivers") — genuinely independent, unaffected
+    PASS  Requests awaiting review renders normally ("1 request") —
+          genuinely independent, unaffected
+    SHARED-FAULT  Tomorrow readiness shows its own "Tomorrow readiness
+          unavailable" (cascaded via the shared `vehicles` embed — see
+          SHARED-TABLE BEHAVIOR)
+    SHARED-FAULT  Recurring care shows its own "Recurring care unavailable"
+          (same shared-embed cascade)
+    PASS  Proof of service remained healthy ("No completed trips to
+          review from yesterday") in this specific run — see SHARED-TABLE
+          BEHAVIOR for why this is not a guaranteed independence claim
+    PASS  No raw Supabase/SQL/PostgREST/ZW-code/stack-trace text anywhere
+          on the page (regex-scanned)
+    PASS  No false "0 active trips"/"No trips scheduled today"/"Nothing
+          needs attention" claim anywhere
+    PASS  Driver still redirected away from /operations
+    PASS  No horizontal overflow at 1024px
+    (Dev-only note: Next.js's dev-mode indicator surfaced a "1 Issue"
+    badge during this run — confirmed to be exactly this phase's own new
+    `console.error("[operations] getTodaysOperations failed")` diagnostic
+    log being faithfully surfaced by the dev server, not a defect; this
+    indicator does not exist in a production build.)
+
+  RESTORED (SELECT re-granted on vehicles):
+    PASS  Full healthy Overview returns — identical to the pre-fault
+          HEALTHY run, no lingering "unavailable" text anywhere
+    PASS  Driver still redirected away from /operations
+    PASS  No horizontal overflow at 1024px
+
+FAULT RESTORATION
+---------------------
+  docker exec -i supabase_db_ZenWard psql -U postgres -d postgres \
+    -c "grant select on public.vehicles to authenticated;"
+Verified via `\dp vehicles` that the restored grant (`authenticated=ar`)
+is byte-for-byte identical to the pre-fault state, and via the RESTORED
+E2E run above that the page returns to full health. No migration was
+touched at any point; the fault and its restoration were both plain,
+reversible GRANT/REVOKE statements against the local database only.
+
+HEALTHY PATH
+---------------
+Confirmed three times: once before any fault injection, once immediately
+after restoring the grant, and once more after the final `supabase db
+reset` (below) — all three runs identical in outcome (0 failures).
+
+AUTHORIZATION
+----------------
+`requireOperationsAccess` was not modified in any way. Confirmed live in
+all three fault-injection modes (healthy/faulted/restored): a Driver
+Membership signing in and navigating to /operations was redirected to
+/driver every time, including during the fault — the failure boundary
+added by this phase sits entirely inside the already-authorized render
+path and never touches the authorization gate itself.
+
+ORG ISOLATION
+----------------
+No change was made to how `organizationId`/`organizationTimezone` are
+resolved — both still come exclusively from `requireOperationsAccess`'s
+own `OrganizationContext`, exactly as before this phase, in every code
+path this phase touched. Not re-tested live this phase since nothing in
+the trust boundary was altered (out of scope — this phase changed only
+application-level error isolation, per its own regression rule).
+
+RECURRING CARE BULK COEXISTENCE
+------------------------------------
+`npm run build`'s route manifest (run twice — once before local fixture
+cleanup, once after) confirmed `/operations/recurring-care`,
+`/operations/recurring-care/[arrangementId]`, and `/operations/recurring-
+care/create-missing` all still compile as their own distinct routes.
+Live-confirmed post-reset via authenticated navigation: both
+`/operations/recurring-care` (renders "Recurring Care") and
+`/operations/recurring-care/create-missing` (renders "Review missing
+rides") load correctly. No missing-rides workflow behavior was re-
+exercised (not required by this phase — S2's own local/production
+validation already covered it in full).
+
+LOCAL FIXTURE CLEANUP
+--------------------------
+One `supabase db reset` was run, after all fault-injection work (both the
+fault and its restoration) was already complete — no repeated resets. All
+26 migrations (through 20260918100000_maintain_privilege_hardening.sql,
+the current HEAD's own last migration) applied cleanly; `supabase/seed.sql`
+reseeded normally. One unrelated, benign warning appeared during the reset
+("failed to cache migrations catalog... Failed loading
+https://registry.npmjs.org/@supabase%2fpg-delta") — an optional, network-
+dependent Studio diffing feature with no bearing on schema/seed
+correctness; the reset itself completed successfully
+("Finished supabase db reset on branch main"). Post-reset, /operations
+was re-verified healthy with normal seeded data (2 Needs Attention items,
+matching the standard seed fixture — the S2-phase-era synthetic scale-test
+arrangements are gone, as intended).
+
+RESPONSIVE
+-------------
+1024px viewport checked in all three fault-injection modes (healthy/
+faulted/restored) — no horizontal overflow in any of them, including the
+new "Today's operations unavailable" Panel/EmptyState.
+
+ACCESSIBILITY
+-----------------
+No dedicated accessibility audit was run this phase (out of the explicit
+"small, isolated" scope). No new interactive element, custom widget, or
+new component was introduced — the unavailable treatment reuses the
+existing `Panel`/`EmptyState` primitives verbatim (the same components
+already used throughout /operations for every other empty/failure state),
+so no new accessibility surface was created beyond what those primitives
+already provide.
+
+APPLICATION TEST RESULTS
+----------------------------
+npx tsc --noEmit   : clean, 0 errors
+npm run lint        : 0 errors, 48 warnings (47 pre-existing + 1 new,
+                       the new one being an unused import in this phase's
+                       own new scratch script .tmp-qa/s3-ops-e2e.mjs — not
+                       product code)
+npm run build        : succeeded twice (before and after the local
+                       fixture reset); route manifest unchanged in shape
+npm test              : 260 / 260 passing (255 baseline + 5 new, all in
+                       operations-brief-core.test.mjs)
+No full SQL regression was run. No concurrency battery was run. Both
+explicitly out of scope per this phase's own regression rule (no mutation/
+RPC/schema change occurred).
+
+FILES CREATED
+----------------
+None (product code). Local-only QA scripts (not shipped, not staged):
+  .tmp-qa/s3-ops-e2e.mjs
+
+FILES MODIFIED
+------------------
+  src/lib/operations/operations-brief-core.ts   — OperationsBriefDayState
+    gains "UNAVAILABLE"; OperationsBriefData's today's-operations-derived
+    fields become nullable; deriveOperationsBrief accepts `data:
+    TodaysOperationsData | null` and returns the UNAVAILABLE contract.
+  src/lib/operations/operations-brief-core.test.mjs — 5 new focused unit
+    tests for the `data === null` contract.
+  src/lib/operations/operations-brief.ts   — `getOperationsBrief()`'s own
+    (currently uncalled) `getTodaysOperations` invocation is now caught
+    the same way as its three sibling promises, for consistency within
+    the same file/invariant rather than leaving an identical dormant bug
+    unfixed next to the one just corrected.
+  src/components/operations/OperationsBrief.tsx   — new `isUnavailable`
+    branch (dayState === "UNAVAILABLE") renders the contained unavailable
+    Panel; the 4 independently-sourced blocks (Driver Snapshot, Requests,
+    Tomorrow Readiness, Recurring Care, Proof of Service) are unchanged
+    and still render unconditionally.
+  src/app/operations/page.tsx   — `getTodaysOperations` is now started in
+    parallel and caught via `.then/.catch` into a discriminated result;
+    the SummaryStrip + 4-panel detail region is now gated behind one
+    `data === null` conditional with a single contained unavailable
+    Panel.
+
+No existing Server Action, RPC, migration, or RLS policy was touched.
+
+SCHEMA IMPACT
+----------------
+None. No migration was written or needed.
+
+RLS IMPACT
+-------------
+None. No policy was added, removed, or modified. The fault-injection
+GRANT/REVOKE was a temporary, local-only, immediately-reversed table
+privilege change — not a migration, not an RLS policy, and fully restored
+before this report was written (confirmed via `\dp vehicles` matching the
+pre-fault state exactly).
+
+OPEN ISSUES
+--------------
+1. `getOnboardingChecklist`/`getDriverSnapshot`/`getRequestSummary` in
+   page.tsx still share one plain, un-caught `Promise.all` — a genuine
+   failure in any of the three would still take down the whole route.
+   Deliberately NOT addressed this phase (out of the explicitly-scoped
+   "Today's Operations must never take down the page" mission; expanding
+   to these three would have broadened the diff beyond what this phase's
+   own "small diff preferred" / "solve the actual pilot risk only"
+   instruction allows). Flagged here as a candidate for a future,
+   similarly-scoped hardening phase if it becomes a real pilot risk.
+2. `getOperationsBrief()` (operations-brief.ts) has zero current callers
+   in the codebase — it was still fixed (see FILES MODIFIED) for internal
+   consistency, but its lack of any caller means this fix has no
+   observable effect on the live product today; it only prevents a latent
+   bug from surfacing if/when this function is ever wired up.
+3. The shared-`vehicles`-embed cascade (Tomorrow Readiness, Recurring
+   Care, and — situationally — Proof of Service) is real, current, and
+   accepted per §12 of this phase's own instructions. A future phase
+   focused specifically on Brief-block independence could reduce this
+   blast radius (e.g., by making each block's own vehicle/driver status
+   lookup independently fault-tolerant), but that is explicitly a
+   different, larger phase than this one.
+
+BASE HEAD:
+9ac0d14ebfc3cee70767f939f4ee17b328f95545
+
+TODAY'S OPERATIONS HEALTHY:
+PASS
+
+FAULT INJECTION:
+PASS
+
+FULL PAGE SURVIVES:
+PASS
+
+NO FALSE ZERO:
+PASS
+
+UNAVAILABLE STATE:
+PASS
+
+INDEPENDENT BRIEF:
+PASS
+
+PROOF OF SERVICE:
+PASS
+
+RECURRING CARE:
+SHARED-FAULT
+
+REQUESTS:
+PASS
+
+DRIVER SNAPSHOT:
+PASS
+
+FAULT RESTORED:
+PASS
+
+S2 ROUTE COMPATIBILITY:
+PASS
+
+LOCAL FIXTURES:
+CLEAN
+
+NEW SCHEMA:
+NO
+
+NEW RPC:
+NO
+
+NEW RLS:
+NO
+
+FULL SQL:
+NOT RUN — APPLICATION RESILIENCE PHASE
+
+CONCURRENCY:
+NOT RUN — NO MUTATION CHANGE
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+260/260
+
+READY FOR S4:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-PILOT-S4 — PRE-PILOT PRODUCTION RELEASE + 7-DAY PILOT READINESS GATE
+
+Do NOT begin S4.
+Do NOT commit.
+Do NOT push.
+Do NOT deploy.
+
+STOP.

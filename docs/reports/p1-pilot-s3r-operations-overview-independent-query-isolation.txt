@@ -1,0 +1,379 @@
+P1-PILOT-S3R — OPERATIONS OVERVIEW REMAINING INDEPENDENT QUERY ISOLATION
+============================================================================
+Date: 2026-09-19
+Baseline: P1-PILOT-S3's LOCAL, UNCOMMITTED working tree, over production
+commit 9ac0d14ebfc3cee70767f939f4ee17b328f95545.
+Scope: LOCAL IMPLEMENTATION ONLY. Not committed. Not pushed. Not deployed.
+
+S3 CARRY-FORWARD
+--------------------
+Confirmed at the start of this phase (git status --short / git diff --stat)
+that every P1-PILOT-S3 modification was still present and untouched:
+  M src/app/operations/page.tsx
+  M src/components/operations/OperationsBrief.tsx
+  M src/lib/operations/operations-brief-core.test.mjs
+  M src/lib/operations/operations-brief-core.ts
+  M src/lib/operations/operations-brief.ts
+(5 files, 355 insertions / 152 deletions, matching S3's own report exactly.)
+No S3 file was reset, checked out, stashed, or discarded. No commit existed
+at the start of this phase — HEAD was still 9ac0d14, exactly as S3 left it.
+
+REMAINING FAILURE PATH
+---------------------------
+Read fresh: src/app/operations/page.tsx, OperationsBrief.tsx,
+getOnboardingChecklist (onboarding-checklist.ts), getDriverSnapshot and
+getRequestSummary (operations-brief.ts). Confirmed exactly what S3's own
+OPEN ISSUES section flagged: `getOnboardingChecklist`, `getDriverSnapshot`,
+and `getRequestSummary` were still awaited together inside one plain,
+uncaught `Promise.all` in page.tsx — a genuine rejection from any one of
+them would still propagate out of the Server Component and take down the
+entire /operations route, the same availability class S3 had just fixed
+for `getTodaysOperations`.
+
+Traced field-by-field, not assumed:
+  - `getOnboardingChecklist(organizationId)` -> `OnboardingChecklist` ->
+    consumed ONLY by `<OnboardingChecklistBanner checklist={checklist} />`
+    at the top of the page — no other section reads it.
+  - `getDriverSnapshot(organizationId)` -> `OperationsBriefDriverSnapshot`
+    -> passed into `deriveOperationsBrief` -> `OperationsBriefData.
+    driverSnapshot` -> rendered ONLY by `DriverSnapshotBlock` inside
+    OperationsBrief.tsx.
+  - `getRequestSummary(organizationId)` -> `OperationsBriefRequestSummary`
+    -> passed into `deriveOperationsBrief` -> `OperationsBriefData.
+    requestSummary` -> rendered ONLY by `RequestsAwaitingReviewBlock`
+    inside OperationsBrief.tsx.
+None of the three feeds any other section of the page.
+
+ONBOARDING ISOLATION
+-------------------------
+`getOnboardingChecklist` is now started as its own promise, caught with
+`.catch(() => null)` (a safe, fixed `console.error("[operations]
+getOnboardingChecklist failed")` log, no dynamic error content). Per this
+phase's own §4, no dedicated "unavailable" UI treatment was added: this is
+a low-priority setup banner, not operationally load-bearing, and
+`OnboardingChecklistBanner` already had an established "stop rendering
+entirely" precedent (once setup is complete). The component's null-check
+was extended one line: `if (checklist === null || checklist.isComplete)
+return null;` — on a genuine fetch failure the banner is simply omitted,
+never rendered as complete, never rendered with a fabricated count. This
+was the documented, deliberate choice per §4's own explicit allowance
+("omission is acceptable provided unknown is not presented as completed").
+
+DRIVER SNAPSHOT ISOLATION
+------------------------------
+`getDriverSnapshot` is now started as its own promise, caught with
+`.catch(() => null)` (page.tsx) — and, for consistency, the same fix was
+applied to `getOperationsBrief()`'s own (still currently uncalled) second
+call site in operations-brief.ts. `OperationsBriefData.driverSnapshot`
+became `OperationsBriefDriverSnapshot | null` (the smallest type change
+required — a straight pass-through nullable field, mirroring
+`tomorrowReadiness`'s exact established convention; no Result<T>
+framework). `DriverSnapshotBlock` gained a `snapshot === null` branch
+rendering "Driver snapshot unavailable" with the same compact Panel shape
+every other Brief block already uses, before its existing
+`hasDrivers`/`totalActiveDrivers` logic (which is now unreachable when
+`snapshot` is null, since the null branch returns first).
+
+REQUEST SUMMARY ISOLATION
+------------------------------
+Identical shape to Driver Snapshot: `getRequestSummary` started as its own
+independently-caught promise (both in page.tsx and, for consistency, in
+`getOperationsBrief()`). `OperationsBriefData.requestSummary` became
+`OperationsBriefRequestSummary | null`. `RequestsAwaitingReviewBlock`
+gained a `summary === null` branch rendering "Request summary unavailable"
+in the same compact Panel shape, before its existing
+`hasPending`/`pendingRequestCount` logic.
+
+UNKNOWN VS ZERO
+-------------------
+Hard invariant preserved and unit-tested: `driverSnapshot`/`requestSummary`
+being `null` never renders as `0 active drivers` / `0 requests` / "No
+drivers set up yet" / "No requests awaiting review" (all real,
+successfully-fetched-zero copy, reserved for the actual `{
+totalActiveDrivers: 0, ... }` / `{ pendingRequestCount: 0, ... }` cases).
+4 new focused unit tests added to operations-brief-core.test.mjs:
+  - driverSnapshot null passes through unchanged, never coerced to zero
+  - requestSummary null passes through unchanged, never coerced to zero
+  - driverSnapshot/requestSummary null does NOT force dayState into
+    UNAVAILABLE (each failure stays independently representable, never
+    coupled to Today's Operations' own contract)
+  - driverSnapshot/requestSummary null AND data also null: every failure
+    stays independently null, never conflated into one combined state
+
+OPERATIONS BRIEF CONTRACT
+------------------------------
+`OperationsBriefData.driverSnapshot`/`.requestSummary` changed from
+required to `T | null` — the smallest type change required, exactly
+mirroring the already-established `tomorrowReadiness`/`recurringCare`/
+`proofOfService` nullable-summary convention (each with its own doc
+comment explaining the null-only-on-genuine-failure contract).
+`deriveOperationsBrief`'s corresponding parameters changed to `T | null`;
+the function body needed NO other change, since both values were already
+pure pass-through fields (never derived from `data`/`getTodaysOperations`).
+No generic Result<T> framework was introduced. S3's own Today's Operations
+UNAVAILABLE contract (dayState/attention/activeNow/nextDepartures/
+unassignedCount) was not touched in any way. Tomorrow Readiness, Recurring
+Care, and Proof of Service were not touched in any way — confirmed by
+`git diff` showing no line changes inside `TomorrowReadinessBlock`/
+`RecurringCareBlock`/`ProofOfServiceBlock` or their corresponding
+`getTomorrowReadinessSummary`/`getRecurringCareSummary`/
+`getProofOfServiceSummary` functions.
+
+FAULT INJECTION
+-------------------
+Local-only, reversible, no migration — same `docker exec ... psql`
+GRANT/REVOKE pattern S3 already established. Dependency mapping first
+(grep across every Overview-adjacent query module) confirmed:
+  - `transportation_requests` is referenced ONLY by `getRequestSummary`
+    among every Overview/Brief data source — a genuinely clean isolation
+    target.
+  - `drivers` is embedded (via `drivers!...` FK joins) in FOUR different
+    modules — todays-operations.ts, tomorrow-readiness.ts,
+    recurring-care.ts, AND trip-proof-of-service.ts — in addition to being
+    Driver Snapshot's own primary table. Per this phase's own §9
+    contingency ("if Driver Snapshot cannot be isolated cleanly because of
+    shared tables, choose the narrowest real fault and document the shared
+    impact"), `drivers` was still used as the fault target (the narrowest
+    real fault available, and the one Driver Snapshot's own first query
+    hits directly and unconditionally), with the resulting cascade
+    documented below rather than a false independence claim.
+
+  FAULT A — `revoke select on public.drivers from authenticated;`
+    Live result (headless Chrome/CDP against localhost, .tmp-qa/
+    s3r-ops-e2e.mjs "drivers-fault" mode):
+      PASS  /operations still renders and returns successfully
+      PASS  PageHeader/sidebar/navigation fully intact
+      PASS  Driver Snapshot shows "Driver snapshot unavailable"
+      PASS  No false "No drivers set up yet."/"0 active drivers" claim
+      PASS  Requests awaiting review remained healthy ("1 request") —
+            genuinely independent of `drivers`
+      SHARED-FAULT  Today's Operations also showed "Today's operations
+            unavailable" (drivers embedded directly in TRIP_COLUMNS)
+      SHARED-FAULT  Tomorrow readiness also showed "Tomorrow readiness
+            unavailable" (same shared drivers-status embed pattern S3
+            already documented for `vehicles`)
+      Recurring care and Proof of service both remained healthy in this
+      specific run (zero active recurring arrangements / zero completed
+      trips yesterday in the current seed meant their own drivers-embed
+      query branch was never evaluated against a row needing it — the
+      same situational independence S3 documented for `vehicles` and
+      Proof of Service).
+      No raw SQL/PostgREST/ZW-code/stack-trace text anywhere (regex-
+      scanned). Driver still redirected away from /operations.
+    Restored: `grant select on public.drivers to authenticated;` —
+    verified via `\dp drivers` identical to the pre-fault
+    `authenticated=ar` state.
+
+  FAULT B — `revoke select on public.transportation_requests from
+    authenticated;`
+    Live result ("requests-fault" mode):
+      PASS  /operations still renders and returns successfully
+      PASS  Requests awaiting review shows "Request summary unavailable"
+      PASS  No false "No requests awaiting review" claim
+      PASS  Today's Operations remained fully healthy (real trip data,
+            SummaryStrip, all 4 panels)
+      PASS  Driver Snapshot remained fully healthy ("On trip now: 1 of 2
+            active drivers")
+      PASS  Tomorrow readiness remained fully healthy ("1 trip needs
+            preparation")
+      PASS  Recurring care remained fully healthy ("No recurring
+            transportation set up" — a real, successfully-fetched state)
+      PASS  Proof of service remained fully healthy ("No completed trips
+            to review from yesterday" — a real, successfully-fetched
+            state)
+      No raw SQL/PostgREST/ZW-code/stack-trace text anywhere. Driver still
+      redirected away from /operations.
+    This is the genuinely clean, fully-isolated case this phase's mission
+    was chartered around — confirmed empirically, not just by static
+    dependency mapping.
+    Restored: `grant select on public.transportation_requests to
+    authenticated;` — verified via `\dp transportation_requests` identical
+    to the pre-fault `authenticated=r` state.
+
+ONBOARDING FAILURE VALIDATION
+----------------------------------
+Not live-fault-tested. `getOnboardingChecklist` touches `vehicles`,
+`drivers`, `facilities`, `passengers`, and `trips` — every one of them a
+heavily-shared, foundational table across the whole Overview page; any
+fault broad enough to trigger it would have cascaded far beyond
+"onboarding" specifically and would have destabilized the OTHER two
+targeted fault tests in this same phase. Per this phase's own §10
+("If not [a clean local-only fault]: source-level validation + unit
+contract may be sufficient because onboarding is not operationally
+load-bearing. Do not invent dangerous database faults just to tick a
+box."), this phase relied instead on: (1) source-level confirmation that
+`checklistPromise` is now caught exactly like the other two, verified by
+`tsc`/`build`; (2) the component-level contract itself (`checklist ===
+null` renders nothing, same code path already proven for
+`checklist.isComplete`), which needed no new pure-core unit test since it
+introduces no new derivation logic — it is a one-line early return,
+consistent with this repository's own convention of not unit-testing
+components directly (S3 made the same choice for its own UI-only
+changes).
+
+FAULTED UI ASSERTIONS
+--------------------------
+See FAULT INJECTION above for the full per-fault checklist; every required
+assertion from this phase's own §11 was verified live and passed,
+including the explicit "no raw SQL/PGRST/ZW/stack traces" check via a
+regex scan of the fully-rendered page body text in both faulted runs.
+
+TODAY'S OPERATIONS REGRESSION
+----------------------------------
+S3's own contract was not touched by this phase (confirmed via `git diff`
+showing zero changed lines inside the `dayState === "UNAVAILABLE"` branch
+of `deriveOperationsBrief`, the `isUnavailable` branch of OperationsBrief.
+tsx, or the `todaysOperationsPromise`/`data === null` handling in
+page.tsx). Re-confirmed live rather than assumed: the "healthy" mode of
+.tmp-qa/s3r-ops-e2e.mjs (run 3 times — before any fault, and twice more
+after each restoration) showed Today's Operations fully healthy every
+time, with no "Today's operations unavailable" text present. The full S3
+fault-injection matrix (the `vehicles`-table test) was not repeated in
+full, per this phase's own §14 ("You do NOT need to repeat the full S3
+matrix unless the changes touched its logic materially") — it did not.
+
+HEALTHY PATH
+---------------
+Confirmed 3 times end-to-end via .tmp-qa/s3r-ops-e2e.mjs "healthy"/
+"restored" modes: once before any S3R fault injection, once after both
+faults were restored, and once more after the final `supabase db reset`
+below. All three runs: 0 failures, Driver Snapshot/Requests/Today's
+Operations all genuinely healthy, Driver still redirected from
+/operations, no raw error text.
+
+AUTHORIZATION
+----------------
+`requireOperationsAccess` was not modified in any way — confirmed via
+`git diff` (zero changes to src/lib/auth/authorization.ts, which this
+phase never opened for editing) and live: a Driver Membership was
+redirected to /driver in every one of the 4 E2E runs this phase performed
+(healthy, drivers-fault, requests-fault, restored).
+
+FILES MODIFIED
+------------------
+  src/lib/operations/operations-brief-core.ts — `OperationsBriefData.
+    driverSnapshot`/`.requestSummary` become `T | null`;
+    `deriveOperationsBrief`'s corresponding parameters become `T | null`
+    (pure pass-through, no logic change).
+  src/lib/operations/operations-brief-core.test.mjs — 4 new focused unit
+    tests for the driverSnapshot/requestSummary null contract.
+  src/lib/operations/operations-brief.ts — `getOperationsBrief()`'s own
+    (still uncalled) `getDriverSnapshot`/`getRequestSummary` invocations
+    now caught independently, for the same internal-consistency reason S3
+    fixed its `getTodaysOperations` call.
+  src/components/operations/OperationsBrief.tsx — `DriverSnapshotBlock`/
+    `RequestsAwaitingReviewBlock` each gain a `null`-branch rendering their
+    own contained "unavailable" copy, mirroring `TomorrowReadinessBlock`'s
+    established pattern exactly.
+  src/components/operations/OnboardingChecklistBanner.tsx — accepts
+    `checklist: OnboardingChecklist | null`; a genuine fetch failure is
+    treated the same as "nothing to show" (one-line change to the existing
+    early-return condition).
+  src/app/operations/page.tsx — `getOnboardingChecklist`/
+    `getDriverSnapshot`/`getRequestSummary` each started as their own
+    promise and caught independently (safe, fixed-message
+    `console.error` logs), still all started in parallel, still awaited
+    together via one `Promise.all` over the three now-safe promises.
+
+No existing Server Action, RPC, migration, or RLS policy was touched. No
+S3 file's Today's-Operations-specific logic was altered.
+
+SCHEMA IMPACT
+----------------
+None. No migration was written or needed.
+
+RLS IMPACT
+-------------
+None. No policy was added, removed, or modified. Both fault-injection
+GRANT/REVOKE pairs were temporary, local-only, and fully restored before
+this report was written — confirmed via `\dp drivers`/`\dp
+transportation_requests` matching their pre-fault state exactly, and
+reconfirmed once more after the final `supabase db reset` (both grants
+came back from the migrations themselves, matching baseline, with no
+manual grant needed).
+
+OPEN ISSUES
+--------------
+1. The shared-`drivers`-embed cascade (Today's Operations, Tomorrow
+   Readiness, and — situationally — Recurring Care/Proof of Service) is
+   real and, per this phase's own §9 contingency, accepted rather than
+   engineered around; a future phase focused specifically on reducing
+   Brief-block coupling could address it, but that is a larger, different
+   phase than this one.
+2. `getOperationsBrief()` (operations-brief.ts) still has zero callers in
+   the codebase. Both of its own latent failure paths (Today's Operations
+   from S3, Driver Snapshot/Request Summary from this phase) were fixed
+   for consistency, but neither fix has any observable effect on the live
+   product until/unless this function is ever wired up.
+3. `getOnboardingChecklist`'s own INTERNAL per-item `count ?? 0` fallback
+   (onboarding-checklist.ts) silently treats a genuine per-query error the
+   same as a real zero count for that one checklist item, even though the
+   OUTER function itself doesn't throw in that case. This is a separate,
+   pre-existing, narrower issue from the one this phase was chartered to
+   fix (the whole-function rejection propagating out of the page) and was
+   deliberately not touched, per this phase's own "small diff, no
+   over-engineering" instruction — flagged here for visibility only.
+
+TODAY'S OPERATIONS ISOLATION:
+PASS
+
+ONBOARDING FAILURE CONTAINED:
+SOURCE-VERIFIED
+
+DRIVER SNAPSHOT FAILURE CONTAINED:
+PASS
+
+NO FALSE DRIVER ZERO:
+PASS
+
+REQUEST SUMMARY FAILURE CONTAINED:
+PASS
+
+NO FALSE REQUEST ZERO:
+PASS
+
+FULL PAGE SURVIVES:
+PASS
+
+FAULTS RESTORED:
+PASS
+
+NEW SCHEMA:
+NO
+
+NEW RPC:
+NO
+
+NEW RLS:
+NO
+
+FULL SQL:
+NOT RUN — APPLICATION RESILIENCE
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+BUILD:
+PASS
+
+UNIT:
+264/264
+
+READY FOR S4:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-PILOT-S4 — PRE-PILOT PRODUCTION RELEASE + 7-DAY PILOT READINESS GATE
+
+Do NOT begin S4.
+Do NOT commit.
+Do NOT push.
+Do NOT deploy.
+
+STOP.

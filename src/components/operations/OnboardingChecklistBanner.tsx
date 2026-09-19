@@ -12,9 +12,16 @@ import type { OnboardingChecklist } from "@/lib/operations/onboarding-checklist"
  * drift from reality. Every item's completion is derived live from real
  * data (`getOnboardingChecklist`) — never a persisted "80% complete"
  * value.
+ *
+ * `checklist === null` (P1-PILOT-S3R) means the underlying
+ * `getOnboardingChecklist` fetch genuinely failed — this low-priority
+ * banner is simply omitted in that case (never rendered as complete,
+ * never rendered with a fabricated 0/6 count) rather than given its own
+ * contained "unavailable" treatment, since it is not operationally
+ * load-bearing.
  */
-export function OnboardingChecklistBanner({ checklist }: { checklist: OnboardingChecklist }) {
-  if (checklist.isComplete) {
+export function OnboardingChecklistBanner({ checklist }: { checklist: OnboardingChecklist | null }) {
+  if (checklist === null || checklist.isComplete) {
     return null;
   }
 

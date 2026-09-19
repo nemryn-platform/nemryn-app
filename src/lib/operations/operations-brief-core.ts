@@ -34,8 +34,14 @@ import type { TodaysOperationsData, TodaysOperationsTrip, TodaysOperationsAttent
  * ACTIVE_DAY: everything else — today has trips that are not (all)
  *   completed, whether scheduled, in progress, or a mix including a
  *   cancellation/no-show alongside completions.
+ * UNAVAILABLE (P1-PILOT-S3): the underlying `getTodaysOperations` fetch
+ *   genuinely failed — never computed from real trip data, and never
+ *   conflated with NO_TRIPS (a real, successfully-fetched "zero trips"
+ *   answer). "Unknown" must never present as "healthy/zero," mirroring
+ *   the same failure-vs-empty convention already established for
+ *   `tomorrowReadiness`/`recurringCare`/`proofOfService` below.
  */
-export type OperationsBriefDayState = "NO_TRIPS" | "ALL_COMPLETE" | "ACTIVE_DAY";
+export type OperationsBriefDayState = "NO_TRIPS" | "ALL_COMPLETE" | "ACTIVE_DAY" | "UNAVAILABLE";
 
 /** Next Departures window — 2 hours, inclusive of both boundaries (see deriveNextDepartures's own doc comment for exact semantics). */
 const NEXT_DEPARTURES_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -262,17 +268,58 @@ export function deriveProofOfServiceSummary(results: ProofOfServiceSummaryInputR
 
 export interface OperationsBriefData {
   dayState: OperationsBriefDayState;
-  totalTripsToday: number;
-  /** Pass-through of getTodaysOperations().attentionItems — same objects, same deterministic priority order (trip-assurance.ts's evaluator + todays-operations.ts's own PRIORITY_RANK sort). Never re-sorted or re-evaluated here. */
-  attention: TodaysOperationsAttentionItem[];
-  /** Pass-through of getTodaysOperations().activeTrips — no new lifecycle concept (delayed/late/at-risk/on-time) is introduced. */
-  activeNow: TodaysOperationsTrip[];
-  /** Derived subset of todayTrips: state='scheduled', not already present in `attention`, scheduled_pickup_at within [now, now+2h]. See deriveNextDepartures. */
-  nextDepartures: TodaysOperationsTrip[];
-  /** Count only (P1-E1-S1A §11's own resolved ambiguity) — every unassigned trip already appears as its own row inside `attention` via the NEEDS_ASSIGNMENT assurance code; this is deliberately NOT a second row collection. */
-  unassignedCount: number;
-  driverSnapshot: OperationsBriefDriverSnapshot;
-  requestSummary: OperationsBriefRequestSummary;
+  /**
+   * `null` only when `dayState === "UNAVAILABLE"` (P1-PILOT-S3) — the
+   * underlying `getTodaysOperations` fetch genuinely failed. Never `0`,
+   * which is a real, successfully-fetched "no trips today" answer.
+   */
+  totalTripsToday: number | null;
+  /**
+   * Pass-through of getTodaysOperations().attentionItems — same objects,
+   * same deterministic priority order (trip-assurance.ts's evaluator +
+   * todays-operations.ts's own PRIORITY_RANK sort). Never re-sorted or
+   * re-evaluated here. `null` only when `dayState === "UNAVAILABLE"`
+   * (P1-PILOT-S3) — never `[]`, which would falsely claim "nothing needs
+   * attention" when attention status is actually unknown.
+   */
+  attention: TodaysOperationsAttentionItem[] | null;
+  /**
+   * Pass-through of getTodaysOperations().activeTrips — no new lifecycle
+   * concept (delayed/late/at-risk/on-time) is introduced. `null` only
+   * when `dayState === "UNAVAILABLE"` (P1-PILOT-S3) — never `[]`.
+   */
+  activeNow: TodaysOperationsTrip[] | null;
+  /**
+   * Derived subset of todayTrips: state='scheduled', not already present
+   * in `attention`, scheduled_pickup_at within [now, now+2h]. See
+   * deriveNextDepartures. `null` only when `dayState === "UNAVAILABLE"`
+   * (P1-PILOT-S3) — never `[]`.
+   */
+  nextDepartures: TodaysOperationsTrip[] | null;
+  /**
+   * Count only (P1-E1-S1A §11's own resolved ambiguity) — every
+   * unassigned trip already appears as its own row inside `attention` via
+   * the NEEDS_ASSIGNMENT assurance code; this is deliberately NOT a
+   * second row collection. `null` only when `dayState === "UNAVAILABLE"`
+   * (P1-PILOT-S3) — never `0`.
+   */
+  unassignedCount: number | null;
+  /**
+   * `null` only when the underlying `getDriverSnapshot` fetch genuinely
+   * failed (P1-PILOT-S3R) — never used to represent "0 active drivers,"
+   * which is a real, distinct, successfully-fetched
+   * `{ totalActiveDrivers: 0, ... }` value. Mirrors `tomorrowReadiness`'s
+   * own established null-on-failure convention exactly.
+   */
+  driverSnapshot: OperationsBriefDriverSnapshot | null;
+  /**
+   * `null` only when the underlying `getRequestSummary` fetch genuinely
+   * failed (P1-PILOT-S3R) — never used to represent "0 pending requests,"
+   * which is a real, distinct, successfully-fetched
+   * `{ pendingRequestCount: 0, ... }` value. Mirrors `tomorrowReadiness`'s
+   * own established null-on-failure convention exactly.
+   */
+  requestSummary: OperationsBriefRequestSummary | null;
   /**
    * `null` only when the underlying `getTomorrowReadiness` fetch
    * genuinely failed (P1-E1-S4E §11) — never used to represent "zero
@@ -385,16 +432,40 @@ export function countDriversCurrentlyOnTrip(rows: DriverAssignmentStateRow[]): n
  * TodaysOperationsData (never re-fetched or re-derived here) and an
  * already-fetched driver snapshot. Pure — no I/O, no `new Date()` inside;
  * `now` is always the caller's own already-resolved instant.
+ *
+ * `data === null` (P1-PILOT-S3) means the underlying `getTodaysOperations`
+ * fetch genuinely failed — the caller (the server-only wrapper or the
+ * page itself) is responsible for catching that failure and passing
+ * `null` through, exactly like `tomorrowReadiness`/`recurringCare`/
+ * `proofOfService` already do. This function never re-derives or guesses
+ * at the failure; it only propagates it as `dayState: "UNAVAILABLE"` with
+ * every today's-operations-derived field set to `null`, never `0`/`[]`.
  */
 export function deriveOperationsBrief(
-  data: TodaysOperationsData,
-  driverSnapshot: OperationsBriefDriverSnapshot,
-  requestSummary: OperationsBriefRequestSummary,
+  data: TodaysOperationsData | null,
+  driverSnapshot: OperationsBriefDriverSnapshot | null,
+  requestSummary: OperationsBriefRequestSummary | null,
   tomorrowReadiness: OperationsBriefTomorrowSummary | null,
   recurringCare: OperationsBriefRecurringCareSummary | null,
   proofOfService: OperationsBriefProofOfServiceSummary | null,
   now: Date,
 ): OperationsBriefData {
+  if (data === null) {
+    return {
+      dayState: "UNAVAILABLE",
+      totalTripsToday: null,
+      attention: null,
+      activeNow: null,
+      nextDepartures: null,
+      unassignedCount: null,
+      driverSnapshot,
+      requestSummary,
+      tomorrowReadiness,
+      recurringCare,
+      proofOfService,
+    };
+  }
+
   const attentionTripIds = new Set(data.attentionItems.map((item) => item.trip.id));
 
   return {

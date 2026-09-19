@@ -97,6 +97,88 @@ test("deriveOperationsBrief — zero trips today still reports real driver count
 });
 
 // ---------------------------------------------------------------------
+// A1. TODAY'S OPERATIONS UNAVAILABLE (P1-PILOT-S3) — data === null means
+// the underlying getTodaysOperations fetch genuinely failed. "Unknown"
+// must never present as "healthy/zero" (§6): dayState becomes
+// "UNAVAILABLE", never "NO_TRIPS", and every today's-operations-derived
+// field becomes null, never 0/[].
+// ---------------------------------------------------------------------
+
+test("deriveOperationsBrief — data null: dayState is UNAVAILABLE, never NO_TRIPS", () => {
+  const result = deriveOperationsBrief(null, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "UNAVAILABLE");
+});
+
+test("deriveOperationsBrief — data null: attention/activeNow/nextDepartures are null, never [] (never a false '0 items' claim)", () => {
+  const result = deriveOperationsBrief(null, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.attention, null);
+  assert.equal(result.activeNow, null);
+  assert.equal(result.nextDepartures, null);
+});
+
+test("deriveOperationsBrief — data null: unassignedCount/totalTripsToday are null, never 0", () => {
+  const result = deriveOperationsBrief(null, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.unassignedCount, null);
+  assert.equal(result.totalTripsToday, null);
+});
+
+test("deriveOperationsBrief — data null: independent summaries (driverSnapshot/requestSummary/tomorrowReadiness/recurringCare/proofOfService) still pass through unchanged", () => {
+  const drivers = { totalActiveDrivers: 4, driversCurrentlyOnTrip: 2 };
+  const requests = { pendingRequestCount: 3, oldestPendingRequestCreatedAt: "2026-09-10T00:00:00.000Z" };
+  const tomorrow = { totalScheduledTrips: 5, readyCount: 5, needsPreparationCount: 0 };
+  const recurring = { activeArrangementCount: 2, missingOccurrenceCount: 1, arrangementsWithMissingCount: 1, nextMissingDate: "2026-09-20" };
+  const proofOfService = { completedTripCount: 6, readyForReviewCount: 6, needsReviewCount: 0, evidenceIntegrityGapCount: 0 };
+  const result = deriveOperationsBrief(null, drivers, requests, tomorrow, recurring, proofOfService, new Date("2026-09-15T10:00:00.000Z"));
+  assert.deepEqual(result.driverSnapshot, drivers);
+  assert.deepEqual(result.requestSummary, requests);
+  assert.deepEqual(result.tomorrowReadiness, tomorrow);
+  assert.deepEqual(result.recurringCare, recurring);
+  assert.deepEqual(result.proofOfService, proofOfService);
+});
+
+test("deriveOperationsBrief — data null AND an independent summary also null (e.g. a genuinely separate Recurring Care failure): each failure stays independently represented, never conflated", () => {
+  const result = deriveOperationsBrief(null, NO_DRIVERS, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, null, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "UNAVAILABLE");
+  assert.equal(result.recurringCare, null);
+  assert.deepEqual(result.tomorrowReadiness, NO_TOMORROW_READINESS);
+});
+
+// ---------------------------------------------------------------------
+// A2. DRIVER SNAPSHOT / REQUEST SUMMARY UNAVAILABLE (P1-PILOT-S3R) —
+// `driverSnapshot`/`requestSummary` are `null` only on a genuine
+// getDriverSnapshot/getRequestSummary fetch failure — never coerced to a
+// zero/healthy value, and never coupled to Today's Operations' own
+// UNAVAILABLE state (each failure is independently representable).
+// ---------------------------------------------------------------------
+
+test("deriveOperationsBrief — driverSnapshot null (genuine fetch failure) passes through unchanged, never coerced to a zero value", () => {
+  const data = makeTodaysOperationsData({ todayTrips: [] });
+  const result = deriveOperationsBrief(data, null, NO_PENDING_REQUESTS, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.driverSnapshot, null);
+});
+
+test("deriveOperationsBrief — requestSummary null (genuine fetch failure) passes through unchanged, never coerced to a zero value", () => {
+  const data = makeTodaysOperationsData({ todayTrips: [] });
+  const result = deriveOperationsBrief(data, NO_DRIVERS, null, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.requestSummary, null);
+});
+
+test("deriveOperationsBrief — driverSnapshot/requestSummary null does NOT force dayState into UNAVAILABLE (independent failures, not coupled to Today's Operations)", () => {
+  const data = makeTodaysOperationsData({ todayTrips: [] });
+  const result = deriveOperationsBrief(data, null, null, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "NO_TRIPS");
+  assert.deepEqual(result.attention, []);
+});
+
+test("deriveOperationsBrief — driverSnapshot/requestSummary null while data is ALSO null: every failure stays independently null, never conflated into one state", () => {
+  const result = deriveOperationsBrief(null, null, null, NO_TOMORROW_READINESS, NO_RECURRING_CARE, NO_PROOF_OF_SERVICE, new Date("2026-09-15T10:00:00.000Z"));
+  assert.equal(result.dayState, "UNAVAILABLE");
+  assert.equal(result.driverSnapshot, null);
+  assert.equal(result.requestSummary, null);
+  assert.deepEqual(result.tomorrowReadiness, NO_TOMORROW_READINESS);
+});
+
+// ---------------------------------------------------------------------
 // B. NEXT DEPARTURES WINDOW — now = 10:00, both boundaries inclusive
 // ---------------------------------------------------------------------
 

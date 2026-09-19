@@ -23,9 +23,17 @@ export interface OperationsBriefProps {
  * (src/lib/operations/operations-brief-core.ts) — this component renders
  * that data, it does not re-filter, re-sort, or re-derive any of it.
  *
- * Four render modes, driven by `brief.dayState` plus the real contents of
+ * Five render modes, driven by `brief.dayState` plus the real contents of
  * `attention`/`activeNow` (never `organizations.business_stage` — P1-E1-
  * S1A §11's own explicit instruction):
+ *   - UNAVAILABLE (P1-PILOT-S3): dayState=UNAVAILABLE — the underlying
+ *     getTodaysOperations fetch genuinely failed. A single contained
+ *     "Today's operations unavailable" panel — never a fabricated
+ *     "Nothing needs attention"/"0 active" claim (§9/§6 — "unknown is
+ *     not zero"). `attention`/`activeNow`/`nextDepartures`/
+ *     `unassignedCount` are all `null` in this mode (deriveOperationsBrief's
+ *     own guaranteed invariant — see operations-brief-core.ts), so they
+ *     are never read here.
  *   - QUIET: dayState=NO_TRIPS and both attention and activeNow are
  *     empty — a single calm "Nothing scheduled today" panel.
  *   - CARRYOVER: dayState=NO_TRIPS but attention or activeNow is
@@ -40,10 +48,12 @@ export interface OperationsBriefProps {
  *     positive "All caught up" panel.
  *   - ACTIVE_DAY (default): the full 3-block grid, each with its own
  *     real content or its own calm empty state.
- * Driver Snapshot and Requests Awaiting Review both render in every
- * mode — neither is trip-scoped (P1-E1-S2G: a pending Request is
- * inbound demand, never a Trip operational failure, so it never joins
- * the day-state-gated Trip sections above).
+ * Driver Snapshot, Requests Awaiting Review, Tomorrow Readiness,
+ * Recurring Care, and Proof of Service all render in EVERY mode
+ * including UNAVAILABLE — none of them is trip-scoped or derived from
+ * getTodaysOperations (P1-E1-S2G / P1-PILOT-S3 §11: a Today's Operations
+ * failure must never take these independently-sourced blocks down with
+ * it).
  */
 export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
   const {
@@ -59,9 +69,10 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
     proofOfService,
   } = brief;
 
-  const isQuiet = dayState === "NO_TRIPS" && activeNow.length === 0 && attention.length === 0;
+  const isUnavailable = dayState === "UNAVAILABLE";
+  const isQuiet = !isUnavailable && dayState === "NO_TRIPS" && activeNow!.length === 0 && attention!.length === 0;
   const isAllComplete = dayState === "ALL_COMPLETE";
-  const isCarryoverOnly = dayState === "NO_TRIPS" && !isQuiet;
+  const isCarryoverOnly = !isUnavailable && dayState === "NO_TRIPS" && !isQuiet;
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -72,7 +83,14 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
         </p>
       </div>
 
-      {isQuiet ? (
+      {isUnavailable ? (
+        <Panel>
+          <EmptyState
+            title="Today's operations unavailable"
+            description="We couldn't load today's trip activity. Refresh the page to try again."
+          />
+        </Panel>
+      ) : isQuiet ? (
         <Panel>
           <EmptyState title="Nothing scheduled today" description="Trips scheduled for today will appear here." />
         </Panel>
@@ -85,13 +103,19 @@ export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
           {isCarryoverOnly && (
             <p className={cn(typography.bodySmall, "text-text-secondary")}>No new trips scheduled today.</p>
           )}
-          <NeedsAttentionBlock items={attention} unassignedCount={unassignedCount} timezone={timezone} />
+          {/* Non-null assertions below are safe by deriveOperationsBrief's
+              own guaranteed invariant: these 4 fields are non-null
+              whenever dayState !== "UNAVAILABLE" (already excluded via
+              `isUnavailable` above), exactly mirroring todays-operations.ts's
+              own established `candidateTrips.get(id)!` precedent for a
+              known-safe-by-construction lookup. */}
+          <NeedsAttentionBlock items={attention!} unassignedCount={unassignedCount!} timezone={timezone} />
           {isCarryoverOnly ? (
-            <ActiveNowBlock trips={activeNow} timezone={timezone} />
+            <ActiveNowBlock trips={activeNow!} timezone={timezone} />
           ) : (
             <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
-              <ActiveNowBlock trips={activeNow} timezone={timezone} />
-              <NextDeparturesBlock trips={nextDepartures} timezone={timezone} />
+              <ActiveNowBlock trips={activeNow!} timezone={timezone} />
+              <NextDeparturesBlock trips={nextDepartures!} timezone={timezone} />
             </div>
           )}
         </>
@@ -275,7 +299,29 @@ function NextDeparturesBlock({ trips, timezone }: { trips: TodaysOperationsTrip[
   );
 }
 
+/**
+ * `snapshot === null` (P1-PILOT-S3R) means the underlying
+ * `getDriverSnapshot` fetch genuinely failed — renders "Driver snapshot
+ * unavailable," never a fabricated "0 active drivers"/"No drivers set up
+ * yet" (that copy is reserved for the real, successfully-fetched
+ * `totalActiveDrivers === 0` case). Mirrors `TomorrowReadinessBlock`'s own
+ * established null-branch convention exactly.
+ */
 function DriverSnapshotBlock({ snapshot }: { snapshot: OperationsBriefData["driverSnapshot"] }) {
+  if (snapshot === null) {
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Driver Snapshot</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Driver snapshot unavailable</p>
+        </div>
+        <LinkButton href="/operations/dispatch" variant="outline" size="sm">
+          View Dispatch
+        </LinkButton>
+      </Panel>
+    );
+  }
+
   const { totalActiveDrivers, driversCurrentlyOnTrip } = snapshot;
   const hasDrivers = totalActiveDrivers > 0;
 
@@ -316,6 +362,24 @@ function RequestsAwaitingReviewBlock({
   summary: OperationsBriefData["requestSummary"];
   timezone: string;
 }) {
+  if (summary === null) {
+    // P1-PILOT-S3R: the underlying `getRequestSummary` fetch genuinely
+    // failed — "Request summary unavailable," never a fabricated "No
+    // requests awaiting review" (that copy is reserved for the real,
+    // successfully-fetched `pendingRequestCount === 0` case).
+    return (
+      <Panel className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Requests awaiting review</h3>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Request summary unavailable</p>
+        </div>
+        <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm">
+          Review requests
+        </LinkButton>
+      </Panel>
+    );
+  }
+
   const { pendingRequestCount, oldestPendingRequestCreatedAt } = summary;
   const hasPending = pendingRequestCount > 0;
 
