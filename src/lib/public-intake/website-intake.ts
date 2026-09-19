@@ -53,6 +53,22 @@ export async function submitWebsiteTransportationRequest(
     p_assistance_notes: submission.assistanceNotes ?? undefined,
     p_additional_notes: submission.additionalNotes ?? undefined,
     p_origin: origin ?? undefined,
+    // P1-PILOT-S4B-R2 — two optional structured fields, both `undefined`
+    // (Postgres default null) when the caller did not send them. The RPC
+    // itself converts recurringSchedule.daysOfWeek's day-NAME strings to
+    // canonical ISO weekday numbers for storage — this module passes
+    // them through unchanged, doing no conversion of its own.
+    p_service_type: submission.serviceType ?? undefined,
+    p_recurring_days_of_week: submission.recurringSchedule?.daysOfWeek ?? undefined,
+    p_recurring_start_date: submission.recurringSchedule?.startDate ?? undefined,
+    p_recurring_end_date: submission.recurringSchedule?.endDate ?? undefined,
+    p_recurring_appointment_time: submission.recurringSchedule?.appointmentTime ?? undefined,
+    p_recurring_return_trip_expected: submission.recurringSchedule?.returnTripExpected ?? undefined,
+    // P1-PILOT-S4B-R2A — a plain free-text snapshot, passed through
+    // unchanged. Never matched/resolved against any Passenger record by
+    // this module or the RPC — see requested_passenger_name's own
+    // column comment.
+    p_requested_passenger_name: submission.requestedPassengerName ?? undefined,
   });
 
   if (error || !data?.accepted) {

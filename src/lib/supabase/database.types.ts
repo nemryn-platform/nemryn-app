@@ -670,12 +670,19 @@ export type Database = {
           pickup_description: string
           preferred_date: string | null
           preferred_time: string | null
+          recurring_appointment_time: string | null
+          recurring_days_of_week: number[] | null
+          recurring_end_date: string | null
+          recurring_return_trip_expected: boolean | null
+          recurring_start_date: string | null
+          requested_passenger_name: string | null
           requester_email: string | null
           requester_name: string
           requester_phone: string
           requester_relationship: string
           requester_user_id: string | null
           return_trip_needed: string
+          service_type: string | null
           source: string
           state: string
           updated_at: string
@@ -693,12 +700,19 @@ export type Database = {
           pickup_description: string
           preferred_date?: string | null
           preferred_time?: string | null
+          recurring_appointment_time?: string | null
+          recurring_days_of_week?: number[] | null
+          recurring_end_date?: string | null
+          recurring_return_trip_expected?: boolean | null
+          recurring_start_date?: string | null
+          requested_passenger_name?: string | null
           requester_email?: string | null
           requester_name: string
           requester_phone: string
           requester_relationship: string
           requester_user_id?: string | null
           return_trip_needed: string
+          service_type?: string | null
           source?: string
           state?: string
           updated_at?: string
@@ -716,12 +730,19 @@ export type Database = {
           pickup_description?: string
           preferred_date?: string | null
           preferred_time?: string | null
+          recurring_appointment_time?: string | null
+          recurring_days_of_week?: number[] | null
+          recurring_end_date?: string | null
+          recurring_return_trip_expected?: boolean | null
+          recurring_start_date?: string | null
+          requested_passenger_name?: string | null
           requester_email?: string | null
           requester_name?: string
           requester_phone?: string
           requester_relationship?: string
           requester_user_id?: string | null
           return_trip_needed?: string
+          service_type?: string | null
           source?: string
           state?: string
           updated_at?: string
@@ -1690,11 +1711,18 @@ export type Database = {
           p_pickup_description: string
           p_preferred_date?: string
           p_preferred_time?: string
+          p_recurring_appointment_time?: string
+          p_recurring_days_of_week?: string[]
+          p_recurring_end_date?: string
+          p_recurring_return_trip_expected?: boolean
+          p_recurring_start_date?: string
+          p_requested_passenger_name?: string
           p_requester_email?: string
           p_requester_name: string
           p_requester_phone: string
           p_requester_relationship: string
           p_return_trip_needed: string
+          p_service_type?: string
         }
         Returns: Database["public"]["CompositeTypes"]["public_request_submission_result"]
         SetofOptions: {

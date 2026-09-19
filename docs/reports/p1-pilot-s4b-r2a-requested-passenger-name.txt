@@ -1,0 +1,461 @@
+P1-PILOT-S4B-R2A — STRUCTURED REQUESTED PASSENGER NAME
+=============================================================================
+Date: 2026-09-19
+Scope: A small contract correction, applied on top of the still-
+uncommitted P1-PILOT-S4B-R2 work, before R2 is committed. Adds a proper,
+first-class, structured `passengerName` field to Nemryn's public website
+intake contract, replacing R2's own recommendation to fold it into
+`additionalNotes`. LOCAL implementation and validation only — no commit,
+no push, no `supabase db push`, no production change of any kind, no
+Zenward-Web change.
+
+=============================================================================
+1. R2 CARRY-FORWARD
+=============================================================================
+R2 (implemented earlier the same day, still uncommitted) added structured
+`serviceType` and `recurringSchedule` to the public intake contract and
+passed 317/317 application unit tests, 591/591 full SQL regression,
+concurrency validation, tsc, lint, and build. This phase does NOT discard
+or rewrite any of that work — every R2 file is built on top of, not
+replaced. R2's own migration
+(`20260919130000_structured_website_intake_extension.sql`) and this
+phase's new migration
+(`20260919140000_requested_passenger_name_extension.sql`) both remain in
+the local migration history, applied in order via `supabase db reset`.
+
+=============================================================================
+2. PASSENGER NAME GAP
+=============================================================================
+R2's own report (§3, "PASSENGERNAME FINDING") correctly discovered that
+Zenward-Web's form collects `passengerName` but Nemryn's public intake
+never had a field for it, and — as a stopgap, not a considered design —
+recommended a future Zenward-Web adapter fold it into `additionalNotes`
+(e.g. `"Passenger: <name>"`). That recommendation is now WITHDRAWN (R2's
+own report has been corrected in place, §3/§16/§17 there). Passenger name
+is first-class intake information a requester explicitly provides — who
+the trip is FOR — not an incidental note, and deserves its own structured
+field exactly like `serviceType`/`recurringSchedule` already got in R2.
+
+=============================================================================
+3. DOMAIN SEMANTICS
+=============================================================================
+The critical distinction this entire phase is built around: **REQUESTED
+PASSENGER NAME != PASSENGER ENTITY.**
+  - A REQUESTED passenger name is a plain string the requester typed on a
+    public form, with zero verification, zero relationship to any
+    account, and no guarantee it even refers to a real, distinct person
+    (the requester and passenger are very often the same person —
+    `requesterRelationship: "self"`).
+  - A Passenger ENTITY (`public.passengers`) is an operator-managed,
+    reviewed record — created and linked exclusively through the
+    existing, unrelated `AddPassengerDialog`/`link_request_passenger`
+    controlled workflow, requiring a deliberate operator action.
+Conflating the two — auto-creating, auto-matching, or auto-linking a
+Passenger from a public, unauthenticated, unverified string — would be a
+serious integrity and safety regression (a malicious or mistaken
+submission could silently attach itself to, or fabricate, a real
+Passenger record). This phase adds NOTHING that narrows that gap in any
+way: no matching, no fuzzy lookup, no email/phone reconciliation, no
+`passenger_id` write of any kind from this code path.
+
+=============================================================================
+4. COLUMN NAMING
+=============================================================================
+Audited before writing any code:
+  - `transportation_requests`' own original table comment: "Requester is
+    snapshot fields here, not a standalone table (ZD-045)" —
+    `requester_name`/`requester_relationship`/`requester_phone`/
+    `requester_email` are the established precedent for exactly this
+    category of data: free-text, captured-at-submission-time, never a
+    foreign key.
+  - `passenger_id` (existing column): the ONLY column on this table that
+    is a real FK to `public.passengers` — reserved exclusively for
+    `link_request_passenger`'s own controlled write.
+  - `passenger_display_name` (existing, but a DIFFERENT concept —
+    `20260831110000_driver_read_result_types.sql`'s own driver-read
+    result types): a *joined, live* Passenger's own `display_name`,
+    surfaced through an API result shape — never a stored column on
+    `transportation_requests`, and a name that could be confused with
+    what this phase needed if chosen carelessly.
+  - Request Detail read model (`request-detail.ts`) and the Passenger
+    reconciliation UI (`RequestPassengerPanel.tsx`/`AddPassengerDialog`)
+    were both read in full to confirm neither has any existing concept
+    this could collide with.
+  - Zenward-Web's own `passengerName` (its `TransportationRequestInput`
+    type) is a simple required string with no further semantics — no
+    guidance needed from that side beyond "it's free text."
+CHOSEN: `requested_passenger_name` — exactly the phase brief's own
+preferred direction. Parallels `requester_name`'s snapshot semantics,
+cannot be mistaken for `passenger_id` (the FK) or `passenger_display_name`
+(the live/joined entity's own name elsewhere in the codebase). Never
+called `passenger_name` alone, which could misleadingly suggest it
+belongs to (or mirrors) the `passengers` table itself.
+
+=============================================================================
+5. PUBLIC CONTRACT
+=============================================================================
+Added `passengerName` to `website-intake-core.ts`'s `ALLOWED_KEYS` — one
+new OPTIONAL top-level field. Every other existing field, bound, and enum
+is unchanged; the closed-contract behavior for unknown/protected fields
+(including a direct attempt to smuggle `passengerId`, the entity FK — not
+this snapshot — or `organizationId`) is unaffected and re-confirmed by a
+dedicated unit test (§17 below).
+
+=============================================================================
+6. VALIDATION
+=============================================================================
+Uses the SAME `optionalString(value, maxLength)` helper `requesterEmail`/
+`assistanceNotes`/`additionalNotes` already use — no new validation
+primitive introduced. Behavior: `undefined`/`null` -> `null` (absent is
+fine, backward compatible); wrong type -> rejected (`invalid_request`);
+empty or whitespace-only string -> normalizes to `null` (matches the
+existing optional-string convention exactly, chosen over "reject empty
+string" per the phase brief's own explicit "according to existing
+optional-string convention" instruction); a non-empty string is trimmed
+and length-capped at 200 (matching `requester_name`'s own bound exactly —
+same category of field); over 200 chars -> rejected. Enforced identically,
+independently, at both the pure-core pre-check AND the RPC (the
+authoritative layer) — the same double-validation discipline as every
+other field in this endpoint.
+
+=============================================================================
+7. PERSISTENCE
+=============================================================================
+One new nullable `text` column,
+`transportation_requests.requested_passenger_name` — no JSONB, no CHECK
+constraint at the table level (matching `requester_name`'s own
+established convention: length is bounded at the RPC layer only for this
+table's free-text snapshot fields, never by a table CHECK). NOT written
+to `additional_notes` or `assistance_notes` under any circumstance —
+proven directly (SQL TEST R2A-1, live UI check, §13/§17). NULL for every
+pre-existing row and every row that does not explicitly set it — no
+existing row was touched by this migration.
+
+=============================================================================
+8. RPC SIGNATURE
+=============================================================================
+`submit_public_transportation_request` gained ONE new trailing optional
+parameter, `p_requested_passenger_name text default null` — appended
+after R2's own 20 parameters (now 21 total), strictly additive; every
+pre-existing caller (the Route Handler, every SQL test invoking the RPC
+with fewer positional args) continues to work unchanged. Because Postgres
+treats a longer parameter list as a DISTINCT overload rather than a
+silent replacement, the now-orphaned 20-parameter (R2-era) overload is
+explicitly `drop function if exists`-ed at the end of this migration —
+confirmed via `grep -c "submit_public_transportation_request:"` against
+the regenerated `database.types.ts` (returns exactly `1`) that only ONE
+version of this function exists after this migration. Every field's own
+validation logic, tenant resolution, origin check, idempotency mechanism,
+rate-limiting integration point, hard-coded `state='pending'`/`source=
+'web'`, and "no side effects" contract are byte-for-byte carried forward
+from R2 — only the one new parameter and its own validation block were
+added.
+
+=============================================================================
+9. PRIVILEGES
+=============================================================================
+Reconfirmed for the NEW 21-parameter overload specifically (not assumed
+carried over): `GRANT`/`REVOKE`/`COMMENT ON FUNCTION` all reference the
+complete, current 21-type signature; `revoke all ... from public, anon,
+authenticated` + `grant execute ... to service_role` — the exact same
+service-role-only shape R2/S4B established. SQL TEST R2A-6/R2A-7 directly
+invoke the NEW signature as `anon`/`authenticated` and confirm
+`insufficient_privilege` for both; a `has_function_privilege`-based
+structural check (via `function_privilege_tests.sql`'s own existing
+allowlist assertion, re-run and still 7/7) independently confirms PUBLIC
+holds no grant either. Exactly one authoritative overload exists after
+this migration (§8).
+
+=============================================================================
+10. IDEMPOTENCY
+=============================================================================
+Unchanged mechanism (R2A adds no new idempotency logic of its own) —
+reconfirmed specifically for a passenger-name-bearing payload: SQL TEST
+R2A-8 submits the SAME `idempotencyKey` twice with COMPLETELY DIFFERENT
+`requested_passenger_name` values (`"FIRST PASSENGER NAME"` then
+`"SECOND PASSENGER NAME -- must never apply"`, alongside different
+requester name/phone/pickup/destination/return-trip values too, mirroring
+R2's own §11 idempotency proof). Result: exactly ONE Request row, holding
+the FIRST call's own `requested_passenger_name` — the second call's value
+never applies (`ON CONFLICT ... DO NOTHING`, never `DO UPDATE`). No
+update-on-replay exists anywhere in this RPC.
+
+=============================================================================
+11. NO AUTO PASSENGER
+=============================================================================
+MANDATORY per the phase brief — verified directly, twice (SQL + live
+browser):
+  SQL (TEST R2A-1): after a submission with `passengerName =
+    "PILOT PASSENGER QA"` — `transportation_requests.requested_passenger_
+    name = 'PILOT PASSENGER QA'` (present); `passengers` table row count
+    matching that name = 0 (no new row); `transportation_requests.
+    passenger_id` = NULL.
+  LIVE (real HTTP route + real browser, §13): submitted the same
+    synthetic payload through `http://localhost:3000/api/public-intake/
+    website`, viewed the resulting Request Detail page — "Requested
+    passenger / PILOT PASSENGER QA" shown, "Linked passenger / Not
+    linked." shown, "Passenger needed" readiness banner unchanged (the
+    EXACT same readiness state a Request with no requested name would
+    show — this field influences nothing about readiness/lifecycle).
+No matching, fuzzy or otherwise, against name/email/phone was implemented
+or attempted anywhere in this phase.
+
+=============================================================================
+12. REQUEST HUB PRESENTATION
+=============================================================================
+`RequestPassengerPanel.tsx` (the existing Passenger reconciliation panel
+— chosen over `RequestDetailsPanel.tsx`, where R2's own `serviceType`/
+`recurringSchedule` live, because this concept is directly about the
+passenger-linking distinction the phase brief's own example groups
+together) gained one new conditional block: "Requested passenger /
+<name>" shown ONLY when `requestedPassengerName` is non-null (the
+overwhelmingly common staff-entered case shows nothing new, exact
+pre-R2A copy preserved). When it IS present, the existing linked-
+Passenger display is explicitly relabeled "Linked passenger" (either the
+existing passenger card, or "Not linked." in place of the generic "No
+passenger linked.") so the two concepts are never visually conflated.
+The existing "Search existing Passenger" / "Add New Passenger" / "Link
+Passenger" reconciliation workflow is completely UNCHANGED — still
+appears exactly when it always did (`isUnlinkedPending` etc.), regardless
+of whether a requested name is present.
+
+=============================================================================
+13. REQUESTED VS LINKED PASSENGER
+=============================================================================
+Live-verified end-to-end, exactly matching the phase brief's own example
+layout: submitted a synthetic Request with `passengerName: "PILOT
+PASSENGER QA"` through the real local HTTP route, viewed it in a real
+signed-in browser session — confirmed "Requested passenger / PILOT
+PASSENGER QA" and "Linked passenger / Not linked." rendered as two
+clearly separate lines. Then, through the EXISTING "Add New Passenger"
+workflow (no code path from this phase touched), linked a Passenger named
+"A Totally Different Linked Name" (deliberately different, to prove the
+UI never conflates the two) — reloaded the detail page and confirmed
+"Requested passenger / PILOT PASSENGER QA" was STILL shown, completely
+unchanged, alongside the now-populated "Linked passenger / A Totally
+Different Linked Name" card. The requested-name snapshot is never
+overwritten by a subsequent link — `request-detail.ts` reads it from its
+own independent column, with no code path anywhere that copies the linked
+Passenger's `display_name` into it or vice versa.
+
+=============================================================================
+14. ZENWARD CONTRACT
+=============================================================================
+`passengerName` is now a proper, first-class, structured OPTIONAL
+top-level field in Nemryn's actual flat contract:
+```json
+"passengerName": "string, <=200 chars — optional, omit or null if blank"
+```
+R2's own report (`p1-pilot-s4b-r2-structured-website-intake-extension.txt`)
+has been updated in place (§3, §16, §17) to withdraw its earlier
+"fold into `additionalNotes`" recommendation and reference this design
+instead. `additionalNotes` must remain actual additional notes — it is
+never used as a carrier for `passengerName`, `serviceType`, or
+`recurringSchedule` (all three now have their own proper field). The
+earlier, uncommitted S4B-R1 Zenward-Web adapter draft (never committed;
+that session was interrupted on an unrelated commit-scoping question, see
+R2's own §17) will need updating — not rewritten — to send `passengerName`
+as its own field, exactly like R2's own `serviceType`/`recurringSchedule`
+additions already require. Zenward-Web itself was NOT touched this
+phase.
+
+=============================================================================
+15. SERVICE TYPE WARNING (DOCUMENTATION ONLY — NO CODE CHANGE)
+=============================================================================
+Per the phase brief's own explicit instruction, the `serviceType`
+allow-list itself was NOT changed in this phase (still the same 8 values
+R2 established). Noted here, for the record, and NOT acted on: Nemryn
+being CAPABLE of accepting a given `serviceType` value (e.g.
+`wheelchair_transportation`) is not the same claim as any particular
+tenant actually OFFERING that service. Zenward Mobility's own real,
+current operational capabilities (e.g. whether it has wheelchair-
+accessible vehicles in service today) are a Zenward-Web website
+configuration/content decision — which service options that site's own
+form actually presents to a visitor — never a reason to remove a value
+from Nemryn's shared, cross-tenant public contract. This is out of scope
+for any Nemryn-side change; it is flagged here purely so a future
+Zenward-Web content/product decision is not confused with a Nemryn
+contract limitation.
+
+=============================================================================
+16. FOCUSED SQL
+=============================================================================
+Per the phase's own explicit proportionality instruction ("this amendment
+changes the SAME security-sensitive intake RPC signature again... do not
+blindly rerun the entire 33-file marathon again"), ran ONLY the directly
+relevant files, each on a fresh `supabase db reset`:
+  public_request_intake_tests.sql: 42/42 PASS, 0 fail, 0 fatal (34 R2-era
+    assertions + 8 new R2A ones: R2A-1 structured persistence + no auto-
+    Passenger, R2A-2 omitted field stays null, R2A-3 no auto-Trip, R2A-4
+    org isolation, R2A-5 disabled integration, R2A-6/R2A-7 anon/
+    authenticated denied on the new 21-parameter overload, R2A-8
+    idempotent replay preserves the first accepted name). TEST 20's own
+    `has_function_privilege` signature strings were updated (again) to
+    the new 21-parameter type list — the SAME kind of mechanical update
+    R2 itself already required when it extended the signature from 14 to
+    20 parameters; the underlying assertion (service_role-only, zero
+    access for anon/authenticated/public) is unchanged.
+  function_privilege_tests.sql: 7/7 PASS.
+  security_definer_exposure_tests.sql: 20/20 PASS.
+  client_privilege_surface_tests.sql: 21/21 PASS.
+No other SQL file was touched by this migration (one new nullable column,
+one new RPC parameter) and none was re-run. R2's own 591/591 full-battery
+result (§11 there) remains the current, valid broad baseline — nothing in
+this phase's own database diff (a single nullable text column + one
+`default null` trailing RPC parameter, both strictly additive) has any
+plausible mechanism to affect any of the other 29 untouched test files.
+
+=============================================================================
+17. CONCURRENCY
+=============================================================================
+`public_request_intake_concurrency_test.sh` re-run unmodified (it calls
+the RPC with the original field set, unaffected by one more `default
+null` trailing parameter) — PASS: two genuinely concurrent OS processes,
+same integration + idempotency key, exactly ONE Request row and ONE
+`request_logged` event, proven via Postgres's own unique-index insertion
+arbitration, not a lock.
+
+=============================================================================
+18. APPLICATION TESTS
+=============================================================================
+`website-intake-core.test.mjs` gained 9 new focused pure-core tests:
+absent passengerName -> null; null passengerName -> null; valid
+passengerName accepted and trimmed; empty-string normalizes to null
+(matches existing optional-string convention); whitespace-only normalizes
+to null; wrong type (number) rejected; over-200-chars rejected; exactly
+200 chars accepted; organizationId injection alongside a valid
+passengerName still rejected; a direct attempt to smuggle `passengerId`
+(the entity FK) alongside a valid `passengerName` (the snapshot) still
+rejected — proving the two are handled as completely independent
+concerns, never conflated even adversarially.
+`npm test` (`node --test src/**/*.test.mjs`): 368/368 PASS (0 fail) — the
+full application suite, including every R2 and pre-R2 test, unbroken.
+`npx tsc --noEmit`: clean, 0 errors.
+`npm run lint`: 0 errors; 56 pre-existing warnings, all confined to
+unshipped `.tmp-qa/*.mjs` scratch scripts.
+`npm run build`: succeeded (`.next/BUILD_ID` produced).
+
+LIVE VERIFICATION (real HTTP route + real browser, beyond the pure-core
+tests): §11/§13 above — a full round trip through the actual Next.js dev
+server and a real signed-in operator session, not just SQL/unit-level
+proof.
+
+=============================================================================
+19. FILES MODIFIED
+=============================================================================
+New:
+  supabase/migrations/20260919140000_requested_passenger_name_extension.sql
+Modified (all already touched by the still-uncommitted R2; further
+extended here):
+  src/lib/supabase/database.types.ts (regenerated, additive — 28
+    insertions, 0 deletions; stderr "Connecting to db 5432" contamination
+    caught and kept OUT of the file this time by redirecting stderr to a
+    separate temp file before copying the clean stdout into place)
+  src/lib/public-intake/website-intake-core.ts
+  src/lib/public-intake/website-intake-core.test.mjs
+  src/lib/public-intake/website-intake.ts
+  src/lib/operations/request-detail.ts
+  src/components/operations/requests/RequestPassengerPanel.tsx (NEW to
+    this file's own list — R2 never touched it; R2 only touched
+    RequestDetailsPanel.tsx)
+  src/app/operations/requests/[requestId]/page.tsx
+  supabase/tests/public_request_intake_tests.sql
+Also modified: `docs/reports/p1-pilot-s4b-r2-structured-website-intake-
+extension.txt` (correction, §14 above — not a code file, but listed here
+for completeness since the phase brief asked for it to be updated).
+No other file was touched. No Zenward-Web file was touched. No production
+database or Vercel state was touched.
+
+=============================================================================
+20. SCHEMA IMPACT
+=============================================================================
+One new nullable `text` column on `transportation_requests`
+(`requested_passenger_name`), no CHECK constraint, no index (this field
+is never queried/filtered on independently — it is display-only context
+alongside the Request row it belongs to, exactly like `requester_name`
+itself has no dedicated index). One RPC signature change (20 -> 21
+parameters, strictly additive, old overload dropped). No other table,
+column, type, trigger, or index was added, altered, or dropped. Zero
+existing rows were touched (`requested_passenger_name` is NULL for all of
+them, same as R2's own six new columns were for pre-R2 rows).
+
+=============================================================================
+21. RLS IMPACT
+=============================================================================
+None. `transportation_requests`' own RLS policies
+(`_select_org_operations`, `_update_org_operations`) were not modified —
+a new column added via `ALTER TABLE ... ADD COLUMN` is automatically
+covered by every existing policy on that table with no migration-side
+action required. `request_intake_integrations`' own zero-grant/zero-policy
+posture is untouched. No new table was created, so no new RLS surface
+exists to reason about at all.
+
+=============================================================================
+22. OPEN ISSUES
+=============================================================================
+1. The uncommitted, interrupted S4B-R1 Zenward-Web adapter draft now
+   needs a THIRD field added to its intended output shape (passengerName,
+   on top of R2's own serviceType/recurringSchedule) before it can be
+   finished and committed — carried forward from R2's own OPEN ISSUES,
+   not new to this phase.
+2. R2's own commit-scoping question (Zenward-Web's working tree holds a
+   large body of unrelated, already-in-progress, uncommitted feature
+   work) remains open and unresolved — still the user's own call, not
+   something either Nemryn-side phase should decide.
+3. Production `SUPABASE_SERVICE_ROLE_KEY`/integration state was last
+   touched by the S4B-R1 session (confirmed PRESENT then); this phase
+   made no production request of any kind and has no new information
+   about current production state either way.
+4. §15's service-type/tenant-capability distinction is a documentation-
+   only note for a future Zenward-Web content decision — no Nemryn-side
+   action is pending from it.
+
+=============================================================================
+STRUCTURED GATE SUMMARY
+=============================================================================
+REQUESTED PASSENGER NAME:          PASS
+STRUCTURED STORAGE:                PASS (typed nullable column, not JSONB)
+ADDITIONAL NOTES UNTOUCHED:        PASS (confirmed via SQL + live UI —
+                                    "No additional notes" shown throughout)
+NO AUTO PASSENGER:                 PASS (0 Passenger rows created; SQL +
+                                    live browser)
+NO AUTO TRIP:                      PASS
+REQUESTED VS LINKED:               PASS (live-verified: snapshot persists
+                                    unchanged after linking a differently-
+                                    named real Passenger)
+IDEMPOTENCY:                       PASS (first-accepted name preserved,
+                                    replay with a different name has no
+                                    effect)
+DIRECT RPC BYPASS:                 BLOCKED (anon/authenticated denied on
+                                    the new 21-parameter overload;
+                                    service_role-only; exactly one
+                                    overload exists)
+TENANT ISOLATION:                  PASS
+FOCUSED SQL:                       PASS (public_request_intake_tests.sql
+                                    42/42, function_privilege_tests.sql
+                                    7/7, security_definer_exposure_tests.sql
+                                    20/20, client_privilege_surface_tests.sql
+                                    21/21)
+CONCURRENCY:                       PASS
+TSC:                               PASS
+LINT:                              PASS (0 errors)
+BUILD:                             PASS
+UNIT:                               368/368
+FULL 33-FILE SQL:                  NOT RERUN — R2 BROAD BASELINE 591/591
+                                    REMAINS CURRENT (proportional decision,
+                                    §16 — the only database diff is one
+                                    nullable snapshot column + one
+                                    trailing default-null RPC parameter,
+                                    with no plausible mechanism to affect
+                                    any of the 29 untouched test files)
+READY TO COMMIT R2 + R2A:          YES
+BLOCKERS:                          NONE
+
+NEXT:
+Coordinated production migration + application release.
+
+DO NOT COMMIT.
+DO NOT PUSH.
+DO NOT DEPLOY.
+
+STOP.

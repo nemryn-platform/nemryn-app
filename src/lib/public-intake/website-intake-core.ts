@@ -32,8 +32,34 @@
 export const REQUESTER_RELATIONSHIP_VALUES = ["self", "family", "caregiver", "facility_coordinator", "other"] as const;
 export const RETURN_TRIP_NEEDED_VALUES = ["yes", "no", "not_sure"] as const;
 
+/** Closed allow-list (P1-PILOT-S4B-R2) — matches Zenward-Web's own `SERVICE_TYPES` (src/lib/request-intake/service-types.ts in that repository) value-for-value. Optional at this layer (a future non-Zenward integration need not send one — see submit_public_transportation_request's own p_service_type default null), but when present must be exactly one of these. */
+export const SERVICE_TYPE_VALUES = [
+  "medical_appointment",
+  "dialysis",
+  "rehabilitation",
+  "hospital_discharge",
+  "recurring_care",
+  "senior_medical",
+  "wheelchair_transportation",
+  "other",
+] as const;
+
+/** Lowercase weekday NAME strings — the wire contract, matching Zenward-Web's own `Weekday` type exactly. The RPC converts these to canonical ISO weekday numbers (1=Monday..7=Sunday) for storage; this module never does that conversion itself (server-authoritative, per this schema's own established discipline). */
+export const RECURRING_WEEKDAY_VALUES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+
 export type RequesterRelationship = (typeof REQUESTER_RELATIONSHIP_VALUES)[number];
 export type ReturnTripNeeded = (typeof RETURN_TRIP_NEEDED_VALUES)[number];
+export type ServiceType = (typeof SERVICE_TYPE_VALUES)[number];
+export type RecurringWeekday = (typeof RECURRING_WEEKDAY_VALUES)[number];
+
+/** The REQUESTED recurring schedule (P1-PILOT-S4B-R2) — describes what the requester wants, never an actual Trip series or a recurring_arrangements row. Mirrors Zenward-Web's own `RecurringSchedule` shape (src/lib/request-intake/recurring.ts) field-for-field. */
+export interface RecurringScheduleInput {
+  daysOfWeek: RecurringWeekday[];
+  startDate: string;
+  endDate: string | null;
+  appointmentTime: string | null;
+  returnTripExpected: boolean | null;
+}
 
 /** Raw, fully untrusted shape as received from an external caller's JSON body — every field is `unknown` until validated below. */
 export interface RawWebsiteIntakePayload {
@@ -55,6 +81,12 @@ export interface WebsiteIntakeSubmission {
   preferredTime: string | null;
   assistanceNotes: string | null;
   additionalNotes: string | null;
+  /** P1-PILOT-S4B-R2. Optional — `null` when the caller did not send one (backward compatible with any non-Zenward integration). */
+  serviceType: ServiceType | null;
+  /** P1-PILOT-S4B-R2. Optional — `null` means a one-time request (the pre-R2 default, unchanged). */
+  recurringSchedule: RecurringScheduleInput | null;
+  /** P1-PILOT-S4B-R2A. A free-text SNAPSHOT of the passenger name the requester supplied — NOT a Passenger id, NOT matched/resolved against any Passenger record. `null` when not sent. See `transportation_requests.requested_passenger_name`'s own column comment for the full snapshot/entity distinction. */
+  requestedPassengerName: string | null;
 }
 
 /**
@@ -78,7 +110,13 @@ const ALLOWED_KEYS = new Set([
   "preferredTime",
   "assistanceNotes",
   "additionalNotes",
+  "serviceType",
+  "recurringSchedule",
+  "passengerName",
 ]);
+
+/** Keys `recurringSchedule` itself may contain — a nested closed field set, exactly like the top-level `ALLOWED_KEYS` above. */
+const RECURRING_SCHEDULE_ALLOWED_KEYS = new Set(["daysOfWeek", "startDate", "endDate", "appointmentTime", "returnTripExpected"]);
 
 /** A single, narrow, public-safe error vocabulary — deliberately NOT finer-grained than this. Every distinct internal failure (unknown field, missing field, oversized field, invalid enum value, malformed date/time, a disabled integration, a nonexistent integration, an Origin mismatch, a field-validation failure inside the RPC itself) collapses to this SAME code from the public caller's point of view — no existence oracle, exactly mirroring ZW002's own "not_found is not_found regardless of why" contract carried one layer further out to the public HTTP boundary. */
 export type PublicIntakeErrorCode = "invalid_request";
@@ -97,10 +135,22 @@ const MAX_LENGTHS = {
   destinationDescription: 2000,
   assistanceNotes: 4000,
   additionalNotes: 4000,
+  /** P1-PILOT-S4B-R2A — matches `requester_name`'s own bound exactly (same category of free-text snapshot field). */
+  passengerName: 200,
 } as const;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
+/** Strict 24-hour `HH:MM` (hour 00-23, minute 00-59) — used only for `recurringSchedule.appointmentTime` (P1-PILOT-S4B-R2), which the phase's own shape spec requires as exactly this format, matching Zenward-Web's own `isTime`. */
+const STRICT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** True for a real calendar date in `YYYY-MM-DD` form (rejects 2026-02-30, 2026-13-01, …) — a stricter check than `DATE_RE`'s own shape-only match, needed for `recurringSchedule.startDate`/`endDate` per the phase's own "valid real calendar date" requirement. Mirrors Zenward-Web's own `isIsoDate` exactly. */
+function isRealIsoDate(value: string): boolean {
+  if (!DATE_RE.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
 
 function nonBlankString(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") return null;
@@ -119,6 +169,68 @@ function optionalString(value: unknown, maxLength: number): { present: boolean; 
 }
 
 const INVALID: WebsiteIntakeValidationResult = { ok: false, error: "invalid_request" };
+
+/**
+ * Validates a raw, untrusted `recurringSchedule` object (P1-PILOT-S4B-R2).
+ * Returns the normalized shape on success, `null` on any failure —
+ * mirrors Zenward-Web's own `parseRecurringSchedule` rule-for-rule:
+ *   - must be a plain object with ONLY the five known keys (an array,
+ *     primitive, or an object with an unknown key is rejected, never
+ *     silently trimmed);
+ *   - `daysOfWeek`: array of 1-7 distinct allow-listed weekday-name
+ *     strings;
+ *   - `startDate`: required, a real `YYYY-MM-DD` calendar date;
+ *   - `endDate`: optional; a real date, not before `startDate`;
+ *   - `appointmentTime`: optional; strict 24-hour `HH:MM`;
+ *   - `returnTripExpected`: optional; a strict boolean (`"true"`/`1` is
+ *     rejected, never coerced).
+ * This is still only a fast, client-facing PRE-check — the RPC
+ * (submit_public_transportation_request) re-validates every one of
+ * these same rules server-side regardless of what passes here, exactly
+ * like every other field this module checks.
+ */
+function validateRecurringSchedule(raw: unknown): RecurringScheduleInput | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const body = raw as Record<string, unknown>;
+
+  for (const key of Object.keys(body)) {
+    if (!RECURRING_SCHEDULE_ALLOWED_KEYS.has(key)) return null;
+  }
+
+  const days = body.daysOfWeek;
+  if (!Array.isArray(days) || days.length < 1 || days.length > RECURRING_WEEKDAY_VALUES.length) return null;
+  const seen = new Set<RecurringWeekday>();
+  for (const d of days) {
+    if (typeof d !== "string" || !RECURRING_WEEKDAY_VALUES.includes(d as RecurringWeekday)) return null;
+    if (seen.has(d as RecurringWeekday)) return null;
+    seen.add(d as RecurringWeekday);
+  }
+  const daysOfWeek = RECURRING_WEEKDAY_VALUES.filter((d) => seen.has(d));
+
+  if (typeof body.startDate !== "string" || !isRealIsoDate(body.startDate)) return null;
+  const startDate = body.startDate;
+
+  let endDate: string | null = null;
+  if (body.endDate !== undefined && body.endDate !== null && body.endDate !== "") {
+    if (typeof body.endDate !== "string" || !isRealIsoDate(body.endDate)) return null;
+    if (body.endDate < startDate) return null; // ISO dates sort lexicographically
+    endDate = body.endDate;
+  }
+
+  let appointmentTime: string | null = null;
+  if (body.appointmentTime !== undefined && body.appointmentTime !== null && body.appointmentTime !== "") {
+    if (typeof body.appointmentTime !== "string" || !STRICT_TIME_RE.test(body.appointmentTime)) return null;
+    appointmentTime = body.appointmentTime;
+  }
+
+  let returnTripExpected: boolean | null = null;
+  if (body.returnTripExpected !== undefined && body.returnTripExpected !== null) {
+    if (typeof body.returnTripExpected !== "boolean") return null;
+    returnTripExpected = body.returnTripExpected;
+  }
+
+  return { daysOfWeek, startDate, endDate, appointmentTime, returnTripExpected };
+}
 
 /**
  * Validates a raw, untrusted JSON payload against the exact field set
@@ -192,6 +304,39 @@ export function validateWebsiteIntakePayload(raw: unknown): WebsiteIntakeValidat
     preferredTime = body.preferredTime;
   }
 
+  // P1-PILOT-S4B-R2 — serviceType: optional (absent = backward compatible
+  // with a future non-Zenward integration), but when present must be
+  // exactly one allow-listed value — never coerced, never accepted as an
+  // arbitrary string.
+  let serviceType: ServiceType | null = null;
+  if (body.serviceType !== undefined && body.serviceType !== null) {
+    if (typeof body.serviceType !== "string" || !SERVICE_TYPE_VALUES.includes(body.serviceType as ServiceType)) {
+      return INVALID;
+    }
+    serviceType = body.serviceType as ServiceType;
+  }
+
+  // P1-PILOT-S4B-R2 — recurringSchedule: optional; absent means a
+  // one-time request (unchanged default). When present, validated
+  // strictly — see validateRecurringSchedule's own comment for the full
+  // rule set.
+  let recurringSchedule: RecurringScheduleInput | null = null;
+  if (body.recurringSchedule !== undefined && body.recurringSchedule !== null) {
+    const parsed = validateRecurringSchedule(body.recurringSchedule);
+    if (parsed === null) return INVALID;
+    recurringSchedule = parsed;
+  }
+
+  // P1-PILOT-S4B-R2A — passengerName: optional free-text SNAPSHOT of the
+  // passenger's name. Same `optionalString` convention as `requesterEmail`/
+  // `assistanceNotes`/`additionalNotes` — an empty string normalizes to
+  // `null` (not rejected), a too-long value is rejected, wrong type is
+  // rejected. This value is NEVER matched, resolved, or looked up against
+  // any Passenger record — it is stored on the Request row only (see
+  // `transportation_requests.requested_passenger_name`'s own comment).
+  const passengerName = optionalString(body.passengerName, MAX_LENGTHS.passengerName);
+  if (!passengerName.present) return INVALID;
+
   return {
     ok: true,
     value: {
@@ -208,6 +353,9 @@ export function validateWebsiteIntakePayload(raw: unknown): WebsiteIntakeValidat
       preferredTime,
       assistanceNotes: assistance.value,
       additionalNotes: additional.value,
+      serviceType,
+      recurringSchedule,
+      requestedPassengerName: passengerName.value,
     },
   };
 }
@@ -234,4 +382,35 @@ export function publicIntakeErrorMessage(code: PublicIntakeErrorCode): string {
  */
 export function requestProvenanceLabel(intakeIntegrationId: string | null): "Website" | null {
   return intakeIntegrationId !== null ? "Website" : null;
+}
+
+/** Human-readable labels for `SERVICE_TYPE_VALUES` (P1-PILOT-S4B-R2) — matches Zenward-Web's own `SERVICE_TYPE_LABELS` (src/lib/request-intake/service-types.ts in that repository) word-for-word, so the label an operator sees in Request Hub matches what the requester saw on the form. */
+export const SERVICE_TYPE_LABELS: Record<ServiceType, string> = {
+  medical_appointment: "Medical appointment",
+  dialysis: "Dialysis transportation",
+  rehabilitation: "Rehabilitation transportation",
+  hospital_discharge: "Hospital discharge transportation",
+  recurring_care: "Recurring care transportation",
+  senior_medical: "Senior medical transportation",
+  wheelchair_transportation: "Wheelchair transportation",
+  other: "Other",
+};
+
+/** Short weekday labels keyed by the canonical ISO weekday number (1=Monday..7=Sunday) `transportation_requests.recurring_days_of_week` stores — for rendering a REQUESTED schedule's days on Request Detail. */
+const ISO_WEEKDAY_SHORT_LABELS: Record<number, string> = {
+  1: "Mon",
+  2: "Tue",
+  3: "Wed",
+  4: "Thu",
+  5: "Fri",
+  6: "Sat",
+  7: "Sun",
+};
+
+/** Renders a stored `recurring_days_of_week` (ISO weekday numbers, already canonically ascending) as `"Mon, Wed, Fri"`. Unrecognized numbers (should never occur — the DB CHECK constraint already guarantees 1-7 only) are simply skipped rather than throwing, since this is a display helper, not a validator. */
+export function formatRecurringDaysOfWeek(daysOfWeek: number[]): string {
+  return daysOfWeek
+    .map((d) => ISO_WEEKDAY_SHORT_LABELS[d])
+    .filter((label): label is string => Boolean(label))
+    .join(", ");
 }

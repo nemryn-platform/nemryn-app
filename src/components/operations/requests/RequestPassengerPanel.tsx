@@ -25,6 +25,8 @@ export interface RequestPassengerPanelProps {
   candidatePassengers: NewTripPassengerOption[];
   /** True only if the active-Passenger option list itself failed to load — a soft-degrade of the search/link sub-feature, never a reason to fail the whole Detail page (that list is not part of the Request's own authoritative data). */
   candidatesUnavailable: boolean;
+  /** P1-PILOT-S4B-R2A — a free-text SNAPSHOT of the passenger name the requester supplied at submission time (website intake only). NOT the same entity as `passenger` below — the two are independent and may name different people (or the requester may have mistyped/nicknamed the actual Passenger). Shown alongside, never merged into, the linked-Passenger display. Persists unchanged even after linking. */
+  requestedPassengerName: string | null;
 }
 
 /**
@@ -61,6 +63,7 @@ export function RequestPassengerPanel({
   passenger,
   candidatePassengers: initialCandidates,
   candidatesUnavailable,
+  requestedPassengerName,
 }: RequestPassengerPanelProps) {
   const [state, formAction, pending] = useActionState(linkPassengerAction, INITIAL_STATE);
   const submittedRef = useRef(false);
@@ -133,7 +136,26 @@ export function RequestPassengerPanel({
     <Panel>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Passenger</h3>
 
+      {/*
+       * P1-PILOT-S4B-R2A — a website-submitted Request may carry a
+       * REQUESTED passenger name (a free-text snapshot the requester
+       * typed) with no relationship to any real Passenger record. Shown
+       * ONLY when present (the overwhelmingly common staff-entered case
+       * has none, and keeps its exact pre-R2A copy below unchanged) —
+       * when it IS present, the existing linked-Passenger display is
+       * explicitly relabeled "Linked passenger" so the two concepts are
+       * never mistaken for one another, exactly like the example in the
+       * phase brief this implements.
+       */}
+      {requestedPassengerName && (
+        <div className="mt-zw-md">
+          <p className={cn(typography.label, "text-text-muted")}>Requested passenger</p>
+          <p className={cn(typography.bodySmall, "mt-0.5 text-text-primary")}>{requestedPassengerName}</p>
+        </div>
+      )}
+
       <div className="mt-zw-md">
+        {requestedPassengerName && <p className={cn(typography.label, "mb-1 text-text-muted")}>Linked passenger</p>}
         {passenger ? (
           <div className="flex items-center gap-3 rounded-sm border border-border-subtle bg-surface-secondary px-3 py-2.5">
             <Avatar name={passenger.displayName} size="sm" />
@@ -150,7 +172,7 @@ export function RequestPassengerPanel({
             />
           </div>
         ) : (
-          <p className={cn(typography.bodySmall, "text-text-muted")}>No passenger linked.</p>
+          <p className={cn(typography.bodySmall, "text-text-muted")}>{requestedPassengerName ? "Not linked." : "No passenger linked."}</p>
         )}
       </div>
 

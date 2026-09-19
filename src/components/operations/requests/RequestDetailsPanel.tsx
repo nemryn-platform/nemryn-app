@@ -1,7 +1,13 @@
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { SOURCE_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
-import { requestProvenanceLabel } from "@/lib/public-intake/website-intake-core";
+import {
+  requestProvenanceLabel,
+  SERVICE_TYPE_LABELS,
+  formatRecurringDaysOfWeek,
+  type ServiceType,
+} from "@/lib/public-intake/website-intake-core";
+import type { RequestDetailRecurringSchedule } from "@/lib/operations/request-detail";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -11,6 +17,19 @@ export interface RequestDetailsPanelProps {
   intakeIntegrationId: string | null;
   assistanceNotes: string | null;
   additionalNotes: string | null;
+  /** P1-PILOT-S4B-R2 — `null` when no service type was sent (most current staff-entered Requests and any pre-R2 website submission). */
+  serviceType: string | null;
+  /** P1-PILOT-S4B-R2 — the REQUESTED (not confirmed) recurring schedule; `null` for a one-time request. */
+  recurringSchedule: RequestDetailRecurringSchedule | null;
+}
+
+function formatAppointmentTime(time: string | null): string {
+  if (!time) return "";
+  const [h, m] = time.split(":");
+  const hour = Number(h);
+  const period = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12}:${m} ${period}`;
 }
 
 /**
@@ -30,8 +49,16 @@ export interface RequestDetailsPanelProps {
  * should simply understand where the Request came from, not be alerted
  * to it.
  */
-export function RequestDetailsPanel({ source, intakeIntegrationId, assistanceNotes, additionalNotes }: RequestDetailsPanelProps) {
+export function RequestDetailsPanel({
+  source,
+  intakeIntegrationId,
+  assistanceNotes,
+  additionalNotes,
+  serviceType,
+  recurringSchedule,
+}: RequestDetailsPanelProps) {
   const provenanceLabel = requestProvenanceLabel(intakeIntegrationId);
+  const serviceLabel = serviceType ? SERVICE_TYPE_LABELS[serviceType as ServiceType] : null;
   return (
     <Panel>
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-zw-md">
@@ -42,6 +69,28 @@ export function RequestDetailsPanel({ source, intakeIntegrationId, assistanceNot
         </span>
       </div>
       <div className="mt-zw-md flex flex-col gap-zw-md">
+        {serviceLabel && (
+          <div>
+            <p className={cn(typography.label, "text-text-muted")}>Service requested</p>
+            <p className={cn(typography.body, "mt-0.5 text-text-primary")}>{serviceLabel}</p>
+          </div>
+        )}
+        {recurringSchedule && (
+          <div>
+            <p className={cn(typography.label, "text-text-muted")}>Recurring schedule requested</p>
+            <p className={cn(typography.body, "mt-0.5 text-text-primary")}>
+              {formatRecurringDaysOfWeek(recurringSchedule.daysOfWeek)}, starting {recurringSchedule.startDate}
+              {recurringSchedule.endDate && <> through {recurringSchedule.endDate}</>}
+              {recurringSchedule.appointmentTime && <>, around {formatAppointmentTime(recurringSchedule.appointmentTime)}</>}
+              {recurringSchedule.returnTripExpected !== null && (
+                <>{recurringSchedule.returnTripExpected ? ", return trip expected" : ", no return trip expected"}</>
+              )}
+            </p>
+            <p className={cn(typography.metadata, "mt-0.5 text-text-muted")}>
+              Requested only — no Trip has been scheduled. Review and, if appropriate, arrange recurring care separately.
+            </p>
+          </div>
+        )}
         <div>
           <p className={cn(typography.label, "text-text-muted")}>Assistance Notes</p>
           <p className={cn(typography.body, "mt-0.5 text-text-primary")}>

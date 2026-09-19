@@ -58,7 +58,23 @@ interface RequestRow {
   created_at: string;
   updated_at: string;
   intake_integration_id: string | null;
+  service_type: string | null;
+  recurring_days_of_week: number[] | null;
+  recurring_start_date: string | null;
+  recurring_end_date: string | null;
+  recurring_appointment_time: string | null;
+  recurring_return_trip_expected: boolean | null;
+  requested_passenger_name: string | null;
   passengers: PassengerRelation;
+}
+
+/** P1-PILOT-S4B-R2 — the REQUESTED recurring schedule, present only when `recurringDaysOfWeek` is non-null. Mirrors `RecurringScheduleInput`'s own shape (website-intake-core.ts) at the read side. */
+export interface RequestDetailRecurringSchedule {
+  daysOfWeek: number[];
+  startDate: string;
+  endDate: string | null;
+  appointmentTime: string | null;
+  returnTripExpected: boolean | null;
 }
 
 export interface RequestDetailPassenger {
@@ -97,6 +113,12 @@ export interface RequestDetailData {
   intakeIntegrationId: string | null;
   assistanceNotes: string | null;
   additionalNotes: string | null;
+  /** P1-PILOT-S4B-R2 — optional, closed allow-list; `null` when not sent (most current staff-entered Requests and any pre-R2 website submission). */
+  serviceType: string | null;
+  /** P1-PILOT-S4B-R2 — the REQUESTED (not confirmed) recurring schedule; `null` for a one-time request. */
+  recurringSchedule: RequestDetailRecurringSchedule | null;
+  /** P1-PILOT-S4B-R2A — a free-text SNAPSHOT of the passenger name the requester supplied at submission time. NOT the linked Passenger's own `displayName` (see `passenger` below) — the two are independent and may differ; this value persists unchanged even after a real Passenger is linked. `null` for every staff-entered Request and any pre-R2A website submission. */
+  requestedPassengerName: string | null;
   passenger: RequestDetailPassenger | null;
   /** Reuses request-readiness-core.ts unmodified (P1-E1-S2E §10) — never re-derived here. Computed from the REAL linked Passenger's own current `status`, never merely `passenger_id !== null`. */
   readiness: RequestReadiness;
@@ -109,6 +131,8 @@ const REQUEST_COLUMNS =
   "id, passenger_id, requester_name, requester_relationship, requester_phone, requester_email, " +
   "pickup_description, destination_description, preferred_date, preferred_time, return_trip_needed, " +
   "assistance_notes, additional_notes, source, state, created_at, updated_at, intake_integration_id, " +
+  "service_type, recurring_days_of_week, recurring_start_date, recurring_end_date, " +
+  "recurring_appointment_time, recurring_return_trip_expected, requested_passenger_name, " +
   // Two FKs exist from transportation_requests to passengers (plain +
   // composite) — the explicit hint is required, not cosmetic; an
   // unqualified `passengers(...)` embed is genuinely ambiguous to
@@ -204,6 +228,17 @@ export async function getRequestDetail(requestId: string, organizationId: string
     intakeIntegrationId: row.intake_integration_id,
     assistanceNotes: row.assistance_notes,
     additionalNotes: row.additional_notes,
+    serviceType: row.service_type,
+    recurringSchedule: row.recurring_days_of_week
+      ? {
+          daysOfWeek: row.recurring_days_of_week,
+          startDate: row.recurring_start_date as string,
+          endDate: row.recurring_end_date,
+          appointmentTime: row.recurring_appointment_time,
+          returnTripExpected: row.recurring_return_trip_expected,
+        }
+      : null,
+    requestedPassengerName: row.requested_passenger_name,
     passenger: passenger
       ? {
           id: row.passenger_id as string,

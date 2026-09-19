@@ -452,10 +452,16 @@ declare v_authenticated boolean;
 declare v_service_role boolean;
 declare v_public boolean;
 begin
-  select has_function_privilege('anon', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text)', 'EXECUTE') into v_anon;
-  select has_function_privilege('authenticated', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text)', 'EXECUTE') into v_authenticated;
-  select has_function_privilege('service_role', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text)', 'EXECUTE') into v_service_role;
-  select has_function_privilege('public', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text)', 'EXECUTE') into v_public;
+  -- Signature updated P1-PILOT-S4B-R2 (20260919130000): the RPC gained 6
+  -- new trailing parameters (serviceType/recurringSchedule); the old
+  -- 14-arg overload was dropped by that same migration, not merely
+  -- superseded, so has_function_privilege must reference the current,
+  -- full 20-arg signature or this lookup itself errors ("function does
+  -- not exist") rather than returning a real answer.
+  select has_function_privilege('anon', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_anon;
+  select has_function_privilege('authenticated', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_authenticated;
+  select has_function_privilege('service_role', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_service_role;
+  select has_function_privilege('public', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_public;
 
   if v_service_role and not v_anon and not v_authenticated and not v_public then
     raise notice 'TEST 20 minimum-execute-privilege: PASS (service_role=true, anon=false, authenticated=false, public=false)';
@@ -583,6 +589,421 @@ begin
     raise notice 'TEST BONUS-B3 origin-missing-rejected: PASS (rejected: %)', v_error_code;
   end;
   reset role;
+end $$;
+
+-- =============================================================================
+-- R2-1. serviceType + recurringSchedule stored STRUCTURALLY, never folded
+-- into additionalNotes (P1-PILOT-S4B-R2).
+-- =============================================================================
+do $$
+declare
+  v_service_type text;
+  v_days smallint[];
+  v_start date;
+  v_end date;
+  v_time time;
+  v_return boolean;
+  v_additional_notes text;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2-TEST-STRUCTURED-1', 'S4A TEST R2 Requester', 'self', '555-0300',
+    'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'yes',
+    null, null, null, null, null, null,
+    'dialysis', array['monday','wednesday','friday'], '2026-10-01', '2026-12-01', '09:00', true
+  );
+  reset role;
+
+  select service_type, recurring_days_of_week, recurring_start_date, recurring_end_date,
+         recurring_appointment_time, recurring_return_trip_expected, additional_notes
+  into v_service_type, v_days, v_start, v_end, v_time, v_return, v_additional_notes
+  from public.transportation_requests
+  where external_submission_ref = 'R2-TEST-STRUCTURED-1';
+
+  if v_service_type = 'dialysis' and v_days = array[1,3,5]::smallint[] and v_start = '2026-10-01'
+     and v_end = '2026-12-01' and v_time = '09:00' and v_return = true and v_additional_notes is null then
+    raise notice 'TEST R2-1 structured-persistence: PASS (service_type=%, days=%, additional_notes stays NULL -- never used as storage)', v_service_type, v_days;
+  else
+    raise notice 'TEST R2-1 structured-persistence: FAIL (service_type=%, days=%, start=%, end=%, time=%, return=%, notes=%)',
+      v_service_type, v_days, v_start, v_end, v_time, v_return, v_additional_notes;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2-2. Omitted serviceType/recurringSchedule -> both remain NULL
+-- (backward-compatible one-time request, the pre-R2 default unchanged).
+-- =============================================================================
+do $$
+declare
+  v_service_type text;
+  v_days smallint[];
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2-TEST-OMITTED-1', 'S4A TEST R2 Requester', 'self', '555-0301',
+    'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'no'
+  );
+  reset role;
+
+  select service_type, recurring_days_of_week into v_service_type, v_days
+  from public.transportation_requests where external_submission_ref = 'R2-TEST-OMITTED-1';
+
+  if v_service_type is null and v_days is null then
+    raise notice 'TEST R2-2 omitted-fields-stay-null: PASS';
+  else
+    raise notice 'TEST R2-2 omitted-fields-stay-null: FAIL (service_type=%, days=%)', v_service_type, v_days;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2-3. Request remains pending / awaiting review; zero auto-Passenger,
+-- zero auto-Trip -- a structured (serviceType + recurringSchedule)
+-- submission is NOT treated any differently from a plain one-time
+-- Request in this respect.
+-- =============================================================================
+do $$
+declare
+  v_state text;
+  v_passenger_id uuid;
+  v_trip_count int;
+  v_request_id uuid;
+begin
+  select id, state, passenger_id into v_request_id, v_state, v_passenger_id
+  from public.transportation_requests where external_submission_ref = 'R2-TEST-STRUCTURED-1';
+
+  select count(*) into v_trip_count from public.trips where request_id = v_request_id;
+
+  if v_state = 'pending' and v_passenger_id is null and v_trip_count = 0 then
+    raise notice 'TEST R2-3 no-side-effects-on-structured-request: PASS (state=pending, no Passenger, no Trip)';
+  else
+    raise notice 'TEST R2-3 no-side-effects-on-structured-request: FAIL (state=%, passenger_id=%, trip_count=%)', v_state, v_passenger_id, v_trip_count;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2-4. Org spoofing remains impossible with serviceType/recurringSchedule
+-- present -- Org B's own integration still only ever creates an Org B
+-- Request, never Org A's, regardless of these new fields.
+-- =============================================================================
+do $$
+declare
+  v_org_id uuid;
+  v_expected_org_id uuid;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-b', 'R2-TEST-ORGB-STRUCTURED', 'S4A TEST R2 Org B Requester', 'self', '555-0302',
+    'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'no',
+    null, null, null, null, null, null,
+    'other', array['tuesday'], '2026-10-06', null, null, null
+  );
+  reset role;
+
+  select organization_id into v_org_id from public.transportation_requests where external_submission_ref = 'R2-TEST-ORGB-STRUCTURED';
+  select organization_id into v_expected_org_id from public.request_intake_integrations where external_id = 'test-intake-org-b';
+
+  if v_org_id = v_expected_org_id and v_org_id <> (select organization_id from public.request_intake_integrations where external_id = 'test-intake-org-a') then
+    raise notice 'TEST R2-4 org-isolation-with-structured-fields: PASS (Org B integration created an Org B Request, never Org A)';
+  else
+    raise notice 'TEST R2-4 org-isolation-with-structured-fields: FAIL (got org=%, expected=%)', v_org_id, v_expected_org_id;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2-5/R2-6. Direct RPC bypass remains closed for the NEW (20-parameter)
+-- overload too -- anon/authenticated still cannot EXECUTE it directly,
+-- confirming the R2 migration's function replacement did not
+-- accidentally reopen S4B's own closed bypass.
+-- =============================================================================
+do $$
+begin
+  set local role anon;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2-TEST-DIRECT-ANON', 'S4A TEST R2 Bypass', 'self', '555-0303',
+    'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'no',
+    null, null, null, null, null, null,
+    'other', array['monday'], '2026-10-06', null, null, null
+  );
+  raise notice 'TEST R2-5 anon-cannot-execute-extended-rpc: FAIL (call succeeded, should be permission denied)';
+exception when insufficient_privilege then
+  raise notice 'TEST R2-5 anon-cannot-execute-extended-rpc: PASS (permission denied: %)', sqlerrm;
+end $$;
+reset role;
+
+do $$
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2-TEST-DIRECT-AUTH', 'S4A TEST R2 Bypass', 'self', '555-0304',
+    'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'no',
+    null, null, null, null, null, null,
+    'other', array['monday'], '2026-10-06', null, null, null
+  );
+  raise notice 'TEST R2-6 authenticated-cannot-execute-extended-rpc: FAIL (call succeeded, should be permission denied)';
+exception when insufficient_privilege then
+  raise notice 'TEST R2-6 authenticated-cannot-execute-extended-rpc: PASS (permission denied: %)', sqlerrm;
+end $$;
+reset role;
+
+-- =============================================================================
+-- R2-7. Idempotent replay with a structured (recurringSchedule) payload
+-- still creates exactly ONE Request -- the addition of new columns does
+-- not weaken the existing partial-unique-index idempotency mechanism.
+-- =============================================================================
+do $$
+declare
+  v_count int;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2-TEST-REPLAY', 'S4A TEST R2 Replay First', 'self', '555-0305',
+    'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'yes',
+    null, null, null, null, null, null,
+    'senior_medical', array['thursday'], '2026-10-08', null, null, null
+  );
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2-TEST-REPLAY', 'S4A TEST R2 Replay Second -- different text, same key', 'family', '555-0306',
+    'S4A TEST R2 Pickup CHANGED', 'S4A TEST R2 Destination CHANGED', 'no',
+    null, null, null, null, null, null,
+    'other', array['friday'], '2026-11-01', null, null, null
+  );
+  reset role;
+
+  select count(*) into v_count from public.transportation_requests where external_submission_ref = 'R2-TEST-REPLAY';
+  if v_count = 1 then
+    raise notice 'TEST R2-7 idempotent-replay-with-structured-payload: PASS (exactly one Request, even with a materially different second payload)';
+  else
+    raise notice 'TEST R2-7 idempotent-replay-with-structured-payload: FAIL (row_count=%)', v_count;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2-8. Disabled/nonexistent integration still rejected with
+-- serviceType/recurringSchedule present -- these new optional fields do
+-- not create a second, less-validated code path.
+-- =============================================================================
+do $$
+declare v_error_code text;
+begin
+  set local role service_role;
+  begin
+    perform public.submit_public_transportation_request(
+      'test-intake-org-a-disabled', 'R2-TEST-DISABLED', 'S4A TEST R2', 'self', '555-0307',
+      'S4A TEST R2 Pickup', 'S4A TEST R2 Destination', 'no',
+      null, null, null, null, null, null,
+      'other', array['monday'], '2026-10-06', null, null, null
+    );
+    raise notice 'TEST R2-8 disabled-integration-rejected-with-structured-fields: FAIL (accepted, should be rejected)';
+  exception when others then
+    get stacked diagnostics v_error_code = returned_sqlstate;
+    raise notice 'TEST R2-8 disabled-integration-rejected-with-structured-fields: PASS (rejected: %)', v_error_code;
+  end;
+  reset role;
+end $$;
+
+-- =============================================================================
+-- R2A-1. requested_passenger_name stored STRUCTURALLY; no Passenger row
+-- created; passenger_id stays NULL (P1-PILOT-S4B-R2A).
+-- =============================================================================
+do $$
+declare
+  v_requested_name text;
+  v_passenger_id uuid;
+  v_passenger_count int;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2A-TEST-STRUCTURED-1', 'S4A TEST R2A Requester', 'self', '555-0600',
+    'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no',
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    'PILOT PASSENGER QA'
+  );
+  reset role;
+
+  select requested_passenger_name, passenger_id into v_requested_name, v_passenger_id
+  from public.transportation_requests where external_submission_ref = 'R2A-TEST-STRUCTURED-1';
+
+  select count(*) into v_passenger_count from public.passengers where display_name = 'PILOT PASSENGER QA';
+
+  if v_requested_name = 'PILOT PASSENGER QA' and v_passenger_id is null and v_passenger_count = 0 then
+    raise notice 'TEST R2A-1 requested-passenger-name-structured-no-auto-passenger: PASS (name stored, passenger_id NULL, zero Passenger rows created)';
+  else
+    raise notice 'TEST R2A-1 requested-passenger-name-structured-no-auto-passenger: FAIL (name=%, passenger_id=%, passenger_count=%)', v_requested_name, v_passenger_id, v_passenger_count;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2A-2. Omitted passengerName -> NULL (backward compatible, unchanged
+-- default).
+-- =============================================================================
+do $$
+declare v_requested_name text;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2A-TEST-OMITTED-1', 'S4A TEST R2A Requester', 'self', '555-0601',
+    'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no'
+  );
+  reset role;
+
+  select requested_passenger_name into v_requested_name
+  from public.transportation_requests where external_submission_ref = 'R2A-TEST-OMITTED-1';
+
+  if v_requested_name is null then
+    raise notice 'TEST R2A-2 omitted-passenger-name-stays-null: PASS';
+  else
+    raise notice 'TEST R2A-2 omitted-passenger-name-stays-null: FAIL (requested_passenger_name=%)', v_requested_name;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2A-3. No auto-Trip either -- a requested passenger name does not
+-- change this endpoint's own "no side effects" contract.
+-- =============================================================================
+do $$
+declare
+  v_state text;
+  v_passenger_id uuid;
+  v_trip_count int;
+  v_request_id uuid;
+begin
+  select id, state, passenger_id into v_request_id, v_state, v_passenger_id
+  from public.transportation_requests where external_submission_ref = 'R2A-TEST-STRUCTURED-1';
+
+  select count(*) into v_trip_count from public.trips where request_id = v_request_id;
+
+  if v_state = 'pending' and v_passenger_id is null and v_trip_count = 0 then
+    raise notice 'TEST R2A-3 no-side-effects-with-requested-passenger-name: PASS (state=pending, no Passenger, no Trip)';
+  else
+    raise notice 'TEST R2A-3 no-side-effects-with-requested-passenger-name: FAIL (state=%, passenger_id=%, trip_count=%)', v_state, v_passenger_id, v_trip_count;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2A-4. Org isolation unchanged with requested_passenger_name present.
+-- =============================================================================
+do $$
+declare
+  v_org_id uuid;
+  v_expected_org_id uuid;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-b', 'R2A-TEST-ORGB', 'S4A TEST R2A Org B Requester', 'self', '555-0602',
+    'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no',
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    'PILOT PASSENGER QA ORG B'
+  );
+  reset role;
+
+  select organization_id into v_org_id from public.transportation_requests where external_submission_ref = 'R2A-TEST-ORGB';
+  select organization_id into v_expected_org_id from public.request_intake_integrations where external_id = 'test-intake-org-b';
+
+  if v_org_id = v_expected_org_id and v_org_id <> (select organization_id from public.request_intake_integrations where external_id = 'test-intake-org-a') then
+    raise notice 'TEST R2A-4 org-isolation-with-requested-passenger-name: PASS';
+  else
+    raise notice 'TEST R2A-4 org-isolation-with-requested-passenger-name: FAIL (got org=%, expected=%)', v_org_id, v_expected_org_id;
+  end if;
+end $$;
+
+-- =============================================================================
+-- R2A-5. Disabled integration still rejected with passengerName present.
+-- =============================================================================
+do $$
+declare v_error_code text;
+begin
+  set local role service_role;
+  begin
+    perform public.submit_public_transportation_request(
+      'test-intake-org-a-disabled', 'R2A-TEST-DISABLED', 'S4A TEST R2A', 'self', '555-0603',
+      'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no',
+      null, null, null, null, null, null,
+      null, null, null, null, null, null,
+      'PILOT PASSENGER QA'
+    );
+    raise notice 'TEST R2A-5 disabled-integration-rejected-with-passenger-name: FAIL (accepted, should be rejected)';
+  exception when others then
+    get stacked diagnostics v_error_code = returned_sqlstate;
+    raise notice 'TEST R2A-5 disabled-integration-rejected-with-passenger-name: PASS (rejected: %)', v_error_code;
+  end;
+  reset role;
+end $$;
+
+-- =============================================================================
+-- R2A-6/R2A-7. Direct RPC bypass remains closed for the NEW (21-parameter)
+-- overload too.
+-- =============================================================================
+do $$
+begin
+  set local role anon;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2A-TEST-DIRECT-ANON', 'S4A TEST R2A Bypass', 'self', '555-0604',
+    'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no',
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    'PILOT PASSENGER QA'
+  );
+  raise notice 'TEST R2A-6 anon-cannot-execute-extended-rpc: FAIL (call succeeded, should be permission denied)';
+exception when insufficient_privilege then
+  raise notice 'TEST R2A-6 anon-cannot-execute-extended-rpc: PASS (permission denied: %)', sqlerrm;
+end $$;
+reset role;
+
+do $$
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2A-TEST-DIRECT-AUTH', 'S4A TEST R2A Bypass', 'self', '555-0605',
+    'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no',
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    'PILOT PASSENGER QA'
+  );
+  raise notice 'TEST R2A-7 authenticated-cannot-execute-extended-rpc: FAIL (call succeeded, should be permission denied)';
+exception when insufficient_privilege then
+  raise notice 'TEST R2A-7 authenticated-cannot-execute-extended-rpc: PASS (permission denied: %)', sqlerrm;
+end $$;
+reset role;
+
+-- =============================================================================
+-- R2A-8. Idempotent replay with a DIFFERENT requested_passenger_name on
+-- the second call still yields exactly ONE Request, preserving the
+-- FIRST accepted submission's own name (never updated on replay).
+-- =============================================================================
+do $$
+declare
+  v_count int;
+  v_name text;
+begin
+  set local role service_role;
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2A-TEST-REPLAY', 'S4A TEST R2A Replay First', 'self', '555-0606',
+    'S4A TEST R2A Pickup', 'S4A TEST R2A Destination', 'no',
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    'FIRST PASSENGER NAME'
+  );
+  perform public.submit_public_transportation_request(
+    'test-intake-org-a', 'R2A-TEST-REPLAY', 'S4A TEST R2A Replay Second -- different text, same key', 'family', '555-0607',
+    'S4A TEST R2A Pickup CHANGED', 'S4A TEST R2A Destination CHANGED', 'yes',
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    'SECOND PASSENGER NAME -- must never apply'
+  );
+  reset role;
+
+  select count(*) into v_count from public.transportation_requests where external_submission_ref = 'R2A-TEST-REPLAY';
+  select requested_passenger_name into v_name from public.transportation_requests where external_submission_ref = 'R2A-TEST-REPLAY';
+
+  if v_count = 1 and v_name = 'FIRST PASSENGER NAME' then
+    raise notice 'TEST R2A-8 idempotent-replay-preserves-first-passenger-name: PASS (exactly one Request, name=%)', v_name;
+  else
+    raise notice 'TEST R2A-8 idempotent-replay-preserves-first-passenger-name: FAIL (row_count=%, name=%)', v_count, v_name;
+  end if;
 end $$;
 
 -- =============================================================================

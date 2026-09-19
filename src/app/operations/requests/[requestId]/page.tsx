@@ -238,6 +238,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             passenger={request.passenger}
             candidatePassengers={candidatePassengers}
             candidatesUnavailable={candidatesUnavailable}
+            requestedPassengerName={request.requestedPassengerName}
           />
           <RequestTransportationPanel
             pickupDescription={request.pickupDescription}
@@ -261,6 +262,8 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             intakeIntegrationId={request.intakeIntegrationId}
             assistanceNotes={request.assistanceNotes}
             additionalNotes={request.additionalNotes}
+            serviceType={request.serviceType}
+            recurringSchedule={request.recurringSchedule}
           />
           <RequestActivityPanel events={activityEvents} timezone={timezone} />
         </div>

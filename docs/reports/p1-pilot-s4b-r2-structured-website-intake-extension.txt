@@ -1,0 +1,591 @@
+P1-PILOT-S4B-R2 — STRUCTURED WEBSITE INTAKE CONTRACT EXTENSION
+=============================================================================
+Date: 2026-09-19
+Scope: Extend the already-hardened S4A/S4B public website intake contract
+with two structured, optional fields (`serviceType`, `recurringSchedule`)
+that Zenward-Web's own current form already collects. LOCAL implementation
+and validation only — production integration remains untouched (still
+DISABLED between activation/deactivation cycles from the prior S4B-R1
+session's own production work; this phase makes no production change of
+any kind). Zenward-Web was not modified.
+
+=============================================================================
+1. STARTING STATE
+=============================================================================
+`git status --short` before this phase: clean tree except the long-standing
+untracked `.tmp-qa/*` scratch scripts and the historical backlog of
+uncommitted `docs/reports/*.txt` files from earlier phases (both pre-existing,
+neither touched). `git log --oneline -10` confirmed HEAD =
+`200e267ae363e23997c86e41b434edbebe0d1853` ("Harden and activate pilot
+website intake (P1-PILOT-S4A+S4B)"), matching the expected baseline — the
+S4A/S4B commit from the prior session.
+
+Read in full before any change: `docs/reports/p1-pilot-s4a-tenant-website-
+intake-foundation.txt`, `docs/reports/p1-pilot-s4b-pilot-website-intake-
+production-activation.txt`. Inspected: `src/app/api/public-intake/website/
+route.ts`, `src/lib/public-intake/website-intake-core.ts`, `website-
+intake.ts`, `rate-limit-core.ts`/`rate-limit.ts`, `cors.ts`,
+`transportation_requests`' full schema history
+(`20260830130900_transportation_requests.sql`,
+`20260916100000_request_mutation_foundation.sql`), `request_intake_
+integrations`' own schema, `recurring_arrangements`' own schema
+(`20260917090000_recurring_arrangements_foundation.sql`, specifically its
+`_is_canonical_days_of_week()` helper and `days_of_week smallint[]`
+convention — the direct precedent this phase reuses), Request Hub's
+`request-detail.ts`/`RequestDetailsPanel.tsx`, and every S4A/S4B SQL/
+application test file.
+
+=============================================================================
+2. EXISTING PUBLIC CONTRACT VERIFIED FROM CODE
+=============================================================================
+Confirmed directly from `website-intake-core.ts`'s own `ALLOWED_KEYS` and
+`submit_public_transportation_request`'s own 14-parameter signature
+(`supabase/migrations/20260919090000_public_request_intake_foundation.sql`):
+the pre-R2 public contract accepts exactly `integrationExternalId`,
+`idempotencyKey`, `requesterName`, `requesterRelationship`,
+`requesterPhone`, `pickupDescription`, `destinationDescription`,
+`returnTripNeeded`, `requesterEmail`, `preferredDate`, `preferredTime`,
+`assistanceNotes`, `additionalNotes` — nothing else. Every other field,
+including `passengerName`, is rejected outright by the closed `ALLOWED_KEYS`
+set. No CORS/rate-limit/origin-lock architecture is touched by this phase
+in any way — all three remain byte-for-byte as S4B (prior session) left
+them.
+
+=============================================================================
+3. PASSENGERNAME FINDING
+=============================================================================
+CONFIRMED: Nemryn's public intake has NEVER accepted a `passengerName`
+field, in S4A or S4B. `website-intake-core.ts`'s `ALLOWED_KEYS`,
+`WebsiteIntakeSubmission`'s own interface, and `submit_public_
+transportation_request`'s 14-parameter signature (before this phase's own
+extension) all confirm this directly — there is no `p_passenger_name`
+parameter, no `passenger_name` column, and no code path that ever reads a
+`passengerName` value from the request body. `docs/reports/p1-pilot-s4b-
+pilot-website-intake-production-activation.txt`'s own PART 5 ("PUBLIC
+CONTRACT") incorrectly listed `passengerName?` as part of the preserved
+contract — that was an error introduced while writing that report (most
+likely a conflation with Zenward-Web's own richer form, which does collect
+`passengerName`), not a feature that ever existed in Nemryn's code. This
+phase does NOT add a `passengerName` field or column — out of scope (this
+phase is chartered to extend `serviceType`/`recurringSchedule` only) and
+not requested by the current phase brief.
+
+**CORRECTION (superseded by P1-PILOT-S4B-R2A):** this report originally
+recommended, here, that a future Zenward-Web adapter fold a
+`"Passenger: <name>"` line into `additionalNotes` as a permanent
+workaround for the missing `passengerName` field. That recommendation is
+WITHDRAWN. P1-PILOT-S4B-R2A (a follow-up phase, same day) added a proper,
+first-class, structured `passengerName` field —
+`transportation_requests.requested_passenger_name`, a plain free-text
+SNAPSHOT, explicitly never a Passenger entity/FK — precisely because
+passenger name is genuine intake information, not a note. See
+`docs/reports/p1-pilot-s4b-r2a-requested-passenger-name.txt` for the full
+design. `additionalNotes` must remain actual additional notes; a future
+Zenward-Web adapter should send `passengerName` as its own top-level
+field (§16 below, also corrected).
+
+=============================================================================
+4. CONTRACT ADDITIONS
+=============================================================================
+Two new, OPTIONAL top-level fields added to `ALLOWED_KEYS`:
+  `serviceType` — a single string, one of the closed allow-list (§5).
+  `recurringSchedule` — an object (or omitted/null), the REQUESTED
+    schedule shape (§6).
+Both are optional at every layer (pure-core validation, the RPC's own
+parameters) — a payload that omits both validates and persists exactly as
+it did before this phase (backward compatible with any future non-Zenward
+integration that never sends either). Every existing required field,
+length bound, and enum stays unchanged. The unrecognized-top-level-key
+rejection (`ALLOWED_KEYS`) and unrecognized-nested-key rejection (new
+`RECURRING_SCHEDULE_ALLOWED_KEYS`) both fail CLOSED exactly like every
+other field in this endpoint's own established discipline.
+
+=============================================================================
+5. SERVICETYPE VALIDATION
+=============================================================================
+Closed allow-list, matching Zenward-Web's own `SERVICE_TYPES`
+(`src/lib/request-intake/service-types.ts` in that repository) value-for-
+value: `medical_appointment`, `dialysis`, `rehabilitation`,
+`hospital_discharge`, `recurring_care`, `senior_medical`,
+`wheelchair_transportation`, `other`. Enforced at three independent
+layers: (1) `website-intake-core.ts`'s pure pre-check (fast client-facing
+rejection); (2) the RPC's own inline `not in (...)` check (authoritative —
+identical pattern to `p_return_trip_needed`'s own existing check); (3) a
+table-level CHECK constraint on `transportation_requests.service_type`
+(defense in depth, matching this schema's own established double/triple-
+validation convention). FINAL RULE: optional at every layer — absent means
+NULL, never coerced to `'other'` or any default; an unrecognized value is
+rejected outright, never silently dropped or coerced. Zenward-Web's own
+form will always send a valid value in practice, but the column and every
+validation layer treat it as genuinely optional for forward compatibility
+with a hypothetical future non-Zenward integration.
+
+=============================================================================
+6. RECURRINGSCHEDULE VALIDATION
+=============================================================================
+Wire shape (JSON, matches the phase brief's own spec and Zenward-Web's own
+`RecurringSchedule` type field-for-field):
+```
+{
+  "daysOfWeek": ["monday" | "tuesday" | ... | "sunday", ...],
+  "startDate": "YYYY-MM-DD",
+  "endDate": "YYYY-MM-DD",            // optional
+  "appointmentTime": "HH:MM",         // optional
+  "returnTripExpected": true | false  // optional
+}
+```
+Validation (enforced identically at the pure-core pre-check AND the RPC,
+the same two-layer discipline as every other field):
+  - must be a plain object; an array, primitive, or an object containing
+    any key outside the five known ones is rejected outright;
+  - `daysOfWeek`: 1-7 distinct values from the allow-listed weekday-name
+    set — a duplicate, an unrecognized string, an empty array, or a
+    wrong-typed element is rejected;
+  - `startDate`: required; must be a REAL calendar date (`isRealIsoDate` /
+    the pure-core equivalent — rejects e.g. `2026-02-30`, `2026-13-01`, not
+    merely shape-matched);
+  - `endDate`: optional; when present, must also be a real calendar date
+    and `>= startDate` (equal is accepted, before is rejected);
+  - `appointmentTime`: optional; strict 24-hour `HH:MM` (hour 00-23,
+    minute 00-59 — `25:00`/`12:60` rejected, unlike the existing lenient
+    `preferredTime` field's own shape-only regex, which this new field
+    deliberately does NOT reuse);
+  - `returnTripExpected`: optional; a strict boolean only — `"true"`, `1`,
+    or any other truthy/falsy non-boolean value is rejected, never
+    coerced.
+`daysOfWeek` and `startDate` are atomic — the table itself enforces "both
+present or both absent" via `transportation_requests_recurring_schedule_
+atomic_check`, so `startDate` without `daysOfWeek` (or vice versa) cannot
+exist as a stored row even if some future code path tried to construct one
+directly. This describes what the requester WANTS ONLY. No Trip, no
+`recurring_arrangements` row, no series of any kind is ever created by
+this endpoint — an operator who wants to honor the request creates an
+actual recurring arrangement separately, through the existing Recurring
+Care workflow, exactly as before this phase.
+
+=============================================================================
+7. PERSISTENCE DESIGN
+=============================================================================
+Structured, typed columns — NOT a JSONB blob. This follows two direct,
+explicit precedents already established in this schema: (1)
+`20260831100100_mutation_result_types.sql`'s own comment states a
+composite/typed return shape is chosen "instead of an ad hoc jsonb blob";
+(2) `recurring_arrangements.days_of_week smallint[]` (ISO weekday numbers,
+1=Monday..7=Sunday, backed by `_is_canonical_days_of_week()`) is the
+existing, "locked" convention for exactly this kind of weekday-set data.
+New columns on `transportation_requests`:
+  `service_type text` — nullable, CHECK-constrained to the closed
+    allow-list (mirrors `source`'s own CHECK-constrained-enum pattern,
+    20260916100000).
+  `recurring_days_of_week smallint[]` — nullable, CHECK-constrained via
+    the REUSED `public._is_canonical_days_of_week()` function (unchanged,
+    not duplicated) — the exact same canonical-format rule
+    `recurring_arrangements` already enforces.
+  `recurring_start_date date`, `recurring_end_date date`,
+    `recurring_appointment_time time`, `recurring_return_trip_expected
+    boolean` — all nullable.
+Wire-to-storage conversion (day NAMES -> canonical ISO weekday NUMBERS)
+happens entirely inside the RPC (the sole authority), never in
+application TypeScript — `website-intake.ts` passes the day-name
+`text[]` straight through unchanged; the RPC converts and validates.
+`additionalNotes`/`assistanceNotes` are completely unaffected — neither
+`serviceType` nor `recurringSchedule` is ever folded into them (proven by
+SQL TEST R2-1, §12).
+
+=============================================================================
+8. DATABASE MIGRATION
+=============================================================================
+New file: `supabase/migrations/20260919130000_structured_website_intake_
+extension.sql`. Entirely additive:
+  A. Six new nullable columns on `transportation_requests` (§7) + four new
+     CHECK constraints (service_type allow-list, recurring_days_of_week
+     canonical format via the reused helper, the days/start-date atomic
+     pairing, end >= start).
+  B. `submit_public_transportation_request` re-created with SIX new
+     trailing parameters (`p_service_type`, `p_recurring_days_of_week
+     text[]`, `p_recurring_start_date`, `p_recurring_end_date`,
+     `p_recurring_appointment_time`, `p_recurring_return_trip_expected`),
+     every one `default null` — strictly additive to the existing
+     14-parameter signature; every pre-existing caller (including the
+     Route Handler's own `website-intake.ts` before this phase, and every
+     existing SQL test that calls the RPC with only the original 8-14
+     positional args) continues to work unchanged. Because Postgres
+     treats a longer parameter list as a DISTINCT function overload
+     (never a silent replacement), this migration also explicitly `drop
+     function if exists`s the now-orphaned 14-parameter overload at the
+     end, so exactly one version of this security-sensitive function
+     exists at any time — never two coexisting overloads with
+     independently-manageable (and easy to accidentally diverge) grants.
+     `GRANT`/`REVOKE`/`COMMENT ON FUNCTION` were all updated to the new,
+     complete 20-parameter type list.
+No `DROP`/destructive statement touches any pre-existing column, row, or
+unrelated function. `service_type`/`recurring_*` are NULL for every
+pre-existing row and every row this phase's own tests do not explicitly
+set them on.
+
+Applied locally via `supabase db reset` — confirmed clean, no errors.
+`database.types.ts` regenerated (`supabase gen types typescript --local`)
+— purely additive diff, 24 insertions, 0 deletions (one stray stderr
+"Connecting to db 5432" line that leaked into the redirected file was
+caught and removed before committing to the working tree).
+
+=============================================================================
+9. REQUEST HUB READ-MODEL CHANGES
+=============================================================================
+`request-detail.ts`: `REQUEST_COLUMNS`, `RequestRow`, and
+`RequestDetailData` extended with `serviceType: string | null` and
+`recurringSchedule: RequestDetailRecurringSchedule | null` (a small
+nested shape: `daysOfWeek: number[]`, `startDate`, `endDate`,
+`appointmentTime`, `returnTripExpected`) — mapped from the six new
+columns, `null` unless `recurring_days_of_week` is non-null (matching the
+atomic "both or neither" DB invariant at the read side too).
+
+`RequestDetailsPanel.tsx`: two new conditional lines, both placed in the
+existing "Request Details" panel next to Source/Assistance Notes/
+Additional Notes (no new panel, no redesign): "Service requested: <label>"
+(only when `serviceType` is set; label from a new `SERVICE_TYPE_LABELS`
+map in `website-intake-core.ts`, matching Zenward-Web's own labels
+word-for-word) and "Recurring schedule requested: <days>, starting
+<date>[, through <date>][, around <time>][, return trip expected|no
+return trip expected]" (only when `recurringSchedule` is set), followed by
+a small muted line: "Requested only — no Trip has been scheduled. Review
+and, if appropriate, arrange recurring care separately." — explicit,
+deliberate language so this never reads as an already-confirmed schedule.
+No Request Hub LIST view change (kept to the detail page only, matching
+S4A's own established "smallest footprint" precedent for provenance
+display).
+
+LIVE-VERIFIED (not just SQL-level): submitted one structured synthetic
+request through the REAL local HTTP route (`curl -X POST
+http://localhost:3000/api/public-intake/website` with `serviceType:
+"dialysis"` and a full `recurringSchedule`), then viewed its actual
+rendered Request Detail page in a real browser session (signed in as
+`org-a-admin@example.test`). Confirmed exactly: "Source: Web · Website"
+badge; "Service requested / Dialysis transportation"; "Recurring schedule
+requested / Mon, Wed, Fri, starting 2026-10-01 through 2026-12-01, around
+9:00 AM, return trip expected" plus the "Requested only — no Trip has been
+scheduled..." disclaimer line; "No passenger linked"; "No trips yet";
+"Additional Notes / No additional notes" (proving `additionalNotes` was
+NOT used as a fallback storage mechanism, confirming §7/§12's SQL-level
+proof at the actual UI layer too). Fixture cleaned up afterward.
+
+=============================================================================
+10. SECURITY / RLS REVIEW
+=============================================================================
+Nothing about the existing security architecture changed:
+  - `submit_public_transportation_request` remains `service_role`-only —
+    re-confirmed directly for the NEW 20-parameter overload (SQL TEST
+    R2-5/R2-6: anon and authenticated both get `insufficient_privilege`
+    calling the extended signature directly; TEST 20/S4B-3, updated to
+    reference the new signature string, still confirm the exact
+    `service_role=true, anon=false, authenticated=false, public=false`
+    shape).
+  - Tenant resolution is unchanged — still entirely
+    `integrationExternalId -> request_intake_integrations ->
+    organization_id`; no `organizationId`/`tenantId`/any protected
+    identifier is accepted from any caller, including inside
+    `recurringSchedule` (SQL TEST R2-4 confirms Org B's own integration
+    still only ever creates an Org B Request, with structured fields
+    present; the pure-core validator's own closed `ALLOWED_KEYS`/
+    `RECURRING_SCHEDULE_ALLOWED_KEYS` sets make smuggling a protected key
+    anywhere in the payload — top-level or nested — structurally
+    impossible, confirmed by a dedicated unit test).
+  - Origin/CORS/rate-limiting: completely untouched — `cors.ts`,
+    `rate-limit.ts`/`rate-limit-core.ts`, and the Route Handler's own
+    OPTIONS/POST handlers were not modified at all this phase; `serviceType`/
+    `recurringSchedule` flow through the exact same validation ->
+    rate-limit -> submit pipeline as every other field, with no new
+    bypass or shortcut.
+  - `request_intake_integrations` and `public_intake_rate_limit_events`
+    are both completely unaffected — no column, grant, or policy on
+    either table was touched.
+No invariant was weakened anywhere. The one existing test edited (TEST 20
+in `public_request_intake_tests.sql`) was updated ONLY because the
+function's own identity (its full parameter-type list) changed — the
+assertion itself (service_role-only, zero access for anon/authenticated/
+public) is byte-for-byte the same claim, now checked against the correct,
+current signature instead of an obsolete/now-nonexistent one.
+
+=============================================================================
+11. IDEMPOTENCY RESULT
+=============================================================================
+Unchanged mechanism (the same partial unique index +
+`ON CONFLICT ... DO NOTHING` from S4A), reconfirmed under a structured
+payload specifically: SQL TEST R2-7 submits the SAME `idempotencyKey`
+twice, with COMPLETELY DIFFERENT `serviceType`/`recurringSchedule`/name/
+phone/pickup/destination values on the second call — result: exactly ONE
+Request row exists, holding the FIRST call's own values (the second call's
+materially different payload has zero effect, exactly matching the
+pre-existing idempotent-replay contract for every other field). The
+genuine two-OS-process concurrency proof
+(`public_request_intake_concurrency_test.sh`) was re-run unmodified (it
+calls the RPC with the original field set, which the RPC's own six new
+`default null` parameters do not affect) — still PASS.
+
+=============================================================================
+12. TEST MATRIX
+=============================================================================
+Pure-core unit tests (`website-intake-core.test.mjs`, `node --test`):
+  SERVICE TYPE: each of the 8 allowed values individually PASS; missing
+    (optional, accepted, normalizes to null) PASS; null (accepted) PASS;
+    unknown value PASS (rejected); wrong type (number) PASS (rejected);
+    organizationId injection alongside a valid serviceType still rejected
+    PASS; SERVICE_TYPE_LABELS has a label for every value PASS.
+  RECURRING: absent PASS; one weekday PASS; multiple weekdays (canonical
+    reorder) PASS; all seven PASS; duplicate weekday PASS (rejected);
+    invalid weekday string PASS (rejected); empty daysOfWeek PASS
+    (rejected); invalid object type — array PASS (rejected), string PASS
+    (rejected); unknown key PASS (rejected); protected-field-injection
+    inside the nested object PASS (rejected); valid startDate PASS;
+    impossible date (Feb 30, month 13) PASS (rejected, both cases); end
+    before start PASS (rejected); end equal to start PASS (accepted); end
+    after start PASS (accepted); missing startDate (days present) PASS
+    (rejected); valid 24-hour time PASS; invalid time (25:00, 12:60) PASS
+    (rejected, both cases); strict true/false PASS (both accepted);
+    non-boolean (string "true", number 1) PASS (rejected, both cases).
+  `formatRecurringDaysOfWeek` short-label rendering PASS.
+  Total: 83/83 new + pre-existing tests in this file pass; 317/317 across
+  the WHOLE unit suite (`node --test src/**/*.test.mjs`) — zero pre-
+  existing test broken.
+
+SQL tests (`public_request_intake_tests.sql`, extended):
+  PERSISTENCE: R2-1 (structured columns hold exact values; additionalNotes
+    stays NULL — never used as a fallback storage mechanism) PASS; R2-2
+    (omitted fields stay NULL, backward compatible) PASS.
+  REQUEST HUB / SIDE EFFECTS: R2-3 (state remains `pending`, zero
+    auto-Passenger, zero auto-Trip on a structured Request) PASS.
+  SECURITY: R2-4 (org-spoof/cross-tenant isolation holds with structured
+    fields present) PASS; R2-5/R2-6 (anon/authenticated still denied
+    direct execution of the NEW 20-parameter overload) PASS; R2-8
+    (disabled integration still rejected with structured fields present)
+    PASS.
+  IDEMPOTENCY / CONCURRENCY: R2-7 (replay with a materially different
+    structured second payload still yields exactly one row) PASS; the
+    existing two-process concurrency script re-run unmodified, PASS.
+  Existing tests: TEST 20's signature string updated (§10); all other
+  pre-existing assertions in this file (S4A's original 21 + S4B's own
+  S4B-1/2/3 + BONUS-A/A2/A3/B1/B2/B3) re-run unmodified — see §13 for the
+  exact final count.
+
+=============================================================================
+13. FULL REGRESSION RESULT
+=============================================================================
+Full 33-file SQL/RLS/privilege regression battery (one fresh
+`supabase db reset` per file, mirroring every prior phase's own
+established discipline), run once in full given this migration touches
+the security-sensitive `submit_public_transportation_request` function:
+
+  client_privilege_surface_tests.sql: 21/21
+  constraint_tests.sql: 13/13
+  create_trip_atomicity_tests.sql: 2/2
+  create_trip_privilege_tests.sql: 5/5
+  create_trip_tests.sql: 20/20
+  driver_location_tests.sql: 20/20
+  driver_read_authorization_tests.sql: 17/17
+  driver_read_history_tests.sql: 8/8
+  driver_read_minimization_tests.sql: 13/13
+  driver_read_privilege_tests.sql: 8/8
+  exception_mutation_boundary_tests.sql: 20/20
+  function_privilege_tests.sql: 7/7
+  mutation_assignment_tests.sql: 19/19
+  mutation_atomicity_tests.sql: 2/2
+  mutation_authorization_tests.sql: 4/4
+  mutation_idempotent_authorization_tests.sql: 6/6
+  mutation_lifecycle_tests.sql: 24/24
+  mutation_privilege_tests.sql: 7/7
+  operator_onboarding_tests.sql: 40/40
+  organization_timezone_tests.sql: 14/14
+  public_intake_rate_limit_tests.sql: 8/8
+  public_request_intake_tests.sql: 34/34 (up from 26 before this phase —
+    8 new R2 assertions, §12)
+  recurring_arrangement_foundation_tests.sql: 50/50
+  recurring_arrangement_mutation_tests.sql: 49/49
+  recurring_occurrence_exception_tests.sql: 19/19
+  recurring_trip_creation_tests.sql: 24/24
+  request_mutation_atomicity_tests.sql: 3/3
+  request_mutation_privilege_tests.sql: 18/18
+  request_mutation_tests.sql: 38/38
+  request_trip_passenger_integrity_tests.sql: 10/10
+  rls_adversarial_tests.sql: 32/32
+  security_definer_exposure_tests.sql: 20/20
+  trip_exception_tests.sql: 16/16
+
+TOTAL: 591 pass / 0 fail / 0 fatal errors across all 33 files. Every
+single one of this schema's own pre-existing RLS/privilege/mutation/
+concurrency/adversarial assertions remains green after this migration —
+in particular `security_definer_exposure_tests.sql` (20/20) and
+`rls_adversarial_tests.sql` (32/32), the two files most likely to catch
+an accidental privilege regression from re-creating a SECURITY DEFINER
+function, both fully clean.
+
+Both dedicated concurrency scripts (not part of the 33-file battery, run
+separately, §11) also reconfirmed PASS on this same migration state.
+
+=============================================================================
+14. TYPESCRIPT / LINT / BUILD
+=============================================================================
+`npx tsc --noEmit`: clean, 0 errors (confirmed after every application-
+layer change: the migration + type regeneration, `website-intake-core.ts`,
+`website-intake.ts`, `request-detail.ts`, `RequestDetailsPanel.tsx`,
+`page.tsx`).
+`npm run lint`: 0 errors; 56 pre-existing warnings, all confined to
+unshipped `.tmp-qa/*.mjs` scratch scripts, none in any file this phase
+touched.
+`npm run build`: succeeded (`.next/BUILD_ID` produced, full route manifest
+printed with no error, `/operations/requests/[requestId]` compiles as a
+dynamic route exactly as before this phase).
+
+=============================================================================
+15. PRODUCTION ACTIVATION STATUS
+=============================================================================
+NOT TOUCHED this phase, per the phase's own explicit instruction. The
+Zenward Mobility pilot integration provisioned during the prior S4B-R1
+session remains in whatever state that session last left it (ACTIVE, per
+that session's own final state) — this phase made NO production database
+change, NO migration push to production, and NO integration state change
+of any kind. Production's `SUPABASE_SERVICE_ROLE_KEY` was confirmed
+PRESENT during S4B-R1 (via the indirect, non-printing verification method
+documented in that phase's own report) — this phase has no new information
+about it either way, since it made no production request. Before this
+migration can go to production, it must be applied via the same
+`supabase db push --linked` mechanism S4B-R1 used, exactly like S4A/S4B's
+own two migrations were.
+
+=============================================================================
+16. EXACT FINAL FLAT JSON CONTRACT — WHAT ZENWARD-WEB MUST SEND
+=============================================================================
+`POST https://app.nemryn.com/api/public-intake/website`,
+`Content-Type: application/json`:
+```json
+{
+  "integrationExternalId": "string, <=200 chars, required",
+  "idempotencyKey": "string, <=200 chars, required — a fresh UUID per NEW logical submission, reused unchanged on a genuine retry",
+  "requesterName": "string, <=200 chars, required",
+  "requesterRelationship": "self | family | caregiver | facility_coordinator | other, required",
+  "requesterPhone": "string, <=50 chars, required",
+  "pickupDescription": "string, <=2000 chars, required",
+  "destinationDescription": "string, <=2000 chars, required",
+  "returnTripNeeded": "yes | no | not_sure, required",
+  "requesterEmail": "string, <=320 chars — optional, omit or null if blank",
+  "preferredDate": "YYYY-MM-DD — optional, omit or null if blank",
+  "preferredTime": "HH:MM or HH:MM:SS — optional, omit or null if blank",
+  "assistanceNotes": "string, <=4000 chars — optional, omit or null if blank",
+  "additionalNotes": "string, <=4000 chars — optional, omit or null if blank",
+  "serviceType": "medical_appointment | dialysis | rehabilitation | hospital_discharge | recurring_care | senior_medical | wheelchair_transportation | other — optional, omit or null if not selected",
+  "recurringSchedule": {
+    "daysOfWeek": ["monday", "...", "sunday"],
+    "startDate": "YYYY-MM-DD",
+    "endDate": "YYYY-MM-DD",
+    "appointmentTime": "HH:MM",
+    "returnTripExpected": true
+  },
+  "passengerName": "string, <=200 chars — optional, omit or null if blank"
+}
+```
+`recurringSchedule` itself is entirely optional — omit or send `null` for
+a one-time request. When present, only `daysOfWeek` and `startDate` are
+required inside it; `endDate`/`appointmentTime`/`returnTripExpected` may
+each be omitted independently. **SUPERSEDED (see the §3 correction
+above):** `passengerName` IS now a proper, first-class, structured
+top-level field, added by P1-PILOT-S4B-R2A — see that phase's own report
+for the full design. It must be sent as its own field, never folded into
+`additionalNotes`. Response shapes are UNCHANGED from S4B: success `200
+{"ok": true}`; every rejection `400 {"ok": false, "error":
+"invalid_request", "message": "..."}` (429 for rate-limiting, same
+generic body).
+
+=============================================================================
+17. REMAINING ZENWARD-WEB WORK
+=============================================================================
+Zenward-Web was NOT modified this phase (explicit instruction). What
+remains, for a FUTURE phase, not this one:
+  1. The S4B-R1 session drafted (but never committed — that session was
+     interrupted mid-decision on how to scope a commit against Zenward-
+     Web's own large pre-existing uncommitted feature work) a
+     `PlatformRequestIntakeAdapter` rewrite targeting Nemryn's flat
+     contract, plus a new pure `nemryn-mapping.ts` module and
+     `nemryn-mapping.test.mjs`. That draft predates both this phase's own
+     `serviceType`/`recurringSchedule` additions AND P1-PILOT-S4B-R2A's
+     own `passengerName` addition — it currently folds all three into
+     `additionalNotes` as a workaround. It should be updated (not
+     rewritten from scratch) to send all three as their own proper
+     top-level `serviceType`/`recurringSchedule`/`passengerName` JSON
+     fields (§16) instead, since Nemryn now has real structured support
+     for every one of them — `additionalNotes` should carry only the
+     requester's own actual free-text notes.
+  2. That commit-scoping question (Zenward-Web's working tree has a
+     large body of unrelated, already-in-progress, uncommitted feature
+     work this phase did not touch or resolve) remains open and is the
+     user's own call to make — not something this Nemryn-side phase
+     should decide.
+  3. Zenward-Web env vars: `PLATFORM_INTAKE_URL` (Nemryn's real public
+     endpoint) and `PLATFORM_INTAKE_INTEGRATION_ID` (the opaque
+     identifier for the already-provisioned, currently-ACTIVE Zenward
+     Mobility integration from S4B-R1) still need to be configured in
+     Zenward-Web's own Vercel production environment before
+     `REQUEST_INTAKE_MODE=platform` can be safely turned on there.
+
+=============================================================================
+18. FILES MODIFIED
+=============================================================================
+New:
+  supabase/migrations/20260919130000_structured_website_intake_extension.sql
+Modified:
+  src/lib/supabase/database.types.ts (regenerated, additive)
+  src/lib/public-intake/website-intake-core.ts
+  src/lib/public-intake/website-intake-core.test.mjs
+  src/lib/public-intake/website-intake.ts
+  src/lib/operations/request-detail.ts
+  src/components/operations/requests/RequestDetailsPanel.tsx
+  src/app/operations/requests/[requestId]/page.tsx
+  supabase/tests/public_request_intake_tests.sql
+No other file was touched. No Zenward-Web file was touched. No production
+database or Vercel state was touched.
+
+=============================================================================
+19. COMMIT RECOMMENDATION
+=============================================================================
+STOPPING BEFORE COMMIT/PUSH, per the phase's own explicit instruction. All
+local gates pass (see the structured gate summary below) and this work is
+ready to commit and push (and, separately, to `supabase db push --linked`
+to production) whenever the user gives the go-ahead — no blocker exists.
+
+=============================================================================
+STRUCTURED GATE SUMMARY
+=============================================================================
+WORKTREE:                        CLEAN (only the 9 files listed in §18)
+PASSENGERNAME FINDING:            DOCUMENTED (never existed in Nemryn's
+                                   contract; prior report's claim corrected)
+SERVICETYPE CONTRACT:             ADDED (optional, closed allow-list)
+RECURRINGSCHEDULE CONTRACT:       ADDED (optional, structured, requested-
+                                   only, no Trip/arrangement side effect)
+STRUCTURED PERSISTENCE:           PASS (typed columns, not JSONB, not
+                                   additionalNotes)
+REQUEST HUB EXPOSURE:             PASS (Service requested / Recurring
+                                   schedule requested lines, clearly
+                                   labeled as requested-only)
+DIRECT RPC BYPASS (NEW SIGNATURE): BLOCKED (anon/authenticated/public all
+                                   denied, service_role-only, reconfirmed)
+TENANT ISOLATION:                 PASS (org-spoof still impossible with
+                                   structured fields present)
+IDEMPOTENCY:                      PASS (structured replay proof)
+CONCURRENCY:                      PASS (existing 2-process proof re-run
+                                   unmodified)
+NO AUTO TRIP:                     PASS
+NO AUTO PASSENGER:                PASS
+UNIT TESTS:                       317/317 (83/83 in the extended file)
+SQL (DIRECTLY RELEVANT FILES):    PASS (see §12)
+FULL SQL REGRESSION:              PASS (33/33 files, 591/591, 0 fail, 0 fatal)
+TSC:                              PASS
+LINT:                             PASS (0 errors)
+BUILD:                            PASS
+PRODUCTION TOUCHED:               NO (correctly, per instruction)
+ZENWARD-WEB TOUCHED:              NO (correctly, per instruction)
+READY TO COMMIT:                  YES — awaiting explicit go-ahead
+BLOCKERS:                         NONE
+
+NEXT IF APPROVED TO COMMIT: stage the 9 files in §18 (never `git add .`),
+secret-scan the diff, commit, and — separately, only if/when instructed —
+`supabase db push --linked` to apply this migration to production.
+
+STOP before commit/push, per this phase's own explicit instruction.
