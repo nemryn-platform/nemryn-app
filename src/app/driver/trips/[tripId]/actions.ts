@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
+import { dispatchNotification } from "@/lib/notifications/dispatch";
 import { redirect } from "next/navigation";
 import { requireDriverAccess } from "@/lib/auth/authorization";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -211,7 +213,7 @@ export async function driverReportIssueAction(
   }
 
   const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.rpc("report_trip_exception", {
+  const { data: reported, error } = await supabase.rpc("report_trip_exception", {
     p_trip_id: tripId,
     p_exception_type: exceptionType,
     p_description: description.trim(),
@@ -219,6 +221,15 @@ export async function driverReportIssueAction(
 
   if (error) {
     return { status: "error", errorCode: mapTripExceptionError(error.code) };
+  }
+
+  // P1-PILOT-S4B-R4D: the exception and its notification event committed
+  // together; the email goes out AFTER, best-effort (see dispatchNotification) --
+  // it can never fail or slow this action, and a provider outage is recorded,
+  // not surfaced as a failed report.
+  const notificationEventId = reported?.notification_event_id;
+  if (notificationEventId) {
+    after(() => dispatchNotification(notificationEventId));
   }
 
   // No revalidation of this Driver route — the Driver UI never displays

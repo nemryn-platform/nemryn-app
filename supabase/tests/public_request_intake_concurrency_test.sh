@@ -113,8 +113,9 @@ SQL
 
 echo "row_count=$ROW_COUNT requester_name=\"$REQUESTER_NAME\" request_logged_event_count=$EVENT_COUNT"
 
-A_ACCEPTED=$(grep -cE "^ *t *$" /tmp/public_intake_concurrency_session_a.log || true)
-B_ACCEPTED=$(grep -cE "^ *t *$" /tmp/public_intake_concurrency_session_b.log || true)
+# the result composite is (accepted, notification_event_id); count rows whose accepted column is t
+A_ACCEPTED=$(grep -cE "^ *t *(\||$)" /tmp/public_intake_concurrency_session_a.log || true)
+B_ACCEPTED=$(grep -cE "^ *t *(\||$)" /tmp/public_intake_concurrency_session_b.log || true)
 
 echo "=== Verdict ==="
 if [ "$ROW_COUNT" = "1" ] && [ "$EVENT_COUNT" = "1" ] && [ "$A_ACCEPTED" -ge "1" ] && [ "$B_ACCEPTED" -ge "1" ]; then

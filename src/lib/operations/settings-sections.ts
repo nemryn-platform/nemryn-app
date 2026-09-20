@@ -22,8 +22,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { slug: "team", title: "Team & Access", description: "Staff accounts, invitations and roles", available: true },
   { slug: "services", title: "Services & Intake", description: "Transportation services and intake preferences", available: true },
   { slug: "integrations", title: "Integrations", description: "Connect your website and external systems", available: true },
-  { slug: "notifications", title: "Notifications", description: "Operational alert preferences", available: false },
+  { slug: "notifications", title: "Notifications", description: "Operational alert preferences", available: true },
   { slug: "operations", title: "Operations", description: "Operating hours and dispatch information", available: true },
-  { slug: "security", title: "Security", description: "Account and access security", available: false },
-  { slug: "activity", title: "Activity", description: "Administrative change history", available: false },
+  { slug: "security", title: "Security", description: "Account and access security", available: true },
+  { slug: "activity", title: "Activity", description: "Administrative change history", available: true },
 ];

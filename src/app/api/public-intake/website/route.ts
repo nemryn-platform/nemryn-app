@@ -1,8 +1,9 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse, after, type NextRequest } from "next/server";
 import { validateWebsiteIntakePayload, publicIntakeErrorMessage } from "@/lib/public-intake/website-intake-core";
 import { submitWebsiteTransportationRequest } from "@/lib/public-intake/website-intake";
 import { resolveAllowedCorsOrigin } from "@/lib/public-intake/cors";
 import { checkAndRecordPublicIntakeRateLimit, resolveClientIp } from "@/lib/public-intake/rate-limit";
+import { dispatchNotification } from "@/lib/notifications/dispatch";
 
 /**
  * P1-PILOT-S4A/S4B — the ONE public, unauthenticated HTTP boundary an
@@ -110,6 +111,15 @@ export async function POST(request: NextRequest) {
 
   if (result.status !== "accepted") {
     return genericRejection(allowedOrigin);
+  }
+
+  // P1-PILOT-S4B-R4D: a genuinely NEW Request (never an idempotent replay --
+  // the id is null then) triggers the tenant's "New website request"
+  // notification AFTER the response: best-effort, never able to change this
+  // response or the committed Request. The public response is unchanged.
+  if (result.notificationEventId) {
+    const notificationEventId = result.notificationEventId;
+    after(() => dispatchNotification(notificationEventId));
   }
 
   return NextResponse.json({ ok: true }, { status: 200, headers: corsHeaders(allowedOrigin) });

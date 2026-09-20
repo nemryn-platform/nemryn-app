@@ -30,7 +30,10 @@ import type { WebsiteIntakeSubmission } from "./website-intake-core";
  * beyond the one RPC call, never a raw table write.
  */
 
-export type WebsiteIntakeSubmitResult = { status: "accepted" } | { status: "rejected" };
+export type WebsiteIntakeSubmitResult =
+  /** `notificationEventId` is non-null ONLY when this call created a genuinely new Request (an idempotent replay yields null) -- server-side only, never sent to the public caller. */
+  | { status: "accepted"; notificationEventId: string | null }
+  | { status: "rejected" };
 
 export async function submitWebsiteTransportationRequest(
   submission: WebsiteIntakeSubmission,
@@ -83,5 +86,5 @@ export async function submitWebsiteTransportationRequest(
     return { status: "rejected" };
   }
 
-  return { status: "accepted" };
+  return { status: "accepted", notificationEventId: data.notification_event_id ?? null };
 }

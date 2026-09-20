@@ -65,6 +65,22 @@ function fromAddress(): string {
   return process.env.EMAIL_FROM?.trim() || "Nemryn <notifications@nemryn.com>";
 }
 
+export type EmailTransportStatus = "available" | "development" | "unavailable";
+
+/**
+ * What the PLATFORM's own email transport can do in this environment, known
+ * without contacting any provider or revealing any secret (P1-PILOT-S4B-R4D).
+ * "available" = a provider key is configured; "development" = no key but a
+ * non-production process, so messages go to the server log transport (not real
+ * delivery); "unavailable" = production with no provider configured -- sendEmail
+ * would return `not_configured`. Tenants never configure this; Settings ->
+ * Notifications only tells an Admin when delivery is currently unavailable.
+ */
+export function getEmailTransportStatus(): EmailTransportStatus {
+  if (process.env.RESEND_API_KEY?.trim()) return "available";
+  return process.env.NODE_ENV !== "production" ? "development" : "unavailable";
+}
+
 /**
  * Send one transactional email. Never throws — every outcome is a value.
  */

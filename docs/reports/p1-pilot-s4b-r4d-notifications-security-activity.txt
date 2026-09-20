@@ -1,0 +1,139 @@
+NEMRYN PLATFORM — P1-PILOT-S4B-R4D — NOTIFICATIONS + SECURITY + ACTIVITY
+Report date: 2026-09-20
+Scope: local only. Nothing pushed, deployed, db-pushed to production; Vercel, Zenward-Web and the production QA integration untouched; no official Zenward tenant created.
+Status of work: R4D is UNCOMMITTED, left for owner review (as instructed).
+
+============================================================
+1. COMMIT HASHES (prior phases, all local, none pushed)
+============================================================
+R4A  1a1bfe6   Add tenant settings and self-service organization setup
+R4B  46a9d57   Add self-service website integrations
+R4C  2bc25b7cdb863d16b1481dec2a0a4c6b066f60d5   Add tenant team services and operations settings
+R4C was committed at the start of this phase (R4C only). R4D changes are in the working tree, uncommitted.
+
+============================================================
+2. WHAT WAS BUILT
+============================================================
+/operations/settings/notifications  — email preferences + honest delivery history
+/operations/settings/security       — only what exists (account, existing password-reset flow, staff summary)
+/operations/settings/activity       — human-readable projection of existing audit_events
+All three: Organization Admin only, enforced in page, Server Action and database. Dispatcher/Driver are bounced. All eight Settings sections are now "available".
+
+============================================================
+3. NOTIFICATIONS
+============================================================
+Events OFFERED (both fire at an authoritative, transactional moment):
+  - New website request  — a genuinely NEW public Request is created. Default recipients: Organization Admins.
+  - Trip exception       — a TripException is newly reported (Operations or Driver). Default recipients: Organization Admins + Dispatchers.
+Events OMITTED, with reason:
+  - Upcoming unassigned trip, Recurring care gap — need periodic evaluation; no scheduler exists.
+  - Proof needs review — a derived read-time state, not a persisted moment.
+  A switch that never fires would be misleading, so none is shown.
+
+Recipient model: organization_notification_settings(organization, event, recipient_roles). Staff roles only — no stored addresses. No row = default; empty array = off. Saved through set_notification_settings (audited notification_preferences_updated with before/after). Recipients are resolved LIVE at dispatch from active staff Memberships holding an enabled role: never Drivers, inactive members, Platform Admins without Membership, or other organizations.
+
+Durable design (transactional outbox): notification_events is written IN THE SAME TRANSACTION as the business change (submit_public_transportation_request, report_trip_exception). It stores only the reference + outcome (status pending|dispatching|sent|partial|failed|skipped, counts, fixed failure reason) — no address, name, or record content. unique(event_type, entity_id).
+Dispatch (server-side, after the response via after()): claim_notification_dispatch (service_role only) atomically claims the event — exactly one claimer wins the payload, others get NULL. One email per live recipient. complete_notification_dispatch (service_role only) records the outcome with a fixed vocabulary (provider_error | not_configured | build_failed | unknown) — never provider text.
+
+Minimal email payload (verified in unit tests and E2E):
+  - Website request: "A new transportation request was received through your website." + requested DATE (if given) + service CATEGORY (if given) + "Open Request Hub" link (list page).
+  - Trip exception: "An issue was reported on a trip." + scheduled pickup time (org timezone) + "Open Trips" link (list page).
+  - NEVER: requester/passenger names, phone, email, pickup/destination addresses, notes, exception type/description, UUIDs, integration details, secrets, provider text.
+
+Failure behavior: notification failure never rolls back or fails the business transaction (dispatch runs after the response, never throws). Failure is recorded honestly as failed/partial with a fixed reason and shown on the page as "Not delivered". When production email is unavailable the Admin sees "Email delivery is currently unavailable." (getEmailTransportStatus(), no provider call, no secret). Tenants never configure the platform email key. No in-request retry.
+
+Idempotent-replay design: a replayed public submission takes the existing-row path and never reaches the enqueue, so it returns no notification_event_id and never notifies again; unique(event_type, entity_id) is a second guard; the claim is exactly-once under concurrency.
+
+Public intake contract: unchanged. Response is still {ok:true}; wrong Origin / unknown key / disabled service still 400. The only touch to public-intake code is passing the new event id to after() dispatch (route.ts, website-intake.ts).
+
+============================================================
+4. SECURITY
+============================================================
+Shows only what exists: signed-in account email + verification state, sign-in method (email + password), the EXISTING password-reset flow ("Send password reset email" → /auth/confirm type=recovery → /auth/reset-password; address taken from the session so it can only mail the caller's own account), and a read-only staff-access summary (active Admins/Dispatchers, pending/expired invitations) linking to Team & Access.
+Account email is NOT changeable (no safe existing flow; not offered).
+No MFA, device sessions, IP history, SSO, password policy or compliance claims are shown — none exist. No team-mutation controls duplicated. Page source verified free of JWTs/keys/tokens/password fields; no password, reset link or token is ever displayed.
+
+============================================================
+5. ACTIVITY
+============================================================
+list_activity_events projects existing audit_events (no second audit table) via an SQL action whitelist: organization_*, website_integration_*, staff_invitation_*, membership_*, notification_preferences_updated. Operational trip/request audit rows are never returned. Unmapped actions are omitted.
+Mapping: activity-core.ts converts each row to a human title + short safe summary server-side (changed field NAMES, not values; team emails; services in words). Raw before/after JSON, UUIDs and codes never reach the browser.
+Actor: profile display name, else account email; NULL actor shows "System".
+Pagination: keyset on (occurred_at, id), opaque base64url cursor, 30 per page (within the 25–50 brief), newest first, "Load older activity" / "Back to newest"; a tampered cursor is ignored (newest page shown). Verified 30 + 24 = 54 reconciling with the database, nothing lost or repeated.
+
+============================================================
+6. PLATFORM ADMIN AND ORGANIZATION LIFECYCLE BOUNDARY
+============================================================
+Platform Admin (no Membership) is denied every R4D function (ZW002) and every prior tenant mutation (settings, team, services, integrations, schedule). No Platform Admin UI was built. Organization status remains platform-bound: no tenant control exists and a direct PATCH of status by a tenant Admin is denied. Lifecycle is reserved for R4E.
+
+============================================================
+7. FILES, MIGRATION, SCHEMA, RLS, GRANTS
+============================================================
+New migration: supabase/migrations/20260920120000_notifications_activity.sql (849 lines; replays cleanly on a full db reset).
+  Schema: tables notification_events, organization_notification_settings (both closed: RLS on, zero policies, zero grants to client roles); composite attribute notification_event_id added to public_request_submission_result and trip_exception_result; submit_public_transportation_request (21-arg, service_role only) and report_trip_exception re-created to enqueue in-transaction.
+  Functions: get_notification_settings, set_notification_settings, list_notification_history, list_activity_events (authenticated, has_org_role organization_admin); claim_notification_dispatch / complete_notification_dispatch (service_role ONLY; not callable by anon or authenticated).
+Changed: src/lib/email/send.ts, src/lib/public-intake/website-intake.ts, src/app/api/public-intake/website/route.ts, src/app/operations/trips/[tripId]/actions.ts, src/app/driver/trips/[tripId]/actions.ts, src/lib/operations/settings-sections.ts, src/lib/supabase/database.types.ts (regenerated), supabase/tests/public_request_intake_concurrency_test.sh (see §10).
+New: src/lib/email/notification-email.ts, src/lib/notifications/dispatch.ts, src/lib/operations/{notification-core,notifications,activity-core,activity}.ts, settings pages notifications/security/activity (+ actions), components NotificationSettingsForm and PasswordResetRequest, unit tests (notification-core, notification-email, activity-core), supabase/tests/notifications_activity_tests.sql, supabase/tests/notification_claim_concurrency_test.sh, docs/product/notifications-security-activity.md.
+Local scratch (untracked, not for commit): .tmp-qa/r4d-*.mjs.
+
+============================================================
+8. VALIDATION
+============================================================
+tsc --noEmit: exit 0.
+npm run lint: 0 errors; 63 warnings, ALL in untracked .tmp-qa scratch scripts (0 in tracked/new source).
+npm test: 424 / 424 pass, 0 fail.
+npm run build: success.
+Focused SQL (clean full `db reset --local`): 21 suites, 0 failures — notifications_activity 42, team_services_operations 106, tenant_settings_foundation 51, website_integration_self_service 72, operator_onboarding 41, organization_timezone 15, function_privilege 7, security_definer_exposure 20, client_privilege_surface 21, rls_adversarial 33, public_request_intake 42, public_intake_rate_limit 8, recurring_* 50/49/24, constraint 13, mutation_authorization 4, driver_read_authorization 17, trip_exception 17, exception_mutation_boundary 21, create_trip 20.
+Concurrency: notification claim (exactly one wins; 2/2), last-admin (14/14), website-integration 3/3, org-creation + settings 2/2, public-intake idempotency (PASS after script fix), rate-limit, driver-invite — all PASS.
+Browser E2E (local, headless Chrome, fresh DB reset; dev :3000, production build :3100 for the email-failure scenario): 98 / 98 checks passed (notifications, security, activity, org isolation, role denial, platform admin, regression of every operations page, driver invitations).
+
+============================================================
+9. PROPORTIONALITY OF FOCUSED SQL
+============================================================
+The full existing SQL battery was run rather than a subset, because R4D re-created two core write RPCs (public intake and exception reporting) and altered two shared result types. All of it is cheap locally (minutes) and covers every regression surface touched.
+
+============================================================
+10. ISSUES FOUND AND HANDLED
+============================================================
+- public_request_intake_concurrency_test.sh reported FAIL (a_accepted=0, b_accepted=0) though row_count=1 and event_count=1 were correct. Cause: the script's grep matched a bare "t" line; the RPC composite now prints (accepted | notification_event_id). Fixed the script's parsing (test-only change); reran: PASS. The logs also confirm exactly one of the two racers received an event id and the other none (idempotent, no double notify).
+- Test-only: SQL suites are non-idempotent against a used DB; they were validated on freshly reset databases.
+
+============================================================
+11. OPEN ITEMS / KNOWN LIMITS (not blockers)
+============================================================
+- No retry queue: a `failed` event is not re-sent automatically (outbox supports a future drain job).
+- If a process dies after claiming, an event can stay `dispatching`; no reaper exists yet.
+- Email is the only channel; no per-user preferences; no scheduled-condition alerts (no scheduler).
+- Account email change is not offered.
+
+============================================================
+RESULT
+============================================================
+R4C COMMITTED: PASS (2bc25b7cdb863d16b1481dec2a0a4c6b066f60d5; R4A 1a1bfe6; R4B 46a9d57; none pushed)
+NOTIFICATIONS: PASS
+WEBSITE REQUEST EMAIL: PASS
+MINIMAL EMAIL CONTENT: PASS
+EMAIL FAILURE SAFE: PASS
+DISABLED PREFERENCE: PASS
+INACTIVE STAFF EXCLUDED: PASS
+SECURITY SETTINGS: PASS
+PASSWORD FLOW: PASS
+PASSWORD/SECRET EXPOSURE: NONE
+ACTIVITY: PASS
+ACTIVITY HUMAN READABLE: PASS
+ACTIVITY PAGINATION: PASS
+ORG ISOLATION: PASS
+DISPATCHER/DRIVER SETTINGS ACCESS: DENIED
+PLATFORM ADMIN TENANT MUTATION: DENIED
+ORGANIZATION STATUS: PLATFORM-BOUND (no tenant control)
+PUBLIC INTAKE CONTRACT: UNCHANGED
+IDEMPOTENT NOTIFICATION: PASS
+WEBSITE INTEGRATION/TEAM/SERVICES REGRESSION: PASS
+TSC: PASS
+LINT: PASS (0 errors; warnings only in untracked .tmp-qa scratch)
+UNIT: PASS (424/424)
+BUILD: PASS
+FOCUSED SQL: PASS (21 suites, 0 failures; concurrency all PASS)
+READY FOR PLATFORM ADMIN FOUNDATION: YES (pending owner review of R4D)
+BLOCKERS: NONE
+NEXT IF PASS: owner reviews and commits R4D; then R4E (Platform Admin foundation). Not started.

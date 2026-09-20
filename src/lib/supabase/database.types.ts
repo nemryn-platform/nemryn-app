@@ -331,6 +331,91 @@ export type Database = {
           },
         ]
       }
+      notification_events: {
+        Row: {
+          attempted_at: string | null
+          completed_at: string | null
+          created_at: string
+          entity_id: string
+          entity_type: string
+          event_type: string
+          failed_count: number
+          failure_reason: string | null
+          id: string
+          organization_id: string
+          recipient_count: number
+          sent_count: number
+          status: string
+        }
+        Insert: {
+          attempted_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          event_type: string
+          failed_count?: number
+          failure_reason?: string | null
+          id?: string
+          organization_id: string
+          recipient_count?: number
+          sent_count?: number
+          status?: string
+        }
+        Update: {
+          attempted_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          event_type?: string
+          failed_count?: number
+          failure_reason?: string | null
+          id?: string
+          organization_id?: string
+          recipient_count?: number
+          sent_count?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notification_events_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      organization_notification_settings: {
+        Row: {
+          event_type: string
+          organization_id: string
+          recipient_roles: string[]
+          updated_at: string
+        }
+        Insert: {
+          event_type: string
+          organization_id: string
+          recipient_roles: string[]
+          updated_at?: string
+        }
+        Update: {
+          event_type?: string
+          organization_id?: string
+          recipient_roles?: string[]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_notification_settings_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_service_offerings: {
         Row: {
           created_at: string
@@ -1286,6 +1371,15 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      _enqueue_notification_event: {
+        Args: {
+          p_entity_id: string
+          p_entity_type: string
+          p_event_type: string
+          p_organization_id: string
+        }
+        Returns: string
+      }
       _generate_intake_external_id: { Args: never; Returns: string }
       _generate_staff_invite_token: { Args: never; Returns: string }
       _is_canonical_days_of_week: {
@@ -1322,6 +1416,10 @@ export type Database = {
         Returns: undefined
       }
       _normalize_website_origin: { Args: { p_origin: string }; Returns: string }
+      _notification_default_roles: {
+        Args: { p_event_type: string }
+        Returns: string[]
+      }
       _organization_local_to_utc: {
         Args: { p_date: string; p_time: string; p_timezone: string }
         Returns: {
@@ -1390,6 +1488,19 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      claim_notification_dispatch: {
+        Args: { p_event_id: string }
+        Returns: Json
+      }
+      complete_notification_dispatch: {
+        Args: {
+          p_event_id: string
+          p_failed: number
+          p_reason: string
+          p_sent: number
+        }
+        Returns: boolean
       }
       complete_pending_signup: {
         Args: never
@@ -1674,6 +1785,14 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      get_notification_settings: {
+        Args: { p_organization_id: string }
+        Returns: {
+          event_type: string
+          is_default: boolean
+          recipient_roles: string[]
+        }[]
+      }
       get_organization_service_offerings: {
         Args: { p_organization_id: string }
         Returns: string[]
@@ -1726,6 +1845,32 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      list_activity_events: {
+        Args: {
+          p_before_at?: string
+          p_before_id?: string
+          p_limit?: number
+          p_organization_id: string
+        }
+        Returns: {
+          action: string
+          actor_name: string
+          after_data: Json
+          before_data: Json
+          id: string
+          occurred_at: string
+        }[]
+      }
+      list_notification_history: {
+        Args: { p_limit?: number; p_organization_id: string }
+        Returns: {
+          created_at: string
+          event_type: string
+          recipient_count: number
+          sent_count: number
+          status: string
+        }[]
       }
       list_request_intake_integrations: {
         Args: { p_organization_id: string }
@@ -1885,6 +2030,20 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "membership_change_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_notification_settings: {
+        Args: {
+          p_event_type: string
+          p_organization_id: string
+          p_recipient_roles: string[]
+        }
+        Returns: Database["public"]["CompositeTypes"]["notification_settings_result"]
+        SetofOptions: {
+          from: "*"
+          to: "notification_settings_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2100,6 +2259,9 @@ export type Database = {
         status: string | null
         changed: boolean | null
       }
+      notification_settings_result: {
+        changed: boolean | null
+      }
       organization_operating_schedule_result: {
         organization_id: string | null
         changed: boolean | null
@@ -2126,6 +2288,7 @@ export type Database = {
       }
       public_request_submission_result: {
         accepted: boolean | null
+        notification_event_id: string | null
       }
       rate_limit_check_result: {
         allowed: boolean | null
@@ -2231,6 +2394,7 @@ export type Database = {
         resolution_note: string | null
         created_at: string | null
         changed: boolean | null
+        notification_event_id: string | null
       }
       trip_transition_result: {
         trip_id: string | null
