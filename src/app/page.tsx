@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { getUser } from "@/lib/auth/session";
 import { resolveOrganizationContext } from "@/lib/auth/organization";
+import { isPlatformAdmin } from "@/lib/auth/platform";
+import { getSuspendedOrganizationNames } from "@/lib/auth/membership";
 
 /**
  * Root route behavior (work item §27). This repository is the Zenward
@@ -31,6 +33,15 @@ export default async function RootPage() {
   const resolution = await resolveOrganizationContext();
 
   if (resolution.status === "none") {
+    // R4E: a Nemryn Platform Admin with no tenant Membership lands in the
+    // platform control plane; a member whose only workspace Nemryn has
+    // suspended is told so rather than sent to organization signup.
+    if (await isPlatformAdmin()) {
+      redirect("/platform");
+    }
+    if ((await getSuspendedOrganizationNames()).length > 0) {
+      redirect("/access-unavailable");
+    }
     redirect("/complete-signup");
   }
   if (resolution.status === "select-required") {

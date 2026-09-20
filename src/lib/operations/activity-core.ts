@@ -131,6 +131,14 @@ export function describeActivity(record: ActivityRecord, helpers: ActivityHelper
       return { title: "Notification preferences updated", summary: `${event}: ${who}` };
     }
 
+    // R4E: Nemryn platform lifecycle actions. Shown deliberately and generically --
+    // the internal reason and the platform administrator's identity are never
+    // part of the tenant-visible record (the database returns the actor as "Nemryn").
+    case "platform_organization_suspended":
+      return { title: "Organization suspended by Nemryn", summary: "Workspace access and new website requests were paused. Your records were not changed." };
+    case "platform_organization_reactivated":
+      return { title: "Organization reactivated by Nemryn", summary: "Workspace access and new website requests are available again." };
+
     default:
       return null;
   }

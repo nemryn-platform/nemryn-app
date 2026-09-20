@@ -1,0 +1,349 @@
+NEMRYN PLATFORM — P1-PILOT-S4B-R4E — PLATFORM ADMIN FOUNDATION
+Report date: 2026-09-20
+Scope: local only. Nothing pushed, deployed, db-pushed to production. Vercel, Zenward-Web, the production QA integration untouched; no official Zenward tenant created.
+Status of work: R4E is UNCOMMITTED, left for owner review (as instructed). R4D was committed first.
+
+============================================================
+STARTING STATE
+============================================================
+Branch main. R4D (owner-approved) was uncommitted with the R4D fix to supabase/tests/public_request_intake_concurrency_test.sh. Before starting R4E I inspected `git status` / `git diff --stat`, confirmed only intended R4D scope (8 modified files, R4D migration/tests/pages/libs/doc/report), excluded .tmp-qa scratch and unrelated older docs/reports, and committed R4D as its own checkpoint (29 files). R4E work sits on top, uncommitted.
+
+============================================================
+R4A COMMIT   1a1bfe6                                       Add tenant settings and self-service organization setup
+R4B COMMIT   46a9d57                                       Add self-service website integrations
+R4C COMMIT   2bc25b7cdb863d16b1481dec2a0a4c6b066f60d5     Add tenant team services and operations settings
+R4D COMMIT   b750b0b1a8fd70efdb76a4a691b88dcc33d0ef27     Add tenant notifications security and activity settings
+============================================================
+(none pushed)
+
+============================================================
+CURRENT PLATFORM ADMIN AUDIT (before R4E) — answers A–F
+============================================================
+A. What did Platform Admin have? Authority = a row in platform_admin_grants (user_id unique, no organization_id; no authenticated INSERT/UPDATE/DELETE — provisioned only by a privileged path). `is_platform_admin()` (SECURITY DEFINER, authenticated) is the only mechanism. RLS backed by it on exactly three tables: organizations (SELECT all tenants), audit_events (SELECT ALL tenants' audit history — team emails, settings changes), platform_admin_grants (SELECT). NO policy on memberships, requests, trips, passengers, drivers, etc. No route, no UI, no platform RPC, no mutation of any kind.
+B. What did organizations.status mean? CHECK (status in ('active','inactive')), default 'active', set 'active' at creation. It was a stored label only.
+C. Did status block tenant use? NO. Nothing in the schema read it: not is_org_member / has_org_role / current_driver_id, not any RLS policy, not any tenant RPC, not the public-intake RPC, not invitation acceptance, not the application's organization resolution.
+D. What would have stayed available for an "inactive" organization? Everything — every read, every mutation, Driver access, public intake, invitations.
+E. Did public intake check organization status? No (only integration.is_active and the origin allow-list).
+F. Did Driver access check organization status? No (current_driver_id required drivers.status='active' and an active Membership only).
+System tenant: none exists in the schema or seed; nothing special-cased.
+Findings acted on: (1) status is now enforced (below); (2) the broad Platform Admin SELECT on audit_events was a pre-existing privacy exposure and was dropped.
+
+============================================================
+CURRENT ORGANIZATION STATUS SEMANTICS (after R4E)
+============================================================
+Stored vocabulary unchanged: 'active' | 'inactive' (no schema change, no invented terms). UI label: inactive = "Suspended" (reversible pause). A non-active organization is not operable through ANY path (see LIFECYCLE ENFORCEMENT). Membership status and organization status remain distinct concepts; no Membership/Driver row is ever rewritten by a lifecycle change.
+
+============================================================
+PLATFORM AUTHORIZATION
+============================================================
+Application: src/lib/auth/platform.ts — isPlatformAdmin() (rpc is_platform_admin, live) and requirePlatformAdminAccess(): no session -> sign-in; no PlatformAdminGrant -> 404 (the control plane is not advertised to tenant users). Guard runs in the /platform layout AND in the lifecycle Server Action.
+Database (the real boundary): every platform function starts with `_require_platform_admin()` — no session ZW001, no PlatformAdminGrant ZW002 (Org Admin / Dispatcher / Driver / multi-org / no-membership all ZW002). anon has no EXECUTE. The guard itself is not executable by any client role.
+Verified: Org Admin without a grant denied; Dispatcher denied; Driver denied; no-membership + grant allowed into /platform.
+
+============================================================
+PLATFORM ROUTES
+============================================================
+/platform (overview), /platform/organizations (directory), /platform/organizations/[organizationId] (detail + lifecycle), /platform/activity. Separate route tree (NOT under /operations/settings), separate shell (top bar "Nemryn Platform · Control plane", no organization sidebar/switcher, standing notice "You are operating Nemryn, not a transportation company…"), robots noindex. A Platform Admin with no Membership opening "/" or /operations is sent to /platform (never into a tenant workspace).
+
+============================================================
+PLATFORM HOME
+============================================================
+Organizations total / Active / Suspended / Platform administrators; Website integrations (total, active); Notifications failed (failed+partial) and stuck; a "Notification delivery" attention list (event type, status, timestamp, fixed failure label, link to the organization). No revenue/MRR/ARR/churn (no billing data exists). No tenant content.
+
+============================================================
+ORGANIZATION DIRECTORY
+============================================================
+platform_list_organizations: name, status, created, timezone, active staff (Admins+Dispatchers), drivers, website-intake status (n of m integrations active), last activity, plus request/trip COUNTS. Server-side search (name substring; %, _ and \ are literal), status filter, stable order (lower(name), id), page size 25 (clamped to 50), total on every row, "Previous/Next". Malformed page/status params fall back safely. Never loads the full directory in the browser.
+"Last activity" definition (documented, factual): latest of any audit_events row for the organization, the latest Request received, the latest Trip change. It is NOT a login time (no login audit exists).
+
+============================================================
+ORGANIZATION DETAIL
+============================================================
+platform_get_organization (counts and health metadata, one row): Organization (name, status, created, timezone, business stage, last activity); Access (active Org Admins, Dispatchers, Driver memberships, pending unexpired staff invites); Operations footprint (drivers, vehicles, passengers, requests, trips — counts only); Website intake; Notification delivery; Lifecycle control. Unknown/malformed id -> 404.
+
+============================================================
+PRIVACY BOUNDARY
+============================================================
+No tenant table is granted to Platform Admin. Reads are SECURITY DEFINER aggregate functions returning approved fields only (a SQL test asserts no output column names passengers, requesters, addresses, notes, phones, emails, tokens, recipients, external ids). No Request/Trip/Passenger content, no record links, no trip detail links anywhere (E2E asserts none of the DB's passenger/requester/pickup strings appear on any platform page and no href points at /operations). Platform Admin reads ZERO rows (or is denied) on 15 tenant-content tables incl. audit_events, memberships, staff_invites, notification_events, request_intake_integrations.
+Tightening: policy audit_events_select_platform_admin DROPPED; and (R4F pre-release hardening, before commit) organizations_select_platform_admin DROPPED — a Platform Admin reads organization information only through the platform_* functions.
+
+============================================================
+INTEGRATION HEALTH
+============================================================
+platform_list_organization_integrations: allowed origin(s), active/disabled, created, Requests received, last request received. Deliberately NO integration id / external id (E2E asserts the Integration ID appears neither in visible text nor in page HTML). Read-only: Platform Admin cannot create/edit/activate/disable (create_request_intake_integration etc. -> ZW002). No emergency integration shutdown built.
+
+============================================================
+NOTIFICATION HEALTH
+============================================================
+Per organization: pending, dispatching, sent, partial, failed, skipped counts, last failure category (fixed vocabulary: provider_error / not_configured / build_failed / unknown -> plain labels), and global attention list on /platform (failed, partial, stuck). Never exposes recipient email, request contents, exception description, provider response or key (SQL test on column names; E2E asserts no provider/secret vocabulary or addresses).
+
+============================================================
+STUCK DISPATCH VISIBILITY
+============================================================
+"Stuck" = status 'dispatching' with attempted_at older than 15 minutes, or 'pending' older than 15 minutes (a process that died before dispatch). Surfaced as "Needs attention" on the overview counters, the attention list ("Stuck dispatching" / "Pending too long") and the organization page. Observed only: no reaper, nothing mutated by reading (SQL test asserts row state unchanged). No job infrastructure exists, so no automatic reaper was built (as instructed).
+
+============================================================
+ORGANIZATION LIFECYCLE MODEL
+============================================================
+Existing canonical values retained: active ↔ inactive (UI "Suspended"). Transitions: active -> inactive (suspend), inactive -> active (reactivate); same-state request is an idempotent no-op. No delete, no purge, no archive, no third state. No system/internal organization to protect (none exists).
+
+============================================================
+LIFECYCLE ENFORCEMENT
+============================================================
+Audit result: status was enforced nowhere; the smallest coherent shared enforcement was applied at the authorization chokepoints, then the two paths that bypass them:
+ 1. is_org_member, has_org_role, current_driver_id now additionally require organizations.status = 'active' (is_driver_assigned_to_trip inherits via current_driver_id). Every tenant RLS policy and every SECURITY DEFINER tenant RPC (trips, requests, passengers, settings, team, services, integrations, notification prefs, activity, recurring care, proof of service, driver reads…) already routes through these, so all are denied for a suspended tenant with no per-function edits. PlatformAdminGrant still never satisfies them.
+ 2. submit_public_transportation_request: after resolving the integration, requires the owning organization to be active, with a FOR SHARE lock on the organization row (strict against a concurrent suspension); rejection is the identical generic invalid_input (ZW006) as unknown/disabled — no lifecycle disclosure.
+ 3. accept_staff_invite and redeem_driver_invite refuse a suspended organization (ZW003 stale_state).
+ 4. Application: organization resolution (getActiveMemberships) excludes suspended organizations (never selectable); a member of only-suspended workspaces is shown "Workspace suspended … Your records have not been changed" (access-unavailable) instead of being sent to organization creation. Members can still read their own organization row (organizations_select_members rewritten to be status-independent) so the app can explain the state; that grants no operation.
+Not changed: notification dispatch of an event enqueued BEFORE suspension still completes (recipients resolved from Memberships); an in-flight accepted website request may still email. No new Requests can exist after suspension commits.
+Because central tenancy helpers changed, the FULL SQL/security regression battery was run (see DATABASE TESTS).
+
+============================================================
+LIFECYCLE MUTATION
+============================================================
+set_platform_organization_status(p_organization_id, p_status, p_reason) — Platform Admin only (Org Admin/Dispatcher/Driver/no-membership ZW002; anon permission denied; no session ZW001). status must be active|inactive; reason required 3–500 chars after trim (ZW006); unknown org ZW002; locks the organization row FOR UPDATE; idempotent (same state: changed=false, no audit); writes audit_events (platform_organization_suspended / _reactivated, entity organization, actor = auth.uid() — never browser-supplied, before/after {status}, reason). No client role has a column grant on organizations.status (asserted). Only organizations.status is written: no cascade.
+Server Action re-checks PlatformAdminGrant, validates input (same rules), maps every database refusal to a generic message.
+
+============================================================
+REACTIVATION
+============================================================
+Same function, status active, reason required, audited. Restores access with no re-provisioning: same Memberships, same Drivers, same integration id (asserted unchanged, still active, accepts a website request), no Request/Trip loss.
+
+============================================================
+MULTI-ORG BEHAVIOR
+============================================================
+Verified in SQL and browser: user with Org A (admin) + Org B (driver): with B suspended, A stays fully operable, B unavailable and NOT selectable (auto-routed to A, no picker offering B), the auth user is not globally blocked; after reactivation the workspace picker offers both again.
+
+============================================================
+PLATFORM ACTIVITY
+============================================================
+Decision: reuse audit_events with a deliberate action whitelist (option A) — the existing table represents platform actions cleanly (organization_id = the target, actor_user_id, reason, before/after). platform_list_activity returns only platform_organization_suspended / _reactivated, newest first, keyset (occurred_at, id), opaque cursor, 30 per page. The Platform Admin's broad audit_events SELECT was removed so this whitelist is the only path.
+Shows: action, organization, reason, actor (display name, else email; null -> "System"), timestamp (UTC, labelled).
+
+============================================================
+TENANT ACTIVITY INTERACTION
+============================================================
+Decision: transparency, with a deliberately safe presentation. list_activity_events (R4D) now includes the two platform actions; the actor is returned as "Nemryn" (the platform administrator's identity is never returned) and the internal reason is never returned. Tenant text: "Organization suspended by Nemryn — Workspace access and new website requests were paused. Your records were not changed." / "Organization reactivated by Nemryn — …available again." Asserted: no reason text, no admin email/name, no ids, no raw JSON. (Visible to the tenant Admin after reactivation, since a suspended workspace cannot be opened.)
+
+============================================================
+PLATFORM ADMIN GRANT MANAGEMENT
+============================================================
+No UI or product workflow to grant/remove Platform Admin (bootstrap privilege management is high risk). Provisioning remains outside the product (privileged service-role/SQL path), documented; no client role can INSERT/UPDATE/DELETE platform_admin_grants (existing RLS test S). The overview shows a read-only "Platform administrators N". No self-escalation route exists.
+
+============================================================
+NO IMPERSONATION
+============================================================
+ABSENT. No "login as", "impersonate", "enter tenant", or support-session function or button (SQL test scans function names; E2E scans all platform text; no platform link targets /operations). A Platform Admin cannot obtain tenant mutation rights through any control.
+
+============================================================
+TENANT MUTATION BOUNDARY
+============================================================
+Platform Admin WITHOUT Membership, Org A and Org B, denied (ZW002) for: update_organization_settings, set_notification_settings, create_staff_invite, set_organization_service_offerings, create_request_intake_integration, update_organization_operating_schedule, change_membership_role, list integrations, list activity. Direct reads of transportation_requests, trips, passengers, drivers, memberships, audit_events, trip_notes, request_intake_integrations return nothing. Direct PATCH of organizations.status denied for Platform Admin and for tenant Admin. Lifecycle status is the ONLY tenant-affecting Platform Admin mutation.
+Platform Admin WITH Membership (Dispatcher in A): tenant authority = Dispatcher only (organization_admin false; Admin-only mutations ZW002). Dispatcher WITH a PlatformAdminGrant: platform functions work; tenant Admin authority NOT gained; other tenants stay denied. PlatformAdminGrant alone never satisfies has_org_role/is_org_member/current_driver_id.
+
+============================================================
+PUBLIC INTAKE LIFECYCLE ENFORCEMENT
+============================================================
+ACTIVE org + active integration -> accepted. SUSPENDED org + active integration -> rejected, response byte-identical to an unknown integration (400, no lifecycle/status/reason text). Reactivated -> the same integration (same id) accepts again. No integration recreation, no Request deletion. Concurrent proof: a submission started while a suspension held the org row lock BLOCKED (~2.5 s measured in-database), then was rejected; zero Requests created after suspension.
+
+============================================================
+DRIVER LIFECYCLE ENFORCEMENT
+============================================================
+Suspended: current_driver_id null; driver_get_profile denied; Driver reads zero trips (SQL + API); /driver -> "Workspace suspended". Reactivated: same Driver and Membership work again. Driver rows/Memberships are never deleted or rewritten.
+
+============================================================
+RESPONSIVE
+============================================================
+Platform shell validated at 1024 px: no horizontal overflow on overview, directory, detail, activity (asserted; screenshots reviewed). Directory rows are stacked cards with wrapping dl grids; origins/ids use break-words/break-all.
+
+============================================================
+PLATFORM E2E  (local, headless Chrome; seeded fictional tenants; seeded synthetic Platform Admin d1)
+============================================================
+.tmp-qa/r4e-platform-admin-e2e.mjs — see totals under APPLICATION TESTS. Covers: Platform Admin lands in /platform; overview; directory (search, status filter, 30-org pagination 25+5, malformed params); detail counts equal DB; no passenger/request/trip content; integration health without Integration ID; notification health + "Needs attention"; ordinary Org Admin / Dispatcher / Driver / no-membership / signed-out denied (404 / sign-in) on every /platform route; tenant roles refused by every platform function at the API.
+
+============================================================
+LIFECYCLE E2E
+============================================================
+Org B ACTIVE: Admin, Dispatcher, Driver operate; website request 200 (+1 Request, +1 notification event). Platform Admin suspends via the UI (confirmation text exact; blank reason rejected server-side; reason recorded). SUSPENDED: Admin/Dispatcher/Driver workspaces denied ("Workspace suspended", also at "/"); website request 400 generic; Requests, Trips, Drivers, Memberships, Integration (same id, still active), notification history all unchanged; no new Request/notification; API reads zero. Directory/overview/activity reflect it. REACTIVATED: same accounts work again; the same integration accepts a request; exactly +1 Request/+1 event; no re-onboarding.
+
+============================================================
+MULTI-ORG E2E
+============================================================
+Synthetic multi-org user (A admin + B driver): both active -> picker; B suspended -> Org A only (no picker, B not offered, API allows A, denies B); B reactivated -> picker offers both.
+
+============================================================
+SECURITY TESTS
+============================================================
+SQL platform_admin_foundation_tests.sql (57 checks): authorization matrix for every function (Org Admin, Dispatcher, Driver, multi-org, no-membership, no session, anon), guard not executable, direct status write impossible, zero-row/denied reads on 15 tenant tables, no content/secret columns in read models, directory search/wildcards/filter/pagination/validation, counts vs owner-level counts, integration and notification health (stuck rule), lifecycle validation, audit content, idempotency, enforcement while suspended (helpers, RLS zero rows, 7 tenant RPCs ZW002, own-org read, multi-org, invite refusal), public intake rejection/acceptance, retention of all tenant rows, reactivation, platform activity + pagination, tenant activity presentation, Platform-vs-Membership separation (both directions), tenant mutation denial, function privilege surface (7 platform functions authenticated-only, search_path pinned, no impersonation function, no column UPDATE on status). Idempotent (cleans up; run twice).
+
+============================================================
+PUBLIC INTAKE REGRESSION
+============================================================
+Frozen payload, Origin/allow-list check, rate limits, idempotency, service-offering validation, notification outbox: unchanged (public_request_intake 42/42, rate-limit 8/8, intake concurrency PASS, R4D notification suites pass). Only new behavior: a non-active owning organization rejects with the same generic error. No lifecycle information in any public response.
+
+============================================================
+NOTIFICATION REGRESSION
+============================================================
+ACTIVE tenant: dispatch unchanged (E2E: request -> exactly one new notification event; notifications_activity 42/42; claim concurrency PASS). SUSPENDED tenant: no Request is created, therefore no website-request notification event (asserted). Existing pending/failed notification history retained across the cycle (asserted).
+
+============================================================
+APPLICATION TESTS
+============================================================
+npx tsc --noEmit: exit 0.
+npm run lint: 0 errors; 67 warnings, ALL in untracked .tmp-qa scratch scripts (0 in tracked/new source).
+npm test: 431 / 431 pass (new: platform-core 6 tests; activity-core +1 and platform actions mapped).
+npm run build: success (routes /platform, /platform/organizations, /platform/organizations/[organizationId], /platform/activity).
+Browser E2E (r4e-platform-admin-e2e.mjs, fresh DB reset, dev server :3000): 99 / 99 checks passed. (Before the final run, one check failed because the test script's own "no delete/purge" regex matched the explanatory text "There is no delete or purge"; the test was corrected to inspect buttons/links. The final 99/99 was on a freshly reset DB.)
+
+============================================================
+DATABASE TESTS
+============================================================
+FULL battery (central tenancy helpers changed), clean `supabase db reset --local`, 22 suites, 0 failures: platform_admin_foundation 57, notifications_activity 42, team_services_operations 106, tenant_settings_foundation 51, website_integration_self_service 72, operator_onboarding 41, organization_timezone 15, function_privilege 7, security_definer_exposure 20, client_privilege_surface 21, rls_adversarial 33, public_request_intake 42, public_intake_rate_limit 8, recurring_arrangement_foundation 50 / mutation 49 / trip_creation 24, constraint 13, mutation_authorization 4, driver_read_authorization 17, trip_exception 17, exception_mutation_boundary 21, create_trip 20.
+Concurrency (all PASS): notification claim 2/2, last-admin 14/14, website-integration 3/3, org-creation + settings 2/2, public-intake idempotency, rate-limit, driver-invite, and NEW platform_lifecycle_concurrency_test.sh: (1) a submission in flight against a committing suspension blocks on the org row (2.5 s) then is rejected, zero Requests after suspension; (2) two Platform Admins suspending simultaneously -> exactly one change, exactly one audit, no error.
+Local-tooling note: `supabase db reset --local` intermittently reports "supabase_storage container not ready" after the database is already rebuilt/seeded; the schema and seed are correct in that case. Followed each with a kong/rest restart.
+
+============================================================
+FILES CREATED
+============================================================
+supabase/migrations/20260920130000_platform_admin_foundation.sql
+supabase/tests/platform_admin_foundation_tests.sql
+supabase/tests/platform_lifecycle_concurrency_test.sh
+src/lib/auth/platform.ts
+src/lib/platform/platform-core.ts (+ platform-core.test.mjs), src/lib/platform/platform.ts
+src/app/platform/{layout.tsx, page.tsx, organizations/page.tsx, organizations/[organizationId]/{page.tsx, actions.ts}, activity/page.tsx}
+src/components/platform/{PlatformShell.tsx, PlatformNav.tsx, OrganizationLifecycleControl.tsx}
+docs/product/platform-admin-foundation.md
+docs/reports/p1-pilot-s4b-r4e-platform-admin-foundation.txt
+(untracked local scratch, not for commit: .tmp-qa/r4e-platform-admin-e2e.mjs)
+
+============================================================
+FILES MODIFIED
+============================================================
+src/lib/auth/membership.ts (organization resolution excludes suspended orgs; getSuspendedOrganizationNames)
+src/app/page.tsx, src/app/complete-signup/route.ts (Platform Admin without Membership -> /platform; suspended-only member -> access-unavailable)
+src/app/access-unavailable/page.tsx ("Workspace suspended" state)
+src/lib/operations/activity-core.ts (+test) (platform actions mapped safely)
+src/lib/supabase/database.types.ts (regenerated)
+
+============================================================
+MIGRATIONS CREATED
+============================================================
+20260920130000_platform_admin_foundation.sql (1136 lines; replays cleanly on a full db reset; applied locally only).
+
+============================================================
+SCHEMA IMPACT
+============================================================
+No table or column added; no status vocabulary change. New composite type platform_organization_status_result. New functions: _require_platform_admin (internal), platform_get_overview, platform_list_organizations, platform_get_organization, platform_list_organization_integrations, platform_list_notification_attention, platform_list_activity, set_platform_organization_status. Re-created (bodies): is_org_member, has_org_role, current_driver_id, submit_public_transportation_request, accept_staff_invite, redeem_driver_invite, list_activity_events.
+
+============================================================
+RLS IMPACT
+============================================================
+organizations_select_members rewritten: same intent (a member reads their own org row) but status-independent, so a suspended tenant's members can be told why. audit_events_select_platform_admin DROPPED (Platform Admin no longer reads any tenant audit history directly). All other policies unchanged; they now deny suspended tenants transitively through the changed helpers.
+
+============================================================
+GRANT IMPACT
+============================================================
+Seven new functions: EXECUTE to authenticated only (PUBLIC/anon revoked); each enforces PlatformAdminGrant inside. _require_platform_admin: no client role. No new table grants; no change to organizations column grants (no client UPDATE on status — asserted). Helper function grants unchanged.
+
+============================================================
+OPEN ISSUES
+============================================================
+1. (RESOLVED by R4F pre-release hardening: organizations_select_platform_admin dropped; a Platform Admin now reads zero rows of organizations directly. Test PB-3/PB-4 updated.)
+2. PlatformAdminGrant provisioning has no product workflow (service role / SQL only) by design. A Platform Admin who also holds a Membership has no in-app link to /platform (navigate to /platform directly).
+3. Notification events enqueued before a suspension still dispatch afterwards (recipient list is resolved from Memberships); no reaper/retry for stuck or failed events (visibility only).
+4. Suspension takes effect on the next request (database-live checks); pages already rendered in a browser stay visible until the user navigates. Auth sessions are not revoked.
+5. Directory uses offset pagination (fine at pilot scale). Timestamps on the platform are UTC and labelled (no organization timezone applies).
+6. Local `supabase db reset` storage-health flake (tooling only).
+7. Organization deletion/offboarding and emergency integration shutdown are intentionally not built.
+
+============================================================
+RESULT
+============================================================
+R4D COMMITTED:
+YES (b750b0b1a8fd70efdb76a4a691b88dcc33d0ef27; R4A 1a1bfe6, R4B 46a9d57, R4C 2bc25b7cdb863d16b1481dec2a0a4c6b066f60d5; none pushed)
+
+PLATFORM HOME:
+PASS
+
+ORGANIZATION DIRECTORY:
+PASS
+
+ORGANIZATION DETAIL:
+PASS
+
+TENANT DATA MINIMIZATION:
+PASS
+
+INTEGRATION HEALTH:
+PASS
+
+NOTIFICATION HEALTH:
+PASS
+
+PLATFORM ADMIN AUTH:
+PASS
+
+ORDINARY TENANT USER PLATFORM ACCESS:
+BLOCKED
+
+PLATFORM ADMIN TENANT SETTINGS MUTATION:
+BLOCKED
+
+ORGANIZATION LIFECYCLE:
+PASS
+
+SUSPENSION STAFF ACCESS:
+BLOCKED
+
+SUSPENSION DRIVER ACCESS:
+BLOCKED
+
+SUSPENSION WEBSITE INTAKE:
+BLOCKED
+
+REACTIVATION:
+PASS
+
+MULTI-ORG ISOLATION:
+PASS
+
+PLATFORM ACTIVITY:
+PASS
+
+IMPERSONATION:
+ABSENT
+
+PUBLIC INTAKE CONTRACT:
+UNCHANGED
+
+NOTIFICATION REGRESSION:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS (0 errors; warnings only in untracked .tmp-qa scratch)
+
+UNIT:
+431/431
+
+BUILD:
+PASS
+
+SQL/SECURITY:
+PASS (22 suites, 0 failures; all concurrency scripts PASS incl. new lifecycle concurrency)
+
+READY FOR PRODUCTION RELEASE + FRESH ZENWARD ONBOARDING:
+YES (pending owner review of R4E; production needs the R4A–R4E migrations applied in order and a PlatformAdminGrant provisioned out-of-band for the owner)
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-PILOT-S4B-R4F
+Coordinated Production Release + Fresh Zenward Mobility Onboarding +
+Self-Service Website Integration + Manual QA Integration Removal
+
+Not started. Driver PWA not started.

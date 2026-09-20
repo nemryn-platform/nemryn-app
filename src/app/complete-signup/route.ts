@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { resolveOrganizationContext } from "@/lib/auth/organization";
+import { isPlatformAdmin } from "@/lib/auth/platform";
+import { getSuspendedOrganizationNames } from "@/lib/auth/membership";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 /**
@@ -85,6 +87,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL(role === "driver" ? "/driver" : "/operations", origin));
   }
 
+  // R4E: zero ACTIVE workspaces is not always "nothing to complete". A Nemryn
+  // Platform Admin (PlatformAdminGrant, no Membership) belongs in the control
+  // plane; a member whose only workspace Nemryn has suspended is told that
+  // below -- never offered organization creation.
+  if (await isPlatformAdmin()) {
+    return NextResponse.redirect(new URL("/platform", origin));
+  }
   const metadata = (user.user_metadata ?? {}) as Record<string, unknown>;
   const pendingInviteToken =
     typeof metadata.pending_driver_invite_token === "string" ? metadata.pending_driver_invite_token : undefined;
@@ -128,6 +137,11 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.redirect(new URL("/", origin));
     }
+    return NextResponse.redirect(new URL("/access-unavailable", origin));
+  }
+
+  // (After any pending invitation above, which may legitimately grant a NEW workspace.)
+  if ((await getSuspendedOrganizationNames()).length > 0) {
     return NextResponse.redirect(new URL("/access-unavailable", origin));
   }
 

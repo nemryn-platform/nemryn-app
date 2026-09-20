@@ -1427,6 +1427,7 @@ export type Database = {
           utc: string
         }[]
       }
+      _require_platform_admin: { Args: never; Returns: undefined }
       _staff_invite_token_hash: { Args: { p_token: string }; Returns: string }
       accept_staff_invite: {
         Args: { p_token: string }
@@ -1943,6 +1944,112 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      platform_get_organization: {
+        Args: { p_organization_id: string }
+        Returns: {
+          active_admin_count: number
+          active_dispatcher_count: number
+          active_driver_membership_count: number
+          business_stage: string
+          created_at: string
+          driver_count: number
+          integrations_active: number
+          integrations_total: number
+          last_activity_at: string
+          last_failure_at: string
+          last_failure_reason: string
+          last_website_request_at: string
+          name: string
+          notif_dispatching: number
+          notif_failed: number
+          notif_partial: number
+          notif_pending: number
+          notif_sent: number
+          notif_skipped: number
+          notif_stuck: number
+          organization_id: string
+          passenger_count: number
+          pending_staff_invite_count: number
+          request_count: number
+          status: string
+          timezone: string
+          trip_count: number
+          vehicle_count: number
+          website_request_count: number
+        }[]
+      }
+      platform_get_overview: {
+        Args: never
+        Returns: {
+          active_organizations: number
+          integrations_active: number
+          integrations_total: number
+          notifications_failed: number
+          notifications_partial: number
+          notifications_stuck: number
+          platform_admin_count: number
+          suspended_organizations: number
+          total_organizations: number
+        }[]
+      }
+      platform_list_activity: {
+        Args: { p_before_at?: string; p_before_id?: string; p_limit?: number }
+        Returns: {
+          action: string
+          actor_name: string
+          id: string
+          occurred_at: string
+          organization_id: string
+          organization_name: string
+          reason: string
+        }[]
+      }
+      platform_list_notification_attention: {
+        Args: { p_limit?: number }
+        Returns: {
+          completed_at: string
+          created_at: string
+          event_type: string
+          failure_reason: string
+          is_stuck: boolean
+          organization_id: string
+          organization_name: string
+          status: string
+        }[]
+      }
+      platform_list_organization_integrations: {
+        Args: { p_organization_id: string }
+        Returns: {
+          allowed_origins: string[]
+          created_at: string
+          is_active: boolean
+          last_request_at: string
+          request_count: number
+        }[]
+      }
+      platform_list_organizations: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_search?: string
+          p_status?: string
+        }
+        Returns: {
+          active_staff_count: number
+          created_at: string
+          driver_count: number
+          integrations_active: number
+          integrations_total: number
+          last_activity_at: string
+          name: string
+          organization_id: string
+          request_count: number
+          status: string
+          timezone: string
+          total_count: number
+          trip_count: number
+        }[]
+      }
       reassign_trip: {
         Args: {
           p_driver_id: string
@@ -2054,6 +2161,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "organization_service_offerings_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_platform_organization_status: {
+        Args: { p_organization_id: string; p_reason: string; p_status: string }
+        Returns: Database["public"]["CompositeTypes"]["platform_organization_status_result"]
+        SetofOptions: {
+          from: "*"
+          to: "platform_organization_status_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2285,6 +2402,11 @@ export type Database = {
         driver_id: string | null
         organization_id: string | null
         linked: boolean | null
+      }
+      platform_organization_status_result: {
+        organization_id: string | null
+        status: string | null
+        changed: boolean | null
       }
       public_request_submission_result: {
         accepted: boolean | null

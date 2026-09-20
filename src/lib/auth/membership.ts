@@ -6,7 +6,13 @@ import type { ActiveMembership, MembershipRole } from "./types";
 interface MembershipRow {
   organization_id: string;
   role: MembershipRole;
-  organizations: { name: string; timezone: string } | { name: string; timezone: string }[] | null;
+  organizations: OrganizationJoin | OrganizationJoin[] | null;
+}
+
+interface OrganizationJoin {
+  name: string;
+  timezone: string;
+  status: string;
 }
 
 /**
@@ -33,15 +39,33 @@ interface MembershipRow {
  * denial).
  */
 export async function getActiveMemberships(): Promise<ActiveMembership[]> {
+  const { active } = await getMembershipsByOrganizationStatus();
+  return active;
+}
+
+/**
+ * Names of organizations where the caller holds an ACTIVE Membership but Nemryn
+ * has suspended the organization (R4E). Such a workspace is not operable: it is
+ * excluded from `getActiveMemberships` (so it is never selectable and the
+ * database helpers deny it anyway), and this is used only to explain the state
+ * ("your workspace is suspended") instead of behaving like "no access at all".
+ * The Membership rows themselves are untouched by suspension.
+ */
+export async function getSuspendedOrganizationNames(): Promise<string[]> {
+  const { suspended } = await getMembershipsByOrganizationStatus();
+  return suspended;
+}
+
+async function getMembershipsByOrganizationStatus(): Promise<{ active: ActiveMembership[]; suspended: string[] }> {
   const user = await getUser();
   if (!user) {
-    return [];
+    return { active: [], suspended: [] };
   }
 
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("memberships")
-    .select("organization_id, role, organizations(name, timezone)")
+    .select("organization_id, role, organizations(name, timezone, status)")
     .eq("user_id", user.id)
     .eq("status", "active")
     .returns<MembershipRow[]>();
@@ -50,16 +74,27 @@ export async function getActiveMemberships(): Promise<ActiveMembership[]> {
     throw new Error(`Failed to resolve active memberships (backend contract mismatch, not an authorization denial — RLS returns zero rows for "no access", not an error): ${error.message}`);
   }
 
-  return (data ?? []).map((row) => {
+  const active: ActiveMembership[] = [];
+  const suspended: string[] = [];
+  for (const row of data ?? []) {
     const org = Array.isArray(row.organizations) ? row.organizations[0] : row.organizations;
-    return {
+    // A member can read their own organization row regardless of its status
+    // (organizations_select_members). An unreadable/missing join is treated as
+    // not operable rather than as an active workspace.
+    if (!org) continue;
+    if (org.status !== "active") {
+      suspended.push(org.name);
+      continue;
+    }
+    active.push({
       organizationId: row.organization_id,
-      organizationName: org?.name ?? "",
+      organizationName: org.name,
       // organizations.timezone is NOT NULL at the schema level (P1-E3-S2C)
-      // — this fallback exists only so a malformed/partial join can never
+      // -- this fallback exists only so a malformed/partial join can never
       // silently produce `undefined` here; it is not an expected runtime path.
-      organizationTimezone: org?.timezone ?? "UTC",
+      organizationTimezone: org.timezone ?? "UTC",
       role: row.role,
-    };
-  });
+    });
+  }
+  return { active, suspended };
 }

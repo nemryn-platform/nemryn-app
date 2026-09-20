@@ -15,6 +15,7 @@ const ACTIONS = [
   "website_integration_created", "website_integration_activated", "website_integration_disabled", "website_integration_origin_updated",
   "staff_invitation_created", "staff_invitation_resent", "staff_invitation_cancelled", "staff_invitation_accepted",
   "membership_role_changed", "membership_deactivated", "membership_reactivated", "notification_preferences_updated",
+  "platform_organization_suspended", "platform_organization_reactivated",
 ];
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i;
 
@@ -94,4 +95,15 @@ test("cursor round-trips; tampered or malformed cursors are ignored", () => {
     assert.equal(decodeCursor(bad), null, String(bad));
   }
   assert.equal(ACTIVITY_PAGE_SIZE, 30);
+});
+
+test("platform lifecycle actions read as Nemryn actions and never expose a reason, id or internal identity", () => {
+  const suspended = describeActivity({ action: "platform_organization_suspended", actorName: "Nemryn", before: { status: "active" }, after: { status: "inactive", reason: "SECRET REASON" } }, helpers);
+  const reactivated = describeActivity({ action: "platform_organization_reactivated", actorName: "Nemryn", before: { status: "inactive" }, after: { status: "active" } }, helpers);
+  assert.equal(suspended.title, "Organization suspended by Nemryn");
+  assert.equal(reactivated.title, "Organization reactivated by Nemryn");
+  for (const d of [suspended, reactivated]) {
+    assert.doesNotMatch(`${d.title} ${d.summary}`, /SECRET|_|inactive|[0-9a-f]{8}-/);
+  }
+  assert.equal(actorLabel("Nemryn"), "Nemryn");
 });
