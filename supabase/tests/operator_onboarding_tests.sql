@@ -53,15 +53,17 @@ insert into auth.users (
 do $$
 declare v_a public.organization_signup_result; v_b public.organization_signup_result;
 begin
-  set local role authenticated;
+  -- P1-PILOT-S4B-R4A: signup_create_organization is internal-only (not
+  -- executable by `authenticated`), so it is exercised directly here as the
+  -- owner role, with the caller identity set via the same JWT-claim GUC
+  -- auth.uid() reads. Its real client-reachable entry points are the
+  -- complete_pending_signup* gates, covered from section 13 onward and by
+  -- tenant_settings_foundation_tests.sql.
   set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a1';
   v_a := public.signup_create_organization('Onboarding Test Org A', 'Owner A', 'starting', 'America/New_York');
-  reset role;
 
-  set local role authenticated;
   set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a2';
   v_b := public.signup_create_organization('Onboarding Test Org B', 'Owner B', 'growing', 'America/Chicago');
-  reset role;
 
   if v_a.organization_id is not null and v_b.organization_id is not null and v_a.organization_id <> v_b.organization_id then
     raise notice 'TEST SIGNUP-1 (two signups create two isolated organizations): PASS';
@@ -117,7 +119,6 @@ begin
   select count(*) into v_before_orgs from public.organizations;
   select count(*) into v_before_profiles from public.user_profiles;
 
-  set local role authenticated;
   set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a3';
   begin
     perform public.signup_create_organization('', 'Someone', null, 'America/New_York');

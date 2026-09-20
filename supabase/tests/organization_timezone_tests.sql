@@ -194,51 +194,65 @@ end $$;
 -- permitted). The original value is restored at the end so later tests
 -- in this suite are unaffected.
 -- =============================================================================
+-- P1-PILOT-S4B-R4A: direct UPDATE of organizations.timezone (and name) was
+-- REVOKED from `authenticated` (20260920090000) so the audited
+-- update_organization_settings RPC is the only write path. WRITE-1 now
+-- asserts the Organization Admin can still change their own timezone --
+-- through the RPC -- and WRITE-1b asserts the direct column UPDATE is now
+-- denied. WRITE-2 asserts the foreign-org attempt is denied by the RPC.
 do $$
-declare v_succeeded boolean := false;
+declare v_changed boolean;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1'; -- Org A admin, own org
-  begin
-    update public.organizations set timezone = 'America/Chicago' where id = '10000000-0000-0000-0000-0000000000a1';
-    v_succeeded := true;
-  exception
-    when insufficient_privilege then
-      null;
-  end;
+  v_changed := (public.update_organization_settings('10000000-0000-0000-0000-0000000000a1', '{"timezone": "America/Chicago"}'::jsonb)).changed;
   reset role;
-  if v_succeeded then
-    raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone): PASS (Organization Admin can update their own org''s timezone)';
+  if v_changed and (select timezone from public.organizations where id = '10000000-0000-0000-0000-0000000000a1') = 'America/Chicago' then
+    raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone, via RPC): PASS (Organization Admin can update their own org''s timezone)';
   else
-    raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone): FAIL (expected success, UPDATE was denied)';
+    raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone, via RPC): FAIL';
   end if;
+exception when others then
+  reset role;
+  raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone, via RPC): FAIL (%: %)', sqlstate, sqlerrm;
 end $$;
 
 do $$
 declare v_denied boolean := false;
 begin
   set local role authenticated;
-  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1'; -- Org A admin — NOT Org B's admin
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    update public.organizations set timezone = 'America/Denver' where id = '10000000-0000-0000-0000-0000000000b1';
-  exception
-    when insufficient_privilege then
-      v_denied := true;
+    update public.organizations set timezone = 'America/Denver' where id = '10000000-0000-0000-0000-0000000000a1';
+  exception when insufficient_privilege then
+    v_denied := true;
   end;
   reset role;
-  -- A foreign-org UPDATE is denied by the RLS `with check`, not the
-  -- column grant itself (the grant is role-wide, not org-scoped) — a
-  -- silent zero-row UPDATE is the same DENY outcome as an exception here,
-  -- so both count as PASS; only an actual foreign-org write is FAIL.
-  declare v_leaked text;
+  if v_denied then
+    raise notice 'TEST TZ-WRITE-1b (direct column UPDATE of timezone): PASS (DENY -- only the audited RPC writes it)';
+  else
+    raise notice 'TEST TZ-WRITE-1b (direct column UPDATE of timezone): FAIL (direct UPDATE was permitted)';
+  end if;
+end $$;
+
+do $$
+declare v_denied boolean := false;
+declare v_leaked text;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1'; -- Org A admin -- NOT Org B's admin
   begin
-    select timezone into v_leaked from public.organizations where id = '10000000-0000-0000-0000-0000000000b1';
-    if v_leaked = 'America/Denver' then
-      raise notice 'TEST TZ-WRITE-2 (foreign org denied): FAIL (Org A admin changed Org B''s timezone)';
-    else
-      raise notice 'TEST TZ-WRITE-2 (foreign org denied): PASS (DENY — org-scoping unchanged)';
-    end if;
+    perform public.update_organization_settings('10000000-0000-0000-0000-0000000000b1', '{"timezone": "America/Denver"}'::jsonb);
+  exception when sqlstate 'ZW002' then
+    v_denied := true;
   end;
+  reset role;
+  select timezone into v_leaked from public.organizations where id = '10000000-0000-0000-0000-0000000000b1';
+  if v_denied and v_leaked is distinct from 'America/Denver' then
+    raise notice 'TEST TZ-WRITE-2 (foreign org denied): PASS (DENY -- org-scoping unchanged)';
+  else
+    raise notice 'TEST TZ-WRITE-2 (foreign org denied): FAIL (denied=%, org B timezone=%)', v_denied, v_leaked;
+  end if;
 end $$;
 
 -- Restore Org A's original timezone so later tests in this suite (and

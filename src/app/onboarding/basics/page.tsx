@@ -7,21 +7,9 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
+import { TIMEZONE_OPTIONS } from "@/lib/operations/organization-settings-core";
 
 const INITIAL_STATE: OnboardingActionState = { status: "idle" };
-
-// A practical US timezone list, not an exhaustive IANA catalog — the
-// server-side check (is_valid_iana_timezone, P1-E3-S2C) is the real
-// authority regardless of what this list offers.
-const TIMEZONE_OPTIONS = [
-  { value: "America/New_York", label: "Eastern (New York)" },
-  { value: "America/Chicago", label: "Central (Chicago)" },
-  { value: "America/Denver", label: "Mountain (Denver)" },
-  { value: "America/Phoenix", label: "Mountain, no DST (Phoenix)" },
-  { value: "America/Los_Angeles", label: "Pacific (Los Angeles)" },
-  { value: "America/Anchorage", label: "Alaska" },
-  { value: "Pacific/Honolulu", label: "Hawaii" },
-];
 
 /**
  * Business Basics (P1-E3-S9, work item §6) — timezone is canonical

@@ -67,6 +67,8 @@ export interface OperationsSidebarProps {
   dispatcherRole?: string;
   /** P1-E3-S9 (Owner-Operator Mode, work item §4/§12) — real fact from a live `current_driver_id()` check, never inferred from role. Gates the conditional "Drive" nav item only; the actual /driver/* access decision is independently re-checked by `requireDriverAccess`. */
   hasLinkedDriverProfile?: boolean;
+  /** P1-PILOT-S4B-R4A: true only for an Organization Admin of the active workspace -- gates the "Settings" nav item. Navigation convenience only; every /operations/settings route and mutation independently enforces Organization Admin. */
+  canManageSettings?: boolean;
 }
 
 /**
@@ -94,6 +96,7 @@ export function OperationsSidebar({
   dispatcherName,
   dispatcherRole,
   hasLinkedDriverProfile,
+  canManageSettings,
 }: OperationsSidebarProps) {
   const pathname = usePathname();
   // P1-E3-S9 (work item §4/§12, "progressive complexity" — "a 1-2 vehicle
@@ -101,7 +104,13 @@ export function OperationsSidebar({
   // any existing item — Operations nav stays the same 7 items for
   // everyone, plus this one additional, conditional item for a genuine
   // dual-hat owner-operator. Same platform, no forked nav structure.
-  const navItems = hasLinkedDriverProfile ? [...NAV_ITEMS, { key: "drive" as const, label: "Drive", href: "/driver" }] : NAV_ITEMS;
+  const navItems = [
+    ...NAV_ITEMS,
+    ...(hasLinkedDriverProfile ? [{ key: "drive" as const, label: "Drive", href: "/driver" }] : []),
+    // P1-PILOT-S4B-R4A: tenant administration, Organization Admin only,
+    // always last -- below the operational modules it configures.
+    ...(canManageSettings ? [{ key: "settings" as const, label: "Settings", href: "/operations/settings" }] : []),
+  ];
 
   // P1-UX-R2: defaults to expanded (`false`) so the very first render —
   // both the server-rendered HTML and React's first client commit during
@@ -270,7 +279,8 @@ export function OperationsSidebar({
         */}
         <div className={cn("items-center gap-2 px-1 pb-3 text-chrome-text-secondary", collapsed ? "hidden" : "hidden lg:flex")}>
           <Buildings className="size-4 shrink-0" aria-hidden />
-          <div className={typography.metadata}>
+          {/* min-w-0: without it this flex child never shrinks below its content, so `truncate` had nothing to clip against and a long organization name (now editable in Settings -> Organization, P1-PILOT-S4B-R4A) overflowed the fixed-width sidebar. */}
+          <div className={cn(typography.metadata, "min-w-0")}>
             <p className="truncate font-medium" title={location}>
               {location}
             </p>

@@ -24,8 +24,9 @@ function stringField(formData: FormData, name: string): string {
  * authenticated user via Supabase Auth's own `signUp()` (never a
  * service-role shortcut from this — or any — browser-reachable code
  * path), then, ONLY if a real session actually exists (see the
- * `needsEmailConfirmation` branch below), calls `signup_create_
- * organization` — the sole controlled path that atomically creates the
+ * `needsEmailConfirmation` branch below), calls `complete_pending_
+ * signup` (which reaches `signup_create_organization`, internal-only since
+ * P1-PILOT-S4B-R4A) — the sole controlled path that atomically creates the
  * caller's UserProfile, a new Organization, and their own
  * organization_admin Membership in one transaction (docs/product/
  * operator-onboarding-model.md).
@@ -107,12 +108,15 @@ export async function signUpAction(_prevState: SignUpState, formData: FormData):
     return { needsEmailConfirmation: true };
   }
 
-  const { error: orgError } = await supabase.rpc("signup_create_organization", {
-    p_business_name: businessName,
-    p_display_name: fullName,
-  });
+  // `signup_create_organization` is internal-only since P1-PILOT-S4B-R4A
+  // (no client role can execute it). The immediate-session path uses the
+  // SAME exactly-once gate the email-confirmation path uses,
+  // `complete_pending_signup()`, which reads the pending_full_name /
+  // pending_business_name just persisted by `signUp()` above -- one
+  // creation path regardless of the environment's confirmation behavior.
+  const { data: result, error: orgError } = await supabase.rpc("complete_pending_signup");
 
-  if (orgError) {
+  if (orgError || !result?.created) {
     return { error: AUTH_ERROR.SIGNUP_FAILED };
   }
 

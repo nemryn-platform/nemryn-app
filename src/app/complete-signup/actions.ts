@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { resolveOrganizationContext } from "@/lib/auth/organization";
 import { AUTH_ERROR, type AuthErrorCode } from "@/lib/auth/errors";
 
 export interface CompleteSignupState {
@@ -29,7 +30,7 @@ export async function completeSignupManualAction(
   const businessName = stringField(formData, "businessName");
 
   if (!fullName || !businessName) {
-    return { error: AUTH_ERROR.SIGNUP_INVALID_INPUT };
+    return { error: AUTH_ERROR.ORG_SETUP_INVALID_INPUT };
   }
 
   const supabase = await createServerSupabaseClient();
@@ -38,8 +39,23 @@ export async function completeSignupManualAction(
     p_business_name: businessName,
   });
 
-  if (error || !result?.created) {
-    return { error: AUTH_ERROR.SIGNUP_FAILED };
+  if (error) {
+    return { error: AUTH_ERROR.ORG_SETUP_FAILED };
+  }
+
+  if (!result?.created) {
+    // `created: false` is the exactly-once gate holding (see
+    // complete_pending_signup_manual): this person already holds a
+    // Membership -- a second tab, a double submit, or a retry after a slow
+    // response that actually succeeded. Send them to their real home
+    // rather than showing a failure or creating a second organization.
+    // If they still resolve to NO workspace, the gate refused for another
+    // reason (e.g. an inactive Membership) -- say so instead of looping.
+    const resolution = await resolveOrganizationContext();
+    if (resolution.status === "none") {
+      return { error: AUTH_ERROR.ORG_SETUP_FAILED };
+    }
+    redirect("/");
   }
 
   redirect("/onboarding");

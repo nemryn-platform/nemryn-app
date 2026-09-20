@@ -18,6 +18,9 @@ export const AUTH_ERROR = {
   SIGNUP_EMAIL_TAKEN: "SIGNUP_EMAIL_TAKEN",
   SIGNUP_FAILED: "SIGNUP_FAILED",
   INVITE_INVALID: "INVITE_INVALID",
+  // P1-PILOT-S4B-R4A — first-run organization setup (/complete-signup/form).
+  ORG_SETUP_INVALID_INPUT: "ORG_SETUP_INVALID_INPUT",
+  ORG_SETUP_FAILED: "ORG_SETUP_FAILED",
   // P0-S2B — password-recovery-specific codes.
   FORGOT_PASSWORD_INVALID_EMAIL: "FORGOT_PASSWORD_INVALID_EMAIL",
   FORGOT_PASSWORD_FAILED: "FORGOT_PASSWORD_FAILED",
@@ -40,6 +43,8 @@ export const AUTH_ERROR_MESSAGE: Record<AuthErrorCode, string> = {
   SIGNUP_WEAK_PASSWORD: "Please choose a password with at least 8 characters.",
   SIGNUP_EMAIL_TAKEN: "An account with that email already exists — try signing in instead.",
   SIGNUP_FAILED: "We couldn't complete sign-up. Please try again.",
+  ORG_SETUP_INVALID_INPUT: "Enter your name and your organization's name to continue.",
+  ORG_SETUP_FAILED: "We couldn't set up your organization. Please try again, or contact support if it keeps happening.",
   INVITE_INVALID: "This invite link is no longer valid — it may have been used already or revoked. Ask your dispatcher for a new one.",
   FORGOT_PASSWORD_INVALID_EMAIL: "Enter a valid email address.",
   FORGOT_PASSWORD_FAILED: "We couldn't process that request. Please try again shortly.",

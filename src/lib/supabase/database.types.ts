@@ -333,30 +333,42 @@ export type Database = {
       }
       organizations: {
         Row: {
+          business_address: string | null
+          business_email: string | null
+          business_phone: string | null
           business_stage: string | null
           created_at: string
           id: string
           name: string
+          primary_contact_name: string | null
           service_area_description: string | null
           status: string
           timezone: string
           updated_at: string
         }
         Insert: {
+          business_address?: string | null
+          business_email?: string | null
+          business_phone?: string | null
           business_stage?: string | null
           created_at?: string
           id?: string
           name: string
+          primary_contact_name?: string | null
           service_area_description?: string | null
           status?: string
           timezone: string
           updated_at?: string
         }
         Update: {
+          business_address?: string | null
+          business_email?: string | null
+          business_phone?: string | null
           business_stage?: string | null
           created_at?: string
           id?: string
           name?: string
+          primary_contact_name?: string | null
           service_area_description?: string | null
           status?: string
           timezone?: string
@@ -1746,6 +1758,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      update_organization_settings: {
+        Args: { p_changes: Json; p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["organization_settings_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_settings_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       [_ in never]: never
@@ -1819,6 +1841,10 @@ export type Database = {
         assignment_ended_at: string | null
         end_reason: string | null
         trip_outcome: string | null
+      }
+      organization_settings_result: {
+        organization_id: string | null
+        changed: boolean | null
       }
       organization_signup_result: {
         organization_id: string | null

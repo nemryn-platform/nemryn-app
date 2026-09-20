@@ -12,6 +12,13 @@ import {
   Gear,
   MapPin,
   SteeringWheel,
+  UsersThree,
+  ListChecks,
+  PlugsConnected,
+  Bell,
+  Clock,
+  ShieldCheck,
+  ClockCounterClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -43,3 +50,19 @@ export const navIcons: Record<string, Icon> = {
 };
 
 export type NavIconKey = keyof typeof navIcons;
+
+/**
+ * Settings section iconography (P1-PILOT-S4B-R4A) -- one entry per section
+ * of the tenant Settings information architecture, keyed by the same slug
+ * the section's route uses (/operations/settings/<slug>).
+ */
+export const settingsIcons: Record<string, Icon> = {
+  organization: Buildings,
+  team: UsersThree,
+  services: ListChecks,
+  integrations: PlugsConnected,
+  notifications: Bell,
+  operations: Clock,
+  security: ShieldCheck,
+  activity: ClockCounterClockwise,
+};

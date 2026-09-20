@@ -1,0 +1,596 @@
+NEMRYN PLATFORM
+P1-PILOT-S4B-R4A -- TENANT FOUNDATION + SETTINGS CONTROL CENTER
+Local implementation and validation only. Nothing committed, pushed, deployed
+or applied to production.
+
+================================================================================
+STARTING STATE
+================================================================================
+Repository:      /Users/datamatics/ZenWard
+Branch / HEAD:   main @ c275ec5 ("Extend structured website request intake")
+Tracked changes: none at start. Only untracked files (.tmp-qa/*, docs/reports/*).
+Concurrent git writers: none detected (no .git lock files, no running
+                 git commit/push/rebase/checkout). HEAD unchanged at the end.
+Not touched:     /Users/datamatics/Zenward-Web (one read-only `git status`
+                 only; it has pre-existing uncommitted docs edits that are not
+                 from this phase).
+Production:      no production data, deploy, db push, Vercel or credential
+                 access. The manual QA integration zenward-web-87553280 was
+                 not read, modified or looked up.
+Local environment: local Supabase (54331/54332) and local Next dev server
+                 (3000). The local database was reset with `supabase db reset`
+                 during validation (see OPEN ISSUES) and replayed cleanly
+                 through all 55 migrations including the new one.
+
+================================================================================
+CURRENT SETTINGS AUDIT
+================================================================================
+Before this phase there was NO tenant Settings surface.
+ - Routes:      no /operations/settings. Operations nav was Overview, Requests,
+                Trips, Dispatch, Passengers, Facilities, Drivers, Fleet
+                (+ conditional "Drive"). Billing/Reports routes exist but are
+                deliberately unlinked.
+ - Account menu: real sign-out and Switch Organization only. No settings links
+                (an earlier phase explicitly forbade fake ones).
+ - Organization profile: organizations had name, status, timezone,
+                business_stage, service_area_description. Edited only through
+                onboarding (/onboarding, /onboarding/basics) via direct
+                column UPDATE grants (name/status originally; business_stage,
+                timezone, service_area_description added later). No AuditEvent
+                on any of those writes.
+ - Missing profile fields: business phone, business email, business address,
+                primary operations contact -- did not exist anywhere.
+ - Staff/member management: no UI. Driver invitations exist at
+                /operations/drivers (Organization Admin only, create_driver_invite).
+                No dispatcher invitation, no role-change UI (R4C).
+ - Account settings: none (password recovery/reset flows exist under /auth).
+ - Authorization: requireOperationsAccess (admin+dispatcher), requireDriverAccess,
+                requireOnboardingAccess in src/lib/auth/authorization.ts.
+                Drivers are redirected to /driver, no-Membership users to
+                /complete-signup. Platform Admin has SELECT on organizations
+                only; there is no platform UPDATE path.
+ - AuditEvent conventions: audit_events(organization_id, entity_type,
+                entity_id, action, actor_user_id, before_data, after_data,
+                reason). No client role can INSERT; written only from
+                SECURITY DEFINER functions in the same transaction as the
+                mutation (create_trip, reassign, request lifecycle,
+                organization_created). Reads: Organization Admin of that org
+                and Platform Admin only.
+ - RLS/grants (organizations): SELECT to all org members (organizations_select_
+                members) and Platform Admin; UPDATE policy organizations_update_
+                org_admin; column UPDATE grants; no INSERT/DELETE for any
+                client role.
+ - Timezone: organizations.timezone, NOT NULL, IANA-only via
+                is_valid_iana_timezone (rejects EST/GMT-5/"Eastern"). See
+                TIMEZONE.
+
+================================================================================
+CURRENT TENANT ONBOARDING AUDIT
+================================================================================
+Question: can a completely fresh customer, with no manual SQL / Dashboard /
+manual auth.users edits / service-role scripts / manual Membership INSERT:
+
+ A. sign up ............................. SUPPORTED
+    /sign-up (supabase.auth.signUp, persists pending_full_name /
+    pending_business_name in auth metadata).
+ B. verify / authenticate ............... SUPPORTED
+    Email-confirmation environments via /auth/confirm (token_hash, server
+    verifyOtp) -> /complete-signup; local has confirmations off. Sign-in,
+    password recovery also exist.
+ C. create an Organization .............. SUPPORTED (with one exposure, fixed)
+    complete_pending_signup / complete_pending_signup_manual ->
+    signup_create_organization, all SECURITY DEFINER, atomic (UserProfile +
+    Organization + Membership + AuditEvent in one transaction).
+    EXPOSURE FOUND: signup_create_organization itself was still directly
+    EXECUTE-able by every authenticated user. Any authenticated principal
+    (including a Driver or Dispatcher of an unrelated tenant) could call it
+    directly and repeatedly, minting unlimited organizations and Admin
+    Memberships, and two concurrent direct calls from one fresh user produced
+    two organizations -- bypassing the exactly-once gates. Fixed (see
+    ORGANIZATION CREATION AUTHORITY).
+ D. become Organization Admin ........... SUPPORTED
+    role hard-coded organization_admin inside the function; never a parameter.
+ E. enter Nemryn Operations ............. SUPPORTED
+    -> /onboarding (business stage, basics, vehicle/driver/facility/passenger,
+    all skippable) -> /operations. Onboarding checklist banner on Overview.
+
+Also audited: the no-organization state. /, /operations/*, /driver/* all route a
+zero-Membership user to /complete-signup, which auto-continues a pending
+signup / driver invite, else sends to /complete-signup/form (an explicit
+"recovery" form: full name + business name). It worked but was worded as an
+error recovery ("We couldn't automatically finish setting up..."), not an
+intentional first-run experience. PARTIAL -> presentation fixed.
+
+Multi-organization assumption (audited, not invented): multi-org MEMBERSHIP is
+supported (select-organization, workspace switching, org-context cookie). Multi-
+org SELF-SERVICE CREATION was never reachable from any UI; only the exposed
+direct RPC allowed it. This phase makes "one self-service organization per
+person" the enforced behavior (flagged for owner confirmation in OPEN ISSUES).
+
+================================================================================
+EXISTING CAPABILITIES REUSED
+================================================================================
+ - /sign-up, /auth/confirm, /complete-signup route + /complete-signup/form
+ - complete_pending_signup, complete_pending_signup_manual (advisory-lock +
+   existing-Membership gate) and signup_create_organization (now internal)
+ - organizations.name / timezone (no second settings model), is_valid_iana_
+   timezone, has_org_role, audit_events, ZW001/ZW002/ZW006 error contract
+ - requireOperationsAccess, OrganizationContext.organizationTimezone
+ - Panel, PageHeader, Breadcrumb, Input, Select, Textarea, Button, SectionHeader,
+   design/icons.ts, typography tokens
+ - The onboarding flow (/onboarding/*) unchanged in behavior
+
+================================================================================
+MISSING CAPABILITIES (built)
+================================================================================
+ 1. Settings home + Settings -> Organization (routes, nav entry, guard)
+ 2. Business profile columns: phone, email, address, primary contact
+ 3. Audited, Organization Admin-only mutation update_organization_settings
+ 4. Closing the direct-RPC organization-creation bypass
+ 5. First-run screen wording ("Welcome to Nemryn / Set up your organization")
+ 6. Shared timezone option list (was duplicated in one place; now one source)
+
+================================================================================
+SETTINGS INFORMATION ARCHITECTURE
+================================================================================
+Settings
+ ├ Organization        /operations/settings/organization   IMPLEMENTED (R4A)
+ ├ Team & Access       /operations/settings/team           reserved (R4C)
+ ├ Services & Intake   /operations/settings/services       reserved (R4C)
+ ├ Integrations        /operations/settings/integrations   reserved (R4B)
+ ├ Notifications       /operations/settings/notifications  reserved (R4D)
+ ├ Operations          /operations/settings/operations     reserved (R4C)
+ ├ Security            /operations/settings/security       reserved (R4D)
+ └ Activity            /operations/settings/activity       reserved (R4D)
+Registry: src/lib/operations/settings-sections.ts (`available` flag). Only
+`organization` is true. No placeholder pages exist for reserved routes; later
+phases flip their own entry when the real page ships. Drivers, Vehicles,
+Passengers, Facilities, Trips, Requests and Recurring Care were NOT moved into
+Settings.
+
+================================================================================
+SETTINGS HOME
+================================================================================
+/operations/settings. Title "Settings", copy "Configure how your organization
+operates in Nemryn." Eight sections in a two-column grid at 1024px. Organization
+is the only link (verified: exactly one <a> to /operations/settings/*). The
+other seven are non-interactive, labelled "Not yet available" -- not dead links,
+not fake pages. Sidebar gains a "Settings" item (gear icon), last in the list,
+shown only to an Organization Admin.
+
+================================================================================
+AUTHORIZATION
+================================================================================
+ Page:      requireOrganizationAdminAccess = requireOperationsAccess (Drivers ->
+            /driver, no Membership -> /complete-signup, multi-org select) then
+            role must be organization_admin, else redirect /operations.
+ Mutation:  the Server Action re-runs the guard on every call AND the database
+            enforces it independently (has_org_role on the target org).
+ Organization Admin: full access to Settings -> Organization.
+ Dispatcher: no Settings nav, both routes bounce to /operations, RPC denied
+            (ZW002). Verified in the UI and over real PostgREST with the
+            dispatcher's JWT.
+ Driver:    bounced to /driver from /operations/settings; RPC denied.
+ Platform Admin: behavior preserved. It never had an organization UPDATE path
+            and still does not; a Platform Admin with no Membership is denied by
+            the RPC like any other non-member. (Read access via
+            organizations_select_platform_admin is unchanged.)
+ Hidden buttons are not relied on: sidebar hiding is convenience only.
+
+================================================================================
+FIRST-RUN EXPERIENCE
+================================================================================
+/complete-signup/form now reads "Welcome to Nemryn" / "Set up your
+organization to get started." with "Your name", "Organization name" and a
+"Create organization" button. Fields kept to two because
+user_profiles.display_name is required by the creation function; both prefill
+when signup metadata exists. No wizard. Reached automatically from `/`,
+/operations/*, /driver/* for any authenticated account with no Membership and no
+pending signup/invite (verified: /operations and /operations/settings for such
+a user land on the form -- no crash, no tenant data). Driver invitees are still
+never routed here (route.ts unchanged: invite check runs first).
+Behavior change: re-submitting when a Membership already exists (second tab,
+retry after a slow response that succeeded) now redirects to the existing
+workspace instead of showing a failure. If the gate refuses and the person still
+has no workspace (e.g. only an inactive Membership) it shows a plain error
+instead of looping. New auth error codes ORG_SETUP_INVALID_INPUT / ORG_SETUP_
+FAILED with wording specific to this form.
+
+================================================================================
+ORGANIZATION CREATION AUTHORITY
+================================================================================
+Authority (existing, now the ONLY path): complete_pending_signup() /
+complete_pending_signup_manual(p_full_name, p_business_name) -> internal
+signup_create_organization. SECURITY DEFINER, authenticated-only.
+ - Browser cannot submit: owner/Admin user id, organization id, role, status,
+   created_by. The gate signatures contain only names; identity is auth.uid();
+   role is the literal 'organization_admin'; status the literal 'active'.
+   (test CREATE-5 asserts the signatures.)
+ - No INSERT grant on organizations or memberships was added; both remain
+   denied to client roles (verified over PostgREST).
+ - Migration 20260920090000 REVOKES EXECUTE on signup_create_organization from
+   authenticated. /sign-up's immediate-session branch now calls
+   complete_pending_signup() (reads the just-persisted signup metadata) instead
+   of the RPC directly, so there is one creation path for every environment.
+ - Eligibility = authenticated and holds no Membership of any status.
+
+================================================================================
+TRANSACTION / CONCURRENCY
+================================================================================
+ - Atomic: UserProfile + Organization + Admin Membership + organization_created
+   AuditEvent in one function body. Tested: blank/oversize name -> ZW006 leaves
+   zero rows (CREATE-32..34).
+ - Race: per-user pg_advisory_xact_lock plus existing-Membership check.
+   tenant_org_creation_concurrency_test.sh runs 6 simultaneous real psql
+   sessions for ONE fresh user, transactions held open ~1.5s: exactly 1 created=
+   true, 5 created=false, 0 errors, 1 org, 1 Membership, 1 audit, 1 profile.
+ - UI double submit (two requestSubmit() back to back): exactly one org.
+ - update_organization_settings locks the org row FOR UPDATE; 6 concurrent
+   updates: 0 errors, audit count == effective changes, no torn state.
+ - Why a concurrency test was warranted: the direct-call bypass was a genuine
+   race (two orgs from one user); the test now proves the remaining path is
+   race-free.
+
+================================================================================
+ORGANIZATION SETTINGS
+================================================================================
+Fields: Organization name, Business phone, Business email, Business address,
+Primary operations contact, Timezone. Reused: name, timezone. New (columns on
+organizations, no second model): business_phone, business_email,
+business_address, primary_contact_name (all nullable text). Primary operations
+contact is a plain name label (not a user/Membership link); its phone/email are
+the business phone/email.
+Validation (mirrored in three places -- friendly TS pre-check, the RPC, and
+column CHECK constraints): name required, trimmed, <=200; phone optional, <=40,
+7-20 digits; email optional, lowercased, <=254, single-@ format; address
+optional <=500; contact optional <=200; timezone required, IANA only.
+UI: two calm Panels ("Business profile", "Operating timezone"), field-level
+errors, "Save changes", inline status. A rejected save no longer wipes what was
+typed (server echoes submitted values). No marketing/public output is derived
+from these fields.
+Verified at 1024px (screenshots below): no horizontal overflow; long names now
+truncate in the sidebar (pre-existing flex min-w-0 bug fixed on the workspace
+row because names are now user-editable).
+
+================================================================================
+TIMEZONE
+================================================================================
+Authority: organizations.timezone (IANA, NOT NULL, CHECK is_valid_iana_timezone).
+It already existed and is now editable in Settings; no new source was created.
+Loaded per request into OrganizationContext.organizationTimezone.
+Currently CONSUME it: Operations Overview/Today, Dispatch, Tomorrow readiness,
+Trips list/detail/new (local->UTC conversion), Request detail, Proof of Service,
+Recurring Care create-missing (via Trip creation), Operations Brief, header date,
+Driver Today/Trips/History/Trip detail.
+Other source / fallback (documented, not changed):
+ - recurring_arrangements.timezone is a deliberate SNAPSHOT taken at creation
+   ("a later Organization timezone change must never silently reinterpret" an
+   existing arrangement). Changing the org timezone does NOT rewrite existing
+   arrangements. The Settings help text now says so.
+ - Trip timestamps are absolute timestamptz; a change re-projects display and
+   today/tomorrow boundaries, it does not move scheduled moments.
+ - transportation_requests.preferred_date/time are wall-clock hints, no zone.
+ - membership.ts falls back to "UTC" only if the joined value is missing
+   (unreachable; column is NOT NULL).
+ - Creation default: signup_create_organization defaults 'America/New_York' and
+   /onboarding/basics pre-selects Eastern (Georgia launch assumption). The
+   first-run form does not ask; a non-Eastern tenant is Eastern until basics or
+   Settings is saved. See OPEN ISSUES.
+ - Onboarding Business Basics now writes timezone through the audited RPC.
+Scheduling logic was NOT rewritten.
+
+================================================================================
+READ MODEL
+================================================================================
+getOrganizationSettings(organizationId) in src/lib/operations/organization-
+settings.ts. organizationId comes only from requireOrganizationAdminAccess (the
+validated session workspace); there is no route/query param that selects a
+tenant. RLS (organizations_select_members) is an independent second scope.
+Verified: Org A admin sees only Org A; PostgREST organizations read for Org A
+admin never includes the fresh tenant. Note: any org MEMBER (including
+Dispatcher/Driver) can SELECT their own organization row, including the new
+profile columns -- existing policy, intended, own-org only.
+
+================================================================================
+MUTATION MODEL
+================================================================================
+update_organization_settings(p_organization_id uuid, p_changes jsonb) ->
+(organization_id, changed). SECURITY DEFINER, EXECUTE to authenticated only.
+ - Order: no session -> ZW001; not an active Organization Admin of that org
+   (Dispatcher, Driver, inactive, foreign, nonexistent, null, Platform Admin
+   without Membership) -> ZW002 (no existence oracle); then validation ZW006.
+ - p_changes is a patch of six keys only. Unknown/privileged keys (status,
+   business_stage, id, organization_id) -> ZW006, never ignored. Values must be
+   strings/null. Blank clears optional fields.
+ - The Server Action derives the organization from the session workspace; the
+   form has no organization id field. The RPC re-checks authority regardless.
+ - direct UPDATE of organizations.name and .timezone REVOKED from authenticated,
+   so the audited RPC is the only way to change them (the new columns never had
+   a grant). Remaining direct column grants: status, business_stage,
+   service_area_description (unchanged).
+ - No-op resubmission writes nothing (changed=false, no AuditEvent).
+
+================================================================================
+AUDIT EVENTS
+================================================================================
+ organization_created           existing (entity_type organization, actor =
+                                caller, after_data {business_stage, timezone});
+                                verified for a UI-created fresh tenant.
+ organization_settings_updated  NEW. Same table/shape as every other event;
+                                before_data/after_data hold ONLY the changed
+                                fields. Verified for name+timezone change with
+                                correct actor. No new audit architecture.
+No Activity UI built (R4D).
+
+================================================================================
+EXISTING USER REGRESSION
+================================================================================
+Verified against the seeded local database, in the browser:
+ - Org A Admin: enters /operations, sees Settings, sees only Org A.
+ - Org A Dispatcher: lands in /operations, no Settings link, Settings routes
+   bounce to /operations.
+ - Org A Driver: stays on /driver; /operations/settings -> /driver.
+ - Harmony Admin: /operations, /requests, /trips, /dispatch, /recurring-care all
+   render and stay put.
+ - No existing organization enters first-run (only zero-Membership users do).
+ - Existing Memberships remain authoritative; no Membership data changed.
+ - Existing SQL suites that create tenants/administer orgs updated for the
+   revoked grants and re-run green (see DATABASE TESTS).
+
+================================================================================
+TENANT ISOLATION
+================================================================================
+ SQL:   Org A admin cannot mutate Org B and vice versa (ZW002); nothing
+        hijacked; Org A cannot read Org B's profile columns; new tenant invisible
+        to Org A admin and to another fresh user.
+ HTTP (real PostgREST + real GoTrue JWTs): Dispatcher, Driver, foreign admin,
+        and the new tenant's own admin against Org A all denied ZW002; direct
+        PATCH of name/timezone, INSERT into organizations, INSERT of an Admin
+        Membership into a foreign org, direct call to signup_create_
+        organization (existing member AND brand-new memberless user): all 42501.
+ UI:    Org A admin's Organization page shows only Org A data and none of the
+        fresh tenant's name/phone.
+
+================================================================================
+RESPONSIVE
+================================================================================
+Validated at 1024x768 (Nemryn application floor): first-run, Settings home,
+Organization form (default, validation error, saved). documentElement
+scrollWidth - innerWidth <= 0 on Settings home and Organization. Form fields go
+two-column (phone/email) only at md+. Global shell untouched apart from the
+Settings nav item and the sidebar workspace-name truncation fix.
+Screenshots: scratchpad shots/r4a-first-run-1024.png, r4a-settings-home-1024.png,
+r4a-settings-organization-1024.png, ...-error-1024.png, ...-saved-1024.png.
+
+================================================================================
+APPLICATION TESTS
+================================================================================
+ npx tsc --noEmit ........ PASS
+ npm run lint ............ PASS (0 errors; 58 warnings, all in untracked
+                           .tmp-qa scratch scripts; `eslint src` is clean)
+ npm test ................ 379/379 (incl. 11 new organization-settings-core)
+ npm run build ........... PASS (/operations/settings and
+                           /operations/settings/organization built)
+ Local browser E2E (.tmp-qa/r4a-fresh-tenant-e2e.mjs): 67/67 checks, run twice
+   including once after a clean db reset. Covers: real /sign-up form; a GoTrue-
+   created fresh user with no metadata -> sign-in -> first-run form (also
+   /operations and /operations/settings route to it) -> double submit -> exactly
+   one org -> Admin -> Operations -> Settings home -> Organization (invalid
+   email rejected without losing input) -> save name/phone/email/address/
+   contact/timezone -> reload -> everything persisted -> sidebar shows renamed
+   workspace -> AuditEvent with before/after -> onboarding Business Basics still
+   saves timezone; then Org A Admin / Dispatcher / Driver / Harmony Admin
+   regression; then PostgREST adversarial checks. Fresh users were created only
+   through /sign-up or GoTrue signup; no organization or Membership INSERT was
+   performed by any script.
+
+================================================================================
+DATABASE TESTS (FOCUSED -- decision explained)
+================================================================================
+Decision: NOT the full historical SQL suite. Shared RLS policies were not
+changed. Changes were: one new function, one internal-only revoke, a two-column
+UPDATE revoke on one table, four new nullable columns. I ran every suite that
+touches those surfaces plus the frozen public-intake contract:
+ tenant_settings_foundation_tests (NEW) .............. 51 PASS / 0 FAIL
+ tenant_org_creation_concurrency_test.sh (NEW) ....... PASS (both scenarios)
+ operator_onboarding_tests (fixtures updated) ........ 41 PASS / 0 FAIL
+ organization_timezone_tests (WRITE-1/2 rewritten) ... 15 PASS / 0 FAIL
+ function_privilege_tests ............................ 7 PASS / 0 FAIL
+ security_definer_exposure_tests ..................... 20 PASS / 0 FAIL
+ client_privilege_surface_tests ...................... 21 PASS / 0 FAIL
+ rls_adversarial_tests ............................... 33 PASS / 0 FAIL
+ driver_invite_concurrency_test.sh (fixture updated) . PASS
+ public_request_intake_tests ......................... 42 PASS / 0 FAIL
+ public_intake_rate_limit_tests ...................... 8 PASS / 0 FAIL
+ recurring_arrangement_foundation_tests .............. 50 PASS / 0 FAIL
+Existing tests edited (behavior deliberately changed by this phase):
+ - operator_onboarding_tests.sql, driver_invite_concurrency_test.sh: fixtures
+   called signup_create_organization as `authenticated`; now call it as the
+   owner role with the JWT-claim GUC (it is internal-only). Assertions unchanged.
+ - organization_timezone_tests.sql TZ-WRITE-1/2: previously proved a direct
+   column UPDATE; now prove the RPC succeeds for own org / is denied for a
+   foreign org, plus new TZ-WRITE-1b proving the direct UPDATE is denied.
+
+================================================================================
+FILES CREATED
+================================================================================
+ supabase/migrations/20260920090000_tenant_settings_foundation.sql
+ supabase/tests/tenant_settings_foundation_tests.sql
+ supabase/tests/tenant_org_creation_concurrency_test.sh
+ src/app/operations/settings/page.tsx
+ src/app/operations/settings/organization/page.tsx
+ src/app/operations/settings/organization/actions.ts
+ src/components/operations/settings/OrganizationSettingsForm.tsx
+ src/lib/operations/settings-sections.ts
+ src/lib/operations/organization-settings.ts            (read model)
+ src/lib/operations/organization-settings-core.ts       (pure validation/options)
+ src/lib/operations/organization-settings-core.test.mjs
+ src/lib/operations/organization-settings-errors.ts
+ docs/reports/p1-pilot-s4b-r4a-tenant-foundation-settings-control-center.txt
+ (untracked local QA scratch, not part of the change set:
+  .tmp-qa/r4a-fresh-tenant-e2e.mjs, .tmp-qa/r4a-overlay-check.mjs)
+
+================================================================================
+FILES MODIFIED
+================================================================================
+ src/lib/auth/authorization.ts        + requireOrganizationAdminAccess
+ src/lib/auth/errors.ts               + ORG_SETUP_* codes/messages
+ src/app/sign-up/actions.ts           immediate-session branch -> complete_pending_signup
+ src/app/complete-signup/actions.ts   already-a-member redirect; new error codes
+ src/app/complete-signup/form/page.tsx first-run copy
+ src/components/auth/CompleteSignupForm.tsx labels/button/maxLength
+ src/app/onboarding/actions.ts        timezone via update_organization_settings
+ src/app/onboarding/basics/page.tsx   shared TIMEZONE_OPTIONS
+ src/components/operations/OperationsSidebar.tsx  Settings item (admin only); workspace-name min-w-0
+ src/components/operations/OperationsLayoutClient.tsx  Settings label; canManageSettings
+ src/design/icons.ts                  settingsIcons
+ src/lib/supabase/database.types.ts   regenerated (+4 columns, +function, +result type)
+ docs/product/operator-onboarding-model.md  new section 4C
+ supabase/tests/operator_onboarding_tests.sql, driver_invite_concurrency_test.sh,
+   organization_timezone_tests.sql    see DATABASE TESTS
+ Unchanged (verified empty diff): src/app/api/**, src/lib/public-intake/**.
+
+================================================================================
+MIGRATIONS CREATED
+================================================================================
+ 20260920090000_tenant_settings_foundation.sql  (applied to LOCAL only)
+
+================================================================================
+SCHEMA IMPACT
+================================================================================
+organizations + business_phone, business_email, business_address,
+primary_contact_name (nullable text) with CHECKs (lengths; email format). New
+composite type organization_settings_result. All additive; no backfill needed;
+existing rows unaffected.
+
+================================================================================
+RLS IMPACT
+================================================================================
+No policy created, changed or dropped. Existing organizations SELECT/UPDATE
+policies apply as before; new columns are readable by own-org members and
+writable only via the RPC (no column grant).
+
+================================================================================
+GRANT IMPACT
+================================================================================
+ + EXECUTE update_organization_settings(uuid, jsonb) to authenticated
+   (revoked from PUBLIC; anon has none)
+ - EXECUTE signup_create_organization(text,text,text,text) from authenticated
+   (now no client role can call it)
+ - UPDATE (name, timezone) on organizations from authenticated
+ No INSERT/DELETE grant added anywhere. Remaining column UPDATE grants on
+ organizations: status, business_stage, service_area_description.
+DEPLOYMENT NOTE for R4E: the migration and the app change are coupled. The new
+app calls update_organization_settings/complete_pending_signup; the OLD app's
+/sign-up calls signup_create_organization, which fails once the migration is
+applied. Apply migration and deploy app together in the coordinated cutover.
+
+================================================================================
+OPEN ISSUES
+================================================================================
+ 1. PRODUCT DECISION FOR OWNER: this phase enforces one self-service
+    organization per person (the exposed direct RPC previously allowed more, via
+    API only). Confirm that is intended before release.
+ 2. organizations.status remains directly UPDATE-able by an Organization Admin
+    (pre-existing): an admin can set their own org inactive without an audit
+    row. Not in R4A scope; suggest R4C/R4D route it through an audited RPC.
+    business_stage and service_area_description likewise remain unaudited
+    descriptive writes.
+ 3. Timezone at creation defaults to America/New_York; the first-run form does
+    not ask (kept minimal per brief). A non-Eastern tenant is Eastern until it
+    completes Business Basics or edits Settings. Consider asking at first-run
+    or defaulting from the browser in R4E.
+ 4. Existing Recurring Care arrangements keep their creation-time timezone
+    snapshot when the org timezone changes (by prior design). Documented in the
+    field help text; no migration of arrangements.
+ 5. Dispatcher/Driver can read their own org's business profile columns (existing
+    org-member SELECT). Intended, not exposed cross-tenant.
+ 6. Email-confirmation environments were not re-run end to end (local has
+    confirmations off). The confirmation path's code is unchanged except the
+    sign-up immediate branch and the form copy; the gate functions are
+    unchanged. Recommend one cloud-staging confirmation pass in R4E.
+ 7. The local database was reset (`supabase db reset`) to test against fresh
+    seed data as the suites require; any hand-made local dev data was replaced
+    by seed. Production untouched.
+ 8. Next dev-only console overlay "Performance.measure ... negative time stamp"
+    on RootPage during redirects: pre-existing Next dev behavior, not a
+    production issue.
+ 9. Settings is admin-only, including read. If a read-only Dispatcher view is
+    wanted later, that is a deliberate future product decision.
+
+================================================================================
+RESULTS
+================================================================================
+SETTINGS HOME:
+PASS
+
+FRESH AUTH USER:
+PASS
+
+NO-ORG FIRST RUN:
+PASS
+
+ORGANIZATION CREATION:
+PASS
+
+ADMIN MEMBERSHIP:
+PASS
+
+NO MANUAL ORG SQL:
+PASS
+
+DOUBLE-SUBMIT SAFETY:
+PASS
+
+ORGANIZATION SETTINGS:
+PASS
+
+TIMEZONE:
+PASS
+
+DISPATCHER MUTATION:
+BLOCKED
+
+DRIVER SETTINGS ACCESS:
+BLOCKED
+
+ORG ISOLATION:
+PASS
+
+DIRECT TABLE PRIVILEGE:
+BLOCKED
+
+PUBLIC INTAKE CONTRACT:
+UNCHANGED
+
+MANUAL ZENWARD INTEGRATION:
+UNTOUCHED
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+379/379
+
+BUILD:
+PASS
+
+FOCUSED SQL:
+PASS
+
+READY FOR R4B WEBSITE INTEGRATION SELF-SERVICE:
+YES
+
+BLOCKERS:
+NONE (open issue 1 needs an owner confirmation, not a code change)
+
+NEXT IF PASS:
+P1-PILOT-S4B-R4B -- Website Integration Self-Service.
+
+DO NOT BEGIN R4B AUTOMATICALLY.
+DO NOT BEGIN DRIVER PWA.
+
+STOP.

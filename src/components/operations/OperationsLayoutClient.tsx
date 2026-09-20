@@ -21,6 +21,7 @@ const SECTION_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/operations/facilities", label: "Facilities" },
   { prefix: "/operations/drivers", label: "Drivers" },
   { prefix: "/operations/fleet", label: "Fleet" },
+  { prefix: "/operations/settings", label: "Settings" },
   { prefix: "/operations/billing", label: "Billing" },
   { prefix: "/operations/reports", label: "Reports" },
 ];
@@ -214,6 +215,7 @@ export function OperationsLayoutClient({
         dispatcherName: dispatcherDisplayName,
         dispatcherRole: ROLE_LABEL[organization.role],
         hasLinkedDriverProfile,
+        canManageSettings: organization.role === "organization_admin",
       }}
       header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations)}
     >

@@ -62,10 +62,11 @@ on conflict (id) do nothing;
 do \$\$
 declare v_org public.organization_signup_result;
 begin
-  set local role authenticated;
+  -- signup_create_organization is internal-only since P1-PILOT-S4B-R4A
+  -- (not executable by `authenticated`); fixture setup calls it as the
+  -- owner role with the caller identity set via the JWT-claim GUC.
   set local request.jwt.claim.sub = '$ADMIN_ID';
   v_org := public.signup_create_organization('$ORG_NAME', 'Concurrency Admin', null, 'America/New_York');
-  reset role;
   raise notice 'org_id=%', v_org.organization_id;
 end \$\$;
 

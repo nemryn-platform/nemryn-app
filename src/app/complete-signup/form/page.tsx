@@ -5,7 +5,7 @@ import { CompleteSignupForm } from "@/components/auth/CompleteSignupForm";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
-export const metadata = { title: "Complete your account" };
+export const metadata = { title: "Set up your organization" };
 
 /**
  * P1-E4-S0A1 §9 — the explicit, user-initiated recovery form. Reached
@@ -40,10 +40,9 @@ export default async function CompleteSignupFormPage() {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Complete your organization setup</h1>
+        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Welcome to Nemryn</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
-          We couldn&apos;t automatically finish setting up your business after signup. Enter these details to
-          continue — your account ({user.email}) is already confirmed.
+          Set up your organization to get started. You&apos;re signed in as {user.email}.
         </p>
         <CompleteSignupForm defaultFullName={prefillFullName} defaultBusinessName={prefillBusinessName} />
       </div>

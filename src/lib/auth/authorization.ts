@@ -55,6 +55,25 @@ export async function requireOperationsAccess(currentPath: string): Promise<Orga
 }
 
 /**
+ * Route guard for /operations/settings/* (P1-PILOT-S4B-R4A). Settings is
+ * tenant ADMINISTRATION, not operations: only an Organization Admin of the
+ * resolved workspace passes. A Dispatcher is sent back to /operations (the
+ * surface their role owns), a Driver to /driver (via
+ * requireOperationsAccess), exactly as for any other out-of-role route.
+ * Every Settings mutation calls this again itself -- hiding the sidebar
+ * link is convenience, not authorization -- and the database
+ * (`update_organization_settings`) enforces Organization Admin
+ * independently of this guard.
+ */
+export async function requireOrganizationAdminAccess(currentPath: string): Promise<OrganizationContext> {
+  const context = await requireOperationsAccess(currentPath);
+  if (context.role !== "organization_admin") {
+    redirect("/operations");
+  }
+  return context;
+}
+
+/**
  * Route guard for /onboarding/* (P1-E3-S9). Deliberately reuses the exact
  * same resolution/role logic as `requireOperationsAccess` rather than a
  * separate "just signed up" concept — a brand-new organization's creator

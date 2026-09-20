@@ -65,11 +65,24 @@ export async function setBusinessBasicsAction(
   const pathname = await getCurrentPathname("/onboarding/basics");
   const organization = await requireOnboardingAccess(pathname);
 
+  // Timezone goes through the audited, Organization Admin-only
+  // `update_organization_settings` (direct UPDATE of organizations.timezone
+  // is revoked, P1-PILOT-S4B-R4A) -- the SAME single write path
+  // Settings -> Organization uses, so the authoritative timezone has one
+  // authority and one audit trail. service_area_description remains a
+  // plain descriptive column with its own narrow grant.
   const supabase = await createServerSupabaseClient();
+  const { error: timezoneError } = await supabase.rpc("update_organization_settings", {
+    p_organization_id: organization.organizationId,
+    p_changes: { timezone: timezone.trim() },
+  });
+  if (timezoneError) {
+    return { status: "error", error: "That couldn't be saved — please try again." };
+  }
+
   const { error } = await supabase
     .from("organizations")
     .update({
-      timezone: timezone.trim(),
       service_area_description:
         typeof serviceArea === "string" && serviceArea.trim().length > 0 ? serviceArea.trim().slice(0, 1000) : null,
     })
