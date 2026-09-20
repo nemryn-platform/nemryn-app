@@ -109,6 +109,28 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/access-unavailable", origin));
   }
 
+  // P1-PILOT-S4B-R4C: a pending STAFF invitation (team invite signup that had
+  // to cross an email-confirmation boundary) takes precedence over fresh-
+  // organization creation, exactly like the Driver invite above. Success goes
+  // to "/" (which resolves the right destination for the invited role); any
+  // failure (cancelled / expired / used / foreign) goes to /access-unavailable
+  // -- NEVER to the operator organization-creation form. The team-invite
+  // signup never persists pending_business_name, so complete_pending_signup
+  // below can not create an organization for such a person either.
+  const pendingStaffToken =
+    typeof metadata.pending_staff_invite_token === "string" ? metadata.pending_staff_invite_token : undefined;
+  if (pendingStaffToken) {
+    const { error } = await supabase.rpc("accept_staff_invite", { p_token: pendingStaffToken });
+    if (!error) {
+      const pendingFullName = typeof metadata.pending_full_name === "string" ? metadata.pending_full_name : undefined;
+      if (pendingFullName) {
+        await supabase.from("user_profiles").upsert({ id: user.id, display_name: pendingFullName });
+      }
+      return NextResponse.redirect(new URL("/", origin));
+    }
+    return NextResponse.redirect(new URL("/access-unavailable", origin));
+  }
+
   const { data: continuation } = await supabase.rpc("complete_pending_signup");
   if (continuation?.created) {
     return NextResponse.redirect(new URL("/onboarding", origin));

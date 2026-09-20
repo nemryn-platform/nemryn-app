@@ -71,3 +71,14 @@ export async function buildDriverInviteUrl(token: string): Promise<string> {
   const origin = await getAppOrigin();
   return `${origin}/join/${encodeURIComponent(token)}`;
 }
+
+/**
+ * The absolute URL an invited staff member follows to accept a team
+ * invitation (P1-PILOT-S4B-R4C). The token (256 random bits, hashed at rest)
+ * is the entire credential -- nothing else (organization, role, email) is in
+ * the URL.
+ */
+export async function buildStaffInviteUrl(token: string): Promise<string> {
+  const origin = await getAppOrigin();
+  return `${origin}/team-invite/${encodeURIComponent(token)}`;
+}

@@ -207,7 +207,9 @@ declare
     $j${"business_phone": "123"}$j$,
     $j${"business_phone": "call me maybe"}$j$,
     $j${"status": "inactive"}$j$,
-    $j${"business_stage": "established"}$j$,
+    $j${"business_stage": "huge"}$j$,
+    $j${"service_area_description": 5}$j$,
+    $j${"operating_days": "1"}$j$,
     $j${"id": "11111111-1111-1111-1111-111111111111"}$j$,
     $j${"organization_id": "10000000-0000-0000-0000-0000000000b1"}$j$,
     $j${"name": 5}$j$,
@@ -229,7 +231,7 @@ begin
       v_failed := v_failed || format(' [%s -> %s]', v_stmt, v_code);
     end if;
   end loop;
-  perform pg_temp.report('SET-20 (21 invalid payloads: blank/oversize-free name, bad tz, bad email/phone, unknown or privileged keys, non-string values, non-object patch -> ZW006)', v_ok, v_failed);
+  perform pg_temp.report('SET-20 (23 invalid payloads: blank/oversize-free name, bad tz, bad email/phone, unknown or privileged keys, non-string values, non-object patch -> ZW006)', v_ok, v_failed);
 
   v_code := pg_temp.try_as('authenticated', v_uid,
     format('select public.update_organization_settings(%L, jsonb_build_object(''name'', %L))', '10000000-0000-0000-0000-0000000000a1', repeat('n', 201)));
@@ -268,8 +270,8 @@ begin
   select string_agg(column_name, ',' order by column_name) into v_cols
   from information_schema.column_privileges
   where table_schema = 'public' and table_name = 'organizations' and grantee = 'authenticated' and privilege_type = 'UPDATE';
-  perform pg_temp.report('PRIV-1 (organizations UPDATE columns for authenticated = business_stage,service_area_description,status)',
-    v_cols = 'business_stage,service_area_description,status' and not has_table_privilege('authenticated', 'public.organizations', 'UPDATE'), v_cols);
+  perform pg_temp.report('PRIV-1 (organizations: NO column-level or table-level UPDATE for authenticated -- R4C closed status/business_stage/service_area_description)',
+    v_cols is null and not has_table_privilege('authenticated', 'public.organizations', 'UPDATE'), coalesce(v_cols, 'null'));
 
   -- Direct writes as the Org A ADMIN (the strongest legitimate caller) are denied.
   foreach v_stmt in array array[
@@ -279,6 +281,9 @@ begin
     $q$update public.organizations set business_email = 'x@y.example' where id = '10000000-0000-0000-0000-0000000000a1'$q$,
     $q$update public.organizations set business_address = 'x' where id = '10000000-0000-0000-0000-0000000000a1'$q$,
     $q$update public.organizations set primary_contact_name = 'x' where id = '10000000-0000-0000-0000-0000000000a1'$q$,
+    $q$update public.organizations set status = 'inactive' where id = '10000000-0000-0000-0000-0000000000a1'$q$,
+    $q$update public.organizations set business_stage = 'growing' where id = '10000000-0000-0000-0000-0000000000a1'$q$,
+    $q$update public.organizations set service_area_description = 'x' where id = '10000000-0000-0000-0000-0000000000a1'$q$,
     $q$insert into public.organizations (name, timezone) values ('direct insert', 'America/New_York')$q$,
     $q$delete from public.organizations where id = '10000000-0000-0000-0000-0000000000a1'$q$
   ] loop

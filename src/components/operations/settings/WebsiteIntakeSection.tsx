@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { GlobeHemisphereWest, Plus } from "@phosphor-icons/react/dist/ssr";
 import {
   createWebsiteIntegrationAction,
@@ -35,6 +36,8 @@ export interface WebsiteIntegrationView {
 export interface WebsiteIntakeSectionProps {
   integrations: WebsiteIntegrationView[];
   endpoint: string;
+  /** Informational: the services website intake will accept (Settings -> Services & Intake). null = unavailable. */
+  servicesSummary?: { configured: boolean; text: string } | null;
 }
 
 const IDLE: WebsiteIntegrationActionState = { status: "idle" };
@@ -324,7 +327,15 @@ function SetupInstructions({ integration, endpoint }: { integration: WebsiteInte
 // ---------------------------------------------------------------------------
 // One connection
 // ---------------------------------------------------------------------------
-function ConnectionCard({ integration, endpoint }: { integration: WebsiteIntegrationView; endpoint: string }) {
+function ConnectionCard({
+  integration,
+  endpoint,
+  servicesSummary,
+}: {
+  integration: WebsiteIntegrationView;
+  endpoint: string;
+  servicesSummary?: { configured: boolean; text: string } | null;
+}) {
   const [editOpen, setEditOpen] = useState(false);
   const [disableOpen, setDisableOpen] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
@@ -368,6 +379,16 @@ function ConnectionCard({ integration, endpoint }: { integration: WebsiteIntegra
         <ValueRow label="Requests received">{integration.requestCount}</ValueRow>
         <ValueRow label="Last request received">{integration.lastRequestReceived ?? "No requests received yet"}</ValueRow>
         <ValueRow label="Created">{integration.created}</ValueRow>
+        {servicesSummary && (
+          <ValueRow label="Services accepted">
+            {servicesSummary.text}
+            {!servicesSummary.configured && (
+              <span className={cn(typography.metadata, "block text-text-muted")}>
+                Not set yet — <Link href="/operations/settings/services" className="font-medium text-text-link">choose your services</Link>
+              </span>
+            )}
+          </ValueRow>
+        )}
       </dl>
 
       <div className="flex flex-wrap items-start gap-2">
@@ -397,7 +418,7 @@ function ConnectionCard({ integration, endpoint }: { integration: WebsiteIntegra
 // ---------------------------------------------------------------------------
 // Section
 // ---------------------------------------------------------------------------
-export function WebsiteIntakeSection({ integrations, endpoint }: WebsiteIntakeSectionProps) {
+export function WebsiteIntakeSection({ integrations, endpoint, servicesSummary }: WebsiteIntakeSectionProps) {
   const [connectOpen, setConnectOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
@@ -450,7 +471,7 @@ export function WebsiteIntakeSection({ integrations, endpoint }: WebsiteIntakeSe
       ) : (
         <div className="flex flex-col gap-zw-md">
           {integrations.map((integration) => (
-            <ConnectionCard key={integration.handle} integration={integration} endpoint={endpoint} />
+            <ConnectionCard key={integration.handle} integration={integration} endpoint={endpoint} servicesSummary={servicesSummary} />
           ))}
         </div>
       )}

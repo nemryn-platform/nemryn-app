@@ -54,9 +54,9 @@ begin
   join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public'
     and has_function_privilege('anon', p.oid, 'EXECUTE')
-    and p.proname <> 'get_driver_invite_preview';
+    and p.proname not in ('get_driver_invite_preview', 'get_staff_invite_preview');
   if v_bad is null then
-    raise notice 'FUNCTION-PRIV no-anon-execute: PASS (anon cannot execute any public-schema function, except the deliberate get_driver_invite_preview exception, P1-E3-S9)';
+    raise notice 'FUNCTION-PRIV no-anon-execute: PASS (anon cannot execute any public-schema function, except the two deliberate, token-gated invite-preview exceptions: get_driver_invite_preview (P1-E3-S9) and get_staff_invite_preview (P1-PILOT-S4B-R4C))';
   else
     raise notice 'FUNCTION-PRIV no-anon-execute: FAIL (anon can execute: %)', v_bad;
   end if;

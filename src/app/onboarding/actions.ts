@@ -14,10 +14,9 @@ export interface OnboardingActionState {
 const BUSINESS_STAGES = new Set(["starting", "growing", "established"]);
 
 /**
- * Business Stage (work item §3) — "How are you operating today?" A plain
- * column UPDATE (organizations_update_org_admin + the business_stage
- * column grant), not an RPC — this is descriptive metadata with its own
- * CHECK constraint, not a lifecycle-protected mutation.
+ * Business Stage (work item §3) — "How are you operating today?" Written
+ * through update_organization_settings (audited, Organization Admin only)
+ * since P1-PILOT-S4B-R4C; descriptive metadata only.
  */
 export async function setBusinessStageAction(
   _prevState: OnboardingActionState,
@@ -31,11 +30,15 @@ export async function setBusinessStageAction(
   const pathname = await getCurrentPathname("/onboarding");
   const organization = await requireOnboardingAccess(pathname);
 
+  // business_stage is written through the audited, Organization Admin-only
+  // `update_organization_settings` (direct UPDATE of organizations is
+  // revoked entirely, P1-PILOT-S4B-R4C) -- the same single write path as
+  // every other organization setting.
   const supabase = await createServerSupabaseClient();
-  const { error } = await supabase
-    .from("organizations")
-    .update({ business_stage: stage })
-    .eq("id", organization.organizationId);
+  const { error } = await supabase.rpc("update_organization_settings", {
+    p_organization_id: organization.organizationId,
+    p_changes: { business_stage: stage },
+  });
 
   if (error) {
     return { status: "error", error: "Something went wrong saving that — please try again." };
@@ -65,28 +68,20 @@ export async function setBusinessBasicsAction(
   const pathname = await getCurrentPathname("/onboarding/basics");
   const organization = await requireOnboardingAccess(pathname);
 
-  // Timezone goes through the audited, Organization Admin-only
-  // `update_organization_settings` (direct UPDATE of organizations.timezone
-  // is revoked, P1-PILOT-S4B-R4A) -- the SAME single write path
-  // Settings -> Organization uses, so the authoritative timezone has one
-  // authority and one audit trail. service_area_description remains a
-  // plain descriptive column with its own narrow grant.
+  // Timezone AND service area go through the audited, Organization Admin-only
+  // `update_organization_settings` in ONE call (direct UPDATE of
+  // organizations is revoked entirely, P1-PILOT-S4B-R4C) -- the same single
+  // write path Settings -> Organization uses, so each setting has one
+  // authority and one audit trail.
   const supabase = await createServerSupabaseClient();
-  const { error: timezoneError } = await supabase.rpc("update_organization_settings", {
+  const { error } = await supabase.rpc("update_organization_settings", {
     p_organization_id: organization.organizationId,
-    p_changes: { timezone: timezone.trim() },
-  });
-  if (timezoneError) {
-    return { status: "error", error: "That couldn't be saved — please try again." };
-  }
-
-  const { error } = await supabase
-    .from("organizations")
-    .update({
+    p_changes: {
+      timezone: timezone.trim(),
       service_area_description:
         typeof serviceArea === "string" && serviceArea.trim().length > 0 ? serviceArea.trim().slice(0, 1000) : null,
-    })
-    .eq("id", organization.organizationId);
+    },
+  });
 
   if (error) {
     return { status: "error", error: "That couldn't be saved — please try again." };

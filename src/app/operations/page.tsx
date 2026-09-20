@@ -27,6 +27,8 @@ import {
 import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
 import { OperationsBrief } from "@/components/operations/OperationsBrief";
+import { getOperationsPreferences } from "@/lib/operations/organization-preferences";
+import { formatSchedule } from "@/lib/operations/operating-schedule-core";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
@@ -218,9 +220,22 @@ export default async function OperationsOverviewPage() {
     { key: "status", header: "Status", render: (row) => <TripStatus status={row.statusLabel} /> },
   ];
 
+  // Operating schedule (P1-PILOT-S4B-R4C) -- an informational Organization
+  // preference shown here; best-effort (a failed read simply omits the line)
+  // and it never gates or filters anything on this page.
+  const operatingSchedule = await getOperationsPreferences(organization.organizationId)
+    .then((preferences) => preferences?.schedule ?? null)
+    .catch(() => null);
+
   return (
     <div className="flex flex-col gap-zw-lg">
       <OnboardingChecklistBanner checklist={checklist} />
+
+      {operatingSchedule && (
+        <p className={cn(typography.metadata, "text-text-secondary")}>
+          <span className="font-medium text-text-primary">Operating hours</span> · {formatSchedule(operatingSchedule)}
+        </p>
+      )}
 
       <OperationsBrief brief={brief} timezone={timezone} />
 

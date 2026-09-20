@@ -331,6 +331,32 @@ export type Database = {
           },
         ]
       }
+      organization_service_offerings: {
+        Row: {
+          created_at: string
+          organization_id: string
+          service_type: string
+        }
+        Insert: {
+          created_at?: string
+          organization_id: string
+          service_type: string
+        }
+        Update: {
+          created_at?: string
+          organization_id?: string
+          service_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_service_offerings_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organizations: {
         Row: {
           business_address: string | null
@@ -340,6 +366,9 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          operating_closes_at: string | null
+          operating_days: number[] | null
+          operating_opens_at: string | null
           primary_contact_name: string | null
           service_area_description: string | null
           status: string
@@ -354,6 +383,9 @@ export type Database = {
           created_at?: string
           id?: string
           name: string
+          operating_closes_at?: string | null
+          operating_days?: number[] | null
+          operating_opens_at?: string | null
           primary_contact_name?: string | null
           service_area_description?: string | null
           status?: string
@@ -368,6 +400,9 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+          operating_closes_at?: string | null
+          operating_days?: number[] | null
+          operating_opens_at?: string | null
           primary_contact_name?: string | null
           service_area_description?: string | null
           status?: string
@@ -661,6 +696,59 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "request_intake_integrations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      staff_invites: {
+        Row: {
+          accepted_at: string | null
+          accepted_by: string | null
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          invited_by: string
+          organization_id: string
+          role: string
+          status: string
+          token_hash: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          email: string
+          expires_at: string
+          id?: string
+          invited_by: string
+          organization_id: string
+          role: string
+          status?: string
+          token_hash: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          email?: string
+          expires_at?: string
+          id?: string
+          invited_by?: string
+          organization_id?: string
+          role?: string
+          status?: string
+          token_hash?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "staff_invites_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -1199,6 +1287,7 @@ export type Database = {
         }
       }
       _generate_intake_external_id: { Args: never; Returns: string }
+      _generate_staff_invite_token: { Args: never; Returns: string }
       _is_canonical_days_of_week: {
         Args: { p_days: number[] }
         Returns: boolean
@@ -1228,6 +1317,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      _lock_org_admins: {
+        Args: { p_organization_id: string }
+        Returns: undefined
+      }
       _normalize_website_origin: { Args: { p_origin: string }; Returns: string }
       _organization_local_to_utc: {
         Args: { p_date: string; p_time: string; p_timezone: string }
@@ -1235,6 +1328,17 @@ export type Database = {
           status: string
           utc: string
         }[]
+      }
+      _staff_invite_token_hash: { Args: { p_token: string }; Returns: string }
+      accept_staff_invite: {
+        Args: { p_token: string }
+        Returns: Database["public"]["CompositeTypes"]["staff_invite_acceptance_result"]
+        SetofOptions: {
+          from: "*"
+          to: "staff_invite_acceptance_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       assign_trip: {
         Args: { p_driver_id: string; p_trip_id: string; p_vehicle_id?: string }
@@ -1246,6 +1350,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      cancel_staff_invite: { Args: { p_invite_id: string }; Returns: boolean }
       cancel_transportation_request: {
         Args: { p_organization_id: string; p_request_id: string }
         Returns: Database["public"]["CompositeTypes"]["request_transition_result"]
@@ -1262,6 +1367,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      change_membership_role: {
+        Args: { p_membership_id: string; p_role: string }
+        Returns: Database["public"]["CompositeTypes"]["membership_change_result"]
+        SetofOptions: {
+          from: "*"
+          to: "membership_change_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1336,6 +1451,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "request_intake_integration_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_staff_invite: {
+        Args: { p_email: string; p_organization_id: string; p_role: string }
+        Returns: Database["public"]["CompositeTypes"]["staff_invite_result"]
+        SetofOptions: {
+          from: "*"
+          to: "staff_invite_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1549,6 +1674,20 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      get_organization_service_offerings: {
+        Args: { p_organization_id: string }
+        Returns: string[]
+      }
+      get_staff_invite_preview: {
+        Args: { p_token: string }
+        Returns: Database["public"]["CompositeTypes"]["staff_invite_preview"]
+        SetofOptions: {
+          from: "*"
+          to: "staff_invite_preview"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       has_org_role: {
         Args: { p_org_id: string; p_roles: string[] }
         Returns: boolean
@@ -1599,6 +1738,29 @@ export type Database = {
           is_active: boolean
           last_request_received_at: string
           request_count: number
+        }[]
+      }
+      list_staff_invites: {
+        Args: { p_organization_id: string }
+        Returns: {
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          role: string
+          status: string
+        }[]
+      }
+      list_team_members: {
+        Args: { p_organization_id: string }
+        Returns: {
+          display_name: string
+          email: string
+          is_self: boolean
+          joined_at: string
+          membership_id: string
+          role: string
+          status: string
         }[]
       }
       log_transportation_request: {
@@ -1686,6 +1848,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      resend_staff_invite: {
+        Args: { p_invite_id: string }
+        Returns: Database["public"]["CompositeTypes"]["staff_invite_result"]
+        SetofOptions: {
+          from: "*"
+          to: "staff_invite_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       resolve_trip_exception: {
         Args: { p_exception_id: string; p_resolution_note?: string }
         Returns: Database["public"]["CompositeTypes"]["trip_exception_result"]
@@ -1707,6 +1879,26 @@ export type Database = {
         }
       }
       revoke_driver_invite: { Args: { p_invite_id: string }; Returns: boolean }
+      set_membership_status: {
+        Args: { p_active: boolean; p_membership_id: string }
+        Returns: Database["public"]["CompositeTypes"]["membership_change_result"]
+        SetofOptions: {
+          from: "*"
+          to: "membership_change_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_organization_service_offerings: {
+        Args: { p_organization_id: string; p_service_types: string[] }
+        Returns: Database["public"]["CompositeTypes"]["organization_service_offerings_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_service_offerings_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       set_request_intake_integration_active: {
         Args: { p_active: boolean; p_integration_id: string }
         Returns: Database["public"]["CompositeTypes"]["request_intake_integration_result"]
@@ -1789,6 +1981,21 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "recurring_occurrence_exception_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_organization_operating_schedule: {
+        Args: {
+          p_closes_at: string
+          p_days: number[]
+          p_opens_at: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["organization_operating_schedule_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_operating_schedule_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1887,6 +2094,21 @@ export type Database = {
         end_reason: string | null
         trip_outcome: string | null
       }
+      membership_change_result: {
+        membership_id: string | null
+        role: string | null
+        status: string | null
+        changed: boolean | null
+      }
+      organization_operating_schedule_result: {
+        organization_id: string | null
+        changed: boolean | null
+      }
+      organization_service_offerings_result: {
+        organization_id: string | null
+        first_configuration: boolean | null
+        changed: boolean | null
+      }
       organization_settings_result: {
         organization_id: string | null
         changed: boolean | null
@@ -1962,6 +2184,26 @@ export type Database = {
         previous_state: string | null
         current_state: string | null
         changed: boolean | null
+      }
+      staff_invite_acceptance_result: {
+        organization_id: string | null
+        role: string | null
+        membership_created: boolean | null
+        membership_reactivated: boolean | null
+      }
+      staff_invite_preview: {
+        organization_name: string | null
+        email: string | null
+        role: string | null
+        status: string | null
+      }
+      staff_invite_result: {
+        invite_id: string | null
+        token: string | null
+        email: string | null
+        role: string | null
+        expires_at: string | null
+        reissued: boolean | null
       }
       trip_assignment_result: {
         trip_id: string | null

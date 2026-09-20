@@ -366,10 +366,11 @@ declare v_org_a uuid;
 begin
   select id into v_org_a from public.organizations where name = 'Onboarding Test Org A';
 
-  set local role authenticated;
-  set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a1'; -- Org A admin revokes the driver's membership
+  -- P1-PILOT-S4B-R4C: memberships is no longer directly writable by any
+  -- client role; a driver's access is revoked at the owner level here (the
+  -- property under test is that an inactive Membership denies access
+  -- immediately, not which UI revoked it).
   update public.memberships set status = 'inactive' where organization_id = v_org_a and user_id = '98000000-0000-0000-0000-0000000000a3';
-  reset role;
 
   set local role authenticated;
   set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a3'; -- the now-revoked driver

@@ -1,0 +1,635 @@
+NEMRYN PLATFORM
+P1-PILOT-S4B-R4C -- TEAM & ACCESS + SERVICES & INTAKE + OPERATIONS PREFERENCES
+Local implementation and validation only. R4C is UNCOMMITTED for owner review;
+nothing pushed, deployed, or applied to production.
+
+================================================================================
+STARTING STATE
+================================================================================
+Repository /Users/datamatics/ZenWard, branch main. Start: HEAD 1a1bfe6 (R4A) with the
+owner-approved R4B change set uncommitted. No concurrent git writers observed.
+Owner decisions applied: one self-service organization per person (unchanged);
+multi-organization Membership retained; Admin manages Settings; Dispatcher does not;
+Driver is a separate lifecycle. Untouched: /Users/datamatics/Zenward-Web, production,
+Vercel, zenward-web-87553280 (never read or changed).
+Environment note: mid-phase the local Supabase reset hung; the database was rebuilt
+with a full `supabase db reset` (56 migrations + roles.sql + seed) before the FINAL
+validation. An intermediate attempt that skipped roles.sql produced spurious
+default-privilege failures in unrelated suites; those runs were discarded and every
+number in this report is from the proper reset.
+
+================================================================================
+R4A COMMIT
+================================================================================
+1a1bfe6426bd07309ca5b391fd6c089e95c8ad40  "Add tenant settings and self-service organization setup"
+
+================================================================================
+R4B COMMIT
+================================================================================
+46a9d577bfb1985b32f3668625287b3563d78ed1  "Add self-service website integrations"
+(step 0: git status/diff inspected, R4B scope only, .tmp-qa excluded; not pushed)
+
+================================================================================
+CURRENT MEMBERSHIP AUDIT
+================================================================================
+ - memberships: unique(organization_id, user_id); role in (organization_admin,
+   dispatcher, driver); status in (active, inactive); prevent_organization_id_change
+   trigger. One logical Membership per person per org (a role change updates the row).
+ - Before R4C, `authenticated` held INSERT and UPDATE(role,status) on memberships
+   with org-admin RLS policies: an Admin could mint a Membership for ANY existing auth
+   user id and change any role/status by direct API, unaudited and with no last-admin
+   protection. That was the generic Membership mutation surface this phase closes.
+ - Access is live-checked everywhere (is_org_member / has_org_role require status
+   active), so status=inactive denies access immediately; getActiveMemberships reads
+   live.
+ - Existing controlled Membership writers (all SECURITY DEFINER): signup_create_
+   organization (internal since R4A), redeem_driver_invite, link_self_as_driver.
+ - Multi-org: org-context cookie + select-organization + workspace switching; a
+   caller's role is per organization.
+ - user_profiles.display_name (own-row RLS + org-admin select); emails live only in
+   auth.users (unreadable by clients).
+ - Platform Admin is a separate table; it never was a tenant Membership.
+
+================================================================================
+CURRENT INVITATION AUDIT
+================================================================================
+ - driver_invites (P1-E3-S9): uuid token STORED IN PLAIN, no expiry, pending|accepted|
+   revoked, get_driver_invite_preview anon-callable + token-gated, redeem_driver_invite
+   (email must match; org from the row), create/revoke functions, admin SELECT policy.
+   Resend just re-emails the same token (no reissue).
+ - Email: src/lib/email/send.ts (Resend in production, "log" transport locally; never
+   throws; Nemryn is the platform sender), driver-invite-email.ts, buildDriverInviteUrl.
+ - Sign-up continuity: signUp() stores pending_* metadata; /complete-signup (Route
+   Handler) resolves, in order: existing Membership -> pending Driver invite ->
+   pending operator signup -> manual form. /auth/confirm -> /complete-signup.
+ - REUSED patterns (not duplicated): anon token-gated preview, email-must-match
+   redemption, org resolved from the invitation row, sendEmail, app-origin URL
+   builder, /join-style landing UX. DELIBERATELY DIFFERENT (per brief): staff invites
+   are a separate table (never a Driver invite); token is hashed at rest; invitations
+   expire; resend REISSUES so only one token is ever valid.
+
+================================================================================
+TEAM SETTINGS
+================================================================================
+/operations/settings/team, Organization Admin only (page guard + Server Action guard +
+database). Lists STAFF (organization_admin, dispatcher) with name, email, role,
+Active/Inactive, joined date; Pending invitations separately (email, role, "Invitation
+sent"/"Expired", expiry); Drivers are never listed. Actions: Invite team member,
+Make Organization Admin / Change to Dispatcher (confirm), Deactivate / Reactivate
+access, Resend, Cancel invitation. No UUIDs, membership ids or role codes are
+displayed (opaque handles only travel in hidden fields). Read paths:
+list_team_members / list_staff_invites (SECURITY DEFINER, admin of that org only).
+
+================================================================================
+STAFF INVITATION MODEL
+================================================================================
+Table staff_invites (RLS on, zero policies, zero grants): organization_id, email,
+role in (organization_admin, dispatcher), token_hash, status (pending|accepted|
+cancelled), expires_at (7 days), invited_by, accepted_by/at. "expired" is derived.
+Unique pending invitation per (org, lower(email)); cap 25 pending per org.
+Functions: create_staff_invite(org, email, role), resend_staff_invite(id),
+cancel_staff_invite(id), get_staff_invite_preview(token) [anon+authenticated],
+accept_staff_invite(token), list_staff_invites(org). The browser supplies only an
+email and one of two roles; the org is the session workspace and is re-authorized by
+has_org_role. Driver/platform/unknown roles -> ZW006. An email that already holds an
+ACTIVE staff or ANY driver Membership of this org is refused; an INACTIVE staff member
+can be invited back. The admin UI says only "Invitation sent." -- never whether the
+address has an account.
+
+================================================================================
+EXISTING USER INVITE
+================================================================================
+accept_staff_invite requires the caller's OWN account email to equal the invitation
+email; it creates the Membership for THAT org with THE INVITED role and leaves every
+other Membership untouched. Verified: an existing owner of another tenant accepts an
+Organization Admin invite with one click (no sign-up form), no new auth identity is
+created, their original Membership is preserved, and the workspace picker then lists
+both organizations. Inactive staff Membership: acceptance reactivates the SAME row
+with the invited role. Active member: role preserved. Driver Membership: refused
+(ZW006), never converted.
+
+================================================================================
+NEW USER INVITE
+================================================================================
+/team-invite/<token>: signed-out -> "Join <Org>" + role, sign-up form with the invited
+email locked (or Sign in). signUp persists pending_staff_invite_token (+ full name,
+NEVER a business name), then accepts immediately (local) or on first session
+(/complete-signup). Invitation intent takes precedence over organization creation:
+the new /complete-signup branch runs BEFORE complete_pending_signup; success -> "/",
+failure (cancelled/expired/used) -> /access-unavailable, never "Set up your
+organization". Verified for both the immediate-session path and the metadata/
+confirmation-boundary path (zero-Membership user with pending token lands in the
+tenant, no organization created; a dead token lands on Access unavailable and creates
+nothing). Signed-in wrong account: "Wrong account" + Sign out.
+
+================================================================================
+INVITE TOKEN SECURITY
+================================================================================
+256 random bits (pgcrypto), hex, returned exactly once to the calling server action for
+the email, never stored: only SHA-256 is persisted (verified in the DB: token_hash =
+sha256(token), raw token absent from the table and from audit rows). Never logged,
+never returned to the browser. Lookup is by hash; malformed/short tokens -> ZW002
+without touching the table. Preview is anon-callable (deliberate, same precedent as
+get_driver_invite_preview) and returns only organization name, invited email, role and
+effective status (composite has exactly those four fields). function_privilege_tests
+allowlist updated to name this second deliberate anon exception. Acceptance takes only
+the token: no org/role/user parameter exists, so cross-org acceptance, another
+identity, or role tampering is structurally impossible; a token for another email ->
+ZW002; used tokens cannot be reused by anyone else.
+
+================================================================================
+INVITE EXPIRY / CANCEL / RESEND
+================================================================================
+Expiry 7 days; expired -> ZW003 and page "Invitation expired"; Admin list labels it
+Expired. Cancel (pending only): row kept, token dead ("Invitation no longer
+available"), audited. Resend = re-issue: fresh token + fresh expiry; the OLD link then
+resolves to "Invitation not found" (never two valid tokens); works on expired-pending
+invitations; not on accepted/cancelled (ZW003). A create for an email that already has
+a pending invitation re-issues it (one row). Email delivery outcome is reported
+honestly ("The invitation was created, but the email couldn't be sent. Use Resend.").
+
+================================================================================
+ROLE CHANGES
+================================================================================
+change_membership_role(membership, role): Organization Admin of the TARGET membership's
+own org (foreign/nonexistent id -> ZW002); target must be a staff Membership; role in
+(organization_admin, dispatcher). Verified in UI: promote a Dispatcher -> the promoted
+user can open Team/Settings; demote back via a confirmation dialog -> Settings access
+disappears immediately. Audited membership_role_changed (before/after role, target
+email). No-op writes nothing.
+
+================================================================================
+LAST ADMIN SAFETY
+================================================================================
+Cannot demote or deactivate the last ACTIVE Organization Admin (ZW004 last_admin,
+"Every organization needs at least one active Organization Admin"), including
+self-management; inactive admins do not count. Self-demotion/deactivation is allowed
+only while another active Admin remains (confirmation copy says so). Serialized per
+organization with pg_advisory_xact_lock; the caller is RE-AUTHORIZED after taking the
+lock (an Admin removed by a concurrent transaction cannot complete one more admin
+action). UI evidence: second Admin deactivates themselves (allowed); the sole Admin's
+"Change to Dispatcher" and "Deactivate access" both show the clear error and change
+nothing.
+
+================================================================================
+MEMBERSHIP DEACTIVATION
+================================================================================
+set_membership_status(membership, active): deactivate keeps the row and audit history
+(no hard delete); access ends immediately (live-checked). DECISION: reactivation is
+implemented directly (the model supports it as a clean status toggle, so no
+"invite again" workaround is needed): "Reactivate access" restores the same
+Membership; an inactive person can also be re-invited. Operational records and audit
+attribution remain. Staff only; Driver Memberships refused (ZW006).
+
+================================================================================
+TEAM AUDIT EVENTS
+================================================================================
+staff_invitation_created, staff_invitation_resent (added), staff_invitation_cancelled,
+staff_invitation_accepted, membership_role_changed, membership_deactivated,
+membership_reactivated -- same audit_events table/shape (entity_type staff_invite /
+membership; actor; before/after). No client INSERT. Denied attempts and no-ops write
+nothing. Tokens never appear in audit data (tested).
+
+================================================================================
+SERVICES SETTINGS
+================================================================================
+/operations/settings/services (Admin only): "Services we provide -- Choose the
+transportation services your organization provides." Eight checkboxes with human
+labels (no codes), explanation of the effect, Save. Refuses zero selection. No pricing/
+payer/licensing claims. Reload-persisted; a rejected save keeps the selection.
+
+================================================================================
+CANONICAL SERVICE TYPES
+================================================================================
+Reused, not redefined: the existing eight values (medical_appointment, dialysis,
+rehabilitation, hospital_discharge, recurring_care, senior_medical, wheelchair_
+transportation, other) from transportation_requests_service_type_check /
+submit_public_transportation_request / SERVICE_TYPE_VALUES. Tenant data stores
+identifiers only; labels live in code. A unit test pins the offering options to
+SERVICE_TYPE_VALUES and a SQL test pins the new table's CHECK to the
+transportation_requests constraint (SVC-9). Audit found that Nemryn's own Request/Trip
+forms never ask an operator for a service type (it is only DISPLAYED on Request
+detail), so there is no internal selector to constrain; historical values stay
+visible.
+
+================================================================================
+SERVICE OFFERING DATA MODEL
+================================================================================
+organization_service_offerings(organization_id, service_type, created_at) PK (org,
+type), one row per ENABLED type; RLS on, zero policies/grants. "Has rows" == "explicitly
+configured" (the setter guarantees >= 1 row after the first save), so no separate flag
+is needed. get_organization_service_offerings(org) and set_organization_service_
+offerings(org, text[]) are admin-of-org only; the setter dedupes, requires canonical
+values and at least one, serializes on the organization row, is a no-op when
+identical, and audits organization_services_configured (first) /
+organization_service_offerings_updated with before/after arrays. Read is also
+Admin-only (no operational consumer needs it).
+
+================================================================================
+PUBLIC INTAKE SERVICE ENFORCEMENT
+================================================================================
+The ONLY change to submit_public_transportation_request (same 21-arg signature, same
+service_role-only grants, exactly one overload): after the existing service-type
+allow-list check, if the org resolved from the integration has offering rows and a
+supplied p_service_type is not among them -> the same generic invalid_input (ZW006).
+Public JSON contract, route, Origin check, rate limit, idempotency, integration lookup
+unchanged (route/lib diff empty). Verified live: enabled service -> 200; disabled ->
+400 generic, nothing stored; unknown key/wrong Origin still 400; no organizationId
+sent by any website.
+
+================================================================================
+LEGACY / NO-CONFIG COMPATIBILITY
+================================================================================
+An organization with NO rows behaves exactly as before (verified: an unconfigured
+tenant accepts wheelchair_transportation, rehabilitation, other, dialysis...). The
+temporary production QA integration's org has no rows, so it is unaffected on release.
+A submission that omits serviceType (optional field) is unaffected even for configured
+orgs. Historical Requests with a later-disabled service remain unchanged, visible in
+the Request Hub and openable. Tenant A's configuration never affects Tenant B.
+Documented limit: a configured org cannot return to "unconfigured" (it can enable all
+eight, which is equivalent).
+
+================================================================================
+OPERATIONS SETTINGS
+================================================================================
+/operations/settings/operations (Admin only): Operating schedule form (days, Opens,
+Closes), read-only Timezone reference, read-only Contact reference. No duplicated
+timezone or contact fields (form fields are exactly day/opensAt/closesAt).
+
+================================================================================
+OPERATING SCHEDULE
+================================================================================
+organizations.operating_days smallint[] (canonical ISO, reuses _is_canonical_days_of_
+week), operating_opens_at, operating_closes_at; all-three-null = not configured
+(CHECK: atomic; opens < closes; no overnight, no holidays/shifts/splits). Written only
+by update_organization_operating_schedule (admin only; all-null clears; audited
+organization_operating_schedule_updated with before/after; no-op writes nothing).
+CONSUMED in exactly one place: an informational "Operating hours . Mon-Fri, 6:00 AM -
+6:30 PM" line on Operations Overview. It is NOT enforced anywhere: verified a website
+Request outside a Sunday-only 01:00-02:00 schedule is still accepted. Members
+(Dispatcher/Driver) can read their own org's schedule through the existing member
+SELECT (own org only).
+
+================================================================================
+TIMEZONE SOURCE
+================================================================================
+Single source: organizations.timezone, edited only at Settings -> Organization. The
+schedule stores no timezone; the Operations page shows the Organization's timezone
+label (verified it follows an Organization timezone change, e.g. Central (Chicago)) and
+links to Organization Settings. The action never accepts a timezone.
+
+================================================================================
+ORGANIZATION DIRECT-WRITE CLEANUP
+================================================================================
+Audited all app use: nothing wrote organizations.status; onboarding wrote business_stage
+and service_area_description directly. update_organization_settings now also owns
+business_stage (starting|growing|established|null) and service_area_description
+(<=1000), audited with before/after; onboarding Business Stage and Business Basics
+(timezone + service area in ONE call) now use it (verified through the real UI).
+`authenticated` has NO UPDATE privilege of any kind on organizations any more.
+Organization status is not writable through any client path (not a settings key;
+direct PATCH 42501); a deliberate audited lifecycle operation is future work. Also:
+memberships INSERT/UPDATE/DELETE/TRUNCATE revoked and the two inert admin policies
+dropped.
+
+================================================================================
+ORGANIZATION GRANT INVENTORY
+================================================================================
+authenticated on public.organizations after R4C: SELECT only (RLS: own-org members;
+Platform Admin policy unchanged). INSERT none (creation only via the gated definer
+functions), UPDATE none (was: status, business_stage, service_area_description,
+[name, timezone revoked in R4A]), DELETE none. Every write path is an audited SECURITY
+DEFINER function: update_organization_settings (profile, timezone, stage, service
+area), update_organization_operating_schedule, set_organization_service_offerings
+(separate table). Each former direct grant: status - no UI consumer, removed;
+business_stage / service_area_description - onboarding only, now audited; name /
+timezone - Settings/onboarding, moved in R4A. Nothing kept that lacks an audit trail.
+Also inventoried: memberships (SELECT only), staff_invites / organization_service_
+offerings / request_intake_integrations (no client privilege).
+
+================================================================================
+TENANT ISOLATION
+================================================================================
+SQL + PostgREST with real JWTs: Org A admin cannot invite into Org B, change or
+deactivate an Org B Membership, list Org B's team or invitations, resend/cancel Org B
+invitations, read/set Org B's service offerings or schedule; Org B's invitation token is
+unusable by an Org A identity (ZW002); Org B cannot act on Org A. Foreign and
+nonexistent ids are indistinguishable (ZW002). UI: each tenant's Team/Services/
+Operations/Integrations pages show only their own data.
+Roles at the API: Dispatcher, Driver, inactive Membership, no-Membership, Platform
+Admin without Membership and anon are denied every mutation and read function;
+Dispatcher/Driver are bounced from every /operations/settings/* route in the UI.
+
+================================================================================
+RESPONSIVE
+================================================================================
+Validated at 1024x768: Team (initial, pending, expired, dialogs), Services, Operations,
+Integrations: no horizontal overflow (scrollWidth - innerWidth <= 0 asserted on Team,
+Services, Operations). Emails wrap (break-all/break-words); rows flex-wrap. Screenshots
+in scratchpad shots/r4c-*.png.
+
+================================================================================
+TEAM E2E
+================================================================================
+Local, fresh tenant via GoTrue signup + the real first-run form. Brand-new Dispatcher:
+invited in the UI -> email (dev transport) -> real /team-invite link -> sign-up ->
+accepted -> Active Dispatcher in the tenant, no organization created, one auth identity;
+no Settings entry, every settings route bounces; used link says "Already accepted".
+Promoted to Admin (works as second Admin), demoted back (Settings lost). Deactivated
+(cannot enter the organization), reactivated. Existing Nemryn account invited: one-click
+accept, both organizations in the picker, original Membership preserved. Cancelled link
+unusable; expired link unusable and labelled Expired; resend kills the old link and the
+new one works. Metadata/confirmation-boundary path and dead-token path verified. Driver
+invitations unaffected (create_driver_invite, /join landing, Drivers page); a staff
+invite can never carry the driver role; Team page lists staff only.
+
+================================================================================
+LAST ADMIN CONCURRENCY
+================================================================================
+supabase/tests/team_last_admin_concurrency_test.sh, real parallel psql sessions with
+transactions held open: mutual demotion, mutual deactivation, simultaneous self-demotion
+and self-deactivation (3 rounds each) -> in every round exactly one action succeeded and
+the other was refused (ZW004, or ZW002 when the caller had already been removed while
+waiting), active_admins = 1; three admins each removing the other two -> >= 1 remains;
+6 parallel accepts of one invitation -> exactly 1 Membership, 1 event, 0 errors.
+NEGATIVE CONTROL: with the advisory lock and post-lock re-authorization neutralized the
+same test FAILS with active_admins = 0, proving the test detects the race. Result: 14/14
+scenarios PASS.
+
+================================================================================
+SERVICES E2E
+================================================================================
+Unconfigured page (nothing pre-selected, empty-save refused) -> save Dialysis + Medical
+appointments + Recurring care -> reload persisted -> audit -> Integrations shows
+"Services accepted" informationally -> enabled service accepted, disabled rejected, no
+service type accepted, unknown key/Origin rejected -> dialysis disabled later: new
+dialysis rejected, historical dialysis Request unchanged and openable in the Request Hub
+-> second tenant unconfigured accepts all services -> Dispatcher/cross-org/invalid/
+direct-table attempts denied.
+
+================================================================================
+OPERATIONS E2E
+================================================================================
+Closing-before-opening refused; Mon-Fri 06:00-18:30 saved, reload persisted, audited,
+Organization timezone untouched (Chicago) and shown as a reference with a link; contact
+shown as a reference with a link; Overview shows the Operating hours line; a website
+Request outside configured hours is accepted (not enforced); Dispatcher and cross-org
+denied; second tenant has no schedule.
+
+================================================================================
+EXISTING FEATURE REGRESSION
+================================================================================
+Harmony Admin: Overview, Requests, Trips, Dispatch, Recurring Care, Proof of Service,
+Tomorrow, Drivers and every Settings page render and stay put; seeded Driver stays on
+/driver and is bounced from Settings; fresh-tenant first-run and onboarding (Business
+Stage + Basics) work through the audited function; website integrations create/activate/
+intake still work (used as setup in the services E2E); Organization Settings still
+saves; Driver invitations verified. SQL: R4A and R4B suites, operator_onboarding,
+recurring, intake and rate-limit suites all pass.
+
+================================================================================
+APPLICATION TESTS
+================================================================================
+ npx tsc --noEmit ..... PASS
+ npm run lint ......... PASS (0 errors; warnings only in untracked .tmp-qa; eslint src clean)
+ npm test ............. 404/404 (+17 new: team-core, services-core, operating-schedule)
+ npm run build ........ PASS (team, services, operations, /team-invite/[token] built)
+ Browser E2E .......... 154/154 checks PASS (.tmp-qa/r4c-team-services-operations-e2e.mjs, run on the
+                        final code against the reset database)
+
+================================================================================
+DATABASE TESTS (FOCUSED -- proportionality explained)
+================================================================================
+Decision: NOT every historical SQL suite. R4C changes Membership/organizations grants,
+adds new closed tables and definer functions, and edits ONE function
+(submit_public_transportation_request, additive validation) -- but no shared RLS policy
+other than the two inert memberships write policies, and no existing helper. I ran every
+suite that touches those surfaces plus the frozen intake contract. All on a properly
+reset database:
+ team_services_operations_tests (NEW) ................ 106 PASS / 0 FAIL
+ tenant_settings_foundation_tests (R4A, updated) ..... 51 / 0
+ website_integration_self_service_tests (R4B) ........ 72 / 0
+ operator_onboarding_tests (updated) ................. 41 / 0
+ organization_timezone_tests ......................... 15 / 0
+ function_privilege_tests (allowlist updated) ........ 7 / 0
+ security_definer_exposure_tests ..................... 20 / 0
+ client_privilege_surface_tests ...................... 21 / 0
+ rls_adversarial_tests ............................... 33 / 0
+ public_request_intake_tests ......................... 42 / 0
+ public_intake_rate_limit_tests ...................... 8 / 0
+ recurring_arrangement_foundation / mutation ......... 50 / 0 , 49 / 0
+ recurring_trip_creation_tests ....................... 24 / 0
+ constraint_tests 13 / 0; mutation_authorization 4 / 0; driver_read_authorization 17 / 0
+ Concurrency: team_last_admin (14/14), website_integration (3/3), tenant_org_creation
+ (2/2), public_request_intake, public_intake_rate_limit (exactly 8 of 15),
+ driver_invite -- all PASS.
+Existing tests edited (behavior deliberately changed): function_privilege (second anon
+preview exception); tenant_settings PRIV-1/PRIV-2/SET-20 (no client UPDATE on
+organizations; business_stage now a valid patch key); operator_onboarding ROLE-REVOKE-1
+(memberships no longer client-writable, revocation done at owner level).
+Note: recurring_trip_creation RTC-04 ("past date rejected") failed once during the run
+window between 00:00-04:00 UTC (it compares current_date in UTC against an org-local
+day) and passes outside it; that function was not touched by R4C.
+
+================================================================================
+FILES CREATED
+================================================================================
+ supabase/migrations/20260920110000_team_services_operations_settings.sql
+ supabase/tests/team_services_operations_tests.sql
+ supabase/tests/team_last_admin_concurrency_test.sh
+ src/app/operations/settings/{team,services,operations}/{page,actions}.ts(x)
+ src/app/team-invite/[token]/{page,actions,TeamJoinSignUpForm,AcceptTeamInviteButton}
+ src/components/operations/settings/{TeamSection,ServiceOfferingsForm,OperatingScheduleForm}.tsx
+ src/lib/operations/{team,team-core,team-errors,organization-services,
+   organization-services-core,organization-preferences,operating-schedule-core}.ts
+ src/lib/operations/{team-core,organization-services-core,operating-schedule-core}.test.mjs
+ src/lib/email/staff-invite-email.ts
+ docs/product/team-services-operations-settings.md
+ docs/reports/p1-pilot-s4b-r4c-team-services-operations-settings.txt
+ (untracked local QA scratch: .tmp-qa/r4c-team-services-operations-e2e.mjs)
+
+================================================================================
+FILES MODIFIED
+================================================================================
+ src/lib/operations/settings-sections.ts (team/services/operations available)
+ src/app/complete-signup/route.ts (pending staff invite branch, before org creation)
+ src/app/onboarding/actions.ts (stage + basics via update_organization_settings)
+ src/app/operations/page.tsx (Operating hours line)
+ src/app/operations/settings/integrations/page.tsx + WebsiteIntakeSection.tsx
+   (informational "Services accepted")
+ src/lib/app-url.ts (buildStaffInviteUrl); src/lib/supabase/database.types.ts (regenerated)
+ supabase/tests/{function_privilege,operator_onboarding,tenant_settings_foundation}_tests.sql
+ Unchanged (verified empty diff): src/app/api/**, src/lib/public-intake/**.
+
+================================================================================
+MIGRATIONS CREATED
+================================================================================
+ 20260920110000_team_services_operations_settings.sql (applied to LOCAL only)
+
+================================================================================
+SCHEMA IMPACT
+================================================================================
+New tables: staff_invites, organization_service_offerings. New organizations columns:
+operating_days, operating_opens_at, operating_closes_at (+3 CHECKs). New types/
+functions (see above) and 4 internal helpers. All additive; no backfill; existing rows
+and existing tenants unaffected.
+
+================================================================================
+RLS IMPACT
+================================================================================
+Dropped memberships_insert_org_admin and memberships_update_org_admin (inert after the
+grant revoke, removed so a future accidental grant cannot re-open them). Both new
+tables: RLS on, no policy. No other policy changed.
+
+================================================================================
+GRANT IMPACT
+================================================================================
+ + EXECUTE authenticated: create/resend/cancel/accept_staff_invite, list_staff_invites,
+   list_team_members, change_membership_role, set_membership_status, get/set_
+   organization_service_offerings, update_organization_operating_schedule
+ + EXECUTE anon+authenticated: get_staff_invite_preview (token-gated, minimal projection)
+ - INSERT/UPDATE/DELETE/TRUNCATE on memberships from authenticated/anon
+ - UPDATE on organizations from authenticated/anon (status, business_stage,
+   service_area_description)
+ helpers _staff_invite_token_hash/_generate_staff_invite_token/_lock_org_admins: no
+ client role. submit_public_transportation_request: grants re-asserted identical
+ (service_role only).
+RELEASE NOTE (R4E): apply migrations before deploying the app; the new app calls the new
+functions and the OLD onboarding code wrote business_stage/service_area directly, which
+the migration now blocks -- migration and app ship together.
+
+================================================================================
+OPEN ISSUES
+================================================================================
+ 1. A configured organization cannot return to "unconfigured" (by design: >= 1 service).
+ 2. Operating schedule: same-day window, one window for all days; no overnight/holiday/
+    split hours (per brief). Informational only; consumed only by the Overview line.
+ 3. Owner-operator dual-hat: deactivating an Admin who also has a linked Driver row cuts
+    their operations access; their Driver record is managed under Drivers.
+ 4. Email-confirmation flow was exercised via the metadata path locally (confirmations
+    are off locally); recommend one cloud-staging pass in R4E for the real confirmation
+    email.
+ 5. Invitation emails in production depend on RESEND_API_KEY/EMAIL_FROM; without them
+    the UI reports the honest "email couldn't be sent" state (Resend retries).
+ 6. Organization status has no audited lifecycle operation yet (not needed by any UI);
+    timezone-default issue from R4A unchanged.
+ 7. Local infrastructure incident (not a product defect): a hung `supabase db reset`
+    forced a manual rebuild; results reported come from a clean full reset.
+ 8. R4C is uncommitted, by instruction.
+
+================================================================================
+RESULTS
+================================================================================
+R4B COMMITTED:
+YES (46a9d577bfb1985b32f3668625287b3563d78ed1, not pushed)
+
+TEAM & ACCESS:
+PASS
+
+NEW USER INVITE:
+PASS
+
+EXISTING USER INVITE:
+PASS
+
+INVITE ACCEPT:
+PASS
+
+INVITE CANCEL:
+PASS
+
+INVITE EXPIRY:
+PASS
+
+ROLE CHANGE:
+PASS
+
+LAST ADMIN PROTECTION:
+PASS
+
+LAST ADMIN CONCURRENCY:
+PASS
+
+DISPATCHER SETTINGS ACCESS:
+BLOCKED
+
+DRIVER SETTINGS ACCESS:
+BLOCKED
+
+SERVICES & INTAKE:
+PASS
+
+SERVICE CONFIG PERSISTENCE:
+PASS
+
+ENABLED SERVICE WEBSITE INTAKE:
+PASS
+
+DISABLED SERVICE WEBSITE INTAKE:
+BLOCKED
+
+NO-CONFIG COMPATIBILITY:
+PASS
+
+OPERATIONS SETTINGS:
+PASS
+
+OPERATING SCHEDULE:
+PASS
+
+TIMEZONE SOURCE:
+PASS
+
+DIRECT ORGANIZATION STATUS UPDATE:
+BLOCKED
+
+BUSINESS STAGE:
+CONTROLLED
+
+SERVICE AREA DESCRIPTION:
+CONTROLLED
+
+ORG ISOLATION:
+PASS
+
+DIRECT MEMBERSHIP MUTATION:
+BLOCKED
+
+PUBLIC INTAKE CONTRACT:
+UNCHANGED
+
+WEBSITE INTEGRATION REGRESSION:
+PASS
+
+DRIVER INVITE REGRESSION:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+404/404
+
+BUILD:
+PASS
+
+FOCUSED SQL:
+PASS
+
+READY FOR R4D:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+P1-PILOT-S4B-R4D
+Notifications + Security + Activity
+
+DO NOT BEGIN R4D AUTOMATICALLY.
+DO NOT BEGIN DRIVER PWA.
+
+STOP.
