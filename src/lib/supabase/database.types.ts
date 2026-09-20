@@ -1198,6 +1198,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      _generate_intake_external_id: { Args: never; Returns: string }
       _is_canonical_days_of_week: {
         Args: { p_days: number[] }
         Returns: boolean
@@ -1227,6 +1228,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      _normalize_website_origin: { Args: { p_origin: string }; Returns: string }
       _organization_local_to_utc: {
         Args: { p_date: string; p_time: string; p_timezone: string }
         Returns: {
@@ -1324,6 +1326,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_request_intake_integration: {
+        Args: { p_organization_id: string; p_origin: string }
+        Returns: Database["public"]["CompositeTypes"]["request_intake_integration_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_intake_integration_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1576,6 +1588,19 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      list_request_intake_integrations: {
+        Args: { p_organization_id: string }
+        Returns: {
+          allowed_origins: string[]
+          created_at: string
+          external_id: string
+          id: string
+          integration_type: string
+          is_active: boolean
+          last_request_received_at: string
+          request_count: number
+        }[]
+      }
       log_transportation_request: {
         Args: {
           p_additional_notes?: string
@@ -1682,6 +1707,16 @@ export type Database = {
         }
       }
       revoke_driver_invite: { Args: { p_invite_id: string }; Returns: boolean }
+      set_request_intake_integration_active: {
+        Args: { p_active: boolean; p_integration_id: string }
+        Returns: Database["public"]["CompositeTypes"]["request_intake_integration_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_intake_integration_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       signup_create_organization: {
         Args: {
           p_business_name: string
@@ -1764,6 +1799,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "organization_settings_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_request_intake_integration_origin: {
+        Args: { p_integration_id: string; p_origin: string }
+        Returns: Database["public"]["CompositeTypes"]["request_intake_integration_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_intake_integration_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1897,6 +1942,13 @@ export type Database = {
         organization_id: string | null
         state: string | null
         created: boolean | null
+      }
+      request_intake_integration_result: {
+        integration_id: string | null
+        external_id: string | null
+        is_active: boolean | null
+        changed: boolean | null
+        deactivated: boolean | null
       }
       request_passenger_link_result: {
         request_id: string | null

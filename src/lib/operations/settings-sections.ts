@@ -21,7 +21,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { slug: "organization", title: "Organization", description: "Business profile and operating timezone", available: true },
   { slug: "team", title: "Team & Access", description: "Staff accounts, invitations and roles", available: false },
   { slug: "services", title: "Services & Intake", description: "Transportation services and intake preferences", available: false },
-  { slug: "integrations", title: "Integrations", description: "Connect your website and external systems", available: false },
+  { slug: "integrations", title: "Integrations", description: "Connect your website and external systems", available: true },
   { slug: "notifications", title: "Notifications", description: "Operational alert preferences", available: false },
   { slug: "operations", title: "Operations", description: "Operating hours and dispatch information", available: false },
   { slug: "security", title: "Security", description: "Account and access security", available: false },

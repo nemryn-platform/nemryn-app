@@ -1,0 +1,622 @@
+NEMRYN PLATFORM
+P1-PILOT-S4B-R4B -- WEBSITE INTEGRATION SELF-SERVICE
+Local implementation and validation only. R4B changes are NOT committed, not
+pushed, not deployed, not applied to production.
+
+================================================================================
+STARTING STATE
+================================================================================
+Repository:   /Users/datamatics/ZenWard, branch main.
+Start:        HEAD c275ec5 with the owner-approved R4A change set uncommitted.
+Concurrent writers: none observed. HEAD after step 0 = 1a1bfe6 (R4A) and did not
+              move during R4B.
+Untouched:    /Users/datamatics/Zenward-Web; production; Vercel; the temporary
+              manually-provisioned QA integration zenward-web-87553280 (never
+              read, looked up or changed -- every integration in this phase is
+              local and synthetic).
+Owner decision recorded: ONE self-service organization per person for the pilot:
+              CONFIRMED. Multi-organization Membership (invitation/assignment)
+              is unchanged; this phase touches neither.
+
+================================================================================
+R4A COMMIT
+================================================================================
+Step 0: `git diff` inspected -- exactly the intended R4A set (16 tracked
+modifications + new settings/migration/test/report files); .tmp-qa scratch and
+the other pre-existing untracked docs/reports were excluded. Committed as a
+standalone checkpoint, NOT pushed:
+
+  1a1bfe6426bd07309ca5b391fd6c089e95c8ad40
+  "Add tenant settings and self-service organization setup"  (29 files)
+
+R4B was built on top of that commit.
+
+================================================================================
+CURRENT INTEGRATION ARCHITECTURE (re-read fresh from code and database)
+================================================================================
+ - request_intake_integrations (20260919090000): id, organization_id,
+   external_id (globally unique), integration_type (CHECK 'website'), is_active
+   (default false), allowed_origins text[], timestamps, unique(id,
+   organization_id). RLS enabled with ZERO policies; all rights revoked from
+   anon/authenticated; service_role has SELECT only (20260919120000) for the
+   Route Handler / CORS lookup. No pre-existing one-integration-per-org
+   constraint.
+ - transportation_requests.intake_integration_id (+ composite FK to
+   (id, organization_id)) and external_submission_ref with the partial unique
+   idempotency index.
+ - submit_public_transportation_request (latest signature from
+   20260919140000): service_role-only, resolves the organization ONLY from
+   external_id, reads is_active live (kill switch), enforces allowed_origins
+   when set (NULL/empty = no restriction), idempotent, no passenger_id, no
+   trip. Rejections are one generic ZW006.
+ - Route Handler POST /api/public-intake/website: frozen payload, 8 KB cap,
+   validation, then check_and_record_public_intake_rate_limit (8 per client
+   hash/hour, 120 per integration/hour), then the RPC. CORS allow-list =
+   union of ACTIVE integrations' allowed_origins.
+ - Audit: audit_events written only from SECURITY DEFINER functions; existing
+   R4A organization_* actions; entity_type/entity_id polymorphic.
+ - R4A: requireOrganizationAdminAccess, settings-sections registry,
+   OrganizationContext, has_org_role, ZW001/ZW002/ZW006.
+ - Seeded local QA orgs: Fictional Org A/B, Harmony Medical Transport.
+ KEY DESIGN CONSEQUENCE: the table is deliberately closed and must stay closed.
+ R4B therefore adds NO policy and NO grant to it; everything is through
+ SECURITY DEFINER functions. One thing the RPC does NOT do: with allowed_origins
+ NULL it accepts any Origin -- so the new functions never create a row without
+ an origin and refuse to activate one that lacks it.
+
+================================================================================
+SETTINGS ROUTE
+================================================================================
+/operations/settings/integrations. Integrations flipped `available: true` in
+src/lib/operations/settings-sections.ts (Settings home now links Organization
+and Integrations; six sections remain "Not yet available"). Organization Admin
+only via requireOrganizationAdminAccess. Breadcrumb Settings > Integrations.
+Page = Website Intake only; no generic developer console.
+
+================================================================================
+EMPTY STATE
+================================================================================
+"Website Intake -- Connect your website to send transportation requests directly
+into your Nemryn Request Hub." + status "Not configured" + [Connect website].
+Verified free of Supabase/RPC/database/service-role/RLS/UUID vocabulary.
+
+================================================================================
+READ MODEL
+================================================================================
+list_request_intake_integrations(p_organization_id) -- SECURITY DEFINER, admin-
+of-that-org only. Returns id (opaque management handle, never displayed),
+integration_type, external_id, is_active, allowed_origins, created_at plus
+DERIVED request_count and last_request_received_at (left join to
+transportation_requests.intake_integration_id; no stored counters). The app
+wrapper (src/lib/operations/website-integration.ts) passes only the
+server-resolved workspace. Not exposed: organization_id, updated_at, other
+tenants. Legacy/manual rows for the org are returned and manageable. This was
+chosen over adding a SELECT policy so the locked table stays locked.
+
+================================================================================
+AUTHORIZATION
+================================================================================
+ Organization Admin: view + create + activate + disable + edit website.
+ Dispatcher: page bounces to /operations; all four functions ZW002.
+ Driver: bounced to /driver; ZW002.
+ No-Membership / inactive Membership: ZW002.
+ Platform Admin without Membership: ZW002 (not silently a tenant admin; no
+   existing behavior changed).
+ Enforced at page, at every Server Action (guard re-run per call) and inside
+ each database function. Foreign or nonexistent integration UUID and foreign
+ organization id are the same ZW002 (no existence oracle). anon: EXECUTE denied.
+
+================================================================================
+CREATE MUTATION
+================================================================================
+create_request_intake_integration(p_organization_id uuid, p_origin text).
+Deviation from the conceptual (p_origin) signature, deliberately: a person can
+administer several organizations, so the database cannot infer the workspace
+from auth.uid() alone. p_organization_id is the caller's CURRENT workspace,
+resolved server-side by the Server Action from the authenticated Membership
+(the form carries only the website address), and the function re-authorizes it
+with has_org_role -- so a crafted id for any organization the caller does not
+administer is denied. Same convention as R4A's update_organization_settings.
+Generated/fixed inside the function: external_id, integration_type='website',
+is_active=false, actor (auth.uid() -> AuditEvent). No external_id / is_active /
+type / created_by / service-role parameter exists (test SURFACE-1; and a
+PostgREST call injecting external_id and is_active is rejected).
+
+================================================================================
+EXTERNAL ID GENERATION
+================================================================================
+_generate_intake_external_id(): 'web_' + 12 chars, alphabet
+ABCDEFGHJKLMNPQRSTUVWXYZ23456789 (no 0/O/1/I), from pgcrypto
+gen_random_bytes with `byte & 31` (no modulo bias) = 60 bits. Opaque,
+non-sequential, URL/JSON-safe, encodes no org/user/name/sequence. Uniqueness by
+the existing unique(external_id); the loop retries a collision up to 5 times.
+500 generated IDs: all matched the format, all distinct. UI label is
+"Integration ID" (never key/token/secret/password); the docs and UI state it is
+a public identifier, not a secret. Internal helper, not executable by any
+client role.
+
+================================================================================
+ORIGIN VALIDATION
+================================================================================
+_normalize_website_origin() (authority, in the database) mirrored by
+normalizeWebsiteOrigin() in website-integration-core.ts (friendly pre-check),
+with the SAME vector list asserted on both sides.
+ Accepts: https://www.example.com, https://example.com, https://portal.example.
+ com, example.co.uk, xn-- (punycode) hosts, optional port (:443 dropped).
+ Normalizes: trailing slash; case; outer spaces.
+ Rejects (44 vectors incl.): http; any path/query/fragment; userinfo;
+ wildcards (*.example.com, https://*); javascript:/data:/ftp:; missing scheme;
+ // and https:///; localhost/loopback/IP literals/IPv6; single-label or 1-char
+ TLD; spaces/tabs/newlines; leading/trailing hyphen labels; underscores; bad
+ ports (0, 99999, non-numeric); double trailing slash; non-ASCII IDNs
+ (must be punycode); empty/blank/oversize.
+ No localhost exception was needed: local testing uses a synthetic HTTPS origin
+ and sets the Origin header on the server-to-server call. Sibling subdomains
+ are never implied (exact origin match).
+
+================================================================================
+DUPLICATE / CONCURRENCY SAFETY
+================================================================================
+Multiple integrations per organization are supported (no one-per-org rule).
+Smallest correct invariant: an organization cannot hold two website integrations
+for the same normalized origin, enforced two ways:
+ (1) partial unique index request_intake_integrations_org_origin_uidx on
+     (organization_id, allowed_origins[1]) for single-origin website rows;
+ (2) a per-organization advisory lock in create and update-origin, so a retry /
+     second tab / different spelling of the same origin returns the EXISTING
+     integration (changed=false) instead of erroring or duplicating.
+A 10-per-organization cap bounds abuse. Legacy rows (NULL / multi-origin) are
+outside the predicate.
+Real-process tests (website_integration_concurrency_test.sh): 6 simultaneous
+identical creates -> exactly 1 row, 1 audit, 1 shared Integration ID, 1 changed
+=true, 5 changed=false, 0 errors. 4 simultaneous creates of 4 different origins
+-> 4 rows, 4 IDs, 0 errors. Origin edit racing a create for the same target ->
+never two rows for that origin.
+
+================================================================================
+STATUS MODEL
+================================================================================
+Derived in code (deriveWebsiteIntegrationStatus), never stored:
+ none -> NOT_CONFIGURED "Not configured"
+ inactive -> DISABLED "Disabled"
+ active + 0 Requests -> READY_TO_TEST "Ready to test"
+ active + >=1 Requests -> CONNECTED "Connected"
+"Connected" requires a real accepted Request; no ping / fake state exists.
+(Disabled wins over history: an integration with 2 Requests that is turned off
+shows Disabled while still showing Requests received 2.)
+
+================================================================================
+ACTIVATION
+================================================================================
+set_request_intake_integration_active(p_integration_id, true). Ownership derived
+from the integration row and authorized against the caller. Requires a
+configured origin (else ZW006 -> UI: "Edit the website first"). Locks the row;
+idempotent (changed=false, no second audit). Audit website_integration_activated
+(before/after). Takes effect on the next submission (RPC reads is_active live).
+Verified: activate -> next real request accepted.
+
+================================================================================
+DISABLE / KILL SWITCH
+================================================================================
+Same function with false; UI confirmation copy exactly: "New website requests
+will stop being accepted. Existing Requests will remain unchanged." No permanent
+Delete exists in the UI or API. Verified live: after Disable intake through the
+UI the very next POST to the public endpoint is rejected (400); the historical
+Requests, their provenance, passenger snapshots and every derived counter remain;
+no Passenger/Trip/recurring row touched. Audit website_integration_disabled.
+
+================================================================================
+ORIGIN UPDATE
+================================================================================
+update_request_intake_integration_origin(p_integration_id, p_origin): same
+validation/ownership; external_id unchanged; rejects an origin already held by
+another integration of the same organization; ALWAYS leaves the integration
+disabled -- an ACTIVE integration whose origin changes is auto-disabled
+(deactivated=true) and must be explicitly re-activated. The edit dialog warns
+before saving; the result notice says so. Audit website_integration_origin_
+updated with before/after allowed_origins/is_active and auto_disabled. A
+legacy row with no origin can be given one here (then activated). Verified live:
+after an edit the old origin is rejected, the new origin is rejected until
+re-activation, and accepted after.
+
+================================================================================
+SETUP INSTRUCTIONS
+================================================================================
+Per connection, expandable. Shows: Website form -> your website server ->
+Nemryn -> Request Hub; Endpoint (built from this deployment's own canonical
+origin, https://app.nemryn.com in production via NEXT_PUBLIC_APP_URL, never
+hard-coded), Integration ID, Allowed website, and the example server
+configuration
+  REQUEST_INTAKE_MODE=platform
+  PLATFORM_INTAKE_URL=<endpoint>
+  PLATFORM_INTAKE_INTEGRATION_ID=<generated id>
+with the note that variable names are examples. Copy controls on Integration ID,
+Endpoint and the config block (Clipboard API + execCommand fallback). It never
+shows or asks for a service-role key, anon key, database URL/password or any
+Nemryn admin credential and says so.
+
+================================================================================
+ORIGIN HEADER GUIDANCE
+================================================================================
+Stated explicitly: server-to-server callers must send `Origin: <configured
+website origin>`; Nemryn only accepts requests naming the website configured
+here; "it restricts where requests may come from -- it is not a password."
+Presented only as the configured website-origin constraint, never as
+authentication. Nemryn's origin enforcement was not touched (see PUBLIC CONTRACT
+REGRESSION).
+
+================================================================================
+REQUEST ACTIVITY
+================================================================================
+Requests received and Last request received are derived per integration from
+the Requests actually tied to it (list function join). "No requests received yet"
+when none. Timestamps render in the organization's timezone. No charts, no
+analytics, no stored counters.
+
+================================================================================
+AUDIT EVENTS
+================================================================================
+website_integration_created (after: external_id, allowed_origins, is_active
+false), website_integration_activated / website_integration_disabled (before/
+after is_active), website_integration_origin_updated (before/after origin +
+is_active + auto_disabled). entity_type = request_intake_integration, entity_id
+= the integration, actor_user_id = caller, same table/columns as every other
+event. No client INSERT to audit_events (verified). Idempotent no-ops write no
+event.
+
+================================================================================
+TABLE PRIVILEGES
+================================================================================
+Unchanged and re-proven: request_intake_integrations has no table or column
+privilege for anon/authenticated/PUBLIC, RLS enabled, zero policies;
+service_role still SELECT-only. Verified in SQL (SELECT/INSERT/UPDATE/DELETE/
+TRUNCATE as tenant admin and anon -> 42501) and over real PostgREST with real
+JWTs (GET/POST/PATCH/DELETE -> 42501). The four new functions: EXECUTE for
+authenticated only; none for anon or PUBLIC; the two helpers for nobody.
+
+================================================================================
+TENANT ISOLATION
+================================================================================
+SQL + PostgREST: Org A admin cannot list/create in Org B or act on Org B's
+integration UUID (ZW002); Org B cannot act on A's; a nonexistent UUID and a
+foreign UUID are indistinguishable; A's list contains only A's integration and
+no organization_id/updated_at; Tenant B verified unchanged after A's attempts.
+UI: each tenant's Integrations page shows only its own website/ID.
+
+================================================================================
+FRESH TENANT E2E  (local, .tmp-qa/r4b-website-integration-e2e.mjs)
+================================================================================
+Fresh user created via GoTrue signup -> sign-in -> first-run organization form
+(no manual Organization or Membership INSERT) -> Organization Admin -> Settings
+-> Integrations -> Website Intake -> Connect website: an http:// address is
+rejected with a clear message and creates nothing; a synthetic https website
+with a trailing slash is normalized and created -> Disabled, with guidance and a
+generated web_ ID, no internal UUID on screen, correct endpoint, audit event ->
+a POST while Disabled is rejected -> Activate -> Ready to test -> Setup
+instructions verified -> a real synthetic request against the SAME local public
+endpoint with that Integration ID and configured Origin -> accepted ->
+Requests received = 1, Last request received populated, status Connected ->
+Edit website (auto-disable proven) -> re-activate -> Disable intake through the
+UI -> next submission rejected -> first Requests intact.
+FINAL RESULT: 87/87 checks, run against a freshly reset database.
+
+================================================================================
+SECOND TENANT E2E
+================================================================================
+Second fresh organization through the same product path; its integration created
+through Settings with its own distinct ID. Tenant A cannot see B's and B cannot
+see A's (page text). A's Integration ID routes a Request ONLY to A; B's ONLY to
+B (organization_id checked in the database; neither website sends an
+organizationId). A's ID from B's origin and B's ID from A's origin are both
+rejected and create nothing.
+
+================================================================================
+REQUEST HUB VERIFICATION
+================================================================================
+The website Request appears in Tenant A's Request Hub (and NOT in B's); the
+detail page shows website provenance, the requested passenger name and the
+service type. Row check: organization = A, state pending, source web, provenance
+= A's integration, requested_passenger_name snapshot stored, service_type
+dialysis, requested recurring schedule stored ({1,3,5}, 2026-10-05, 09:30).
+Hub isolation verified both directions.
+
+================================================================================
+NO AUTO PASSENGER / NO AUTO TRIP / NO AUTO RECURRING ARRANGEMENT
+================================================================================
+After the real request: passengers, trips, trip_assignments, recurring_
+arrangements, drivers and vehicles for the tenant are all unchanged (0);
+passenger_id is NULL with only the free-text snapshot. Same result in the SQL
+suite (INTAKE-9). Creating/activating/disabling/editing an integration creates
+none of them either.
+
+================================================================================
+PUBLIC CONTRACT REGRESSION
+================================================================================
+No file under src/app/api or src/lib/public-intake changed (git diff empty);
+submit_public_transportation_request, its grants, the rate-limit function/table
+untouched (the new migration does not mention them). Proven behaviorally on the
+live route:
+ - payload keys: an extra key (organizationId) is rejected; the frozen field set
+   is untouched
+ - origin: missing Origin -> 400, wrong Origin -> 400, configured Origin -> 200
+ - idempotency: replay accepted, still exactly one Request
+ - rate limit: with one client IP, attempts 1-8 pass the limiter, the 9th is 429
+   (8/hour per client, unchanged). Note: the E2E sends a distinct synthetic
+   X-Forwarded-For per probe so its many probes don't trip that limit; the limit
+   itself is asserted separately.
+ - service_role RPC boundary: TABLE-3 (service_role still SELECT-only) and the
+   existing intake/rate-limit suites pass unchanged
+ - creation semantics: pending, source web, no passenger/trip/arrangement.
+
+================================================================================
+RESPONSIVE (1024px application floor)
+================================================================================
+No horizontal overflow (documentElement.scrollWidth - innerWidth <= 0) for: empty
+state, disabled card, ready card, setup instructions expanded, connected card.
+Long endpoint/website values wrap at slashes/dots (soft breaks) with a
+break-words fallback so nothing overflows; Copy buttons stay visible and usable
+beside their values. Screenshots (scratchpad shots/): r4b-integrations-empty-
+1024, r4b-connect-dialog-1024, r4b-integration-disabled/ready/setup/connected-
+1024, r4b-edit-dialog-1024, r4b-disable-dialog-1024.
+
+================================================================================
+APPLICATION TESTS
+================================================================================
+ npx tsc --noEmit ...... PASS
+ npm run lint .......... PASS (0 errors; 59 warnings, all in untracked .tmp-qa
+                         scratch scripts; `eslint src` is clean)
+ npm test .............. 387/387 (8 new website-integration-core tests: origin
+                         vectors shared with SQL, status model, setup env,
+                         timestamps)
+ npm run build ......... PASS (/operations/settings/integrations built)
+ Browser E2E ........... 87/87 (see above)
+
+================================================================================
+DATABASE TESTS (FOCUSED -- proportionality explained)
+================================================================================
+Decision: NOT every historical suite. This phase adds four SECURITY DEFINER
+functions, two internal helpers, one partial unique index and one type; it does
+not alter shared RLS policies, any existing grant, or any existing function.
+Run, on a freshly reset database (all 55+1 migrations replayed cleanly):
+ website_integration_self_service_tests (NEW) ......... 72 PASS / 0 FAIL
+   (origin normalization vectors, ID generation, create/list/activate/disable/
+    update-origin authorization matrix incl. Dispatcher/Driver/inactive/no-
+    membership/Platform Admin/foreign/nonexistent/null/anon/no-session,
+    validation, disabled-by-default, auto-disable, audit events, legacy-row
+    manageability, locked-table checks, unchanged intake path consuming a
+    self-service integration, kill switch, history preservation)
+ website_integration_concurrency_test.sh (NEW) ........ 3/3 scenarios PASS
+ function_privilege_tests ............................. 7 PASS / 0 FAIL
+ security_definer_exposure_tests ...................... 20 PASS / 0 FAIL
+ client_privilege_surface_tests ....................... 21 PASS / 0 FAIL
+ rls_adversarial_tests ................................ 33 PASS / 0 FAIL
+ public_request_intake_tests .......................... 42 PASS / 0 FAIL
+ public_intake_rate_limit_tests ....................... 8 PASS / 0 FAIL
+ public_request_intake_concurrency_test.sh ............ PASS
+ public_intake_rate_limit_concurrency_test.sh ......... PASS (exactly 8 of 15)
+ R4A regression: tenant_settings_foundation_tests 51 PASS, operator_onboarding_
+   tests 41 PASS, organization_timezone_tests 15 PASS, tenant_org_creation_
+   concurrency_test.sh PASS, driver_invite_concurrency_test.sh PASS,
+   recurring_arrangement_foundation_tests 50 PASS.
+Defects found and fixed during validation (test-side, not product): a
+same-statement snapshot in one SQL assertion; the E2E tripping the (unchanged)
+per-client rate limit; an unscoped request lookup after a re-run; Next's hidden
+server-action form fields counted as inputs; boolean-to-text formatting. Product
+fixes made from E2E findings: URL soft-wrapping, and a stale success notice now
+auto-clears.
+
+================================================================================
+FILES CREATED
+================================================================================
+ supabase/migrations/20260920100000_website_integration_self_service.sql
+ supabase/tests/website_integration_self_service_tests.sql
+ supabase/tests/website_integration_concurrency_test.sh
+ src/app/operations/settings/integrations/page.tsx
+ src/app/operations/settings/integrations/actions.ts
+ src/components/operations/settings/WebsiteIntakeSection.tsx
+ src/components/operations/settings/CopyValue.tsx
+ src/lib/operations/website-integration.ts            (read model)
+ src/lib/operations/website-integration-core.ts       (pure: origin, status, env)
+ src/lib/operations/website-integration-core.test.mjs
+ src/lib/operations/website-integration-errors.ts
+ docs/product/website-integration-self-service.md
+ docs/reports/p1-pilot-s4b-r4b-website-integration-self-service.txt
+ (untracked local QA scratch, not part of the change set:
+  .tmp-qa/r4b-website-integration-e2e.mjs)
+
+================================================================================
+FILES MODIFIED
+================================================================================
+ src/lib/operations/settings-sections.ts   Integrations -> available: true
+ src/lib/supabase/database.types.ts        regenerated (+4 functions, +result type)
+ Unchanged (verified empty diff): src/app/api/**, src/lib/public-intake/**.
+
+================================================================================
+MIGRATIONS CREATED
+================================================================================
+ 20260920100000_website_integration_self_service.sql  (applied to LOCAL only)
+
+================================================================================
+SCHEMA IMPACT
+================================================================================
+No new table or column. Additive only: one composite type
+(request_intake_integration_result), one partial unique index
+(request_intake_integrations_org_origin_uidx), two internal helper functions.
+Existing rows are unaffected (the index predicate excludes NULL/multi-origin
+legacy rows; the current production QA row is one row for one org, so it cannot
+collide).
+
+================================================================================
+RLS IMPACT
+================================================================================
+None. No policy created, altered or dropped. request_intake_integrations keeps
+RLS enabled with zero policies.
+
+================================================================================
+GRANT IMPACT
+================================================================================
+ + EXECUTE authenticated: list_request_intake_integrations(uuid),
+   create_request_intake_integration(uuid, text),
+   set_request_intake_integration_active(uuid, boolean),
+   update_request_intake_integration_origin(uuid, text)
+   (revoked from PUBLIC; none for anon)
+ + internal helpers _normalize_website_origin / _generate_intake_external_id:
+   revoked from public/anon/authenticated (callable only inside the definer
+   functions)
+ No table privilege added or changed anywhere.
+RELEASE NOTE (R4E): migration 20260920100000 is additive and independent of the
+app, but the Integrations page needs it. Apply migrations before deploying the
+app (R4A's coupling note still applies).
+
+================================================================================
+OPEN ISSUES
+================================================================================
+ 1. Origin OWNERSHIP is not verified: an Admin may register any https origin,
+    including one another tenant also registers (the Integration ID selects the
+    tenant; the origin is a constraint, and the same-origin invariant is per
+    organization only). CORS uses the union of active origins. Acceptable for a
+    pilot; a DNS/meta-tag ownership check is a possible later hardening.
+ 2. Legacy manual rows are listed and manageable, but the temporary production
+    QA integration zenward-web-87553280 was deliberately not touched; its
+    removal and the official Zenward integration creation remain for the R4E
+    coordinated cutover. A legacy row with NO origin cannot be activated until an
+    origin is set (intentional, since a null origin disables the RPC's origin
+    check).
+ 3. Cap of 10 website integrations per organization is a pilot guard, not a
+    product decision; easy to raise.
+ 4. Signature deviation from the conceptual create_request_intake_integration(
+    p_origin): p_organization_id is server-supplied and DB-authorized (multi-org
+    administrators make pure auth.uid() derivation ambiguous). Documented above.
+ 5. No built-in "Send test request" (per brief: prefer real flow evidence). The
+    Setup instructions tell the admin to submit a clearly synthetic request from
+    their own site; Connected only follows a real accepted Request.
+ 6. "Requests received" counts every Request ever tied to the integration
+    (including ones later archived/cancelled in the Request Hub) -- it measures
+    receipt, not open work.
+ 7. Public route unchanged: it still trusts the forwarded client IP for its
+    per-client limit (pre-existing S4B behavior); the local E2E exploits that
+    only by varying the header.
+ 8. Tracked, not addressed here (per brief): organizations.status /
+    business_stage / service_area_description direct writes and the timezone
+    default -> R4C/R4D audited-settings cleanup.
+ 9. R4B is uncommitted in the working tree (R4A is the last commit).
+
+================================================================================
+RESULTS
+================================================================================
+R4A COMMITTED:
+YES (1a1bfe6426bd07309ca5b391fd6c089e95c8ad40, not pushed)
+
+INTEGRATIONS SETTINGS:
+PASS
+
+FRESH TENANT SELF-SERVICE:
+PASS
+
+CREATE FROM UI:
+PASS
+
+NO MANUAL INTEGRATION SQL:
+PASS
+
+DISABLED BY DEFAULT:
+PASS
+
+GENERATED INTEGRATION ID:
+PASS
+
+ORIGIN VALIDATION:
+PASS
+
+DUPLICATE SAFETY:
+PASS
+
+ACTIVATE:
+PASS
+
+READY TO TEST:
+PASS
+
+REAL LOCAL WEBSITE REQUEST:
+PASS
+
+REQUEST HUB:
+PASS
+
+CONNECTED STATUS:
+PASS
+
+REQUEST ACTIVITY:
+PASS
+
+DISABLE:
+PASS
+
+KILL SWITCH:
+PASS
+
+HISTORICAL REQUEST PRESERVED:
+PASS
+
+ORG ADMIN:
+PASS
+
+DISPATCHER:
+BLOCKED
+
+DRIVER:
+BLOCKED
+
+NO-MEMBERSHIP USER:
+BLOCKED
+
+ORG ISOLATION:
+PASS
+
+DIRECT TABLE INSERT:
+BLOCKED
+
+DIRECT TABLE UPDATE:
+BLOCKED
+
+DIRECT TABLE DELETE:
+BLOCKED
+
+PUBLIC INTAKE CONTRACT:
+UNCHANGED
+
+ORIGIN ENFORCEMENT:
+UNCHANGED
+
+RATE LIMIT:
+UNCHANGED
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+387/387
+
+BUILD:
+PASS
+
+FOCUSED SQL:
+PASS
+
+READY FOR R4C:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+P1-PILOT-S4B-R4C -- Team & Access + Services & Intake +
+Operations Preferences.
+
+DO NOT BEGIN R4C AUTOMATICALLY.
+DO NOT BEGIN DRIVER PWA.
+
+STOP.
