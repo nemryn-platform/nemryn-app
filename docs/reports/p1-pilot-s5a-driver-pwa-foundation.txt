@@ -310,3 +310,296 @@ P1-PILOT-S5B — Driver Mobile Capabilities
 (location strategy, optional push, map/navigation decision)
 
 Not started. No S5B work, no production release performed.
+
+
+======================================================================
+PRODUCTION RELEASE  (appended 2026-09-21)
+======================================================================
+
+The S5A commit was amended BEFORE publication to correct the author identity
+(git commit --amend --reset-author). The hash therefore changed:
+
+    e866589  (local only, never published; superseded)
+    cccb76f0f5aa644634561bbff76414de41df28b4   <- authoritative S5A production release commit
+
+Only this one unpublished commit was rewritten. 3d3cf07 and every older
+published commit are untouched. The tree content is identical.
+Author of cccb76f: Nemryn <nemryn.app@gmail.com>.
+(Older published commits still carry the garbled legacy author string; not rewritten.)
+
+Verification tooling: read-only. Existing synthetic QA logins (git-ignored
+.env.s2h.local, never printed) were used ONLY to sign in/out and load pages.
+No Trip/Passenger/Request was created or changed. No real PHI touched.
+Script: .tmp-qa/s5a-prod-release-verify.mjs (untracked scratch). Result: 41/41.
+
+----------------------------------------------------------------------
+INFRASTRUCTURE PATH
+----------------------------------------------------------------------
+    nemryn-platform/nemryn-app (GitHub, main)
+      -> Vercel project nemryn/nemryn-app (team "nemryn")
+      -> https://app.nemryn.com
+      -> Supabase project wyocbivzgrbekuyqdfts (Nemryn)
+
+Evidence:
+- GitHub commit status "Vercel": success, "Deployment has completed",
+  target https://vercel.com/nemryn/nemryn-app/DQB3ETz7ktZvbsirMUXujeGEHdnT
+- GitHub deployment 6559817866, environment "Production", sha cccb76f,
+  created 2026-09-21T01:08:23Z, state success,
+  environment_url https://nemryn-ndg8vqb5y-nemryn.vercel.app
+  Exactly ONE deployment exists for cccb76f (no duplicate/legacy project deploy).
+- Production auth cookie name observed after a Driver sign-in:
+  sb-wyocbivzgrbekuyqdfts-auth-token  => production authenticates against the
+  Nemryn Supabase project wyocbivzgrbekuyqdfts.
+- Service worker cache name on production: nemryn-driver-static-cccb76f0f5aa
+  => the live build is cccb76f.
+
+----------------------------------------------------------------------
+GITHUB PUSH
+----------------------------------------------------------------------
+Push performed by the owner (not by this session).
+local HEAD == origin/main == cccb76f0f5aa644634561bbff76414de41df28b4 ; ahead/behind 0/0.
+Working tree: no tracked modifications; .tmp-qa scratch untracked.
+GitHub API: main = cccb76f, author Nemryn.
+
+*** FINDING: REPOSITORY IS PUBLIC, NOT PRIVATE ***
+gh repo view / GitHub API: nemryn-platform/nemryn-app  visibility=PUBLIC, private=false.
+Unauthenticated https://github.com/nemryn-platform/nemryn-app returns 200 and
+unauthenticated api.github.com/repos/... returns 200.
+The release brief requires PRIVATE. NOT changed by this session (owner decision;
+visibility is an org-level setting). Consequences until fixed: all source,
+migrations, 90+ docs/reports (including production release reports), the 14
+tracked .tmp-qa scripts, and commit author emails are world-readable.
+A HEAD-tree scan found no secret material (no service-role key, JWTs, sb_secret_,
+Resend keys or private keys; only .env.example is a tracked env file).
+History before HEAD was not scanned beyond that pattern check of the current tree.
+Recommended: set the repository to Private now (Settings > General > Danger Zone),
+then re-confirm the Vercel Git connection still builds (Vercel GitHub app needs
+access to private repos of the nemryn-platform org).
+
+----------------------------------------------------------------------
+VERCEL DEPLOYMENT
+----------------------------------------------------------------------
+PASS (evidence via GitHub deployment/status API; no Vercel CLI in this
+environment and the Vercel dashboard was not opened).
+project nemryn-app, Git repo nemryn-platform/nemryn-app, branch main,
+deployment commit cccb76f, status READY/success.
+Not independently verifiable here: the dashboard's own "Production Branch =
+main" setting. It is implied by the Production-environment deployment of main.
+Note: the previous deployment of 3d3cf07 (00:20Z) carried the environment name
+"Production - nemryn-app"; the cccb76f deployment is plain "Production" with a
+single project -- consistent with zenward-app-staging being gone.
+
+----------------------------------------------------------------------
+PRODUCTION DOMAIN
+----------------------------------------------------------------------
+PASS (functional). app.nemryn.com: CNAME 178bf05b4036574e.vercel-dns-017.com,
+A 64.29.17.1 / 216.198.79.1, TLS valid (Let's Encrypt, subject CN=app.nemryn.com,
+expires 2026-12-13, curl verify=0), Server: Vercel, serves build cccb76f.
+The dashboard label "Valid Configuration" was not read directly; DNS/TLS and
+live serving are consistent with it.
+
+----------------------------------------------------------------------
+PRODUCTION SMOKE   (all PASS)
+----------------------------------------------------------------------
+Signed out -> /sign-in: /driver, /driver/trips, /driver/history, /driver/profile,
+  /platform, /operations, /operations/settings.
+/sign-in 200. /offline 200 public.
+Tenant Admin (synthetic, read-only): sign-in lands /operations; /operations,
+  /operations/requests, /operations/trips, /operations/dispatch,
+  /operations/settings and its Organization, Integrations, Notifications, Team,
+  Security, Activity pages all render, no error text; existing data renders.
+Driver (synthetic): sign-in lands /driver; /driver, /driver/trips,
+  /driver/history, /driver/profile render.
+/api/ping 204 no-store.
+
+----------------------------------------------------------------------
+PWA PRODUCTION VERIFY   (all PASS)
+----------------------------------------------------------------------
+/driver.webmanifest 200 application/manifest+json, Cache-Control public,
+  max-age=3600, must-revalidate. name "Nemryn Driver", short_name "Nemryn",
+  start_url /driver, scope /, display standalone, theme #171A1D, bg #F7F7F4,
+  icons 192/512/maskable-512.
+/sw.js 200 application/javascript, Cache-Control no-cache, no-store, must-revalidate.
+/offline 200; copy: "You're offline / Reconnect to view current trip information /
+  ... Trip updates cannot be sent until your connection returns."
+Icons 200 image/png: /pwa/icon-192.png, icon-512.png, icon-maskable-512.png,
+  apple-touch-icon.png.
+Service worker registered and ACTIVATED on the Driver experience:
+  script /sw.js, scope https://app.nemryn.com/driver (scope is /driver by design;
+  the manifest scope is /).
+
+----------------------------------------------------------------------
+CACHE SECURITY
+----------------------------------------------------------------------
+AUTHENTICATED DATA CACHE: NONE.
+Signed-in Driver, after visiting /driver, /driver/trips, /driver/history,
+/driver/profile twice: exactly ONE cache "nemryn-driver-static-cccb76f0f5aa",
+18 entries, all of: /offline, /_next/static/immutable/** (js, css, woff2),
+/pwa/icon-192.png, /pwa/icon-512.png, /pwa/apple-touch-icon.png,
+/brand/nemryn-symbol-primary.svg.
+- No URL containing _rsc, /driver, /operations, /platform, /api, /auth, supabase.
+- Cached HTML/JSON bodies scanned for supabase.co / auth-token / access_token /
+  passenger / pickup: none (only /offline is cached as HTML).
+- No RSC / json / x-component responses cached.
+- Entry count unchanged after further navigation (18 -> 18).
+- indexedDB.databases() = [] (no offline store).
+- After sign-out, caches contain only the same allowlisted public assets.
+No real PHI was created or needed.
+
+----------------------------------------------------------------------
+DRIVER AUTH
+----------------------------------------------------------------------
+PASS. Signed-out /driver -> /sign-in. Driver sign-in -> /driver. Fresh navigation
+from origin root "/" in the same browser keeps the session (/driver). NOT done:
+a full browser quit/relaunch (the QA harness allocates a new profile per launch);
+the session is the ordinary Supabase cookie session, unchanged by S5A.
+Sign out -> /sign-in; /driver afterwards -> /sign-in.
+Only cookie observed: sb-wyocbivzgrbekuyqdfts-auth-token (chunked). There is no
+separate PWA auth mechanism.
+Driver cannot open /operations/settings (bounced to /driver); Driver /platform = 404.
+
+Offline / network (code-level, production-safe; no production mutation attempted):
+- offline indicator exists (DriverNetworkStatus; probes /api/ping).
+- offline fallback exists (/offline, precached).
+- wording promises no sync: "Trip updates cannot be sent until your connection returns."
+- no Background Sync / periodicSync / SyncManager / push / pushManager anywhere in
+  src or in the deployed sw.js (deployed worker registers only install, activate,
+  fetch, message listeners; POST is never intercepted).
+- DriverLifecycleAction / DriverReportIssueDialog return an explicit retryable
+  NETWORK error; nothing is queued or replayed; server response stays authoritative.
+- The only geolocation use is the pre-existing foreground watchPosition
+  (DriverLocationTracker, S7A). No background location was added.
+
+----------------------------------------------------------------------
+PLATFORM REGRESSION
+----------------------------------------------------------------------
+PARTIAL / PASS on what could be tested. Access boundary verified in production:
+signed-out /platform -> /sign-in; tenant Admin /platform -> 404 (no platform
+chrome); Driver /platform -> 404.
+NOT TESTED: an authenticated Platform Admin session. No Platform Admin credential
+is available to this session (only tenant Admin/Driver synthetic logins exist), so
+Platform Admin pages were not opened. Owner: please open /platform once while
+signed in as the platform admin.
+
+----------------------------------------------------------------------
+TENANT SETTINGS REGRESSION
+----------------------------------------------------------------------
+PASS. Settings home and Organization, Integrations (no secret patterns in page
+text), Notifications, Team, Security, Activity all render for the tenant Admin.
+Public intake: /api/public-intake/website GET 405 (POST-only), OPTIONS 204 -- route
+alive; no submission made. /sign-up 200, /forgot-password 200, /join and
+/team-invite need a token (404 without one, as designed), /auth/confirm 307.
+Tenant isolation: not re-run against a second tenant; S5A changed no SQL and no
+RLS (no migration), so isolation is unchanged. Local S5A already ran the full
+SQL regression.
+
+----------------------------------------------------------------------
+INFRASTRUCTURE INDEPENDENCE
+----------------------------------------------------------------------
+Deployment path is Nemryn-only (see INFRASTRUCTURE PATH). No dependency found on
+zenwardmobility/ZenwardApp, zenward-app-staging, the Zenward Supabase org or the
+Zenward Vercel account:
+- origin = nemryn-platform/nemryn-app; no .vercel/ link file in the repo.
+- production auth cookie names Nemryn Supabase ref wyocbivzgrbekuyqdfts.
+- no zenward-app / zenwardmobility/ZenwardApp / zenward-app-staging string in
+  src, scripts, next.config.ts or supabase config (matches exist only in historical
+  docs/reports and docs/brand inventory text).
+Non-dependency residue (cosmetic, NOT changed, not part of this release):
+- supabase/config.toml project_id "ZenWard" and local container supabase_db_ZenWard
+  (local-only; separate cleanup per owner).
+- package.json name "zenward-mobility".
+- comments/tests mentioning app.zenwardmobility.com; "Zenward Mobility" in
+  PublicHeader/PublicFooter (legitimate customer/business branding).
+- untracked .tmp-qa/cloud-helper.mjs default APP_URL https://zenward-app.vercel.app
+  (scratch; not in production).
+- the Supabase CLI on this machine is logged into the OLD Zenward-era org (it lists
+  only project bwqsowlbcuytsjquhxzh, not wyocbivzgrbekuyqdfts). Local tooling only;
+  production does not use it. Owner should `supabase login` with the Nemryn account
+  before any future CLI work against wyocbivzgrbekuyqdfts, to avoid targeting the
+  wrong project.
+Zenward-Web was not touched; it remains an external customer/integration.
+
+----------------------------------------------------------------------
+PHYSICAL DEVICE QA REMAINING
+----------------------------------------------------------------------
+Not performed (no device in this environment):
+- iPhone Safari: Add to Home Screen, standalone launch, apple-touch-icon, status bar,
+  safe areas, install card wording (iOS has no beforeinstallprompt).
+- Android Chrome: install prompt / Install card, maskable icon, standalone launch.
+- Real airplane-mode behaviour: offline banner, /offline fallback, retry, recovery.
+- Update flow: deploy a later build and confirm the "Update" prompt (worker waits).
+- Sign out inside the installed app and confirm no operational data remains cached.
+
+----------------------------------------------------------------------
+OPEN ISSUES
+----------------------------------------------------------------------
+1. [BLOCKER for the release brief] GitHub repo nemryn-platform/nemryn-app is PUBLIC.
+   Make it PRIVATE; confirm Vercel keeps building.
+2. Authenticated Platform Admin session not tested (no credential available).
+3. Vercel dashboard values ("Valid Configuration", Production Branch) not read
+   directly; inferred from GitHub deployment API + live DNS/TLS/serving.
+4. This report edit is an UNCOMMITTED change to a tracked file. It is not pushed and
+   no new commit was made (a push would trigger another production deploy).
+5. Legacy garbled author string remains on published commits <= 3d3cf07.
+6. Supabase CLI login is the old Zenward org (see INFRASTRUCTURE INDEPENDENCE).
+
+S5B not started: no background location, push notifications, built-in navigation,
+offline mutation queue or native wrapper was implemented.
+
+----------------------------------------------------------------------
+S5A COMMIT:
+cccb76f0f5aa644634561bbff76414de41df28b4   (amended from unpublished e866589)
+
+GITHUB PUSH:
+PASS
+
+PRIVATE NEMRYN REPO:
+FAIL -- repository is PUBLIC
+
+NEW NEMRYN VERCEL:
+PASS   (via GitHub deployment/status API; dashboard not opened)
+
+PRODUCTION DOMAIN:
+PASS   (DNS/TLS/live build verified; dashboard label not read)
+
+PRODUCTION COMMIT:
+cccb76f0f5aa644634561bbff76414de41df28b4
+
+PLATFORM ADMIN:
+PARTIAL -- access boundary PASS; authenticated Platform Admin session NOT tested
+
+TENANT LOGIN:
+PASS
+
+DRIVER:
+PASS
+
+PWA MANIFEST:
+PASS
+
+SERVICE WORKER:
+PASS
+
+OFFLINE FALLBACK:
+PASS
+
+AUTHENTICATED DATA CACHE:
+NONE
+
+PLATFORM REGRESSION:
+PARTIAL -- boundary PASS; authenticated Platform Admin not exercised
+
+TENANT SETTINGS REGRESSION:
+PASS
+
+ZENWARD INFRASTRUCTURE DEPENDENCY:
+NONE  (residual naming only: local supabase project_id, package.json name, and old-org Supabase CLI login)
+
+READY FOR PHYSICAL DEVICE PWA QA:
+YES
+
+READY FOR S5B:
+NO -- OWNER DECISION REQUIRED
+
+BLOCKERS:
+1. GitHub repository nemryn-platform/nemryn-app is PUBLIC; the brief requires PRIVATE.
