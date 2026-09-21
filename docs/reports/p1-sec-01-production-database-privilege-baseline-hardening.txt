@@ -633,3 +633,248 @@ P1-PILOT-S4C
 Website Intake Acquisition Attribution Foundation.
 
 (Neither started. Nothing pushed or deployed.)
+
+
+======================================================================
+======================================================================
+P1-SEC-01 -- PRODUCTION HARDENING RELEASE   (2026-09-21)
+Owner approved P1-SEC-01 + P1-SEC-01R (deny-by-default public schema, no anon table access, contracted
+authenticated privileges, intentionally narrowed service_role with explicit-grant rule, global postgres function
+PUBLIC EXECUTE revoked, schema extensions exception, RLS unchanged, privilege contract = ongoing release control).
+No S4C/S5B work, no GitHub visibility or Vercel plan change, no Zenward change.
+======================================================================
+
+----------------------------------------------------------------------
+RELEASE COMMIT
+----------------------------------------------------------------------
+d0f1d18879c06376970dd57d3f8dfccb2a4db8dd   "security: harden database privilege baseline"
+Author/committer Nemryn <nemryn.app@gmail.com> (repo-local config verified). 12 files, +2360/-21.
+Preceded in the same push by 150e8db "docs: record S5A1 production release" (documentation only; the carried S5A1
+report edit was inspected first: 246 insertions, 0 deletions, only the S5A1 production-release section).
+Starting state verified: branch main, origin nemryn-platform/nemryn-app, HEAD == origin/main == 9805b52; production
+project wyocbivzgrbekuyqdfts; latest remote migration 20260921100000; only 20260921110000 pending.
+Review: no src/ file, no policy statement, no function body, no data migration in the SEC-01 commit; the only
+test edits are the three documented scaffolding changes. Staged-diff secret scan (service-role / JWT / Resend /
+GitHub / Supabase tokens / private keys / connection strings / passwords) returned nothing; .tmp-qa and all
+scratch excluded; support scripts contain ACL names only (no data, no credentials).
+
+GITHUB PUSH
+PASS. One push, no force, as GitHub identity "nemryn": 9805b52..d0f1d18. local HEAD == origin/main == d0f1d18.
+Remote history: d0f1d18, 150e8db, 9805b52. Repository visibility unchanged (PUBLIC).
+
+Local gate before commit (fresh database): verify-db-privileges local 0 violations of 28; privilege_baseline_behavior
+30/30, client_privilege_surface 21/21, function_privilege 7/7, security_definer_exposure 20/20, rls_adversarial
+32/32, driver_identity_write_surface 37/37, owner_operator_self_service 49/49, platform_admin_foundation 58/58,
+public_request_intake 42/42, public_intake_rate_limit 8/8, website_integration_self_service 72/72; tsc PASS; lint 0
+errors (72 warnings, all untracked .tmp-qa); unit 451/451; build PASS.
+
+----------------------------------------------------------------------
+PRE-MIGRATION PRODUCTION CONTRACT
+----------------------------------------------------------------------
+scripts/verify-db-privileges.sh production (before any mutation): 12 violations of 28, failing checks exactly
+05, 07, 08, 11, 12, 16, 17, 18, 22, 23, 26, 28 -- identical to the P1-SEC-01R expectation; no new or different
+violation. Proceeded.
+
+MIGRATION DRY RUN
+`supabase migration list --linked`: only 20260921110000 pending (no remote-only entries).
+`supabase db push --linked --dry-run`: exactly 20260921110000_production_privilege_baseline_hardening.sql.
+
+MIGRATION APPLICATION
+`supabase db push --linked --yes` (established CLI workflow; no dashboard SQL). "Applying migration
+20260921110000 ... Finished". Remote history now ends 20260921090000, 20260921100000, 20260921110000. A second
+dry run: "Remote database is up to date."
+
+POST-MIGRATION CONTRACT   (HARD GATE)
+scripts/verify-db-privileges.sh production immediately after: ALL 28 checks ok -- "SUMMARY (violations = 0 of 28
+checks)". GATE PASSED. (Re-run at the end of the smoke: still 0 of 28.)
+
+----------------------------------------------------------------------
+PRODUCTION ACL SPOT CHECKS   (read-only catalog inventory taken after the migration)
+----------------------------------------------------------------------
+ANON SURFACE
+- Table privileges: NONE on all 26 tables; column privileges: none; sequence privileges: none.
+- EXECUTE: exactly 2 -- get_driver_invite_preview, get_staff_invite_preview.
+- Live proof through PostgREST with the publishable key (denials only; nothing mutated): GET drivers / trips /
+  memberships -> 401 42501 "permission denied for table"; RPC assign_trip / link_self_as_driver / is_platform_admin
+  -> 401 42501 "permission denied for function"; submit_public_transportation_request -> 404 PGRST202 (not exposed
+  to anon); both invite previews with a bogus token -> 400 ZW002 not_found.
+AUTHENTICATED SURFACE
+- DELETE: none on any table. INSERT: only facilities, passengers, trip_notes, user_profiles, vehicles (the 5 used).
+  Table-level UPDATE: only trip_notes, user_profiles. Column-level UPDATE: drivers(3), facilities(7),
+  passengers(4), transportation_requests(12), trips(8), vehicles(2) -- exactly the contract.
+- SELECT on 18 tables; none on the 8 server/RPC-only tables (audit_events, platform_admin_grants,
+  notification_events, organization_notification_settings, organization_service_offerings,
+  public_intake_rate_limit_events, request_intake_integrations, staff_invites).
+- EXECUTE: 71 functions (the product API + RLS helpers); 16 internal functions have no client/service execute.
+SERVICE_ROLE SURFACE
+- Tables: SELECT on request_intake_integrations only (1). Sequences: none.
+- EXECUTE (Nemryn contract): check_and_record_public_intake_rate_limit, submit_public_transportation_request,
+  claim_notification_dispatch, complete_notification_dispatch (4). The platform-installed event-trigger helper
+  rls_auto_enable() also keeps service_role EXECUTE exactly as the platform set it (it cannot be called directly and
+  is excluded from the contract by design). No other public table or RPC privilege. PUBLIC EXECUTE: none.
+DEFAULT PRIVILEGES   (owner postgres)
+- public: tables {postgres=arwdDxtm}, sequences {postgres=rwU}, functions {postgres=X} -> a future public table,
+  sequence or Nemryn function gives anon/authenticated/service_role/PUBLIC nothing (before: anon/authenticated
+  arwd, service_role arwdDxtm, sequences rwU for all three, functions X for all three).
+- global functions {postgres=X}: PUBLIC no longer receives EXECUTE on new postgres-created functions.
+EXTENSIONS EXCEPTION
+- schema extensions default row {=X/postgres} PRESENT. Existing extension functions unchanged and still
+  PUBLIC-executable: owned by postgres 48 of 49 (the 49th never had PUBLIC), owned by supabase_admin 6 of 6.
+  Installed extensions unchanged (pgcrypto 1.3, uuid-ossp 1.1, pg_stat_statements 1.11, supabase_vault 0.3.1,
+  plpgsql). 23 public column defaults call extension functions; authenticated, anon and service_role can execute
+  gen_random_uuid / uuid_generate_v4 / crypt as before. Nothing was installed, updated or altered.
+RLS
+- 26 of 26 public tables RLS enabled; 39 policies, all TO authenticated; 0 anon/PUBLIC policies; 0 DELETE policies;
+  policy set unchanged.
+
+----------------------------------------------------------------------
+WEBSITE INTAKE   (no request submitted, nothing mutated)
+----------------------------------------------------------------------
+POST route present (GET -> 405 as before). OPTIONS with the integration's real configured origin
+(https://www.zenwardmobility.com) -> 204 with Access-Control-Allow-Origin echoing it, which is only produced after
+the service_role SELECT on request_intake_integrations succeeds -- proof the retained grant works in production;
+OPTIONS with an unconfigured origin -> 204 without Allow-Origin. Catalog confirms service_role EXECUTE on
+check_and_record_public_intake_rate_limit and submit_public_transportation_request. PASS.
+
+INVITE PREVIEWS
+/join/<nonexistent uuid> and /team-invite/<nonexistent token> render the existing safe "invite/invitation link isn't
+valid" page (HTTP 200, no 500); the underlying RPCs answer ZW002 not_found to anon; no invitation consumed. anon cannot
+execute any unrelated RPC (above). PASS.
+
+DRIVER
+Direct INSERT on drivers: BLOCKED (no authenticated INSERT). Direct drivers.user_id UPDATE: BLOCKED (no column
+grant). link_self_as_driver, redeem_driver_invite, create_driver_invite, driver_get_profile: authenticated EXECUTE
+retained. Driver PWA smoke (synthetic driver): /driver, /trips, /history, /profile render; service worker
+registered, cache name nemryn-driver-static-d0f1d18879c0 with 18 public/static entries; sign-out clears to sign-in
+(41/41). PASS.
+
+PLATFORM ADMIN
+Catalog: platform_get_overview, is_platform_admin and the platform_* control-plane RPCs keep authenticated EXECUTE;
+platform_admin_grants has no client privilege. A tenant Admin and a Driver get 404 on /platform (smoke). No
+authenticated Platform Admin credential is available to this session: control-plane rendering is MANUAL.
+
+APPLICATION SMOKE   (existing synthetic accounts only; read-only; nothing created or altered)
+- s5a1-prod-smoke 27/27: Org A and Org B Admin sign-in, Settings order, My Access (Driver access Active, Drive shown),
+  Activity, Dispatch, Drivers directory, /platform 404; driver-only account blocked from Settings.
+- r4f-prod-smoke 31/31: sign-in, Operations, Requests, Trips, Dispatch, Recurring Care, Proof of Service, Drivers,
+  Passengers, all eight Settings sections (incl. Notifications, Security, Activity), Driver workspace.
+- s5a-prod-release-verify 41/41: PWA endpoints, cache contents, driver auth/sign-out.
+No "permission denied", error page or missing-capability finding anywhere; no broad re-grant was needed.
+
+VERCEL
+The push triggered the existing Nemryn project (status URL https://vercel.com/nemryn/nemryn-app/5FZZaeJiNHDjP4N4TsKXqQt3wafk):
+GitHub deployment 6567949331, environment Production, sha d0f1d18, success. app.nemryn.com serves build d0f1d18879c0;
+TLS valid; /sign-in 200, /driver.webmanifest 200, /sw.js 200, /offline 200, /api/ping 204. No new project, plan or Zenward
+change. (No application source changed; the deployment is the ordinary rebuild of the same code.)
+
+----------------------------------------------------------------------
+OPEN ITEMS
+----------------------------------------------------------------------
+1. Manual: authenticated Platform Admin control-plane rendering (no credential available).
+2. Release control: run scripts/verify-db-privileges.sh production after every release that adds a migration; it must
+   stay at 0 violations of 28. New public tables/functions must be added to the contract in the same change.
+3. Carried, unchanged: retained-without-caller UPDATE grants (drivers, trips, transportation_requests, trip_notes) and
+   is_org_member EXECUTE; stale Settings-home expectations in old scratch E2E scripts; GitHub repo is PUBLIC (owner decision).
+4. This report edit is an UNCOMMITTED change to a tracked file (committing/pushing it would trigger another identical deploy).
+5. S4C and S5B not started.
+
+======================================================================
+SEC-01 RELEASE COMMIT:
+d0f1d18879c06376970dd57d3f8dfccb2a4db8dd
+
+GITHUB PUSH:
+PASS
+
+MIGRATION 20260921110000:
+APPLIED
+
+PRE-MIGRATION ACL CONTRACT:
+12 VIOLATIONS   (05 07 08 11 12 16 17 18 22 23 26 28, as expected)
+
+POST-MIGRATION ACL CONTRACT:
+0/28 VIOLATIONS
+
+ANON TABLE ACCESS:
+NONE
+
+ANON TABLE WRITE:
+NONE
+
+ANON RPC EXECUTE:
+2 INTENDED
+
+AUTHENTICATED DELETE:
+NONE
+
+UNINTENDED AUTHENTICATED WRITE:
+NONE
+
+SERVICE_ROLE TABLE ACCESS:
+1 INTENDED
+
+SERVICE_ROLE RPC EXECUTE:
+4 INTENDED   (plus the platform-managed rls_auto_enable, unchanged and outside the contract)
+
+PUBLIC NEMRYN FUNCTION DEFAULT:
+DENY
+
+EXTENSIONS PUBLIC DEFAULT:
+PRESERVED
+
+RLS TABLES:
+26/26
+
+PUBLIC/ANON TENANT POLICIES:
+0
+
+DRIVER DIRECT INSERT:
+BLOCKED
+
+DRIVER USER_ID UPDATE:
+BLOCKED
+
+WEBSITE INTAKE:
+PASS
+
+INVITE PREVIEWS:
+PASS
+
+TENANT AUTH:
+PASS
+
+DRIVER PWA:
+PASS
+
+PLATFORM ADMIN:
+MANUAL   (catalog + 404 boundary PASS; authenticated Platform Admin session not available)
+
+VERCEL:
+PASS
+
+APP.NEMRYN.COM:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+451/451
+
+BUILD:
+PASS
+
+PRODUCTION HARDENING RELEASE:
+PASS
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-PILOT-S4C
+Website Intake Acquisition Attribution Foundation
+
+DO NOT BEGIN S4C AUTOMATICALLY.
