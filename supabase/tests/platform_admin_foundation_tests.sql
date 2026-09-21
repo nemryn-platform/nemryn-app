@@ -157,7 +157,8 @@ do $$
 declare v_d1 uuid := '20000000-0000-0000-0000-0000000000d1'; v_a uuid := '10000000-0000-0000-0000-0000000000a1';
 begin
   perform pg_temp.report('RM-1 (overview: totals consistent, admin count = grants)',
-    pg_temp.val_as('authenticated', v_d1, 'select (total_organizations = active_organizations + suspended_organizations and platform_admin_count = (select count(*) from public.platform_admin_grants) and integrations_total >= 2 and integrations_active >= 2)::text from public.platform_get_overview()') = 'true');
+    pg_temp.val_as('authenticated', v_d1, 'select (total_organizations = active_organizations + suspended_organizations and platform_admin_count = ' || (select count(*) from public.platform_admin_grants) || ' and integrations_total >= 2 and integrations_active >= 2)::text from public.platform_get_overview()') = 'true');
+  -- (P1-SEC-01: clients hold no direct SELECT on platform_admin_grants, so the expected count is read here as the owner, not inside the client role.)
 
   perform pg_temp.report('RM-2 (directory: counts equal a direct owner-level count for Org A)',
     pg_temp.val_as('authenticated', v_d1, $q$select (select concat_ws('/', active_staff_count, driver_count, trip_count, request_count, integrations_total, integrations_active) from public.platform_list_organizations('Org A') where organization_id = '10000000-0000-0000-0000-0000000000a1')$q$)

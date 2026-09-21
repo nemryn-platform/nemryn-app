@@ -800,11 +800,13 @@ begin
     raise notice 'TEST AUDIT-01/03/04/05: FAIL (count=%, actor=%, org=%, after=%)', v_create_count, v_actor, v_org, v_after;
   end if;
 
+  -- (P1-SEC-01: clients hold no direct SELECT on audit_events; the audit counts are read as the owner, the mutation itself as the caller.)
+  select count(*) into v_pause_count_before from public.audit_events where entity_id = v_arrangement_id and action = 'recurring_arrangement_paused';
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
-  select count(*) into v_pause_count_before from public.audit_events where entity_id = v_arrangement_id and action = 'recurring_arrangement_paused';
   perform pause_recurring_arrangement('10000000-0000-0000-0000-0000000000a1'::uuid, v_arrangement_id); -- real pause
   perform pause_recurring_arrangement('10000000-0000-0000-0000-0000000000a1'::uuid, v_arrangement_id); -- idempotent no-op
+  reset role;
   select count(*) into v_pause_count_after from public.audit_events where entity_id = v_arrangement_id and action = 'recurring_arrangement_paused';
 
   if v_pause_count_after - v_pause_count_before = 1 then

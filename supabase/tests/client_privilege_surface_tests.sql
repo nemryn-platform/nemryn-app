@@ -179,26 +179,29 @@ end $$;
 reset role;
 
 -- =============================================================================
--- SECTION 3: SERVICE_ROLE UNAFFECTED (proving this hardening did not
--- over-revoke the trusted backend role).
+-- SECTION 3: SERVICE_ROLE (S1D1 left it untouched; P1-SEC-01 narrowed it -- see the two tests below).
 -- =============================================================================
 
--- TEST 10. service_role privileges are completely untouched.
+-- TEST 10. service_role holds none of TRUNCATE / REFERENCES / TRIGGER on public tables.
+-- SUPERSEDED DECISION (P1-SEC-01): S1D1 originally left service_role untouched and asserted here that it
+-- RETAINED these privileges. P1-SEC-01 narrowed service_role to its audited server-only surface (SELECT on
+-- request_intake_integrations + EXECUTE on four RPCs; see privilege_contract_tests.sql), so the assertion is
+-- now the opposite: the trusted backend role must not hold TRUNCATE/REFERENCES/TRIGGER either.
 do $$
-declare v_missing text;
+declare v_extra text;
 begin
-  select string_agg(t.tablename, ', ') into v_missing
+  select string_agg(t.tablename, ', ') into v_extra
   from pg_tables t
   where t.schemaname = 'public'
-    and not (
+    and (
       has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'TRUNCATE')
-      and has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'REFERENCES')
-      and has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'TRIGGER')
+      or has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'REFERENCES')
+      or has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'TRIGGER')
     );
-  if v_missing is null then
-    raise notice 'TEST CLIENT-PRIV-10: PASS (service_role retains TRUNCATE/REFERENCES/TRIGGER on all public tables, unaffected by this client-role-only hardening)';
+  if v_extra is null then
+    raise notice 'TEST CLIENT-PRIV-10: PASS (service_role holds no TRUNCATE/REFERENCES/TRIGGER on any public table -- narrowed by P1-SEC-01, formerly asserted retained)';
   else
-    raise notice 'TEST CLIENT-PRIV-10: FAIL (service_role lost a privilege on: %)', v_missing;
+    raise notice 'TEST CLIENT-PRIV-10: FAIL (service_role still holds a privilege on: %)', v_extra;
   end if;
 end $$;
 
@@ -461,22 +464,22 @@ begin
   end if;
 end $$;
 
--- TEST 20. service_role retains MAINTAIN — this hardening is client-role-only, exactly like S1D1's own TRUNCATE/REFERENCES/TRIGGER scope.
+-- TEST 20. service_role holds no MAINTAIN on public tables (SUPERSEDED by P1-SEC-01, same reasoning as TEST 10).
 do $$
-declare v_missing text;
+declare v_extra text;
 declare v_version_num int := current_setting('server_version_num')::int;
 begin
   if v_version_num < 170000 then
-    raise notice 'TEST CLIENT-PRIV-20: PASS (not applicable — server_version_num=% is PostgreSQL < 17)', v_version_num;
+    raise notice 'TEST CLIENT-PRIV-20: PASS (not applicable -- server_version_num=% is PostgreSQL < 17)', v_version_num;
   else
-    select string_agg(t.tablename, ', ') into v_missing
+    select string_agg(t.tablename, ', ') into v_extra
     from pg_tables t
     where t.schemaname = 'public'
-      and not has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'MAINTAIN');
-    if v_missing is null then
-      raise notice 'TEST CLIENT-PRIV-20: PASS (service_role retains MAINTAIN on all public tables, unaffected by this client-role-only hardening)';
+      and has_table_privilege('service_role', t.schemaname||'.'||quote_ident(t.tablename), 'MAINTAIN');
+    if v_extra is null then
+      raise notice 'TEST CLIENT-PRIV-20: PASS (service_role holds no MAINTAIN on any public table -- narrowed by P1-SEC-01)';
     else
-      raise notice 'TEST CLIENT-PRIV-20: FAIL (service_role lost MAINTAIN on: %)', v_missing;
+      raise notice 'TEST CLIENT-PRIV-20: FAIL (service_role still holds MAINTAIN on: %)', v_extra;
     end if;
   end if;
 end $$;

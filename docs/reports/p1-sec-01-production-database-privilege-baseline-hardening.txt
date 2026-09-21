@@ -1,0 +1,635 @@
+NEMRYN PLATFORM
+P1-SEC-01 -- PRODUCTION DATABASE PRIVILEGE BASELINE HARDENING
+Local implementation. NOT pushed, NOT deployed, `supabase db push` NOT run, production NOT mutated
+(production was only READ, through the read-only Management API endpoint and `supabase migration list`).
+Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+Repository /Users/datamatics/Nemryn, branch main. origin/main == local main == 9805b52
+(S5A1 + S5A1R released and verified). Production Supabase project wyocbivzgrbekuyqdfts at migration
+20260921100000 (S5A1R). Working tree: only P1-SEC-01 files below, plus the still-uncommitted S5A1
+report edit (production-release section) carried over from the previous phase.
+S4C not started. No application behaviour changed; no application source file changed at all.
+
+======================================================================
+PRODUCTION ACL INVENTORY   (read-only, 2026-09-21, before any change; production is authoritative)
+======================================================================
+Objects in schema public: 26 tables, 1 sequence, 0 views/materialized views, 92 functions (91
+migration-owned + the platform helper rls_auto_enable). Everything is owned by `postgres`.
+RLS: enabled on 26 of 26 tables (0 off). Policies: 39, ALL `TO authenticated`; 0 target anon or PUBLIC;
+0 DELETE policies; INSERT/UPDATE checks are scoped by has_org_role / auth.uid(). Policy set is
+byte-identical to local. Every SECURITY DEFINER function pins search_path.
+
+Default privileges (owner postgres, schema public) -- the SOURCE of the drift:
+  tables     anon=arwd  authenticated=arwd  service_role=arwdDxtm
+             (S1D1 had already removed Dxtm from anon/authenticated; the DML entries remained)
+  sequences  anon/authenticated/service_role = rwU
+  functions  anon/authenticated/service_role = X      (plus PUBLIC's built-in EXECUTE)
+Schema public USAGE for anon/authenticated/service_role (needed by PostgREST); no CREATE for any client role.
+
+Effective privileges in production BEFORE:
+  anon:          privileges on 20 of 26 tables (SELECT 20, INSERT 19, UPDATE 18, DELETE 19); EXECUTE on
+                 73 of 92 functions; USAGE/UPDATE on the intake-rate-limit sequence
+  authenticated: DELETE on 19 tables, INSERT on 14 (5 are used), table-level UPDATE on 10 (2 are used) plus
+                 6 column-level UPDATE sets; EXECUTE on 79 functions (71 intended); sequence privileges
+  service_role:  full DML + TRUNCATE/REFERENCES/TRIGGER/MAINTAIN on all 26 tables; EXECUTE on all 92 functions
+  PUBLIC:        EXECUTE on rls_auto_enable() only (every migration-owned function had been revoked from PUBLIC)
+
+======================================================================
+LOCAL VS PRODUCTION DRIFT
+======================================================================
+Local (before): default ACL {tables: service_role=Dxtm only; sequences: w; functions: owner only}; anon no table
+privileges; anon EXECUTE on the two invite previews only; authenticated exactly the deliberate grants;
+service_role Dxtm + SELECT on request_intake_integrations + EXECUTE on 4 RPCs.
+Production drifted upward for anon (tables, sequences, 71 extra function grants), authenticated (DELETE, extra
+INSERT/UPDATE, 8 extra function grants, sequence) and service_role (everything), because hosted Supabase's
+default privileges add grants to every object our migrations create as `postgres`.
+
+EFFECTIVE-SURFACE CHECK (the "is this a breach?" test): for 26 tables x {anon, authenticated} x
+{SELECT, INSERT, UPDATE, DELETE}, (privilege AND matching policy) is IDENTICAL in production and local: 0
+differences. The extra production privileges were inert (no anon policy, no DELETE policy, no INSERT/UPDATE
+policy on the tables where they exist). Section 7 of the brief ("STOP if unexpected exposure") was therefore
+NOT triggered: no unexpected exposure was found.
+
+======================================================================
+TABLE PRIVILEGE CLASSIFICATION
+======================================================================
+Full per-table table with the WHY for every retained and every revoked grant:
+docs/security/database-privilege-contract.md section 3.2. Summary (26 tables):
+  A  no client access:            audit_events*, platform_admin_grants*, notification_events,
+                                  organization_notification_settings, organization_service_offerings,
+                                  public_intake_rate_limit_events, staff_invites, request_intake_integrations
+  B  authenticated read:          driver_invites, driver_location_updates, drivers, facilities, memberships,
+                                  organizations, passengers, recurring_arrangements,
+                                  recurring_occurrence_exceptions, request_events, transportation_requests,
+                                  trip_assignments, trip_events, trip_exceptions, trip_notes, trips,
+                                  user_profiles, vehicles
+  C  authenticated limited write: facilities (INSERT + 7-col UPDATE), vehicles (INSERT + 2-col UPDATE), passengers
+                                  (INSERT + 4-col UPDATE), trip_notes (INSERT, UPDATE), user_profiles (INSERT,
+                                  UPDATE), drivers (3-col UPDATE), trips (8-col UPDATE), transportation_requests
+                                  (12-col UPDATE)
+  * = SELECT revoked by this phase (read only through SECURITY DEFINER RPCs; no direct caller in src).
+Method: every `.from()` / `.insert/.update/.upsert/.delete` in src was enumerated (no browser client exists;
+createBrowserSupabaseClient has no caller). Direct client writes exist only for user_profiles (upsert),
+facilities, vehicles, passengers, trip_notes. There is no `.delete()` anywhere.
+Retained WITHOUT a current caller (kept on purpose, see OPEN ISSUES): drivers UPDATE, trips UPDATE (8 cols),
+transportation_requests UPDATE (12 cols), trip_notes UPDATE.
+
+======================================================================
+FUNCTION EXECUTE CLASSIFICATION
+======================================================================
+91 migration-owned functions (+ platform helper), each classified:
+  D authenticated RPC / RLS helper : 69   (+ the 2 anon previews, also authenticated) = 71 executable by authenticated
+  E anon public surface            : 2    get_driver_invite_preview, get_staff_invite_preview (pre-sign-in
+                                          /join and /team-invite pages, publishable-key server client)
+  F service_role only              : 4    submit_public_transportation_request,
+                                          check_and_record_public_intake_rate_limit,
+                                          claim_notification_dispatch, complete_notification_dispatch
+  A internal (owner only)          : 16   _driver_execute_trip_transition, _enqueue_notification_event,
+                                          _generate_intake_external_id, _generate_staff_invite_token,
+                                          _is_canonical_days_of_week, _is_valid_trip_transition,
+                                          _lock_driver_active_assignment, _lock_org_admins,
+                                          _normalize_website_origin, _notification_default_roles,
+                                          _organization_local_to_utc, _require_platform_admin,
+                                          _staff_invite_token_hash, prevent_organization_id_change,
+                                          set_updated_at, signup_create_organization
+Cross-check: all 73 `.rpc()` names found in src resolve to a function executable by the role that calls it
+(user-session callers -> authenticated/anon; the four service-client files -> the four service RPCs);
+no application call is left without EXECUTE.
+SECURITY DEFINER scrutiny: all pin search_path (contract check 19). Client-executable functions lacking an
+inline auth.uid()/role check are exactly: the 3 service-only RPCs (validate their own inputs), the 6 driver_*
+transition wrappers (delegate to the authorising _driver_execute_trip_transition), the 2 token-scoped anon
+previews (raise not_found for an unknown token; verified) and is_valid_iana_timezone (pure). No function body
+was changed. rls_auto_enable() (platform event-trigger helper): EXECUTE removed from PUBLIC/anon/authenticated
+only; service_role left as the platform installed it (it cannot be called directly).
+
+======================================================================
+SEQUENCE PRIVILEGES
+======================================================================
+One sequence: public_intake_rate_limit_events_id_seq. Before: anon/authenticated/service_role
+SELECT+UPDATE+USAGE (hosted default). It is only advanced by the SECURITY DEFINER rate-limit function running
+as owner, so no client/service grant is needed. After: none for anon/authenticated/service_role/PUBLIC (owner
+only). Future sequences: no default grants.
+
+======================================================================
+DEFAULT PRIVILEGES   (the source of drift -- FIXED)
+======================================================================
+Before (production): see PRODUCTION ACL INVENTORY. Local differed (see drift).
+Migration statements (owner `postgres`, the only owner our migrations use):
+  alter default privileges for role postgres in schema public revoke all on tables    from anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public revoke all on functions from anon, authenticated, service_role;
+  alter default privileges for role postgres revoke execute on functions from public;      -- global (see caveat)
+After (verified on a fresh chain and on a production-emulated start):
+  postgres/public: tables {postgres=arwdDxtm}, sequences {postgres=rwU}, functions {postgres=X}
+  postgres/global: functions {postgres=X}   (PUBLIC no longer gets EXECUTE on new functions)
+A probe (rolled back) creates a table, sequence and function as postgres in public: anon, authenticated,
+service_role and PUBLIC hold NO privilege on any of them (behaviour test DEF-1).
+Caveats, documented: (1) PUBLIC's implicit EXECUTE can only be removed by a GLOBAL default of the owner role
+(per-schema entries only add), so a future `CREATE EXTENSION` run by postgres would also create functions
+without PUBLIC execute; today's extensions already exist and live in schema `extensions`. (2) The
+`supabase_admin` default entries cannot be altered by `postgres`; no public object is owned by supabase_admin
+(contract check 24 fails loudly if that changes). (3) Supabase-managed schemas (storage, auth, ...) are untouched.
+
+======================================================================
+RLS AUDIT   (read-only; RLS not modified)
+======================================================================
+PRODUCTION RLS-OFF TENANT TABLES: 0 of 26.  Policies to public/anon: 0.  DELETE policies: 0.
+Overly broad authenticated policies: none found -- every policy is has_org_role(...) / auth.uid() /
+is_platform_admin() / is_driver_assigned_to_trip(...) scoped. INSERT checks reviewed one by one (facilities,
+passengers, vehicles, trip_notes x2, user_profiles). No policy was touched, weakened or rewritten.
+Note: RLS remains the second layer; the two tables whose client SELECT was revoked keep their SELECT policies.
+
+======================================================================
+PUBLIC / ANON SURFACE
+======================================================================
+After: anon holds NO table, column or sequence privilege and EXECUTE on exactly two functions. Verified at the
+privilege layer (42501, independent of RLS) for SELECT on all 26 tables, INSERT/UPDATE/DELETE/TRUNCATE on
+drivers/trips/organizations/memberships/audit_events, the sequence, and 6 product RPCs (assign_trip,
+link_self_as_driver, is_platform_admin, platform_get_overview, has_org_role, signup_create_organization).
+Positive: both invite previews still execute (unknown token -> not_found). Website intake does not use anon
+at all (see WEBSITE INTAKE IMPACT).
+
+======================================================================
+AUTHENTICATED SURFACE
+======================================================================
+After: exactly the contract in docs/security/database-privilege-contract.md: table grants per section 3.2 (never
+DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN), 6 column-level UPDATE sets, EXECUTE on 71 functions. Behaviour
+tests prove: DELETE denied on EVERY table; direct writes denied on tables whose only writers are RPCs;
+server-only tables unreadable; internal helpers and server-only RPCs not callable; legitimate direct paths
+still work (Admin edits Driver, inserts Facility/Passenger, profile upsert); legitimate reads via RLS; cross-tenant
+still blocked. Two deliberate tightenings beyond local: SELECT on audit_events and platform_admin_grants revoked
+(read only through list_activity_events / is_platform_admin; raw audit JSON must not reach a browser).
+
+======================================================================
+SERVICE ROLE SURFACE   (DECISION FOR OWNER REVIEW)
+======================================================================
+Before (production): everything. After: SELECT on request_intake_integrations (website-intake CORS lookup) and
+EXECUTE on the four server-only RPCs. Nothing else (no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, no DML, no other
+RPC, no sequence). Audited callers: src/lib/public-intake/{cors,rate-limit,website-intake}.ts and
+src/lib/notifications/dispatch.ts -- the only createServiceRoleSupabaseClient() users; the module is
+`server-only`. This REVERSES S1D1's "leave service_role untouched" decision (tests CLIENT-PRIV-10/20 asserted
+it; both were updated with the superseded-decision rationale). Reason: a leaked service key previously meant full
+RLS-bypassing DML on every tenant table; it now reaches one table read and four RPCs. A future server path must
+grant what it needs in its own migration. If the owner prefers the previous posture for service_role, remove the
+service_role revoke from the migration's table loop and contract checks 11/18 (documented, small).
+
+======================================================================
+WEBSITE INTAKE IMPACT
+======================================================================
+Architecture verified in code: browser/public caller -> POST /api/public-intake/website (Nemryn route) ->
+createServiceRoleSupabaseClient (server-only) -> check_and_record_public_intake_rate_limit +
+submit_public_transportation_request (both service_role-only, SECURITY DEFINER, re-check integration origin) ->
+canonical intake tables. Also: cors.ts reads request_intake_integrations via service_role (SELECT retained).
+No browser-to-database path exists; anon has no role in intake. Tests: behaviour SVC-1..4 (privilege layer),
+public_request_intake_tests 42/42, public_intake_rate_limit_tests 8/8, website_integration_self_service_tests
+72/72, concurrency (public_request_intake, rate_limit, website_integration) all pass, and the browser E2E
+r4b-website-integration-e2e: 85/87 (the 2 misses are stale expectations about the Settings-home link list, see
+APPLICATION REGRESSION; every intake submission/CORS/idempotency/isolation check passed). No production request
+was submitted.
+
+======================================================================
+DRIVER IMPACT
+======================================================================
+Driver direct INSERT with user_id: BLOCKED (privilege 42501; behaviour AUTH-6, driver_identity_write_surface
+37/37). Direct UPDATE of drivers.user_id: BLOCKED. The Driver RPC API, Driver PWA reads/mutations, invites,
+owner self-link, Dispatch directory/assignment are unchanged: driver_* suites pass (authorization 17/17,
+privilege 8/8, history 8/8, minimization 13/13, location 20/20), owner_operator_self_service 49/49,
+operator_onboarding 40/40, invite concurrency PASS, self-link concurrency PASS, and browser E2E
+s5a1-owner-operator-e2e 52/52 after the change.
+
+======================================================================
+PLATFORM ADMIN IMPACT
+======================================================================
+Platform Admin (PlatformAdminGrant, no Membership) still has no tenant content: PLAT-1 sees 0 rows across
+drivers/trips/passengers/facilities/memberships; control-plane RPCs (platform_get_overview,
+platform_list_organizations, ...) still work; no tenant authority (link_self_as_driver, list_activity_events ->
+ZW002); no direct client write (42501). platform_admin_grants is no longer client-readable; is_platform_admin()
+(SECURITY DEFINER) is unaffected. platform_admin_foundation_tests 58/58; browser E2E r4e-platform-admin 99/99.
+
+======================================================================
+MIGRATION DESIGN
+======================================================================
+supabase/migrations/20260921110000_production_privilege_baseline_hardening.sql (transactional, idempotent,
+data-free, no RLS/function-body/table-shape change). Part 1 default privileges; Part 2 a DO block that, for
+every public table / sequence / function, REVOKES ALL from PUBLIC/anon/authenticated/service_role and then
+re-GRANTS from an explicit in-migration contract (authenticated table + column jsonb, function-signature
+arrays for anon+authenticated / authenticated / service_role, one service_role table grant). It is deliberately
+NOT a blanket `revoke all on all tables`: the contract was derived from the audited application callers and the
+already-tested local ACL, and every retained grant is justified in the contract doc.
+Unlisted objects end with no client privileges (deny by default); the contract test forces them to be listed.
+CONVERGENCE PROOF FROM PRODUCTION'S REAL STARTING POINT: I rebuilt production's exact pre-hardening ACL state
+locally from the read-only snapshot (supabase/tests/support/emulate_production_acl_2026-09-21.sql: default ACLs,
+26 tables, 1 sequence, 92 functions incl. the platform helper, all column grants), verified it equals the
+snapshot, applied the migration, and compared: relations, functions, columns and default ACLs equal the fresh-
+chain contract state exactly; policies untouched; rls_auto_enable retains only service_role. The behaviour test
+FAILS 9 assertions on the emulated production state and PASSES 27/27 after the migration; the contract test
+reports 11 violations on real production today and 0 after.
+Production-safety: runs as the CLI login role (member of postgres, owner of every object); same operations
+S1D1/S5A1R already ran in production; single transaction. Rollback reference: the emulation script restores the
+previous grants (review before use).
+
+======================================================================
+PARITY TEST   (LOCAL EXPECTED == PRODUCTION EXPECTED)
+======================================================================
+supabase/tests/privilege_contract_tests.sql -- one read-only SELECT asserting the INTENDED ACL state (27
+checks): every table/function is in the contract; RLS on everywhere; no views; anon holds nothing; authenticated
+table AND column privileges equal the contract exactly (no extra, none missing); no client DELETE/TRUNCATE/...;
+service_role exact; sequences empty; PUBLIC EXECUTE none; anon/authenticated/service_role EXECUTE sets equal the
+contract; SECURITY DEFINER search_path pinned; every policy TO authenticated, no DELETE policy; default
+privileges clean incl. the global PUBLIC entry; single owner (postgres); Driver identity (no INSERT, no user_id
+UPDATE); Platform/audit tables closed; no CREATE on schema public.
+Runner: scripts/verify-db-privileges.sh local|production (production uses `supabase db query --linked`, SELECT-only).
+Results: local 27/27 ok (0 violations). Production TODAY (before release): 11 violations of 27 (checks 05, 07, 08,
+11, 12, 16, 17, 18, 22, 23, 26), i.e. the test detects exactly the drift found. After the production release it
+must report 0.
+
+======================================================================
+SECURITY TESTS
+======================================================================
+New: privilege_baseline_behavior_tests.sql 27/27 (anon x7, authenticated x11, Platform Admin x4, service_role x4,
+default-privilege probe). New: privilege_contract_tests.sql 27/27.
+Required assertions (brief section 12): anon SELECT only permitted objects (none) / INSERT none / UPDATE none /
+DELETE none; authenticated DELETE none; INSERT/UPDATE only listed objects/columns; SECURITY DEFINER EXECUTE only
+required roles; Driver direct INSERT + user_id UPDATE blocked; cross-tenant blocked; Platform Admin no tenant
+bypass; website intake functional via the server path; service_role server-only.
+Full SQL battery on a freshly reset database: 42 suites, ~1040 assertions, no product failure. The only red rows
+are two order-dependent notifications_activity checks (ACT-1, PAGE-1) that count audit rows left by earlier
+suites; that suite passes 42/42 in isolation on a fresh database (also true before this phase). Three existing
+tests needed edits because they read tables as `authenticated` directly, which is exactly what was removed:
+  - client_privilege_surface_tests CLIENT-PRIV-10 / -20: asserted service_role RETAINS TRUNCATE/REFERENCES/
+    TRIGGER/MAINTAIN (S1D1 decision); now assert it holds none (superseded decision, commented in the file).
+  - platform_admin_foundation_tests RM-1: expected admin count is read as owner, not inside the client role.
+  - recurring_arrangement_mutation_tests AUDIT-02: audit counts read as owner; the mutation still runs as the caller.
+  These are test-scaffolding changes only; no product path reads audit_events / platform_admin_grants from a client.
+Concurrency: driver_invite, notification_claim, public_intake_rate_limit, public_request_intake,
+website_integration, platform_lifecycle, team_last_admin, tenant_org_creation, and the S5A1 self-link test: all pass.
+
+======================================================================
+APPLICATION REGRESSION
+======================================================================
+npx tsc --noEmit  PASS (no output)         npm run lint  0 errors (72 warnings, all in untracked .tmp-qa; 0 in src)
+npm test          451/451                  npm run build PASS
+Browser E2E on the local stack after the migration (production build / dev server, fictional tenants only):
+  s5a1-owner-operator-e2e 52/52 (sign-up, My Access, owner self-driver, Drive, dispatch + assignment, Dispatcher,
+    invited Driver, onboarding path, multi-org, suspension, restore)
+  r4e-platform-admin 99/99 (Platform Admin, tenant isolation)
+  r4b-website-integration 85/87, r4a-fresh-tenant 65/67, r4c-team-services-operations 152/154,
+  r4d-notifications-security-activity 92/94: every remaining miss is either a stale expectation about which
+  Settings-home sections/links exist (introduced when later phases -- and S5A1's "My Access" -- added sections;
+  the scripts predate them) or an environmental precondition (r4d needs a :3100 production server running for
+  one scenario). None is a privilege/permission failure; no "permission denied" appeared in any run.
+Covered by the above: tenant sign-in, onboarding, Settings, Requests, Trips, Dispatch, Drivers directory, owner
+self-driver, Driver invite, Driver PWA, Platform Admin, notifications/activity, website intake, ping endpoints.
+
+======================================================================
+FILES CREATED
+======================================================================
+supabase/migrations/20260921110000_production_privilege_baseline_hardening.sql
+supabase/tests/privilege_contract_tests.sql
+supabase/tests/privilege_baseline_behavior_tests.sql
+supabase/tests/support/emulate_production_acl_2026-09-21.sql
+scripts/verify-db-privileges.sh
+docs/security/database-privilege-contract.md
+docs/reports/p1-sec-01-production-database-privilege-baseline-hardening.txt
+
+FILES MODIFIED
+supabase/tests/client_privilege_surface_tests.sql        (CLIENT-PRIV-10/20 superseded decision)
+supabase/tests/platform_admin_foundation_tests.sql       (RM-1 reads expected count as owner)
+supabase/tests/recurring_arrangement_mutation_tests.sql  (AUDIT-02 reads counts as owner)
+No application source (src/) file, RLS policy, function body or table definition changed.
+
+======================================================================
+MIGRATION
+======================================================================
+20260921110000_production_privilege_baseline_hardening.sql -- applied to the LOCAL database only.
+Pre-release steps for the owner-gated release: (1) review; (2) `supabase db push --linked` applies exactly this
+one migration; (3) `scripts/verify-db-privileges.sh production` must report 0 violations; (4) re-run the
+production smoke (sign-in, Settings, Dispatch, Driver PWA, Platform Admin, website-intake endpoint alive) --
+the change is privilege-only, but the four service_role call sites and the two anon previews are the paths
+most worth one manual look. No data migration; nothing to backfill.
+
+======================================================================
+OPEN ISSUES
+======================================================================
+1. service_role narrowing reverses S1D1's decision (see SERVICE ROLE SURFACE): owner to confirm.
+2. Retained without a current caller (kept, not over-corrected): drivers UPDATE (3 cols), trips UPDATE (8 cols),
+   transportation_requests UPDATE (12 cols), trip_notes UPDATE, is_org_member() EXECUTE. Candidates for a later
+   least-privilege pass once the roadmap confirms no direct-edit UI is planned.
+3. Global `alter default privileges for role postgres revoke execute on functions from public` also affects
+   functions postgres creates outside public (only extensions, none pending). Documented.
+4. supabase_admin's default entries cannot be changed by postgres; unused today (contract check 24 guards it).
+5. Stale browser-E2E expectations about the Settings-home section list (r4a/r4b/r4c/r4d) predate later phases;
+   they are scratch scripts under .tmp-qa and were not edited.
+6. The unreleased S5A1 report edit (production-release section) is still an uncommitted change to a tracked file.
+7. Not yet applied to production: the contract test reports 11 violations there until the release.
+
+======================================================================
+PRODUCTION RLS-OFF TENANT TABLES:
+0
+
+PUBLIC/ANON TENANT DATA POLICIES:
+0
+
+ANON TABLE WRITE PRIVILEGES AFTER:
+0   (verified on the fresh migration chain and on a production-emulated start; production itself unchanged until release)
+
+UNINTENDED AUTHENTICATED DELETE PRIVILEGES AFTER:
+0
+
+UNINTENDED FUNCTION EXECUTE GRANTS AFTER:
+0
+
+DEFAULT PRIVILEGE DRIFT:
+FIXED   (in the migration; takes effect in production when it is applied)
+
+DRIVER DIRECT INSERT:
+BLOCKED
+
+DRIVER USER_ID UPDATE:
+BLOCKED
+
+CROSS-TENANT:
+BLOCKED
+
+WEBSITE INTAKE:
+PASS
+
+PLATFORM ADMIN:
+PASS
+
+LOCAL/PRODUCTION ACL CONTRACT:
+PASS   (local 27/27; production currently 11 violations = the drift this migration removes)
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+451/451
+
+BUILD:
+PASS
+
+READY FOR PRODUCTION HARDENING RELEASE:
+YES   (owner decisions requested on OPEN ISSUE 1 -- service_role narrowing -- before release)
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-SEC-01 production hardening release
+
+THEN:
+
+P1-PILOT-S4C
+Website Intake Acquisition Attribution Foundation
+
+(S4C NOT started. Nothing pushed or deployed.)
+
+
+======================================================================
+======================================================================
+P1-SEC-01R -- FINAL DEFAULT PRIVILEGE DECISION
+(appended; where it differs from the body above, THIS section governs. Local only: not pushed, not deployed,
+ `supabase db push` not run, production only READ.)
+======================================================================
+Owner decision recorded: least-privilege table grants, function EXECUTE grants, anon and authenticated surface
+reduction and SERVICE_ROLE NARROWING are APPROVED. service_role narrowing is an intentional Nemryn security
+invariant; broad service_role access must not be restored. One item was reviewed: the GLOBAL
+`ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`.
+Production state re-verified before editing: latest remote migration 20260921100000; the SEC-01 migration is
+NOT applied anywhere but local, so amending it in place was safe.
+
+----------------------------------------------------------------------
+POSTGRES DEFAULT EXECUTE BEHAVIOR   (PostgreSQL 17.6, transactional probes, all rolled back)
+----------------------------------------------------------------------
+Probe file (re-runnable): supabase/tests/support/default_function_privilege_probes.sql
+1. Why functions get PUBLIC EXECUTE: with no pg_default_acl row at all (pristine), a new function created by
+   postgres in public has proacl = NULL, i.e. the BUILT-IN default acldefault('f', postgres) =
+   {=X/postgres, postgres=X/postgres}. PUBLIC's EXECUTE comes from that built-in default, not from any row we
+   or Supabase created. Result: PUBLIC, anon, authenticated and service_role can all execute it.
+2. Can `IN SCHEMA public REVOKE EXECUTE ... FROM PUBLIC` remove it?  NO. After
+   `alter default privileges for role postgres in schema public revoke execute on functions from public`
+   (plus revokes from anon/authenticated/service_role) a new public function still has PUBLIC EXECUTE
+   (public_exec = t; anon can execute). Schema-scoped default entries are only ADDED to the global default;
+   they cannot subtract from it.
+3. The only removal is the GLOBAL form (no IN SCHEMA) for the owner role. Probe: after it, functions in
+   public AND in an unrelated new schema both have no PUBLIC EXECUTE; a schema-scoped
+   `GRANT EXECUTE ... TO PUBLIC` for one schema brings PUBLIC back for that schema only.
+   => A public-schema-only default-deny cannot be expressed with default ACLs alone.
+
+----------------------------------------------------------------------
+SCHEMA-ONLY OPTIONS TESTED
+----------------------------------------------------------------------
+A. Global default revoke (as shipped in the first SEC-01 draft): works; side effect = every schema (see below).
+B. Explicit `REVOKE ... FROM PUBLIC` in every function migration, enforced by the contract test: no side effects
+   and it is already the convention of all 91 existing functions, but it FAILS OPEN: a forgotten revoke leaves a
+   PUBLIC/anon-executable function until a human runs the contract test / production verify. Rejected as the sole
+   control (kept as convention; the contract test still enforces the outcome).
+C. Dedicated Nemryn function-owner role: not adopted. Migrations run as postgres (the CLI login role is a member
+   of postgres); a second owner changes ownership of 91 functions, RLS helper behaviour (definer identity),
+   every migration template, and Supabase tooling assumptions. Major operational complexity for architectural
+   purity only.
+D. DDL event trigger that revokes PUBLIC on new public functions: technically possible here (probe: postgres, not a
+   superuser, could create one in the local Supabase image; production already has platform event triggers and
+   `ensure_rls` owned by postgres). Rejected: a persistent hook on every CREATE FUNCTION can block all function DDL
+   if it errors, silently changes ACLs outside the migration text, and cannot be pre-tested on production, which
+   this phase must not mutate. Not a hack, but more moving parts than a declarative default ACL.
+E. Global revoke + schema-scoped PUBLIC re-grant for the schema that relies on vendor defaults (FINAL, below).
+
+----------------------------------------------------------------------
+GLOBAL DEFAULT IMPACT
+----------------------------------------------------------------------
+Scope = objects created BY role postgres in ANY schema. Catalog evidence, production and local:
+  - Functions owned by postgres: public (91 migration-owned + platform rls_auto_enable) and, in production only,
+    49 extension functions in schema extensions (pgcrypto, uuid-ossp, pg_stat_statements) whose ACLs are already
+    stored as {=X/postgres, postgres=X*/postgres, dashboard_user=X/postgres}.
+  - All other schemas' functions belong to supabase_admin / supabase_auth_admin / supabase_storage_admin /
+    supabase_realtime_admin / supabase_functions_admin and are not touched by postgres defaults.
+  - postgres also has schema-scoped default rows for `storage` with explicit anon/authenticated/service_role
+    grants; those remain, so functions postgres creates in storage keep their platform grants.
+Effect of the global revoke on FUTURE postgres-created functions: none get PUBLIC EXECUTE unless the schema has its
+own schema-scoped default (or the migration grants explicitly). Verified: public deny; a brand-new unrelated schema
+deny (behaviour test DEF-2); `extensions` keeps PUBLIC (DEF-3).
+
+----------------------------------------------------------------------
+EXTENSION IMPACT   (nothing installed or modified in production)
+----------------------------------------------------------------------
+Production: extensions pgcrypto 1.3, uuid-ossp 1.1, pg_stat_statements 1.11 are OWNED BY postgres (functions in
+schema extensions, ACL includes PUBLIC); supabase_vault/plpgsql by supabase_admin. 23 column defaults in
+public tables call extension functions (gen_random_uuid), evaluated as the INSERTING role -- so PUBLIC EXECUTE on
+extension functions matters to the product. Local: every extension is owned by supabase_admin.
+Q: could a FUTURE `CREATE EXTENSION` by postgres yield functions without PUBLIC EXECUTE? Probe with a trusted
+   extension (citext, 47 functions) under (a) pristine, (b) global revoke only, (c) final design: in ALL three the
+   functions are owned by supabase_admin and ALL 47 keep PUBLIC EXECUTE; authenticated can use the operators.
+   Reason: supautils (present in production: supautils.privileged_extensions lists citext, hstore, ltree, ...) runs
+   CREATE EXTENSION through the privileged role, so postgres's default ACLs never apply to the extension's objects.
+Q: what if extension objects ARE owned by postgres (as production's current three are)? Probe: a function created
+   by postgres in schema extensions has NO PUBLIC EXECUTE under global-revoke-only (MATERIAL: an inserting role would
+   get permission denied on any new column-default function), and HAS it under the final design.
+Q: do extensions issue their own GRANTs? Typically not for PUBLIC (they rely on the built-in default); Supabase's
+   platform event triggers (issue_pg_graphql_access, issue_pg_net_access, issue_pg_cron_access) grant only for
+   those specific extensions.
+Q: does ALTER EXTENSION UPDATE re-derive existing ACLs? No: existing function ACLs are stored (probe on uuid-ossp);
+   only functions ADDED by an update script take defaults, and the extensions re-grant covers them.
+Q: would the dashboard/CLI compensate? Dashboard/CLI extension enablement goes through the same supautils path
+   (privileged role), i.e. unaffected. A hand-written migration creating a postgres-owned function in `extensions`
+   or another schema is the only exposed case, and it is covered for `extensions` by the re-grant.
+Operator procedure if a future non-Nemryn function outside public legitimately needs PUBLIC EXECUTE: add
+`GRANT EXECUTE ON FUNCTION <signature> TO PUBLIC;` (or a schema-scoped default) in that migration and record the
+exception in docs/security/database-privilege-contract.md section 2.1.
+FUTURE EXTENSION RISK: LOW.
+
+----------------------------------------------------------------------
+FINAL DESIGN
+----------------------------------------------------------------------
+Migration 20260921110000 (amended in place; unreleased) Part 1 is now:
+  alter default privileges for role postgres in schema public revoke all on tables    from anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public revoke all on functions from anon, authenticated, service_role;
+  alter default privileges for role postgres revoke execute on functions from public;                  -- global, the only mechanism
+  alter default privileges for role postgres in schema extensions grant execute on functions to public; -- ONE documented exception
+Resulting pg_default_acl for postgres/functions: global {postgres=X}, public {postgres=X}, extensions {=X}.
+Net behaviour: Nemryn functions in public are default-deny (no PUBLIC, anon, authenticated, service_role EXECUTE);
+extension/vendor behaviour in schema extensions is EXACTLY as before; other roles' schemas untouched; a new schema
+created by postgres is default-deny (documented, one-line opt-out). Explicit per-function revokes remain the
+convention. Design rationale, facts and the operator procedure: docs/security/database-privilege-contract.md 2.1.
+Convergence re-proved from production's real pre-hardening ACL state (emulation script, now also removing any
+extensions default row): 13 contract violations before, 0 after; production-emulated and fresh-chain end states match.
+
+----------------------------------------------------------------------
+SERVICE_ROLE OWNER DECISION
+----------------------------------------------------------------------
+APPROVED and final. Public-schema service_role contract:
+  SELECT   request_intake_integrations
+  EXECUTE  check_and_record_public_intake_rate_limit, submit_public_transportation_request,
+           claim_notification_dispatch, complete_notification_dispatch
+  nothing else (no table DML/SELECT, no other function, no sequence, no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN),
+  and no broad fallback grant, present or default.
+
+FUTURE SERVER FEATURE RULE
+A server-side feature does not automatically receive database access merely because it uses the service role.
+Required capabilities must be explicitly granted: the migration that adds the server path grants exactly the
+table privilege or function EXECUTE it needs to service_role and adds it to the contract (c_service_tbl / the
+service functions in privilege_contract_tests.sql). Written into docs/security/database-privilege-contract.md
+section 7. The contract test fails (checks 11, 18, 13) for a service_role grant that is not in the contract.
+
+----------------------------------------------------------------------
+FUTURE OBJECT BEHAVIOR   (transaction-scoped probes as postgres, rolled back)
+----------------------------------------------------------------------
+Behaviour tests DEF-1..DEF-4 (30/30 in the suite) and probe section 6 of the probe file:
+  public table      anon / authenticated / service_role: no privilege
+  public sequence   anon / authenticated / service_role: no privilege
+  public function   anon / authenticated / service_role / PUBLIC: no EXECUTE
+  new unrelated schema function: no EXECUTE for anyone           (DEF-2, documented side effect)
+  extensions function: PUBLIC EXECUTE kept                        (DEF-3, documented exception)
+  explicit GRANT on a new public function reaches only the named role (DEF-4: deny-by-default hides no deliberate grant)
+This is achieved by the DEFAULT ACL (global + schema exception), not merely by per-migration revokes.
+
+----------------------------------------------------------------------
+CONTRACT TEST
+----------------------------------------------------------------------
+privilege_contract_tests.sql now has 28 checks (new 28: schema extensions keeps PUBLIC EXECUTE on vendor functions;
+22 broadened to every schema except platform-managed storage; 23 requires the global row). Local: 0 violations of 28.
+scripts/verify-db-privileges.sh local|production unchanged in usage.
+Drift-detection proof: supabase/tests/support/prove_contract_detects_drift.py applies 20 mutations in rolled-back
+transactions and shows the contract catches each one: anon grant on a new table; broad authenticated DELETE;
+authenticated INSERT on drivers; service_role grant on a tenant table; service_role losing its intake read; PUBLIC
+EXECUTE on a new function; a new function with no contract entry; anon EXECUTE on a product RPC; service_role EXECUTE on
+a product RPC; authenticated losing a product RPC; a new table without RLS; default-ACL drift for anon / service_role /
+authenticated; the global PUBLIC default restored; a sequence grant to anon; an anon column privilege; a DELETE
+policy; an anon policy; a SECURITY DEFINER function without search_path. Baseline: 0 failing checks; result "all
+drift kinds detected".
+Production today (read-only, before release): 12 violations of 28 (05, 07, 08, 11, 12, 16, 17, 18, 22, 23, 26, 28).
+After the production release the verification must return 0 violations of 28.
+
+----------------------------------------------------------------------
+TESTS RUN   (fresh local database, 20260921110000 applied)
+----------------------------------------------------------------------
+privilege_contract (script) 0/28 violations; privilege_baseline_behavior 30/30; client_privilege_surface 21/21;
+function_privilege 7/7; security_definer_exposure 20/20; rls_adversarial 32/32; driver_identity_write_surface 37/37;
+owner_operator_self_service 49/49; platform_admin_foundation 58/58; public_request_intake 42/42;
+public_intake_rate_limit 8/8; website_integration_self_service 72/72. No SQL errors.
+npx tsc --noEmit PASS; npm run lint 0 errors (72 warnings, all untracked .tmp-qa, 0 in src); npm test 451/451;
+npm run build PASS. Browser E2E deliberately NOT re-run: no client-facing grant changed since the reviewed SEC-01
+state (the only new statement is an extensions-schema default that no client path touches).
+No RLS logic, website intake, Driver, Platform Admin or notification behaviour changed; no src/ file changed;
+no Zenward, S4C or S5B work.
+
+----------------------------------------------------------------------
+RELEASE READINESS
+----------------------------------------------------------------------
+Owner-gated release steps (unchanged): review; `supabase db push --linked` applies exactly 20260921110000;
+`scripts/verify-db-privileges.sh production` must report 0 violations of 28; production smoke (sign-in, Settings,
+Dispatch, Driver PWA, Platform Admin, website-intake endpoint alive; the four service_role call sites and the two
+anon previews are the paths worth one manual look).
+Files changed by P1-SEC-01R: migration (Part 1 + header), privilege_contract_tests.sql (checks 22/28),
+privilege_baseline_behavior_tests.sql (DEF-1 extended, DEF-2..4), docs/security/database-privilege-contract.md
+(2.1, service_role rule), support/emulate_production_acl_2026-09-21.sql (extensions row removal); created
+support/default_function_privilege_probes.sql and support/prove_contract_detects_drift.py.
+Open (carried): retained-without-caller UPDATE grants (drivers, trips, transportation_requests, trip_notes) and
+is_org_member EXECUTE; stale Settings-home expectations in old scratch E2E scripts; the unreleased S5A1 report edit.
+
+======================================================================
+SERVICE_ROLE NARROWING:
+APPROVED
+
+PUBLIC FUNCTION DEFAULT STRATEGY:
+Global default revoke of PUBLIC EXECUTE for role postgres + ONE schema-scoped PUBLIC re-grant for schema extensions
+(vendor functions), Nemryn functions default-deny; explicit per-migration revokes retained as convention; outcome
+enforced by contract checks 13, 15, 16, 22, 23, 28.
+
+UNRELATED SCHEMA SIDE EFFECT:
+DOCUMENTED   (functions postgres creates in a NEW schema are default-deny; schema extensions preserved; other roles' schemas untouched)
+
+FUTURE EXTENSION RISK:
+LOW
+
+ANON FUTURE TABLE DEFAULT:
+DENY
+
+AUTHENTICATED FUTURE TABLE DEFAULT:
+DENY
+
+SERVICE_ROLE FUTURE TABLE DEFAULT:
+DENY
+
+PUBLIC FUTURE NEMRYN FUNCTION EXECUTE:
+DENY
+
+ACL CONTRACT:
+PASS   (local 0/28; production currently 12 violations = the drift the release removes)
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+451/451
+
+BUILD:
+PASS
+
+READY FOR P1-SEC-01 PRODUCTION RELEASE:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-SEC-01 production release.
+
+Then:
+P1-PILOT-S4C
+Website Intake Acquisition Attribution Foundation.
+
+(Neither started. Nothing pushed or deployed.)
