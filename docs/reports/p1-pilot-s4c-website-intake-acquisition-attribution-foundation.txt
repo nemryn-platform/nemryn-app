@@ -368,3 +368,220 @@ P1-COMM-D1
 Website Requests UX + Universal Form Foundation
 
 DO NOT BEGIN D1 AUTOMATICALLY.
+
+
+======================================================================
+======================================================================
+P1-PILOT-S4C -- PRODUCTION RELEASE   (2026-09-21)
+Owner approved S4C. Release order followed: DATABASE MIGRATION FIRST, APPLICATION DEPLOY SECOND.
+No D1, Zenward-Web, S5B, Vercel plan or GitHub visibility change.
+======================================================================
+
+----------------------------------------------------------------------
+RELEASE COMMIT
+----------------------------------------------------------------------
+5333dcb2b59af20ddb1ab5e95d7a6877c9ae8e54   "feat: preserve website request acquisition attribution"
+Nemryn <nemryn.app@gmail.com>. 22 files, +1950/-14. Preceded in the same push by 1eb6b4b "docs: record SEC-01 production
+hardening release" (the carried SEC-01 report edit, inspected first: 245 insertions, 0 deletions, only the release section).
+Starting state verified: branch main, origin nemryn-platform/nemryn-app, HEAD == origin/main == d0f1d18; production project
+wyocbivzgrbekuyqdfts at 20260921110000; only 20260921120000 pending.
+Diff review: only the reviewed attribution work (payload sanitiser, table, read RPC, canonical intake extension, Request
+Detail panel, integration docs, privilege contract, tests, report). No Zenward-Web, analytics, universal form, Website
+Requests redesign, Driver, S5B, ad SDK, tracking pixel or IP/user-agent/fingerprint capture (the only grep hits for those
+words are negative unit tests and comments). Staged-diff secret scan (service-role / Supabase / Resend / GitHub tokens,
+JWTs, private keys, connection strings, passwords) returned nothing; no real emails/PHI (test data uses example domains);
+.tmp-qa excluded.
+Local gate before commit (fresh database): verify-db-privileges local 0 of 28; website_intake_acquisition 52/52,
+public_request_intake 42/42, public_intake_rate_limit 8/8, website_integration_self_service 72/72, privilege_baseline_behavior
+30/30, function_privilege 7/7, security_definer_exposure 20/20, client_privilege_surface 21/21, rls_adversarial 32/32,
+request_mutation 38/38 + privilege 18/18, team_services_operations (service offerings) 106/106, driver_read_authorization/
+privilege 17/8, driver_identity_write_surface 37/37, platform_admin_foundation 58/58 and notifications_activity 42/42 (fresh,
+isolated); tsc PASS; lint 0 errors (72 warnings, all untracked .tmp-qa); unit 469/469; build PASS.
+
+GITHUB PUSH
+PASS. One push, no force, as GitHub identity "nemryn", AFTER the migration was applied and proven compatible with the old
+application: d0f1d18..5333dcb. local HEAD == origin/main == 5333dcb. Repository visibility unchanged.
+
+----------------------------------------------------------------------
+PRE-MIGRATION ACL CHECK   (deviation explained)
+----------------------------------------------------------------------
+The brief expected 0 of 28 before applying. `scripts/verify-db-privileges.sh production` with the S4C working-tree contract
+returned 3 violations: checks 02 (contract table request_acquisition_attributions does not exist yet), 13 (production still
+has the OLD 21-argument submit_public_transportation_request, which the S4C contract no longer lists) and 14 (contract functions
+_sanitize_acquisition / get_request_acquisition / the 22-argument signature do not exist yet). These are the expected structural
+consequence of the contract already describing the pending migration -- NOT privilege drift (checks 05, 07, 08, 11, 12, 16-18,
+22, 23, 26, 28 all ok). Investigated read-only before proceeding: the SEC-01 contract as committed at d0f1d18 against production
+gives 0 violations of 28, production head was 20260921110000 and the new table/functions did not exist. Proceeded.
+MIGRATION DRY RUN: `supabase migration list --linked` pending only 20260921120000; `supabase db push --linked --dry-run`
+listed exactly 20260921120000_website_intake_acquisition_attribution.sql.
+
+MIGRATION
+APPLIED via `supabase db push --linked --yes` BEFORE any GitHub push. Remote history now ends 20260921100000,
+20260921110000, 20260921120000; a second dry run: "Remote database is up to date."
+
+POST-MIGRATION ACL CONTRACT
+scripts/verify-db-privileges.sh production immediately after: ALL 28 ok -- 0 violations of 28. (Hard gate passed.)
+Catalog (read-only): request_acquisition_attributions: RLS enabled, 0 policies, relacl {postgres only}; anon / authenticated /
+service_role / PUBLIC hold NO privilege. get_request_acquisition(uuid,uuid): ACL {postgres, authenticated}; anon no,
+service_role no, PUBLIC no. _sanitize_acquisition(jsonb): ACL {postgres}; no client/service execute. submit_public_transportation_
+request: exactly ONE overload (22 args); ACL {postgres, service_role}; anon no, authenticated no, PUBLIC no. Table constraints
+present (unique request_id, composite FK, not-empty, lengths, paths, referrer host, form version). Data: 0 attribution rows before
+the smoke; 11 existing Requests untouched.
+
+MIGRATION-FIRST COMPATIBILITY   (old application still serving: build d0f1d18879c0)
+PASS. After the migration and BEFORE the push: r4f-prod-smoke 31/31 (sign-in, Operations, Requests, Trips, Dispatch, Recurring,
+Proof of Service, Drivers, Passengers, all eight Settings sections, Driver workspace), s5a1-prod-smoke 27/27 (My Access, Drive,
+Activity, Dispatch, Drivers directory), Driver PWA regression 41/41 (one earlier run of this script hit a transient sign-in
+timing error; the immediate re-run passed 41/41), website intake endpoint alive (GET 405, OPTIONS 204 with the integration's
+configured origin echoed), /api/ping 204. No application failure from the database change. (The old app calls the RPC with
+named arguments and no p_acquisition, which the new default parameter satisfies; also proven by the local legacy suites.)
+
+VERCEL DEPLOYMENT
+PASS. The push triggered the existing Nemryn project (status URL https://vercel.com/nemryn/nemryn-app/Snash7mdzHH1WWJfV5PvSo3fUdWf),
+sha 5333dcb, "Deployment has completed". app.nemryn.com serves build 5333dcb2b59a; TLS valid; /sign-in 200,
+/driver.webmanifest 200, /sw.js 200, /offline 200, /api/ping 204. No new project, plan change or Zenward change.
+
+----------------------------------------------------------------------
+PRODUCTION SMOKE   (SYNTHETIC QA tenants only; no real tenant, customer or PHI)
+----------------------------------------------------------------------
+Tenants: Siloan Medical Centre (synthetic Org A) and Vemt Pro (synthetic Org B), existing QA logins. The synthetic website
+integration web_4D8UV32FHFVD (website https://s4c-synthetic-smoke.example.test) was created and activated through Settings ->
+Integrations. Scripts: .tmp-qa/s4c-prod-smoke.mjs, s4c-prod-cleanup.mjs (untracked). The first run created the integration but
+mis-read its ID (script timing) and failed harmlessly (400s, nothing created); the second run is the recorded one.
+PUBLIC INTAKE / LEGACY PAYLOAD / ATTRIBUTION PAYLOAD / BEST-EFFORT FAILURE / IDEMPOTENCY (tag S4C-SYNTH-MUBABPVQ)
+  A legacy payload (no acquisition)                -> 200 {"ok":true}; no attribution
+  B full valid acquisition                         -> 200; one snapshot with all 8 supplied values
+  C partial acquisition (source + landing "/")     -> 200; only those two values stored
+  D invalid fields + unknown keys (empty source, full-URL landing path, URL referrer, bad version, gclid, IP, UA)
+                                                   -> 200 (request STILL accepted); NO snapshot
+  E replay, same idempotency key, different acquisition -> 200 both; one Request; one snapshot with ORIGINAL values
+                                                   (utm_source=original, campaign=first); one notification
+  F wrong origin -> 400 as before, no Request;  G unknown TOP-LEVEL key -> 400 as before, no Request
+  Responses are exactly {"ok":true} (no echo).
+Read-only production verification: 5 Requests / 3 attribution rows (B, C, E) / 5 notification events (exactly one each,
+including the replayed E) / 0 duplicate attributions / 0 requests from F or G / 0 auto Passenger, Trip or Recurring /
+0 acquisition values in request_events or audit_events.
+ATTRIBUTION CONTENT: table columns are exactly id, organization_id, request_id, the five utm_*, landing_path, submission_path,
+referrer_host, form_version, created_at. Stored values: google / cpc / dialysis_transport / s4c-smoke, /dialysis-transportation,
+/request-transportation, google.com, request-v2 (B); newsletter + "/" (C); original + first (E). A query over every stored value
+for click ids, user agent, IP, "http", "?" or "#" returned 0 rows. No IP, user agent, cookie, click id, query string, full URL or
+arbitrary metadata exists anywhere in the row.
+REQUEST HUB: Org A Admin sees the Acquisition panel on B (values, no raw JSON, no ids, no integration id, no Paid/Organic/Direct
+guess), only the supplied fields on C, the ORIGINAL values on the replayed E, and NO panel on A (legacy) or D (only invalid
+acquisition); the Request list has no acquisition columns. NEW setup instructions render the optional-acquisition guidance and
+example with no credentials. Dispatcher: no synthetic dispatcher credential exists -> MANUAL in production (covered by
+local SQL R2 and browser E2E).
+TENANT ISOLATION / DRIVER PRIVACY / PLATFORM ADMIN (production, synthetic JWTs):
+  Org A Admin JWT -> get_request_acquisition returns the snapshot.
+  Org B Admin JWT (Vemt Pro) with Org A's ids -> ZW002 not_found; opening Org A's Request URL shows nothing of it.
+  Org A Driver JWT -> ZW002; Driver cannot open Request Detail (sent to /driver); Driver workspace has no acquisition text.
+  anon key -> 42501 on the RPC; raw table read as anon, Org A Admin, Org B Admin and Org A Driver -> 42501, no rows.
+  Platform Admin without Membership: no credential available -> MANUAL; enforced by has_org_role (Membership only) inside
+  the RPC (local R6: ZW002) and by the absence of any table privilege (T1).
+SERVICE_ROLE: NO table access added -- production service_role table privileges are still exactly SELECT on
+request_intake_integrations; service_role function EXECUTE = the four approved RPCs (intake under its NEW signature, replacing
+the old one) plus the platform-managed rls_auto_enable, unchanged.
+CLEANUP (synthetic, through product actions): all 5 synthetic Requests declined; the synthetic integration disabled (Website
+intake is off). Residue in the synthetic tenant only: 5 declined Requests tagged S4C-SYNTH-MUBABPVQ, 3 immutable attribution
+rows, 5 notification events (sent to the synthetic owner mailbox), 1 disabled integration. The real Zenward Mobility
+integration and its 5 Requests were not touched and no acquisition has been sent by Zenward-Web.
+TENANT AUTH / DRIVER PWA after the new build: r4f-prod-smoke 31/31, s5a1-prod-smoke 27/27, PWA regression 41/41 (cache
+nemryn-driver-static-5333dcb2b59a).
+
+ACL CONTRACT / ACL FINAL
+scripts/verify-db-privileges.sh production after deployment and smoke: 0 violations of 28. (Hard gate passed.)
+
+----------------------------------------------------------------------
+OPEN ITEMS
+----------------------------------------------------------------------
+1. MANUAL: authenticated Platform Admin and Dispatcher checks against production (no credentials); both proven locally.
+2. Zenward-Web does not send `acquisition` yet (out of scope; D1 / universal form).
+3. Synthetic residue in the Siloan Medical Centre QA tenant (listed above); attribution rows are immutable by design.
+4. This report edit is an UNCOMMITTED change to a tracked file (pushing it would trigger another identical deploy).
+5. Release control: run scripts/verify-db-privileges.sh production after every migration release; keep it at 0 of 28.
+
+======================================================================
+S4C RELEASE COMMIT:
+5333dcb2b59af20ddb1ab5e95d7a6877c9ae8e54
+
+GITHUB PUSH:
+PASS
+
+MIGRATION 20260921120000:
+APPLIED
+
+MIGRATION-FIRST COMPATIBILITY:
+PASS
+
+POST-MIGRATION ACL CONTRACT:
+0/28 VIOLATIONS
+
+OLD INTEGRATION:
+PASS
+
+VALID ACQUISITION:
+PASS
+
+INVALID ACQUISITION BLOCKS REQUEST:
+NO
+
+ONE ATTRIBUTION PER REQUEST:
+PASS
+
+IDEMPOTENT REPLAY:
+PASS
+
+REQUEST HUB:
+PASS
+
+DRIVER ACCESS:
+BLOCKED
+
+PLATFORM ADMIN RAW ATTRIBUTION:
+MANUAL   (no credential; enforced by Membership-only RPC + no table privilege, proven locally)
+
+CROSS-TENANT:
+BLOCKED
+
+SERVICE_ROLE TABLE ACCESS ADDED:
+NONE
+
+TENANT AUTH:
+PASS
+
+DRIVER PWA:
+PASS
+
+VERCEL:
+PASS
+
+APP.NEMRYN.COM:
+PASS
+
+ACL FINAL:
+0/28 VIOLATIONS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+469/469
+
+BUILD:
+PASS
+
+PRODUCTION RELEASE:
+PASS
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-COMM-D1
+Website Requests UX + Universal Form Foundation
+
+DO NOT BEGIN D1 AUTOMATICALLY.
