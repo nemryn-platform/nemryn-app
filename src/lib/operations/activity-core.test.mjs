@@ -12,7 +12,7 @@ const helpers = {
 const ACTIONS = [
   "organization_created", "organization_settings_updated", "organization_operating_schedule_updated",
   "organization_services_configured", "organization_service_offerings_updated",
-  "website_integration_created", "website_integration_activated", "website_integration_disabled", "website_integration_origin_updated",
+  "website_integration_created", "website_integration_activated", "website_integration_disabled", "website_integration_origin_updated", "website_request_form_updated",
   "staff_invitation_created", "staff_invitation_resent", "staff_invitation_cancelled", "staff_invitation_accepted",
   "membership_role_changed", "membership_deactivated", "membership_reactivated", "notification_preferences_updated",
   "platform_organization_suspended", "platform_organization_reactivated",
@@ -53,6 +53,8 @@ test("services, schedule, website and notification summaries are readable", () =
   assert.equal(describeActivity({ action: "organization_operating_schedule_updated", actorName: "V", before: {}, after: { days: null, opens_at: null, closes_at: null } }, helpers).summary, "Schedule cleared");
   assert.equal(describeActivity({ action: "website_integration_created", actorName: "V", before: null, after: { external_id: "web_ABC", allowed_origins: ["https://www.example.com"], is_active: false } }, helpers).summary, "https://www.example.com");
   assert.equal(describeActivity({ action: "website_integration_origin_updated", actorName: "V", before: {}, after: { allowed_origins: ["https://new.example.com"], auto_disabled: true } }, helpers).summary, "Now https://new.example.com. Intake was turned off until reactivated.");
+  assert.equal(describeActivity({ action: "website_request_form_updated", actorName: "V", before: null, after: { status: "ready", version: 2, created: false } }, helpers).summary, "Form is Ready");
+  assert.equal(describeActivity({ action: "website_request_form_updated", actorName: "V", before: null, after: { status: "draft", version: 1, created: true } }, helpers).title, "Website request form created");
   assert.equal(describeActivity({ action: "notification_preferences_updated", actorName: "V", before: {}, after: { event_type: "website_request", recipient_roles: ["organization_admin", "dispatcher"] } }, helpers).summary, "New website request: Organization Admins and Dispatchers");
   assert.equal(describeActivity({ action: "notification_preferences_updated", actorName: "V", before: {}, after: { event_type: "trip_exception", recipient_roles: [] } }, helpers).summary, "Trip exception: Off");
 });

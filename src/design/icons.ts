@@ -62,7 +62,7 @@ export const settingsIcons: Record<string, Icon> = {
   "my-access": UserCircle,
   team: UsersThree,
   services: ListChecks,
-  integrations: PlugsConnected,
+  "website-requests": PlugsConnected,
   notifications: Bell,
   operations: Clock,
   security: ShieldCheck,

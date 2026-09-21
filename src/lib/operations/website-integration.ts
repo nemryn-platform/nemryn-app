@@ -14,6 +14,10 @@ export interface WebsiteIntegration {
   createdAt: string;
   requestCount: number;
   lastRequestReceivedAt: string | null;
+  /** D1 guidance preference; null = a connection that predates D1 ("Existing connection"). */
+  connectionMethod: string | null;
+  /** D1 guidance preference (who manages the website); null = not chosen. */
+  websiteManager: string | null;
 }
 
 /**
@@ -46,6 +50,8 @@ export async function listWebsiteIntegrations(organizationId: string): Promise<W
       createdAt: row.created_at,
       requestCount: Number(row.request_count),
       lastRequestReceivedAt: row.last_request_received_at,
+      connectionMethod: row.connection_method,
+      websiteManager: row.website_manager,
     }));
 }
 

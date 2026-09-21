@@ -104,6 +104,14 @@ export function describeActivity(record: ActivityRecord, helpers: ActivityHelper
       return { title: "Website address changed", summary: origin ? `Now ${origin}.${off}` : off.trim() || null };
     }
 
+    case "website_request_form_updated": {
+      const state = after.status === "ready" ? "Ready" : "Draft";
+      return {
+        title: after.created === true ? "Website request form created" : "Website request form updated",
+        summary: `Form is ${state}`,
+      };
+    }
+
     case "staff_invitation_created":
       return { title: `${roleLabel(after.role)} invitation sent`, summary: str(after.email) };
     case "staff_invitation_resent":

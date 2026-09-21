@@ -1,6 +1,6 @@
 # Website Integration Self-Service (P1-PILOT-S4B-R4B)
 
-An Organization Admin connects their own website to Nemryn from **Settings → Integrations → Website Intake** — no SQL, no Dashboard, no service-role script, no Nemryn engineering step.
+An Organization Admin connects their own website to Nemryn from **Settings → Website Requests** (renamed from Integrations in P1-COMM-D1; `/operations/settings/integrations` redirects) — no SQL, no Dashboard, no service-role script, no Nemryn engineering step.
 
 ## Flow
 

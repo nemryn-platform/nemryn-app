@@ -9,6 +9,9 @@ export interface CopyValueProps {
   value: string;
   /** Names the thing being copied for assistive tech, e.g. "Integration ID". */
   label: string;
+  /** Visible button text (default "Copy"), e.g. "Copy setup instructions". */
+  buttonLabel?: string;
+  size?: "sm" | "md";
 }
 
 /**
@@ -16,7 +19,7 @@ export interface CopyValueProps {
  * falls back to a hidden textarea + execCommand (non-secure contexts, older
  * browsers). Announces the result politely; never throws.
  */
-export function CopyValue({ value, label }: CopyValueProps) {
+export function CopyValue({ value, label, buttonLabel = "Copy", size = "sm" }: CopyValueProps) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -59,12 +62,12 @@ export function CopyValue({ value, label }: CopyValueProps) {
       <Button
         type="button"
         variant="outline"
-        size="sm"
+        size={size}
         onClick={copy}
         aria-label={`Copy ${label}`}
         leadingIcon={copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
       >
-        {copied ? "Copied" : "Copy"}
+        {copied ? "Copied" : buttonLabel}
       </Button>
       <span className="sr-only" role="status">
         {copied ? `${label} copied` : ""}

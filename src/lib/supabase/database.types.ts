@@ -813,6 +813,7 @@ export type Database = {
       request_intake_integrations: {
         Row: {
           allowed_origins: string[] | null
+          connection_method: string | null
           created_at: string
           external_id: string
           id: string
@@ -820,9 +821,11 @@ export type Database = {
           is_active: boolean
           organization_id: string
           updated_at: string
+          website_manager: string | null
         }
         Insert: {
           allowed_origins?: string[] | null
+          connection_method?: string | null
           created_at?: string
           external_id: string
           id?: string
@@ -830,9 +833,11 @@ export type Database = {
           is_active?: boolean
           organization_id: string
           updated_at?: string
+          website_manager?: string | null
         }
         Update: {
           allowed_origins?: string[] | null
+          connection_method?: string | null
           created_at?: string
           external_id?: string
           id?: string
@@ -840,6 +845,7 @@ export type Database = {
           is_active?: boolean
           organization_id?: string
           updated_at?: string
+          website_manager?: string | null
         }
         Relationships: [
           {
@@ -1412,6 +1418,62 @@ export type Database = {
           },
         ]
       }
+      website_request_forms: {
+        Row: {
+          allow_recurring: boolean
+          confirmation_message: string
+          created_at: string
+          id: string
+          intro_text: string | null
+          offered_service_types: string[] | null
+          organization_id: string
+          require_service_choice: boolean
+          status: string
+          submit_label: string
+          title: string
+          updated_at: string
+          version: number
+        }
+        Insert: {
+          allow_recurring?: boolean
+          confirmation_message: string
+          created_at?: string
+          id?: string
+          intro_text?: string | null
+          offered_service_types?: string[] | null
+          organization_id: string
+          require_service_choice?: boolean
+          status?: string
+          submit_label: string
+          title: string
+          updated_at?: string
+          version?: number
+        }
+        Update: {
+          allow_recurring?: boolean
+          confirmation_message?: string
+          created_at?: string
+          id?: string
+          intro_text?: string | null
+          offered_service_types?: string[] | null
+          organization_id?: string
+          require_service_choice?: boolean
+          status?: string
+          submit_label?: string
+          title?: string
+          updated_at?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "website_request_forms_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -1887,6 +1949,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      get_website_request_form: {
+        Args: { p_organization_id: string }
+        Returns: {
+          allow_recurring: boolean
+          confirmation_message: string
+          intro_text: string
+          offered_service_types: string[]
+          require_service_choice: boolean
+          status: string
+          submit_label: string
+          title: string
+          updated_at: string
+          version: number
+        }[]
+      }
       has_org_role: {
         Args: { p_org_id: string; p_roles: string[] }
         Returns: boolean
@@ -1956,6 +2033,7 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: {
           allowed_origins: string[]
+          connection_method: string
           created_at: string
           external_id: string
           id: string
@@ -1963,6 +2041,7 @@ export type Database = {
           is_active: boolean
           last_request_received_at: string
           request_count: number
+          website_manager: string
         }[]
       }
       list_staff_invites: {
@@ -2210,6 +2289,26 @@ export type Database = {
         }
       }
       revoke_driver_invite: { Args: { p_invite_id: string }; Returns: boolean }
+      save_website_request_form: {
+        Args: {
+          p_allow_recurring: boolean
+          p_confirmation_message: string
+          p_intro_text?: string
+          p_offered_service_types?: string[]
+          p_organization_id: string
+          p_require_service_choice: boolean
+          p_status: string
+          p_submit_label: string
+          p_title: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["website_request_form_save_result"]
+        SetofOptions: {
+          from: "*"
+          to: "website_request_form_save_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       set_membership_status: {
         Args: { p_active: boolean; p_membership_id: string }
         Returns: Database["public"]["CompositeTypes"]["membership_change_result"]
@@ -2263,6 +2362,14 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      set_request_intake_integration_setup: {
+        Args: {
+          p_connection_method?: string
+          p_integration_id: string
+          p_website_manager?: string
+        }
+        Returns: boolean
       }
       signup_create_organization: {
         Args: {
@@ -2602,6 +2709,11 @@ export type Database = {
         trip_id: string | null
         previous_state: string | null
         current_state: string | null
+        changed: boolean | null
+      }
+      website_request_form_save_result: {
+        form_version: number | null
+        status: string | null
         changed: boolean | null
       }
     }

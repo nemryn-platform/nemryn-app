@@ -1,0 +1,207 @@
+P1-COMM-D1 — WEBSITE REQUESTS UX + UNIVERSAL FORM FOUNDATION
+Scope: LOCAL IMPLEMENTATION ONLY. Nothing pushed, deployed or committed; no `supabase db push`; production database and
+Zenward-Web untouched; no embed, hosted form or public form; D2 / S5B not started. Returned for owner review.
+
+1. SUMMARY
+Settings -> Integrations (which only ever held website intake) is now the customer-facing Settings -> Website Requests.
+The landing page explains the flow (Customer -> Your website -> Nemryn Request Hub), shows each connection with an
+operator-language status, and offers three ways to connect over ONE unchanged intake engine:
+  A. Use a Nemryn form (badge "Easiest", "Set up form")   B. Connect my existing form   C. Developer connection.
+A Nemryn form configuration foundation with a safe preview, a "Who manages your website?" guidance path (never a dead end),
+and a copy-ready developer package were added. The secure intake backend (route, submit_public_transportation_request,
+S4C attribution, rate limit) was NOT rebuilt or changed.
+
+2. WHAT CHANGED
+Database (migration 20260921130000_website_requests_form_foundation.sql — local only, NOT applied to production)
+ - request_intake_integrations: nullable guidance-only columns connection_method (nemryn_form | existing_form | developer)
+   and website_manager (self | developer | wordpress | wix | squarespace | webflow | other_builder | not_sure) with CHECKs.
+   NULL = predates D1.
+ - list_request_intake_integrations(uuid) recreated to return them (authenticated only).
+ - set_request_intake_integration_setup(p_integration_id, p_connection_method default null, p_website_manager default null):
+   Organization Admin of an ACTIVE organization; ZW002 otherwise; ZW006 invalid value.
+ - NEW class-A table website_request_forms (one row per organization): status draft|ready, title, intro_text, submit_label,
+   confirmation_message (length + control-character CHECKs), offered_service_types (NULL = every offered service),
+   allow_recurring, require_service_choice, version, timestamps. RLS on, NO policy, all privileges revoked from
+   public/anon/authenticated/service_role.
+ - get_website_request_form(uuid), save_website_request_form(...): Org Admin only. Validates bounds/control characters/status;
+   a service subset must be canonical AND currently offered by the organization (ZW006); advisory lock serialises first
+   saves; version increments ONLY when content changes; audit website_request_form_updated (status + version only).
+ - list_activity_events whitelist extended with website_request_form_updated.
+Application
+ - Routes: /operations/settings/website-requests (landing), /form, /existing-form, /developer.
+   /operations/settings/integrations now redirects to /operations/settings/website-requests.
+ - Settings navigation: Organization, My Access, Team & Access, Services & Intake, Website Requests, Notifications,
+   Operations, Security, Activity ("Website Requests — Receive transportation requests from your website").
+ - Pure module website-requests-core.ts (labels, method cards, manager guidance, form config/validation/preview model,
+   developer package); server helpers website-request-form.ts, website-requests-data.ts; server actions
+   saveConnectionSetupAction, saveWebsiteRequestFormAction (customer-language messages).
+ - Components: WebsiteRequestsOverview, WebsiteConnectionControls, NemrynFormEditor, FormPreview, ExistingFormSetup,
+   DeveloperSetup, ConnectionSetupControls; CopyValue gained optional buttonLabel/size.
+ - Activity: "Website request form created/updated — Form is Draft/Ready".
+Docs: docs/product/website-requests.md (new), website-integration-self-service.md (rename note),
+docs/security/database-privilege-contract.md (new table class A; authenticated functions 72 -> 75).
+
+3. WEBSITE REQUESTS UX
+Landing: title/description, flow strip, connection cards with status Not connected / Disabled / Ready to test / Connected
+(mapped from the existing derived status; never stored), requests received, last request, "connected through", services
+accepted, "Test your connection" guidance, Turn on / Turn off, Change website. Empty state: "Not connected" + "Connect your
+website". Integration ID, endpoint and the developer link live in a collapsed "Technical details" section.
+Origin is described as "approved website"; Test connection guidance is operator language.
+
+4. NORMAL OPERATOR TECHNICAL CLUTTER
+The landing page, form page and existing-form page contain no Supabase/service-role/RPC/UUID/Integration-ID text until
+"Technical details" is opened (browser E2E asserts the Integration ID is not visibly rendered while collapsed and that no
+UUID or developer vocabulary appears). The developer page is the only place technical vocabulary is prominent, by design.
+
+5. THREE CONNECTION METHODS
+A Use a Nemryn form -> /form (configuration + preview; placing it on a website is the next phase and the page says so).
+B Connect my existing form -> /existing-form. "Who manages your website?": I manage it myself, developer or web agency,
+  WordPress, Wix, Squarespace, Webflow, other builder, I'm not sure. The choice ONLY changes guidance (persisted as a
+  preference). No plugin / one-click claims (unit-tested). "I'm not sure" offers "Use a Nemryn form" AND "Copy instructions
+  for my website provider" — no dead end.
+C Developer connection -> /developer: endpoint, Integration ID, Origin requirement (a restriction, not a password), payload,
+  optional acquisition, idempotency, example server config, test steps, copy-ready package.
+"Use this method" / "Save my choice" persist connection_method / website_manager on the integration.
+
+6. EXISTING INTEGRATIONS PRESERVED
+Connections created before D1 (including manually provisioned ones and any integration such as Zenward's) appear without
+being recreated, with method label "Existing connection" (connection_method NULL is left untouched — E2E proves the row is
+unchanged). No partner-specific code exists. Verified with a legacy row for a fictional tenant.
+
+7. NEMRYN FORM CONFIGURATION
+One configuration per organization: headline, introduction, button text, confirmation message, service selection ("every
+service we offer" or a chosen subset), "Ask people to choose a service", "Let people say a trip repeats", Draft / Ready.
+Fields required by the canonical intake contract (pickup, destination, return trip, requester name/relationship/phone) are
+always present and cannot be hidden; no free-form schema. Form state (Not configured / Draft / Ready) is independent of
+connection status. formVersion is stable and S4C-compatible: nemryn-form-v<version>; version bumps only on content change.
+
+8. FORM PREVIEW
+Purely presentational (no <form>, disabled submit button, "Preview only — nothing here is sent to Nemryn"). "Preview
+confirmation message" swaps local text only. E2E: no request row created, and the browser performed ZERO requests to the
+public-intake endpoint during preview/edit/save.
+
+9. PUBLIC FORM EXPOSED: NO. There is no public URL, hosted form or embed. The form configuration is readable only through an
+Org-Admin RPC.
+
+10. SERVICES RESPECTED
+Services & Intake remains the source of truth. The form lists only currently offered services; the database rejects a saved
+subset containing a non-offered service (ZW006); at read time the list is the intersection; disabled services cannot be
+ticked; the editor warns when a saved service is no longer offered (E2E: disabling wheelchair transportation removed it from
+the preview and showed the notice). Organization that never configured offerings = every canonical service (matches intake).
+
+11. ACQUISITION COMPATIBLE
+Unchanged S4C contract. formVersion "nemryn-form-v<N>" is accepted and stored by the existing route (E2E: a request carrying
+formVersion nemryn-form-v2 through the unchanged public route stored form_version = nemryn-form-v2). D1 does not capture
+acquisition; D2 owns that.
+
+12. DEVELOPER PACKAGE
+Copy-ready: endpoint, integration ID, approved origin + Origin requirement, JSON payload, optional acquisition, idempotency
+key, example server configuration, test steps. SECRETS EXPOSED: none — no service-role key, Supabase details, database ids,
+internal RPC names or organization UUID (unit + E2E assertions on the package text and pages).
+
+13. SECURITY / AUTHORIZATION
+Org Admin only (page guard + database re-check of Membership, role, ACTIVE organization). Browser E2E on fictional users:
+Dispatcher, Driver, inactive Membership and Platform Admin (no Membership) are turned away from all four routes; another
+tenant's admin sees only its own connections/form and cannot pull a foreign connection via ?connection=; a suspended
+(inactive) organization's admin cannot use the editor. SQL: Dispatcher/Driver/inactive/Platform/other tenant/suspended all get
+ZW002; anon and service_role cannot execute or touch the table. Cross-tenant: no leak. Dispatcher config mutation: denied.
+Driver access: denied. Platform Admin tenant config: denied. Suspended org: denied.
+SEC-01: website_request_forms is class A; three new authenticated-only functions; privilege contract updated in the same
+phase; scripts/verify-db-privileges.sh local = 0 violations of 28; drift-proof (prove_contract_detects_drift.py) still
+detects every drift kind.
+
+14. TESTS (all run locally; fictional data only)
+SQL (fresh `supabase db reset --local` before the run; the two isolated suites re-run after their own fresh reset):
+ - website_requests_form_tests 37/37; privilege_baseline_behavior 30; client_privilege_surface 21; function_privilege 7;
+   security_definer_exposure 20; rls_adversarial 33 (0 failures; one "FAIL" word match is the suite's own banner);
+   tenant_settings_foundation 51; website_integration_self_service 72; public_request_intake 42; public_intake_rate_limit 8;
+   team_services_operations 106; website_intake_acquisition 52 (0 failures; "FAIL" match is a test title);
+   notifications_activity 42; platform_admin_foundation 58.
+ - Concurrency: website_requests_form_concurrency_test.sh (6 parallel first saves -> 1 row, version 6, 6 audits) PASS;
+   website_intake_acquisition_concurrency and public_request_intake_concurrency 0 failures.
+Unit: npm test 483/483 (14 new website-requests-core tests: service-list parity, no plugin claims, package content; Activity
+mapping tests extended).
+Browser E2E (.tmp-qa/d1-website-requests-e2e.mjs, production build via `next start`, fresh tenant via the real first-run flow +
+seeded fictional users): 90 checks, 0 failures — old-route redirect, landing/empty state, three methods, connect -> turn on,
+form edit/preview/save/version/audit, services intake respect, existing-form and not-sure paths, developer page, technical
+details collapsed, S4C formVersion via the unchanged route, Activity wording, 390px no-overflow on all four screens, legacy
+integration as "Existing connection", cross-tenant and role denial, suspended org.
+A bug found by E2E and fixed: React 19 resets an action <form> after it runs, desynchronising the editor's controlled
+radios/checkboxes, so a second save silently changed the form and bumped the version. The editor now submits through an
+onSubmit handler; re-verified (repeat save keeps version).
+
+15. REGRESSION
+tsc --noEmit: clean. npm run lint: 0 errors (73 warnings, all in untracked scratch .tmp-qa scripts; none in src).
+npm test: 483 pass / 0 fail. npm run build: succeeds.
+
+16. KNOWN LIMITS / NOTES FOR OWNER
+ - Form configuration is per organization (not bound to a particular integration); D2 must decide the binding when a form is
+   actually served.
+ - If a saved service subset later contains a service the organization no longer offers, the next save drops it (the editor
+   warns beforehand).
+ - The pre-existing modified docs/reports/p1-pilot-s4c-... file and .tmp-qa scratch files are outside D1 and were left as found.
+ - The migration has NOT been applied to production. Release order when approved: migration first, app second (as in S4C).
+
+17. STATUS
+WEBSITE REQUESTS UX:                       DONE (local)
+NORMAL OPERATOR TECHNICAL CLUTTER:         NONE (Technical details collapsed; developer vocabulary only on /developer)
+THREE CONNECTION METHODS:                  PRESENT (Nemryn form / existing form / developer)
+EXISTING INTEGRATIONS PRESERVED:           YES ("Existing connection"; no special-case code)
+NEMRYN FORM CONFIGURATION:                 FOUNDATION DONE (Draft/Ready, versioned, services-aware)
+FORM PREVIEW:                              SAFE (no submit, no endpoint call — verified)
+PUBLIC FORM EXPOSED:                       NO
+SERVICES RESPECTED:                        YES
+ACQUISITION COMPATIBLE:                    YES (nemryn-form-v<N>)
+DEVELOPER PACKAGE:                         DONE
+SECRETS EXPOSED:                           NO
+CROSS-TENANT:                              NO LEAK
+DISPATCHER CONFIG MUTATION:                DENIED
+DRIVER ACCESS:                             DENIED
+PLATFORM ADMIN TENANT CONFIG:              DENIED
+SUSPENDED ORG:                             DENIED
+OLD SETTINGS ROUTE:                        REDIRECTS to /operations/settings/website-requests
+WEBSITE INTAKE REGRESSION:                 NONE (public intake, S4C, rate limit suites pass)
+ACL CONTRACT:                              0 violations of 28 (updated in this phase)
+TSC:                                       PASS
+LINT:                                      PASS (0 errors)
+UNIT:                                      PASS (483/483)
+BUILD:                                     PASS
+READY FOR D1 PRODUCTION RELEASE:           YES, after owner review (migration first, then app)
+BLOCKERS:                                  NONE
+NEXT: P1-COMM-D2 (embed / hosted form and acquisition capture) — NOT started
+
+==================================================
+ADDENDUM — P1-COMM-D1R: FORM VERSION CONCURRENCY REVIEW
+==================================================
+Question: does "6 parallel first saves -> 1 row, version 6, 6 audits" mean identical concurrent saves inflate version/audit?
+
+1. Classification of the ORIGINAL result: A — SIX DIFFERENT CONFIGURATIONS. The original script sent, for caller i, 
+   p_title => 'Concurrent title i', p_submit_label => 'Send i', p_confirmation_message => 'Thanks i' (all other arguments
+   equal). Six distinct titles/labels/messages = six committed content changes (1 creation + 5 changes) -> version 6 and 6
+   audit events were correct, and the script's own comment said so. The version semantics were not violated; the test simply
+   never exercised the identical case.
+2. Implementation (unchanged, no fix needed): save_website_request_form takes a per-organization advisory lock, reads the
+   row FOR UPDATE, canonicalises the input (trim, control-character checks, de-duplicated/sorted service list), and
+   - no row -> insert version 1 + one audit (created=true);
+   - content identical and status identical -> returns changed=false, NO update, NO version bump, NO audit;
+   - status-only change (Draft <-> Ready) -> audit, version unchanged (a real state change, not a content change);
+   - content change -> version+1 and one audit.
+   Concurrent callers therefore serialise on the lock; each later caller compares against the committed row.
+3. Tests added (supabase/tests/website_requests_form_concurrency_test.sh, 6 separate psql processes, same Organization Admin,
+   the exact per-caller payloads are printed at the top of the script output):
+   CASE A identical first saves            -> 1 row, version 1, 1 audit, exactly 1 caller changed=true.
+   CASE B six different configurations     -> 1 row, version 6, 6 audits, 6 callers changed=true (the original scenario).
+   CASE C two groups of three identical    -> 1 row; version == audits == callers reporting a change; audited versions are
+                                              exactly 1..V with no gap/duplicate. V depends on how the two groups interleave in the
+                                              (arbitrary) serialisation order (observed 2 and 4 over repeated runs), so the test
+                                              asserts the invariant, not a fixed number.
+   CASE D same content, different whitespace / service order / duplicate service -> canonicalised: 1 row, version 1, 1 audit.
+   CASE E (added at release) identical saves against an EXISTING form (version 1, 1 audit) -> version stays 1, still 1 audit,
+                                              0 callers report a change.
+   Every case also asserts no caller errored. Ran 5 times: 0 failures each time. Existing SQL test F5 (sequential identical
+   save: version 1, changed=false, no new audit) still passes (37/37).
+4. Audit / Activity: no new audit subsystem, no code change. Creation and update share website_request_form_updated;
+   Activity already distinguishes them ("created" vs "updated", from the audit's created flag). Identical no-op saves produce no
+   event.
+5. Result: NO PRODUCT DEFECT. Only the test was extended. Production release status of D1 unchanged (READY after owner review;
+   migration first, app second). ACL contract 0 of 28. Nothing deployed, pushed or committed; Zenward-Web untouched; D2 not started.

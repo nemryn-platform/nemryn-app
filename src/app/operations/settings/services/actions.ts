@@ -49,7 +49,7 @@ export async function saveServiceOfferingsAction(
   }
 
   revalidatePath("/operations/settings/services");
-  revalidatePath("/operations/settings/integrations");
+  revalidatePath("/operations/settings/website-requests", "layout");
   return {
     status: "success",
     message: data?.changed ? "Services saved." : "No changes to save.",
