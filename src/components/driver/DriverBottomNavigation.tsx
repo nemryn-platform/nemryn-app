@@ -23,7 +23,7 @@ export function DriverBottomNavigation() {
   return (
     <nav
       aria-label="Primary"
-      className="flex h-16 shrink-0 items-stretch border-t border-border-subtle bg-surface-elevated"
+      className="flex min-h-16 shrink-0 items-stretch border-t border-border-subtle bg-surface-elevated"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {NAV_ITEMS.map((item) => {
@@ -35,7 +35,7 @@ export function DriverBottomNavigation() {
             href={item.href}
             aria-current={isActive ? "page" : undefined}
             className={cn(
-              "flex flex-1 flex-col items-center justify-center gap-1",
+              "flex min-h-16 flex-1 flex-col items-center justify-center gap-1",
               isActive ? "text-info-text" : "text-text-muted",
             )}
           >

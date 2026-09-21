@@ -28,5 +28,7 @@ export async function proxy(request: NextRequest) {
  * this rename.
  */
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // P1-PILOT-S5A: the service worker script, the manifest, the reachability probe and the public
+  // offline page are static/public and must not pay a session-refresh round trip.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|sw\\.js$|driver\\.webmanifest$|api/ping$|offline$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
 };

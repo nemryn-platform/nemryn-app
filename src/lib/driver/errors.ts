@@ -13,6 +13,7 @@ export const DRIVER_ACTION_ERROR = {
   UNAUTHORIZED: "UNAUTHORIZED", // ZW001 — caller can see the Trip but can't act on it right now (reassigned away, already closed)
   NOT_FOUND: "NOT_FOUND", // ZW002 — Trip doesn't exist, or caller has no legitimate visibility (foreign org, never assigned)
   STALE_STATE: "STALE_STATE", // ZW003 — the Trip's actual state no longer matches what this action expected
+  NETWORK: "NETWORK", // P1-PILOT-S5A — the request never reached Nemryn (offline / dropped connection); nothing was changed
   UNKNOWN: "UNKNOWN", // anything else — never render the underlying detail
 } as const;
 
@@ -23,6 +24,7 @@ export const DRIVER_ACTION_ERROR_MESSAGE: Record<DriverActionErrorCode, string> 
   UNAUTHORIZED: "This action is no longer available for this trip. It may have been reassigned.",
   NOT_FOUND: "This trip is no longer available.",
   STALE_STATE: "This trip has changed. Refreshing the latest details.",
+  NETWORK: "Can't reach Nemryn. Your update was not sent. Check your connection, then try again.",
   UNKNOWN: "Something went wrong. Please try again.",
 };
 

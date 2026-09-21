@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { DriverBottomNavigation } from "./DriverBottomNavigation";
+import { DriverNetworkStatus } from "./DriverNetworkStatus";
+import { DriverServiceWorker } from "./DriverServiceWorker";
 
 export interface DriverShellProps {
   header?: ReactNode;
@@ -39,7 +41,11 @@ export function DriverShell({ header, children }: DriverShellProps) {
     <div className="flex min-h-dvh justify-center bg-surface-secondary">
       <div className="flex h-dvh w-full max-w-md flex-col bg-surface-app sm:border sm:border-border-subtle sm:shadow-md">
         {header}
-        <main className="flex-1 overflow-y-auto px-4 py-zw-md">{children}</main>
+        {/* P1-PILOT-S5A: PWA runtime notices, in normal flow (never overlaying a trip action). */}
+        <DriverServiceWorker />
+        <DriverNetworkStatus />
+        {/* overscroll-contain: an accidental pull-to-refresh in the installed app must not reload mid-action. */}
+        <main className="flex-1 overflow-y-auto overscroll-y-contain px-4 py-zw-md">{children}</main>
         <DriverBottomNavigation />
       </div>
     </div>

@@ -9,6 +9,7 @@ import { DriverHeader } from "@/components/driver/DriverHeader";
 import { Avatar } from "@/components/ui/Avatar";
 import { IconButton } from "@/components/ui/IconButton";
 import { signOutAction } from "@/lib/auth/sign-out-action";
+import { notifyWorkerLogout } from "@/lib/pwa/register";
 
 function getDriverHeaderTitle(pathname: string) {
   if (pathname === "/driver") return "Today";
@@ -54,7 +55,7 @@ export function DriverLayoutClient({ children, driverName, showOperationsLink }:
               <Link
                 href="/driver/trips"
                 aria-label="Back to Trips"
-                className="flex size-8 shrink-0 items-center justify-center rounded-sm text-text-secondary hover:bg-surface-hover"
+                className="flex size-11 shrink-0 items-center justify-center rounded-sm text-text-secondary hover:bg-surface-hover"
               >
                 <ArrowLeft className="size-5" aria-hidden />
               </Link>
@@ -73,7 +74,7 @@ export function DriverLayoutClient({ children, driverName, showOperationsLink }:
                   <SquaresFour className="size-5" aria-hidden />
                 </Link>
               )}
-              <form action={signOutAction}>
+              <form action={signOutAction} onSubmit={notifyWorkerLogout}>
                 <IconButton type="submit" label="Sign out" icon={<SignOut className="size-5" aria-hidden />} />
               </form>
             </div>

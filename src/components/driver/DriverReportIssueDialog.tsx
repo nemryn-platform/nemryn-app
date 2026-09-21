@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog } from "@/components/ui/Dialog";
 import { Select } from "@/components/ui/Select";
@@ -8,6 +8,9 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { driverReportIssueAction, type DriverReportIssueState } from "@/app/driver/trips/[tripId]/actions";
 import { tripExceptionErrorMessage, EXCEPTION_TYPE_OPTIONS } from "@/lib/operations/trip-exception-errors";
+import { DRIVER_ACTION_ERROR_MESSAGE } from "@/lib/driver/errors";
+import { isNetworkFailure } from "@/lib/pwa/pwa-core";
+import { reportNetworkFailure } from "@/lib/pwa/register";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 
@@ -27,7 +30,26 @@ export interface DriverReportIssueDialogProps {
  * work item's own explicit scope.
  */
 export function DriverReportIssueDialog({ tripId, onClose }: DriverReportIssueDialogProps) {
-  const [state, formAction, pending] = useActionState(driverReportIssueAction, INITIAL_STATE);
+  // P1-PILOT-S5A: an unreachable network is an explicit failure (the report was NOT sent); the dialog and
+  // the Driver's typed text stay open so they can retry once connected. Nothing is queued.
+  const [networkFailed, setNetworkFailed] = useState(false);
+  // Controlled fields: React clears uncontrolled inputs when a form action settles, which would erase what the
+  // Driver typed exactly when a retry is needed.
+  const [exceptionType, setExceptionType] = useState("");
+  const [description, setDescription] = useState("");
+  const [state, formAction, pending] = useActionState(async (previous: DriverReportIssueState, formData: FormData): Promise<DriverReportIssueState> => {
+    setNetworkFailed(false);
+    try {
+      return await driverReportIssueAction(previous, formData);
+    } catch (error) {
+      if (isNetworkFailure(error, typeof navigator === "undefined" ? undefined : navigator.onLine)) {
+        reportNetworkFailure();
+        setNetworkFailed(true);
+        return previous;
+      }
+      throw error;
+    }
+  }, INITIAL_STATE);
   const router = useRouter();
 
   useEffect(() => {
@@ -49,6 +71,8 @@ export function DriverReportIssueDialog({ tripId, onClose }: DriverReportIssueDi
           required
           placeholder="Choose a category"
           options={EXCEPTION_TYPE_OPTIONS}
+          value={exceptionType}
+          onChange={(event) => setExceptionType(event.target.value)}
           disabled={pending}
         />
 
@@ -57,10 +81,17 @@ export function DriverReportIssueDialog({ tripId, onClose }: DriverReportIssueDi
           name="description"
           required
           placeholder="e.g. Flat tire, waiting for a backup vehicle."
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
           disabled={pending}
         />
 
-        {state.status === "error" && (
+        {networkFailed && (
+          <p role="alert" className={cn(typography.bodySmall, "text-critical-text")}>
+            {DRIVER_ACTION_ERROR_MESSAGE.NETWORK}
+          </p>
+        )}
+        {state.status === "error" && !networkFailed && (
           <p role="alert" className={cn(typography.bodySmall, "text-critical-text")}>
             {tripExceptionErrorMessage(state.errorCode ?? "UNKNOWN")}
           </p>

@@ -1,0 +1,312 @@
+NEMRYN PLATFORM — P1-PILOT-S5A — DRIVER PWA FOUNDATION
+Report date: 2026-09-20
+Scope: local only. Nothing pushed, deployed, or changed in Vercel/production; no production Driver data; Zenward-Web, the old Zenward integration, official Zenward onboarding, Platform Admin and tenant Settings architecture untouched. S5A is UNCOMMITTED, left for owner review.
+Product rule honoured: Nemryn is multi-tenant; nothing Zenward-specific (no IDs, branding, routes, conditionals) exists in any new or changed file (grep-verified; manifest asserted tenant-neutral; a Driver of Org B sees Org B on Profile).
+
+============================================================
+STARTING STATE
+============================================================
+main == origin/main == 3d3cf075d70073e552bafd57d08c654543a97376 (production release R4A–R4E). Working tree clean except untracked scratch/reports. Local DB reset to seed for the E2E (seeded fictional tenants only).
+
+============================================================
+CURRENT DRIVER AUDIT (read fresh, before building)
+============================================================
+CURRENT DRIVER ROUTES: /driver (Today), /driver/trips, /driver/trips/[tripId] (active trip), /driver/history, /driver/profile (was a scaffold stub: "not yet implemented"). Shell = DriverShell (header + content + fixed bottom nav Today/Trips/History/Profile), capped at max-w-md on wide screens.
+CURRENT DRIVER MOBILE QUALITY: mobile-first already: h-dvh column, header top safe-area padding, bottom-nav safe-area padding, viewport-fit=cover, 64px nav, long text wraps. Gaps found: bottom nav used a fixed h-16 so the safe-area padding ate its content height; the trip back button was 32px (below the 44px touch target); no keyboard-resize hint; pull-to-refresh not contained; Profile was a stub.
+CURRENT AUTH FLOW: server-side requireDriverAccess (layout + every action) -> resolveOrganizationContext -> driver_get_profile (current_driver_id, active Membership, active organization after R4E); signed out -> /sign-in?next=; no-driver-link state renders inline; suspended organization -> /access-unavailable "Workspace suspended". Session refresh in src/proxy.ts. No separate PWA auth was created.
+CURRENT NETWORK DEPENDENCIES: every screen is server-rendered from RPCs (driver_get_*); lifecycle progress, Report Issue and location posts are Server Actions; the location tracker posts ~every 20s while a trip is in the tracking window (foreground, tap-to-start).
+CURRENT OFFLINE BEHAVIOR: none. Offline, a navigation showed the browser's error page; a failed Server Action would have thrown into the error boundary (the action call had no network-failure handling); the location tracker degraded quietly.
+CURRENT INSTALLABILITY: not installable: no manifest, no service worker, only an SVG favicon, no PNG/maskable/apple icons, no theme-color, no iOS web-app meta.
+Storage audit (before): no localStorage / sessionStorage / IndexedDB / Cache Storage use anywhere in src (grep). Authenticated responses are dynamic (Cache-Control private, no-store from Next).
+Existing capabilities noted: no camera/photo capture and no proof-capture UI in the Driver workflow (proof of service is Operations-side, derived); external map links only (no map SDK); foreground location tracking exists (unchanged).
+
+============================================================
+PWA ARCHITECTURE
+============================================================
+A delivery layer over the unchanged Driver domain:
+ - /driver.webmanifest (route handler, static) and /sw.js (route handler, static per build) — both public, tenant-free, excluded from the session proxy.
+ - /offline (public static page) and /api/ping (204, no-store reachability probe).
+ - Client pieces inside the Driver shell only: DriverServiceWorker (registration + update notice), DriverNetworkStatus (global indicator), DriverInstallCard (Profile only).
+ - Icons /pwa/* generated from the approved brand master by scripts/generate-pwa-icons.mjs (artwork reused byte-for-byte; only wrapped in a scale transform for maskable/apple).
+ - Build id: next.config.ts sets NEXT_PUBLIC_BUILD_ID (Vercel commit SHA, else a local timestamp) and generateBuildId, so every deployment emits a different sw.js.
+ - Service workers register in PRODUCTION builds only (dev chunks are not hashed).
+
+============================================================
+MANIFEST
+============================================================
+name "Nemryn Driver"; short_name "Nemryn"; description; id and start_url "/driver"; scope "/"; display standalone; orientation any; background #F7F7F4; theme #171A1D; lang en-US; icons 192/512 (any) + 512 (maskable). Chrome parses it with zero errors (Page.getAppManifest). Linked from the Driver layout only (with apple-touch-icon, theme-color, apple-mobile-web-app-title "Nemryn Driver", viewport-fit=cover, interactive-widget=resizes-content).
+
+============================================================
+APP IDENTITY
+============================================================
+Software product name, not tenant: "Nemryn Driver" (full) / "Nemryn" (short). Decision: short_name is brand-only because launchers truncate around 12 characters ("Nemryn Driver" is 13) and "Driver" alone is ambiguous next to other apps; the Driver context is carried by the full name, the start URL and the icon label on iOS ("Nemryn Driver"). Not "Zenward Driver". Tenant identity appears only inside the authenticated workspace (Profile shows the Driver's active organization from context).
+Orientation "any": drivers mount phones landscape; a Fold unfolds near-square.
+Scope "/" (not "/driver"): sign-in, select-organization and email-confirmation pages a Driver passes through must remain inside the standalone window; an out-of-scope hop would open a browser bar mid-flow.
+
+============================================================
+ICONS
+============================================================
+public/pwa/icon-192.png, icon-512.png (approved rounded Deep Graphite tile + Mineral White symbol), icon-maskable-512.png (full-bleed graphite, symbol scaled to 88% to sit inside the maskable safe zone), apple-touch-icon.png (180, full-bleed). All PNG, dimensions verified by unit test and in-browser fetch. Viewed and visually checked. No new sub-brand; no font files exported. If the brand master changes, re-run the script (Chrome headless).
+
+============================================================
+SERVICE WORKER
+============================================================
+Scope "/driver" (deliberately without trailing slash: a scope of "/driver/" would not control the start page /driver itself — found in the first E2E run and fixed). Emitted per build by src/lib/pwa/service-worker.ts; the unit tests execute the exact emitted source in a sandbox.
+ - install: precache the public /offline page, its own CSS/JS/fonts and the icons/brand symbol with credentials omitted. It does NOT skipWaiting.
+ - activate: delete older Nemryn caches, claim clients.
+ - fetch: only GET, same-origin. Navigations: network only; on network failure serve cached /offline; any server response (401/404/500…) passes through unchanged. Allowlisted static assets (/_next/static, /pwa, /brand): cache-first, only ok+basic responses stored. Everything else: NOT intercepted.
+ - message: SKIP_WAITING (update) and LOGOUT (purge).
+ - No background sync, no periodic sync, no push handlers.
+
+============================================================
+CACHE POLICY
+============================================================
+Static: cache-first for hashed build assets and public icons. Shell: /offline precached. Nothing else is ever cached. HTTP headers: /driver/** Cache-Control "private, no-store, max-age=0" (Next default, now also pinned in next.config.ts); /sw.js "no-cache, no-store, must-revalidate"; manifest 1h revalidate; /api/ping no-store.
+
+============================================================
+AUTHENTICATED DATA POLICY
+============================================================
+Authenticated operational data is NETWORK-FIRST with NO persistent service-worker cache. Verified in-browser after visiting Today, Trips, an active Trip, History and Profile and after a full trip lifecycle: Cache Storage holds only /_next/static/**, /pwa/**, /brand/** and /offline (19 entries); none of six sentinel strings (passenger name, pickup address, facility, assistance notes, instructions) occur in any cached body; no /driver*, /api, _rsc or Supabase URL cached; localStorage/sessionStorage contain no operational data; IndexedDB has no databases.
+
+============================================================
+OFFLINE EXPERIENCE
+============================================================
+/offline: "You're offline / Reconnect to view current trip information. / Your connection is unavailable, so current trip details may not be shown. / Trip updates cannot be sent until your connection returns. [Try again]". Static, tenant-free, no JavaScript required, no "will sync later" wording. Shown by the worker when a /driver navigation cannot reach Nemryn — verified with the backend actually unreachable: no stale trip/passenger/address text, styled correctly from the precached shell, "Try again" (min 44px) links to /driver. On a live page, going offline shows the in-flow banner "Offline. Trip updates require a connection." (verified).
+
+============================================================
+NETWORK FAILURE
+============================================================
+Lifecycle actions and Report Issue now treat an unreachable network as an explicit, retryable failure (isNetworkFailure): message "Can't reach Nemryn. Your update was not sent. Check your connection, then try again."; no optimistic state, nothing queued (no IndexedDB/localStorage), no replay; the screen keeps its context (page did not reload or navigate; state still "Assigned"); the button is enabled again; router.refresh is skipped for a network failure (it would itself fail). Report Issue is now controlled-input so React's post-action form reset cannot erase what the Driver typed; text and choice retained (verified). Server truth: trips.state and trip_events unchanged, no exception created while offline; after reconnect the retry succeeds exactly once (1 exception, 1 notification event). Design note: if only a RESPONSE is lost, a retry sends the same expected-current-state and the database returns STALE_STATE (existing ZW003 handling) instead of double-applying.
+
+============================================================
+UPDATE STRATEGY
+============================================================
+New deployment -> new sw.js bytes -> the browser installs a new worker that WAITS. DriverServiceWorker shows "A new version of Nemryn is available. [Update]". The app reloads only when the Driver taps Update (SKIP_WAITING -> controllerchange -> one reload). It also checks for updates on returning to the foreground and every 30 minutes. Verified across a real second build in the same browser profile: notice appeared, worker stayed "waiting", the page did NOT reload by itself (marker persisted, also after 4 more seconds), Update reloaded onto the new worker, the old build's cache was deleted, only the new build's cache remained, the Driver stayed signed in.
+
+============================================================
+DRIVER SHELL
+============================================================
+Changes (small): bottom nav min-h-16 + safe-area padding (no longer squeezed), nav items min 64px tall; trip back button 44x44; main scroll area overscroll-y-contain; network banner and update notice in normal flow under the header (never overlaying a trip action); viewport interactive-widget=resizes-content. Existing design language preserved. Profile implemented as the account entry (name, organization, phone, install card, app version).
+
+============================================================
+RESPONSIVE
+============================================================
+Emulated (mobile metrics + safe-area insets where supported): iPhone SE 320x568, iPhone 15 393x852 (top 59 / bottom 34), Pixel-class 412x915, Galaxy Z Fold5 cover 344x882, Fold5 unfolded 673x841, tablet 768x1024, 1024x768. On Today, Trips, Active Trip, History, Profile at every size: no horizontal overflow, bottom nav fully visible, nav and header touch targets >= 44px, safe-area insets honoured. A 160-character unbroken pickup address fixture wrapped without overflow at 320px. Screenshots reviewed (offline banner, offline page, 344/393 Today).
+Not testable here: a physical keyboard opening on a real device (the viewport hint is present and asserted); real iOS Safari (emulated by UA only) — see OPEN ISSUES.
+
+============================================================
+NAVIGATION
+============================================================
+Bottom nav unchanged: Today, Trips, History, Profile. The active trip stays one tap away (Today/Trips). Profile is now real. No new operational surfaces.
+
+============================================================
+DEEP LINKS
+============================================================
+Verified: /driver, /driver/trips, /driver/trips/<assigned id>, /driver/history, /driver/profile open directly (manifest scope "/" covers them, so a Nemryn link opens in the installed app where the OS supports it). Authorization stays assignment-scoped: another Driver's trip, an Org B trip, a malformed id and a random id all produce the identical calm "Trip unavailable" with no data. A completed trip is no longer reachable (unchanged behaviour).
+
+============================================================
+SESSION / AUTH
+============================================================
+Verified with the existing mechanism only: signed-out start at /driver -> /sign-in?next=%2Fdriver -> sign-in -> /driver; close/reopen keeps the session; cookies cleared (expired) -> clean sign-in route, no error page; suspended organization -> "Workspace suspended"; inactive Membership -> denied; reactivated Membership -> access restored; sign-out ends the session and returns to /sign-in.
+
+============================================================
+MULTI-TENANT BEHAVIOR
+============================================================
+Organization name comes from the Driver's active context (Org A driver sees "Fictional Org A", Org B driver sees "Fictional Org B"). No tenant ids in URLs, no tenant conditionals; manifest and worker are tenant-neutral. Multi-organization selection behaviour is unchanged (existing /select-organization).
+
+============================================================
+SECURITY / STORAGE AUDIT
+============================================================
+ - Manifest/public assets: contain no tenant name, id or URL (asserted).
+ - Service worker: allowlist-only caching (unit-tested in a sandbox: authenticated HTML/RSC/API/POST/cross-origin requests are not intercepted and not written; 4xx/5xx assets not stored; sanitised build id cannot inject code).
+ - Cache Storage / localStorage / sessionStorage / IndexedDB: audited in-browser (no operational data; no IndexedDB); source grep finds no localStorage/sessionStorage/indexedDB use in the Driver, PWA or offline code.
+ - Public endpoints added: /driver.webmanifest, /sw.js, /offline, /api/ping — all static or empty, no data, no session.
+ - No Server Action or RPC was added or changed; no migration; no database, RLS or grant impact.
+
+============================================================
+LOGOUT
+============================================================
+Existing signOutAction is unchanged and still ends the Supabase session; the header sign-out form additionally posts LOGOUT to the worker, which deletes non-static Nemryn caches and any non-allowlisted entry. Verified: a planted stray cache ("nemryn-driver-runtime-e2e" with a fake authenticated response) and planted entry were removed at sign-out while the public static assets remained; after sign-out a trip deep link goes to sign-in with no trip data.
+
+============================================================
+INSTALL EXPERIENCE
+============================================================
+Profile only, no modal, no nagging, never a gate. Chromium/Android: "Install app" appears only when the browser fires beforeinstallprompt and invokes the prompt once (verified with a synthetic event). iOS/iPadOS: "To install: tap Share, then Add to Home Screen." (no install event exists there). Chrome reports zero installability errors for the production build.
+HTTPS note: installation requires a secure context; production (https://app.nemryn.com) satisfies this; localhost is treated as secure for the local test.
+
+============================================================
+STANDALONE MODE
+============================================================
+Detected via display-mode: standalone / navigator.standalone only to change the Profile install card ("You're using Nemryn Driver as an installed app"). No functionality is gated on it (verified: Driver workspace renders normally in emulated standalone).
+
+============================================================
+NETWORK STATUS
+============================================================
+DriverNetworkStatus: offline event -> 2s debounce -> "Offline. Trip updates require a connection." + reachability re-check every 6s; online event / failed action -> probe /api/ping; on success "Connected" (3s) then hidden. navigator.onLine is treated as a hint only. Server errors are not shown as offline. Verified through offline -> reconnect (no flicker, banner gone after confirmation).
+
+============================================================
+LOCATION BOUNDARY
+============================================================
+Unchanged. No background GPS; permission is still requested only from the explicit "Share My Location" tap on an active trip; nothing requests location on launch; failures still degrade quietly. Evaluation of PWA-era location strategy is S5B.
+
+============================================================
+CAMERA / PROOF
+============================================================
+No camera or evidence-capture exists in the Driver workflow; none was added; no offline evidence storage. Proof of Service (Operations) regression: page renders (below).
+
+============================================================
+NAVIGATION MAP BOUNDARY
+============================================================
+Existing external Navigate links untouched; no map SDK, API key, cost or permission added.
+
+============================================================
+PUSH BOUNDARY
+============================================================
+None: no Web Push, no VAPID keys, no subscription table, no notification-permission prompt, no push/notificationclick handlers in the worker.
+
+============================================================
+INSTALLABILITY TEST
+============================================================
+Production build served over localhost (secure context). Asserted: manifest reachable (application/manifest+json, valid JSON, required fields); 3 manifest icons + apple-touch-icon reachable as PNG with declared sizes; start_url reachable (signed out -> sign-in redirect); service worker registered, active, scope /driver, controlling the Driver page after reload; Chrome Page.getAppManifest errors = []; Page.getInstallabilityErrors = [].
+
+============================================================
+SERVICE WORKER TESTS
+============================================================
+Unit (sandboxed real SW source, 8 tests + 6 pwa-core tests): install precache set exact and no skipWaiting; navigation network-first with 500 passthrough and offline fallback without data; RSC/API/POST/cross-origin/other-navigation-like requests not intercepted, nothing written; cache-first assets written once; only ok+basic stored; activate deletes old builds and leaves foreign caches; SKIP_WAITING only on message; LOGOUT purges non-public entries and stray caches, keeps the shell.
+Browser (E2E): static cache populated as designed (19 public entries); zero authenticated/PHI content in any cache or storage; offline banner and offline page never show operational data; failed mutation produces no fake completion; logout purge; update flow across two real builds.
+
+============================================================
+DRIVER LIFECYCLE REGRESSION
+============================================================
+Real UI run as the seeded Driver: sign in -> Today -> assigned trip -> Start to Pickup -> arrived (pickup) -> Passenger Onboard -> Start to Destination -> arrived (destination) -> Complete Trip; DB state advanced exactly through en_route_to_pickup, arrived_at_pickup, passenger_onboard, en_route_to_destination, arrived_at_destination, completed; TripEvents recorded (>=6), assignment closed at completion, redirect to Today, completed trip no longer reachable. Assignment authorization (other Driver's / other org's / malformed / random ids) unchanged. Exception regression: Report Issue creates exactly one exception and one notification event (R4D) after a failed-offline attempt then a reconnect retry. Proof of Service: /operations/proof-of-service renders for the Org Admin after the lifecycle. The PWA changed no domain semantics (no Server Action/RPC/SQL changed).
+
+============================================================
+PLATFORM / TENANT REGRESSION
+============================================================
+Proportional (no backend change): Org Admin renders /operations, requests, trips, dispatch, proof-of-service, Settings, Team, Integrations, Notifications, Activity; Operations pages register NO service worker and expose NO manifest link (not an installable app); a tenant Admin still gets 404 on /platform; the Platform Admin still lands on /platform and sees the directory; public intake contract unchanged (unknown integration -> generic 400). No SQL suite was re-run because no migration, function, policy or grant changed.
+
+============================================================
+APPLICATION TESTS
+============================================================
+tsc --noEmit: exit 0. lint: 0 errors, 70 warnings (all in untracked .tmp-qa scratch; 0 in tracked/new source). npm test: 445 / 445 pass (new: 14 PWA tests). npm run build: success (routes /sw.js, /driver.webmanifest, /offline, /api/ping added).
+Browser E2E (.tmp-qa/s5a-driver-pwa-e2e.mjs, fresh DB, production build on :3100, two builds): 109 / 109 checks passed. Earlier runs surfaced and fixed: (1) SW scope "/driver/" did not control "/driver" (product fix: scope "/driver"); (2) test-method issues: page-level CDP offline emulation does not cover the worker's own fetches (offline navigation is now tested with the backend actually unreachable), Chrome ignores display-mode emulation and fires a real beforeinstallprompt (standalone/iOS now simulated via injected scripts), a marker set on the wrong page, and a wrong column name in a test query.
+
+============================================================
+FILES CREATED
+============================================================
+src/lib/pwa/{pwa-core.ts, service-worker.ts, register.ts, pwa-core.test.mjs, service-worker.test.mjs}
+src/app/{sw.js/route.ts, driver.webmanifest/route.ts, offline/page.tsx, api/ping/route.ts}
+src/components/driver/{DriverServiceWorker.tsx, DriverNetworkStatus.tsx, DriverInstallCard.tsx}
+public/pwa/{icon-192.png, icon-512.png, icon-maskable-512.png, apple-touch-icon.png}
+scripts/generate-pwa-icons.mjs
+docs/product/driver-pwa.md
+docs/reports/p1-pilot-s5a-driver-pwa-foundation.txt
+(untracked local scratch, not for commit: .tmp-qa/s5a-driver-pwa-e2e.mjs, .tmp-qa/s5a-debug-install.mjs; .tmp-qa/local-helper.mjs gained a `cdp` passthrough)
+
+============================================================
+FILES MODIFIED
+============================================================
+next.config.ts (build id env, /driver no-store header), src/proxy.ts (matcher excludes sw.js, manifest, ping, offline), src/app/driver/layout.tsx (PWA metadata + viewport), src/app/driver/profile/page.tsx (real Profile), src/components/driver/{DriverShell, DriverBottomNavigation, DriverLayoutClient, DriverLifecycleAction, DriverReportIssueDialog}.tsx, src/lib/driver/errors.ts (NETWORK code/message).
+No migration, no schema/RLS/grant change, no database types change.
+
+============================================================
+OPEN ISSUES
+============================================================
+1. Real-device verification is still needed before production: install on a physical iPhone (Safari Add to Home Screen, standalone status bar, safe areas, keyboard) and a physical Android phone/Galaxy Fold (install prompt, maskable icon crop, gesture nav). Everything here is emulated Chrome; iOS behaviours (service worker in standalone, home-screen icon) cannot be proven from this environment.
+2. The manifest scope is "/" so links to /operations opened inside the installed app stay in-app; Operations is not an installable app and gets no worker. If this is not wanted, narrow scope later and accept a browser bar at sign-in.
+3. The location tracker still degrades quietly on network failure (existing S7A behaviour) and does not use the new network indicator's failure event; S5B decides background/foreground location.
+4. First-ever load has no controlling worker until the second visit (standard); the offline page becomes available after that first controlled load.
+5. SW update detection relies on the per-build id: locally it is a timestamp; in production it is the Vercel commit SHA (VERCEL_GIT_COMMIT_SHA must be exposed to the build, which is Vercel's default). If it were missing, each build still gets a unique timestamp id.
+6. Notification "Connected" banner timing constants (2s/6s/3s) are conservative defaults chosen without field data.
+7. Production release is a normal deploy (no migration); rollback = redeploy the previous commit. A previously installed worker keeps its cache until the next visit replaces it.
+
+============================================================
+RESULT
+============================================================
+PWA MANIFEST:
+PASS
+
+INSTALLABLE:
+PASS   (Chrome installability errors: none; real-device confirmation pending, see OPEN ISSUES #1)
+
+STANDALONE:
+PASS
+
+DRIVER START URL:
+PASS
+
+STATIC CACHE:
+PASS
+
+AUTHENTICATED DATA PERSISTENT CACHE:
+NONE
+
+OFFLINE EXPERIENCE:
+PASS
+
+OFFLINE MUTATION FAKE SUCCESS:
+NONE
+
+NETWORK RECOVERY:
+PASS
+
+UPDATE HANDLING:
+PASS
+
+LOGOUT DATA LEAK:
+NONE
+
+IOS EXPERIENCE:
+PASS   (emulated: iPhone metrics, safe areas, iOS install guidance; a physical iPhone is still required)
+
+ANDROID EXPERIENCE:
+PASS
+
+FOLD EXPERIENCE:
+PASS   (344 cover and 673 unfolded emulation)
+
+DRIVER AUTH:
+PASS
+
+DRIVER LIFECYCLE:
+PASS
+
+ASSIGNMENT AUTHORIZATION:
+PASS
+
+PROOF REGRESSION:
+PASS
+
+EXCEPTION REGRESSION:
+PASS
+
+PLATFORM REGRESSION:
+PASS
+
+TENANT SETTINGS REGRESSION:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+445/445
+
+BUILD:
+PASS
+
+READY FOR S5A PRODUCTION RELEASE:
+YES   (recommended: verify on a physical iPhone and Android device via a preview or the released build first; no migration is involved)
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-PILOT-S5B — Driver Mobile Capabilities
+(location strategy, optional push, map/navigation decision)
+
+Not started. No S5B work, no production release performed.
