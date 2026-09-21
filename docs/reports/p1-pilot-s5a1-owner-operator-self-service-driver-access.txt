@@ -678,3 +678,249 @@ Then:
 P1-PILOT-S4C Website Intake Acquisition Attribution Foundation.
 
 (S4C NOT started.)
+
+
+======================================================================
+======================================================================
+P1-PILOT-S5A1 -- PRODUCTION RELEASE   (2026-09-21)
+Owner approved S5A1 + S5A1R. GitHub visibility acknowledged, NOT a blocker, NOT changed.
+======================================================================
+
+----------------------------------------------------------------------
+RELEASE COMMIT
+----------------------------------------------------------------------
+9805b52800485257f57ee487bd82fd2bdc6782a3
+"feat: add owner-operator driver self-service access"
+Author/committer: Nemryn <nemryn.app@gmail.com> (repo-local git config verified).
+One clean commit: My Access feature, self-driver hardening, INSERT hardening, tests,
+docs, both migrations, this report. 19 files, +2025/-19. Staged diff inspected: no
+.tmp-qa, .env, keys, tokens, passwords, PHI, generated artefacts; secret-pattern scan
+of added lines returned nothing. Untracked historical docs/reports/* and all
+.tmp-qa/* scratch were deliberately NOT staged.
+9f3b5dc (S5A production-report update) inspected before release: one file, +293,
+report-only, correct author. Preserved unchanged. No published history rewritten.
+
+----------------------------------------------------------------------
+GITHUB PUSH
+----------------------------------------------------------------------
+PASS. `git push origin main` (no force) as the Nemryn GitHub identity (gh: account
+"nemryn", ADMIN on the repo). cccb76f..9805b52. After push: local HEAD == origin/main
+== 9805b52, 0 ahead / 0 behind. Remote history: 9805b52, 9f3b5dc, cccb76f.
+
+GITHUB VISIBILITY
+PUBLIC (unchanged; owner decision). Note that this commit's history/report is
+world-readable.
+
+----------------------------------------------------------------------
+SUPABASE PRECHECK  (production wyocbivzgrbekuyqdfts, read-only)
+----------------------------------------------------------------------
+Before: latest remote migration 20260920130000; 20260921090000/20260921100000 absent
+(`supabase migration list --linked`: exactly those two had no remote entry).
+Duplicate gate re-run immediately before mutation:
+  select organization_id, user_id, count(*) from public.drivers
+  where user_id is not null and status='active' group by 1,2 having count(*)>1;
+  -> 0 rows.   (drivers: 7 total, 7 linked, 7 active.)
+`supabase db push --linked --dry-run` listed exactly the two intended migrations.
+
+MIGRATION 20260921090000
+APPLIED via `supabase db push --linked --yes` (established CLI workflow, no dashboard
+SQL). Remote history: 20260921090000 owner_operator_self_service_driver_access.
+MIGRATION 20260921100000
+APPLIED. Remote history: 20260921100000 retire_direct_driver_insert.
+Remote history after: ..., 20260920130000, 20260921090000, 20260921100000. A second
+`db push` reported "Remote database is up to date." Data unchanged (7/7/7), duplicates 0.
+Note: the CLI printed a pg-delta "certificate file not found" stack trace after the
+push (a post-push schema-diff helper looking for a temp CA file); it did not affect the
+migration, which is confirmed in remote history and by the catalog checks below.
+
+----------------------------------------------------------------------
+PRODUCTION GRANT STATE   (catalog checks, read-only, no tenant records touched)
+----------------------------------------------------------------------
+A. unique index drivers_one_active_link_per_user_org_idx : PRESENT
+   (organization_id, user_id) WHERE user_id IS NOT NULL AND status='active'
+B. authenticated INSERT on public.drivers : REVOKED (table, user_id, display_name all false;
+   relacl now authenticated=rd)
+C. drivers_insert_org_admin / any INSERT policy : ABSENT (policies left: drivers_select_org_operations,
+   drivers_update_org_admin)
+D. authenticated UPDATE of drivers.user_id / organization_id / id : DENIED (false);
+   UPDATE of status/display_name/phone still granted (unchanged by design)
+E. link_self_as_driver : authenticated EXECUTE available; SECURITY DEFINER,
+   search_path=public,pg_temp
+F. anon on drivers : see FINDING below
+Also: RLS enabled on drivers; list_activity_events includes driver_self_linked /
+driver_self_reactivated.
+
+*** FINDING (pre-existing, systemic, NOT introduced by S5A1/S5A1R; not changed here) ***
+Production applies Supabase's HOSTED default privileges: every table/function created
+by `postgres` in schema public is automatically granted to anon, authenticated and
+service_role. The LOCAL Supabase used by all our SQL suites does not (local anon has no
+table privileges), so the local privilege tests do not reflect production defaults.
+Effect on drivers in production: anon has table-level SELECT/INSERT/UPDATE/DELETE
+(relacl anon=arwd), authenticated has SELECT + DELETE, and anon holds EXECUTE on
+link_self_as_driver and other RPCs (proacl anon=X). These grants are INERT in practice:
+RLS is enabled on drivers, the only policies are `TO authenticated` (SELECT, UPDATE), there is
+no DELETE policy and no policy for anon, so anon cannot read or write any row and
+authenticated cannot delete or insert; the RPCs re-check auth.uid() and organization
+role internally. The same pattern holds across the schema: 19 public tables carry anon
+write privileges, all with RLS on and no anon/public policy (0 policies grant to anon/public;
+0 such tables with RLS off). Local (default-ACL-free) tests therefore pass while
+production carries a wider privilege layer whose only guard is RLS.
+=> Direct driver INSERT / user_id UPDATE remain BLOCKED (verified at the privilege and
+   policy layer for authenticated; for anon by RLS default-deny). Recommended follow-up
+   (separate, owner-gated, not S5A1): a production privilege-hardening pass that revokes
+   anon and unneeded authenticated DELETE/INSERT/UPDATE grants schema-wide (and adds a
+   production-side privilege test that reads real ACLs), so defence does not rest on RLS alone.
+   Not done here: unrelated migrations were out of scope and the effective surface is closed.
+
+----------------------------------------------------------------------
+VERCEL DEPLOYMENT
+----------------------------------------------------------------------
+PASS. The push triggered the existing Nemryn project (status URL
+https://vercel.com/nemryn/nemryn-app/HPejkWKJErMJQFFtG1gxASg2gUX3): GitHub deployment
+6566375475, environment Production, sha 9805b52, state success ("Deployment has completed"),
+url nemryn-26o5or9r3-nemryn.vercel.app. No new Vercel project, plan, zenward-web,
+app.zenwardmobility.com or deleted project touched. (Migrations were applied AFTER the
+deploy went live; the new code only calls link_self_as_driver (same signature) and
+SELECTs from drivers, so there was no incompatible window.)
+
+PRODUCTION DOMAIN
+PASS. app.nemryn.com serves build 9805b5280048 (service-worker BUILD id and cache name
+nemryn-driver-static-9805b5280048); TLS valid; /sign-in 200; protected routes 307 -> /sign-in;
+/driver.webmanifest 200, /sw.js 200, /offline 200, /api/ping 204.
+
+----------------------------------------------------------------------
+MY ACCESS SMOKE   (.tmp-qa/s5a1-prod-smoke.mjs, strictly read-only, 27/27)
+----------------------------------------------------------------------
+Existing synthetic QA accounts only; nothing created or altered; no setup/mutation
+button clicked; no real transportation record touched.
+Org A Admin and Org B Admin (both legitimate Organization Admin + linked Driver):
+- sign in; Settings lists My Access between Organization and Team & Access
+- My Access renders account / organization / Operations access "Organization Admin" /
+  Driver access = ACTIVE; no UUIDs, raw role codes or JSON
+- "Drive" item present exactly because Driver access is Active; "Open Driver" offered,
+  no setup form
+- Activity renders (no raw ids/codes), Dispatch renders, Drivers directory renders
+- tenant Admin /platform -> 404
+
+DRIVER PWA SMOKE
+PASS. Driver (synthetic, driver-only): lands /driver; /driver, /driver/trips,
+/driver/history, /driver/profile render. Regression script s5a-prod-release-verify.mjs on the
+new build: 41/41 (manifest, /sw.js registered + activated, cache = 18 public/static
+entries only, no authenticated data, no IndexedDB, sign-out clears to sign-in).
+
+AUTHORIZATION SMOKE
+- Organization Admin + linked Driver: PASS (Active, Drive shown).
+- Driver-only: PASS (cannot open /operations/settings/my-access, sent to /driver; /platform 404).
+- Tenant Admin cannot open /platform: PASS (404).
+- Organization Admin WITHOUT Driver -> no Drive item: MANUAL / NOT AUTOMATED in production
+  (both available synthetic admins are already Driver-Active, and setting one to
+  inactive would mutate records). Proven locally: E2E 52/52 ("Org Admin alone: NO Drive")
+  and SQL suites.
+- Platform Admin without tenant Membership cannot use tenant My Access: MANUAL / NOT
+  AUTOMATED (no Platform Admin credential available to this session). Proven locally
+  (owner_operator_self_service E1/E2, driver_identity_write_surface D1: ZW002 / 42501).
+- Dispatcher self-enable, suspended org, inactive Membership: covered by local SQL/E2E only
+  (not exercised against production tenants, by design).
+
+----------------------------------------------------------------------
+REGRESSION
+----------------------------------------------------------------------
+Pre-push, on a freshly reset local database: owner_operator_self_service 49/49,
+driver_identity_write_surface 37/37, operator_onboarding 40/40, function_privilege 7/7,
+security_definer_exposure 20/20, client_privilege_surface 21/21; no product failures.
+npx tsc --noEmit PASS; npm run lint 0 errors (72 warnings, all in untracked .tmp-qa;
+0 in src); npm test 451/451; npm run build PASS.
+Production compatibility (no real records created): existing tenant sign-in PASS
+(Org A/B admin, driver); existing Dispatch Driver directory PASS; existing Driver PWA
+PASS; existing assignments/Dispatch page renders PASS; public intake endpoint alive
+(GET 405, OPTIONS 204, no request submitted); Driver invite flow unchanged in code and
+covered by SQL (redeem/invite tests), not exercised in production (would create records);
+Platform Admin: access boundary only (tenant Admin/Driver get 404; authenticated Platform
+Admin session MANUAL as above).
+
+----------------------------------------------------------------------
+OPEN ITEMS
+----------------------------------------------------------------------
+1. Production default-privilege drift (FINDING above): recommend a separate, reviewed
+   privilege-hardening phase; RLS currently closes the effective surface.
+2. GitHub repo nemryn-platform/nemryn-app is PUBLIC (owner decision: not a blocker).
+3. Manual checks pending: Organization Admin without Driver in production; authenticated
+   Platform Admin -> tenant My Access denial.
+4. Self-deactivation of Driver access deferred (no controlled deactivate mutation exists).
+5. This production-release section is an UNCOMMITTED edit to a tracked report (pushing it
+   would trigger another identical Vercel deploy); commit at the owner's convenience.
+6. S4C and S5B not started.
+
+======================================================================
+S5A1 RELEASE COMMIT:
+9805b52800485257f57ee487bd82fd2bdc6782a3
+
+GITHUB PUSH:
+PASS
+
+GITHUB VISIBILITY:
+PUBLIC
+
+PRODUCTION ACTIVE DRIVER DUPLICATES:
+NONE
+
+MIGRATION 20260921090000:
+APPLIED
+
+MIGRATION 20260921100000:
+APPLIED
+
+DIRECT DRIVER INSERT:
+BLOCKED
+
+DIRECT USER_ID UPDATE:
+BLOCKED
+
+OWNER SELF-DRIVER:
+PASS   (already-linked Admin: Active + Drive. New setup click not exercised in production: MANUAL)
+
+MY ACCESS:
+PASS
+
+DRIVE NAVIGATION:
+PASS   (Active -> Drive shown; Admin-without-Driver case MANUAL)
+
+DRIVER PWA:
+PASS
+
+TENANT AUTH:
+PASS
+
+PLATFORM ADMIN:
+MANUAL   (boundary PASS; authenticated Platform Admin session not available)
+
+VERCEL:
+PASS
+
+APP.NEMRYN.COM:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+451/451
+
+BUILD:
+PASS
+
+PRODUCTION RELEASE:
+PASS
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-PILOT-S4C
+Website Intake Acquisition Attribution Foundation
+
+DO NOT BEGIN S4C AUTOMATICALLY.
