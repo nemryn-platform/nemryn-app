@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireOnboardingAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { enableSelfDriverAccess } from "@/lib/operations/self-driver";
 
 export interface OnboardingActionState {
   status: "idle" | "error";
@@ -103,25 +104,15 @@ export async function setOwnerAlsoDrivesAction(
   _prevState: OnboardingActionState,
   formData: FormData,
 ): Promise<OnboardingActionState> {
-  const displayName = formData.get("displayName");
-  const phone = formData.get("phone");
-
-  if (typeof displayName !== "string" || displayName.trim().length === 0) {
-    return { status: "error", error: "Enter the name drivers/dispatch should see." };
-  }
-
   const pathname = await getCurrentPathname("/onboarding/driver");
   const organization = await requireOnboardingAccess(pathname);
 
-  const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.rpc("link_self_as_driver", {
-    p_organization_id: organization.organizationId,
-    p_display_name: displayName.trim(),
-    p_phone: typeof phone === "string" && phone.trim().length > 0 ? phone.trim() : undefined,
-  });
-
-  if (error) {
-    return { status: "error", error: "Couldn't set that up — please try again." };
+  // S5A1: the SAME server-side primitive Settings -> My Access uses (one
+  // `link_self_as_driver` call site, one set of rules). Onboarding is a shortcut
+  // into the owner-driver capability, not a second implementation.
+  const result = await enableSelfDriverAccess(organization, formData.get("displayName"), formData.get("phone"));
+  if (!result.ok) {
+    return { status: "error", error: result.message };
   }
 
   revalidatePath("/onboarding");

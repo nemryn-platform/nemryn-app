@@ -19,6 +19,7 @@ import {
   Clock,
   ShieldCheck,
   ClockCounterClockwise,
+  UserCircle,
 } from "@phosphor-icons/react/dist/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -58,6 +59,7 @@ export type NavIconKey = keyof typeof navIcons;
  */
 export const settingsIcons: Record<string, Icon> = {
   organization: Buildings,
+  "my-access": UserCircle,
   team: UsersThree,
   services: ListChecks,
   integrations: PlugsConnected,

@@ -16,6 +16,7 @@ const ACTIONS = [
   "staff_invitation_created", "staff_invitation_resent", "staff_invitation_cancelled", "staff_invitation_accepted",
   "membership_role_changed", "membership_deactivated", "membership_reactivated", "notification_preferences_updated",
   "platform_organization_suspended", "platform_organization_reactivated",
+  "driver_self_linked", "driver_self_reactivated",
 ];
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i;
 
@@ -106,4 +107,14 @@ test("platform lifecycle actions read as Nemryn actions and never expose a reaso
     assert.doesNotMatch(`${d.title} ${d.summary}`, /SECRET|_|inactive|[0-9a-f]{8}-/);
   }
   assert.equal(actorLabel("Nemryn"), "Nemryn");
+});
+
+test("self-driver access reads as a plain account event with no ids or codes", () => {
+  for (const action of ["driver_self_linked", "driver_self_reactivated"]) {
+    const d = describeActivity({ action, actorName: "Victor", before: { status: "inactive" }, after: { status: "active", display_name: "Victor" } }, helpers);
+    assert.ok(d, action);
+    assert.match(d.title, /^Driver access/);
+    assert.match(d.summary, /own account/);
+    assert.doesNotMatch(`${d.title} ${d.summary}`, new RegExp(`${UUID.source}|_|status|active`, "i"), action);
+  }
 });

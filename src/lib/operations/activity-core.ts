@@ -131,6 +131,15 @@ export function describeActivity(record: ActivityRecord, helpers: ActivityHelper
       return { title: "Notification preferences updated", summary: `${event}: ${who}` };
     }
 
+    // S5A1: an Organization Admin enabling Driver access for their OWN account
+    // (Settings -> My Access, or the onboarding "I also drive" step -- the same
+    // database primitive). The actor is shown by the page; nothing here names an
+    // id, a role code or the Driver row.
+    case "driver_self_linked":
+      return { title: "Driver access enabled", summary: "Enabled for their own account." };
+    case "driver_self_reactivated":
+      return { title: "Driver access turned back on", summary: "Turned back on for their own account." };
+
     // R4E: Nemryn platform lifecycle actions. Shown deliberately and generically --
     // the internal reason and the platform administrator's identity are never
     // part of the tenant-visible record (the database returns the actor as "Nemryn").

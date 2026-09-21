@@ -1,0 +1,680 @@
+NEMRYN PLATFORM
+P1-PILOT-S5A1 -- OWNER-OPERATOR SELF-SERVICE DRIVER ACCESS
+Local implementation. NOT pushed, NOT deployed, NOT committed (owner review).
+
+======================================================================
+STARTING STATE
+======================================================================
+Repository /Users/datamatics/Nemryn, branch main.
+Published / production: cccb76f (S5A) is live at https://app.nemryn.com.
+Local main is ONE commit ahead of origin/main: 9f3b5dc, a report-only commit
+(the S5A production-release section appended to
+docs/reports/p1-pilot-s5a-driver-pwa-foundation.txt). It was committed separately,
+locally, so the S5A1 working tree contains only S5A1 changes. Not pushed.
+S5A1 itself is uncommitted in the working tree.
+Local Supabase (project_id "ZenWard", container supabase_db_ZenWard) was at
+migration 20260920130000; S5A1 adds 20260921090000 (applied locally only).
+Zenward-Web, Vercel config, Supabase org, GitHub visibility, S5B: untouched.
+
+======================================================================
+CURRENT OWNER-OPERATOR AUDIT (read fresh, nothing assumed)
+======================================================================
+The capability ALREADY existed (P1-E3-S9 "Owner-Operator Mode"); S5A1 hardened and
+surfaced it rather than building it.
+
+- First-run onboarding: /onboarding/driver, "Do you also drive?", button
+  "Yes, I also drive" (+ "Not right now"). Server action setOwnerAlsoDrivesAction
+  called the RPC link_self_as_driver directly.
+- Self-driver RPC: public.link_self_as_driver(p_organization_id, p_display_name,
+  p_phone) SECURITY DEFINER, EXECUTE to authenticated only (anon revoked).
+  Returns owner_driver_link_result (driver_id, organization_id, linked).
+- Schema: public.drivers (id, organization_id, user_id nullable FK auth.users ON
+  DELETE SET NULL, display_name NOT NULL, phone, status 'active'|'inactive',
+  timestamps; UNIQUE (id, organization_id)). A Driver is an operational resource,
+  not an auth identity. Status vocabulary: active / inactive.
+- Driver <-> auth user: drivers.user_id. Set ONLY by link_self_as_driver and
+  redeem_driver_invite (client UPDATE of user_id was retired in S9).
+- Membership <-> Driver: independent. Membership.role in {organization_admin,
+  dispatcher, driver}; a Driver row does not imply a Membership and vice versa.
+- current_driver_id(org): active drivers row for auth.uid() AND active Membership
+  (ANY role) AND active organization (R4E). Unchanged by S5A1.
+- requireDriverAccess(): lets organization_admin/dispatcher through to the SAME
+  driver_get_profile RPC; if no linked Driver they are sent back to /operations.
+  Navigation only; the database decides. Unchanged.
+- Drive navigation: operations layout calls current_driver_id() live and passes
+  hasLinkedDriverProfile to the sidebar; "Drive" is appended only when it resolves.
+  Role alone never shows it. Unchanged (verified).
+- Driver profile requirements: display_name required (<=200); phone optional.
+  Nothing else is required by the schema or business logic.
+- Activation/deactivation: there is NO controlled deactivate/reactivate mutation
+  and NO UI for it. drivers.status can only change by an Organization Admin's raw
+  UPDATE grant (display_name, phone, status), unused by the app.
+- Assignment: active assignment = trip_assignments.ended_at IS NULL (one active
+  per trip). assign_trip rejects unknown/inactive drivers (ZW006).
+- Audit: audit_events row 'driver_self_linked' (new row only) already written by
+  link_self_as_driver; invites write driver_invite_created/revoked/redeemed.
+- Duplicate prevention BEFORE S5A1: function-level only, and only for ACTIVE rows.
+  No unique constraint.
+- Driver invitation/redeem flow: create_driver_invite (Org Admin) ->
+  /join/[token] -> redeem_driver_invite (email match, driver-only Membership if none,
+  reuses an existing ACTIVE linked Driver else inserts).
+
+GAPS FOUND in link_self_as_driver (all fixed in S5A1):
+  1. Any ACTIVE member (Admin, Dispatcher, Driver) could self-link. Pilot rule is
+     Organization Admin only.
+  2. An INACTIVE linked Driver made it INSERT a second Driver row (duplicate).
+  3. No schema-level guard against two ACTIVE Driver rows for one (org, user)
+     under a race.
+  4. No protection against silently creating a look-alike beside an UNLINKED Driver
+     with the same name.
+  5. The audit action was not visible in tenant Settings -> Activity.
+
+======================================================================
+CURRENT SELF-DRIVER BACKEND
+======================================================================
+REUSED and hardened, not duplicated. No new function, table, grant or RLS policy.
+Migration supabase/migrations/20260921090000_owner_operator_self_service_driver_access.sql:
+  a. unique partial index drivers_one_active_link_per_user_org_idx
+     ON drivers (organization_id, user_id) WHERE user_id IS NOT NULL AND status='active'.
+  b. CREATE OR REPLACE link_self_as_driver (same signature and return type, so no
+     generated-type or caller change).
+  c. CREATE OR REPLACE list_activity_events with driver_self_linked and
+     driver_self_reactivated added to the whitelist (body otherwise identical to the
+     R4E version, including the platform-action "Nemryn" actor rule).
+
+======================================================================
+MY ACCESS IA
+======================================================================
+Route /operations/settings/my-access ("My Access"), a PERSONAL page, distinct from
+Team & Access (managing OTHER staff). Settings order now:
+Organization, My Access, Team & Access, Services & Intake, Integrations,
+Notifications, Operations, Security, Activity (verified in the browser). Settings
+shell not redesigned: one new entry in settings-sections.ts + one icon.
+Page contents: My account (Name, Email, Organization, Operations access =
+"Organization Admin" label) and Driver access card. No UUIDs, auth ids, membership
+ids, driver ids, raw role codes or JSON (asserted in the E2E).
+Driver access card states: Not set up (owner-operator empty state + form),
+Active ("Active", "Open Driver", install hint), Inactive ("Turn my Driver access
+back on"), Needs attention (ambiguous, contact support).
+Empty-state copy: "You manage this organization. If you also drive trips, set up
+Driver access for this same account." plus: no second account/email; Org Admin
+access unchanged; Driver access lets you use assigned trips; you still need trips
+assigned. Button "Set up my Driver access". Success "Driver access is ready." +
+"Open Driver" (-> /driver). Hint "You can install Nemryn Driver from your Driver
+Profile." (the PWA install UI is NOT duplicated in Settings).
+
+======================================================================
+AUTHORIZATION MODEL
+======================================================================
+Self-service Driver activation: ORGANIZATION ADMIN ONLY.
+- Page: requireOrganizationAdminAccess (like every Settings page). A Dispatcher or
+  Driver never reaches Settings; they are redirected as elsewhere. Dispatchers do
+  not get a read-only My Access page because all of Settings is admin-only today;
+  that is recorded as a deliberate non-goal, not an omission.
+- Action: re-derives the same guard itself (session user + resolved organization).
+  The browser sends ONLY displayName and phone. No auth_user_id, organization_id,
+  membership_id or actor id is read from the form.
+- Database: link_self_as_driver requires auth.uid() not null, then
+  has_org_role(p_organization_id, ['organization_admin']) -> active Membership AND
+  active organization. It only ever touches auth.uid(). PlatformAdminGrant never
+  satisfies has_org_role. Foreign/nonexistent/inactive-Membership/suspended/
+  Dispatcher/Driver/Platform-without-Membership are the same ZW002 (no oracle).
+- p_organization_id is still a parameter (the codebase's convention for every RPC);
+  the server action passes the SERVER-RESOLVED context, and the database validates
+  it against the caller's Membership -- it is never trusted as authority.
+- No service role anywhere; no client-side-only authorization.
+
+======================================================================
+DRIVER LINK MODEL
+======================================================================
+Membership.role is never read-modified or written by this feature. The person ends
+with: Membership organization_admin (unchanged, still exactly one) + one Driver row
+(drivers.user_id = auth.uid()). No second Membership, no fake driver Membership, no
+role conversion. Operations authorization (Membership) and Driver-execution
+authorization (drivers row via current_driver_id) remain two independent checks.
+
+======================================================================
+DUPLICATE HANDLING  (deterministic per state)
+======================================================================
+A. no Driver row for this user/org  -> create new row (audit driver_self_linked)
+   - unless an UNLINKED Driver in the org has the same name (case/space-insensitive):
+     ZW003 driver_identity_conflict, nothing written, message tells the person to
+     contact Nemryn support. A different name is never matched; the unlinked row is
+     never claimed.
+B. linked ACTIVE row                 -> returned unchanged, linked=false (idempotent)
+C. linked INACTIVE row (exactly 1)   -> reactivated, same row, audit driver_self_reactivated
+   linked INACTIVE rows (>1)         -> ZW003, nothing changed, "Needs attention" in UI
+D. unlinked look-alike               -> see A (fail safe, never linked by name/phone/email)
+E. pending Driver invite             -> not blocking. If the admin later redeems an
+   invite to their own email, redeem_driver_invite reuses the existing ACTIVE linked
+   Driver (no duplicate). Invites are never matched by name.
+F. multiple organizations            -> see MULTI-ORG.
+Concurrency: pg_advisory_xact_lock per (org, user) + the partial unique index.
+Verified: 8 parallel calls -> 0 errors, 1 linked=true, 7 linked=false, 1 Driver row,
+1 audit row.
+
+======================================================================
+MULTI-ORG BEHAVIOR
+======================================================================
+Driver access is organization-scoped everywhere (drivers.organization_id;
+current_driver_id(p_org_id); Membership per org). My Access reads the CURRENT
+resolved organization. Verified: same person Admin in Org A (Driver Active) and Org B
+(Not set up): switching to Org B shows Not set up, no Drive item, /driver denied;
+switching back shows Active + Drive. Setting up in B creates a SEPARATE row; the A
+row is untouched. No global flag exists.
+
+======================================================================
+SUSPENSION / INACTIVE BEHAVIOR
+======================================================================
+Suspended organization: has_org_role/current_driver_id already require an active
+organization; setup is denied (ZW002), reactivation through the function is denied,
+/operations/settings/my-access and /driver show the existing "Workspace suspended"
+access-unavailable state. After the organization is reactivated the existing valid
+Driver link works again (verified in DB and in the browser).
+Inactive Membership: setup denied (ZW002), no row created, Membership stays
+inactive, no escalation path.
+Organization lifecycle rules were not touched.
+
+======================================================================
+ACTIVATION
+======================================================================
+Fresh business via the real /sign-up form -> Organization Admin -> Settings ->
+My Access shows Not set up, name pre-populated from the account profile -> "Set up
+my Driver access" -> "Driver access is ready." -> Active + Open Driver. Exactly one
+Driver row, Membership unchanged, audit written. Fields asked: name (required by the
+schema) and phone (optional). Nothing invented; no second password/login.
+
+======================================================================
+REACTIVATION
+======================================================================
+Supported. An inactive linked Driver row is reactivated through the same primitive
+(same row so TripAssignment/TripEvent/Proof history stays attached to one Driver id),
+audited as driver_self_reactivated with before/after status. UI: "Turn my Driver
+access back on". Verified in browser and SQL (R1-R3).
+
+======================================================================
+DEACTIVATION DECISION
+======================================================================
+DEFERRED. The domain has no controlled deactivate mutation, no UI, no audit action
+and no Activity copy for it; only an unused raw UPDATE grant on drivers.status.
+Self-service deactivation would be the first such path in the product and would need
+a new SECURITY DEFINER mutation with an active-assignment block (active assignment =
+trip_assignments.ended_at IS NULL) and the calm message "You still have an active
+trip assignment. Complete or reassign it before turning off Driver access." Per the
+brief ("if existing domain semantics do not support safe self-deactivation: do NOT
+invent it"), it is documented (docs/product/owner-operator-mode.md section 8) and
+not built. Test L is therefore N/A.
+Nothing in S5A1 deletes any Driver, Trip, assignment, proof or audit record.
+
+======================================================================
+DRIVE NAVIGATION
+======================================================================
+Unchanged logic, verified: Org Admin alone -> NO "Drive"; /driver bounces to
+/operations. After setup "Drive" appears in the sidebar WITHOUT sign-out (the
+action calls revalidatePath('/operations','layout')). Dispatcher and Org B context
+show no Drive item.
+
+======================================================================
+DRIVER PWA INTEGRATION
+======================================================================
+After activation /driver works immediately with the same session; /driver/profile
+shows the owner's Driver name and organization and the existing install card;
+/driver.webmanifest stays tenant-neutral ("Nemryn Driver", no organization name).
+No separate PWA account, no tenant branding. Assigned Trip appears in /driver/trips.
+
+======================================================================
+ONBOARDING REUSE
+======================================================================
+setOwnerAlsoDrivesAction now calls the SAME server helper as My Access
+(enableSelfDriverAccess) -> the same RPC. One call site, one rule set. Verified: a
+second fresh tenant taking "Yes, I also drive" in onboarding gets exactly one Driver,
+role preserved, audit driver_self_linked, and My Access then shows Active with no
+duplicate. Onboarding error copy is now the shared calm copy.
+Note: onboarding's route guard still admits a Dispatcher, but the database now
+denies them, so a Dispatcher who somehow reaches that step is refused (this is the
+intended tightening).
+
+======================================================================
+AUDIT EVENTS
+======================================================================
+driver_self_linked      (new Driver row)        entity 'driver', actor auth.uid()
+driver_self_reactivated (inactive -> active)    before {status:inactive} after {status:active}
+Both are in the Activity whitelist. Tenant Activity shows "Driver access enabled" /
+"Enabled for their own account." (or "Driver access turned back on") with the actor's
+name on the actor line (verified: human actor, no ids, no raw code). Pre-existing
+onboarding-created rows use the same action so they also appear. No notification/
+email is sent and no new notification type exists.
+
+======================================================================
+SECURITY
+======================================================================
+- Authority chain server-side end to end; nothing trusted from the browser.
+- No service role, no client Driver INSERT introduced, no new grants.
+- Platform Admin: PlatformAdminGrant alone grants ZERO self-driver rights (denied
+  ZW002, no Driver created; tested).
+- Cross-tenant: another tenant's Admin cannot see, link into or deactivate the
+  owner's Driver (RLS + ZW002; tested).
+- Function privileges unchanged (anon none, authenticated execute).
+PRE-EXISTING ISSUE FOUND, NOT INTRODUCED, NOT FIXED HERE (see OPEN ISSUES #1):
+an Organization Admin can, via the raw client INSERT grant on public.drivers, insert
+a Driver row with an arbitrary user_id (probe: linked ANOTHER member as Driver;
+rolled back). The new unique index at least stops it creating a second active row
+for the same person.
+
+======================================================================
+DRIVER INVITE REGRESSION
+======================================================================
+PASS. SQL (J1-J4) and browser: Admin (after self-link) creates a Driver invite ->
+invitee redeems (driver Membership + linked Driver) -> invitee signs in and lands in
+/driver -> /operations/settings/my-access redirects them away, Membership stays
+role=driver, and link_self_as_driver is denied for them (ZW002). The existing
+operator_onboarding suite (INVITE-*, REDEEM-*) passes 40/40. Self-service is an
+ADDITIONAL path; invitations are unchanged.
+
+======================================================================
+OWNER-OPERATOR E2E   (.tmp-qa/s5a1-owner-operator-e2e.mjs, local production build)
+======================================================================
+52/52 checks passed. Fictional synthetic tenants only, created through the real
+sign-up flow; nothing touched production. Covers, in one journey:
+sign up -> Org Admin -> no Drive -> Settings order -> My Access Not set up (copy,
+no ids) -> setup -> Active + Open Driver -> Drive appears without logout -> one
+Driver, role preserved, audit -> Activity text -> /driver + /driver/profile +
+manifest -> owner shows in Dispatch as an ordinary Driver -> normal create_trip and
+assign_trip (no special path) -> assigned Trip visible in /driver/trips ->
+Dispatcher denied (page, nav, direct RPC) -> invited Driver-only regression ->
+onboarding "I also drive" path + My Access Active + no duplicate + tenant isolation
+-> multi-org switch A/B -> suspended org (blocked, then works after reactivation) ->
+inactive Driver -> "turn back on" (same row, audited). Cleanup removed all fixtures.
+
+======================================================================
+APPLICATION TESTS
+======================================================================
+npx tsc --noEmit   PASS (no output)
+npm run lint       PASS (0 errors; warnings only in untracked .tmp-qa scratch)
+npm test           451/451 (was 445; +5 self-driver-core, +1 activity)
+npm run build      PASS (/operations/settings/my-access compiled)
+
+======================================================================
+SQL / SECURITY TESTS
+======================================================================
+Focused: supabase/tests/owner_operator_self_service_tests.sql  49/49 PASS
+  A/B setup + idempotency (A0-A7, B1-B3), C/D/E Dispatcher / Driver-only / Platform
+  Admin denied (C1-C3, D1-D2, E1-E2), F suspended (F0-F4), G inactive Membership
+  (G1-G4), H multi-org (H1-H3), I cross-tenant (I1-I3), K/R legacy + reactivation +
+  audit + Activity (K1, R1-R3), N ambiguity fail-safe (N1-N3), V validation (V1-V4),
+  U unique-index backstop (U1), J invite regression (J1-J4). Fixtures self-clean.
+Proportional regression (central helpers / RLS / other RPCs are UNCHANGED, so the
+full historical battery was deliberately NOT re-run):
+  operator_onboarding_tests   40/40 (includes OWNERDRIVER-1..6, INVITE, REDEEM)
+  notifications_activity_tests 42/42 (list_activity_events was replaced)
+  security_definer_exposure_tests 20/20
+  function_privilege_tests    7/7
+  platform_admin_foundation_tests 58/58
+Concurrency: .tmp-qa/s5a1-concurrency.sh -> 8 parallel calls, 1 Driver, 0 errors.
+Note: operator_onboarding_tests.sql is not re-runnable on a dirty DB (fixed org
+names); local leftovers from my two runs were removed afterwards.
+
+======================================================================
+FILES CREATED
+======================================================================
+supabase/migrations/20260921090000_owner_operator_self_service_driver_access.sql
+supabase/tests/owner_operator_self_service_tests.sql
+src/app/operations/settings/my-access/page.tsx
+src/app/operations/settings/my-access/actions.ts
+src/components/operations/settings/MyDriverAccessCard.tsx
+src/lib/operations/self-driver.ts            (server: read model + shared helper)
+src/lib/operations/self-driver-core.ts       (pure, import-free)
+src/lib/operations/self-driver-core.test.mjs
+docs/reports/p1-pilot-s5a1-owner-operator-self-service-driver-access.txt
+Untracked scratch (not for commit): .tmp-qa/s5a1-owner-operator-e2e.mjs,
+.tmp-qa/s5a1-concurrency.sh
+
+======================================================================
+FILES MODIFIED
+======================================================================
+src/app/onboarding/actions.ts            (uses the shared helper; one call site)
+src/lib/operations/settings-sections.ts  (My Access entry)
+src/design/icons.ts                      (UserCircle for my-access)
+src/lib/operations/activity-core.ts      (+ two human mappings)
+src/lib/operations/activity-core.test.mjs
+docs/product/owner-operator-mode.md      (section 8)
+docs/product/onboarding-data-map.md      (authorization wording)
+
+======================================================================
+MIGRATIONS
+======================================================================
+20260921090000_owner_operator_self_service_driver_access.sql
+  - CREATE UNIQUE INDEX drivers_one_active_link_per_user_org_idx (partial, active only)
+  - CREATE OR REPLACE FUNCTION link_self_as_driver (same signature/return/grants)
+  - CREATE OR REPLACE FUNCTION list_activity_events (whitelist +2 actions)
+Applied to LOCAL Supabase only. NOT applied to production.
+PRE-RELEASE REQUIREMENT: the unique index will FAIL to create if production already
+holds two ACTIVE Driver rows for one (organization, user). Run before release:
+  select organization_id, user_id, count(*) from public.drivers
+  where user_id is not null and status='active' group by 1,2 having count(*)>1;
+Expected none (link_self_as_driver/redeem_driver_invite were idempotent on active
+rows). This was NOT run against production in this phase.
+
+======================================================================
+RLS / GRANT IMPACT
+======================================================================
+No RLS policy changed. No table/column grant changed. No new function. Function
+EXECUTE grants re-stated identically (anon none, authenticated execute). Behavioural
+change: link_self_as_driver is now Organization-Admin-only (was any active member).
+Effect on existing data: none. Effect on users: a Dispatcher who previously could
+self-link can no longer do so (intended by the pilot rule).
+
+======================================================================
+OPEN ISSUES
+======================================================================
+1. PRE-EXISTING (not introduced): an Organization Admin can INSERT a drivers row with
+   any user_id through the raw client INSERT grant (policy drivers_insert_org_admin,
+   INSERT granted on all columns). That contradicts the S9 intent that
+   link_self_as_driver / redeem_driver_invite are the only paths that set
+   drivers.user_id. Impact is tenant-internal (the linked user still needs an active
+   Membership in that org). Suggested fix (separate, reviewed change): REVOKE INSERT
+   ON drivers FROM authenticated and re-grant INSERT (organization_id, display_name,
+   phone, status) only. No app code inserts drivers from the client today.
+2. Self-deactivation deferred (no controlled deactivate mutation exists).
+3. Dispatchers have no read-only My Access view (all Settings is admin-only).
+4. Production has not been checked for duplicate active Driver rows before the unique
+   index (see MIGRATIONS).
+5. Ambiguity guard is name-based on UNLINKED rows only; a person whose unlinked row
+   has a different name is not detected (correct per "never infer identity").
+6. Local main carries an unpushed report-only commit (9f3b5dc) ahead of origin/main.
+7. Repository nemryn-platform/nemryn-app was found PUBLIC in the S5A release (see
+   that report); S5A1 is not affected but should not be pushed until the owner has
+   decided on visibility.
+
+======================================================================
+MY ACCESS PAGE:
+PASS
+
+ORG ADMIN SELF-DRIVER SETUP:
+PASS
+
+SECOND ACCOUNT REQUIRED:
+NO
+
+MEMBERSHIP ROLE PRESERVED:
+PASS
+
+DUPLICATE DRIVER:
+NONE
+
+DRIVE NAVIGATION:
+PASS
+
+DRIVER PWA:
+PASS
+
+MULTI-ORG ISOLATION:
+PASS
+
+DISPATCHER SELF-ESCALATION:
+BLOCKED
+
+PLATFORM ADMIN SELF-ESCALATION:
+BLOCKED
+
+SUSPENDED ORG:
+BLOCKED
+
+INACTIVE MEMBERSHIP:
+BLOCKED
+
+NORMAL DRIVER INVITES:
+PASS
+
+ONBOARDING OWNER-DRIVER PATH:
+PASS
+
+DEACTIVATION:
+DEFERRED
+
+AUDIT:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+451/451
+
+BUILD:
+PASS
+
+READY FOR PRODUCTION RELEASE:
+YES   (after the owner's review, the duplicate-active-Driver pre-check on production,
+       and a decision on the GitHub visibility finding; migration applies to production
+       with `supabase db push`, which is a separate owner-gated step)
+
+BLOCKERS:
+NONE for the feature. Release prerequisites: owner review; production duplicate check
+(MIGRATIONS); repository visibility decision.
+
+NEXT IF PASS:
+
+Owner decision:
+- production release
+- physical Driver PWA QA
+- then S5B Driver Mobile Capabilities
+
+DO NOT BEGIN S5B AUTOMATICALLY.
+
+
+======================================================================
+======================================================================
+P1-PILOT-S5A1R -- DRIVER IDENTITY WRITE-SURFACE HARDENING
++ OWNER-OPERATOR PRODUCTION RELEASE PRECHECK
+(appended; supersedes OPEN ISSUES #1 and #4 above. Local only: not pushed,
+ not deployed, no `supabase db push`, production never mutated.)
+======================================================================
+
+----------------------------------------------------------------------
+DRIVER IDENTITY WRITE-SURFACE HARDENING
+----------------------------------------------------------------------
+AUDIT (read fresh, local live catalog + code + production catalog read-only):
+
+Grants on public.drivers for `authenticated` BEFORE: SELECT (table), INSERT on ALL
+columns incl. user_id (table-level, from 20260830131700), UPDATE on
+(display_name, phone, status) only (S9 retired user_id UPDATE). anon: nothing.
+Policies: drivers_select_org_operations (Org Admin + Dispatcher),
+drivers_insert_org_admin (with check Org Admin), drivers_update_org_admin.
+(drivers_select_own was dropped earlier; the Driver reads through RPCs.)
+Triggers: set_updated_at, prevent_organization_id_change.
+
+Application code that writes to drivers from a client: NONE. The only .from("drivers")
+call sites are SELECTs (dispatch-board, drivers-list, onboarding-checklist,
+operations-brief). No PostgREST/fetch path, no edge function, no script writes them.
+Driver rows are created only by three SECURITY DEFINER functions owned by the
+function owner: create_driver_invite -> redeem_driver_invite, and link_self_as_driver
+(each runs as owner, independent of the client INSERT grant). supabase/seed.sql and
+test fixtures insert as postgres.
+There is no Driver-management UI beyond the read-only directory; onboarding and the
+new My Access page go through link_self_as_driver.
+Generated database.types.ts keeps an Insert type for the table (types are generated
+from columns, not grants); no code uses it.
+
+CONCLUSION: no legitimate direct client INSERT exists, so the smallest safe fix is to
+remove client INSERT entirely (not a reduced column re-grant). No new RPC needed.
+The UPDATE side was already closed for user_id; verified, not assumed.
+
+FIX: migration supabase/migrations/20260921100000_retire_direct_driver_insert.sql
+  revoke insert on public.drivers from authenticated;
+  drop policy if exists drivers_insert_org_admin on public.drivers;   -- unreachable; removed
+        so a future accidental `grant insert` cannot silently re-open the hole
+        (RLS default deny applies)
+  revoke update (user_id) on public.drivers from authenticated;      -- idempotent, explicit
+  comment on table public.drivers ...                                 -- states the invariant
+Nothing else changed: no RLS weakened, SELECT untouched, UPDATE(display_name, phone,
+status) and drivers_update_org_admin untouched (Driver management NOT broadened or
+narrowed beyond the identity column), S5A1 unique index untouched, no shared helper
+touched.
+
+MIGRATION STRUCTURE DECISION
+Remote state confirmed READ-ONLY on production (project wyocbivzgrbekuyqdfts): latest
+applied migration = 20260920130000; 20260921090000 (S5A1) is NOT applied and the
+unique index does not exist. So S5A1 is unreleased and could have been edited, but the
+grant hardening is a distinct security intent, so it is a separate follow-up migration
+for a clean review trail. Two unreleased migrations, applied in order:
+  20260921090000_owner_operator_self_service_driver_access.sql
+  20260921100000_retire_direct_driver_insert.sql
+No applied-to-production migration was rewritten.
+
+----------------------------------------------------------------------
+PRODUCTION DUPLICATE PRECHECK   (READ-ONLY, read-only Management API endpoint)
+----------------------------------------------------------------------
+select organization_id, user_id, count(*) from public.drivers
+where user_id is not null and status='active'
+group by organization_id, user_id having count(*) > 1;
+  -> 0 rows.  PRODUCTION ACTIVE DRIVER DUPLICATES: NONE.
+Supporting counts only (no personal data read): drivers total 7, all linked to a user,
+all active, 0 inactive-linked, 0 users with >1 inactive row in one organization.
+Consequences: the S5A1 unique index will create cleanly; reactivation/ambiguity
+branches cannot trigger on today's data; no owner review of affected rows needed.
+Production catalog confirms the SAME exposure existed live before this fix:
+authenticated INSERT on drivers.user_id = true, UPDATE on drivers.user_id = false,
+INSERT policy drivers_insert_org_admin present. (So this hardening was needed in
+production, and is not just a local artefact.) Production was not mutated.
+
+----------------------------------------------------------------------
+GRANT CHANGES
+----------------------------------------------------------------------
+authenticated on public.drivers (local, after fresh reset of the full chain):
+  INSERT            table + every column : REVOKED (was granted)
+  INSERT policy     drivers_insert_org_admin : DROPPED (0 INSERT policies remain)
+  UPDATE user_id / organization_id / id    : none (verified by has_column_privilege)
+  UPDATE display_name, phone, status       : unchanged (still granted)
+  SELECT + drivers_select_org_operations   : unchanged
+  anon                                     : still nothing
+No function grants changed by S5A1R.
+
+----------------------------------------------------------------------
+SECURITY REGRESSION
+----------------------------------------------------------------------
+New focused suite supabase/tests/driver_identity_write_surface_tests.sql: 37/37 PASS
+  P1-P6 privilege catalog: no client INSERT; no UPDATE on user_id/organization_id/id;
+        anon nothing; no INSERT policy; SELECT surface unchanged; legit UPDATE columns kept
+  A1-A4 Organization Admin direct INSERT with ARBITRARY user_id / own user_id / no
+        user_id: all DENIED (42501); no row created by any attempt
+  B1 Dispatcher, C1 Driver, D1 PlatformAdminGrant alone, D2 anon: DENIED
+  H1 cross-tenant direct INSERT: DENIED
+  I1-I4 direct UPDATE of user_id (to another member / NULL / self) DENIED; user_id
+        unchanged; moving a Driver to another organization DENIED
+  J1-J7 legitimate operations preserved: Admin lists Drivers, Dispatcher reads the
+        directory, Admin edits display_name/phone, Admin toggles status, cross-tenant
+        edit/see blocked, Dispatcher cannot edit, Driver profile RPC resolves
+  E1-E2 link_self_as_driver still works (Membership role preserved, one active Driver)
+  F1-F2 create_driver_invite + redeem_driver_invite still work
+  G1-G2 invited Driver gets a proper linked identity (invite name/phone, active,
+        driver-only Membership, driver_get_profile resolves)
+  H2-H4 wrong-email redemption fails with no Driver created; cross-tenant and
+        Dispatcher self-link still ZW002
+  K1-K2 S5A1 partial unique index still rejects a 2nd ACTIVE linked Driver; an
+        inactive history row beside the active one is allowed
+Regression on a FRESH database (`supabase db reset --local`, which also proves the whole
+migration chain + seed applies cleanly from scratch), no failures, no SQL errors:
+  owner_operator_self_service_tests 49/49   operator_onboarding_tests 40/40
+  function_privilege_tests 7/7              security_definer_exposure_tests 20/20
+  client_privilege_surface_tests 21/21      driver_read_authorization_tests 17/17
+  driver_read_privilege_tests 8/8           driver_read_history_tests 8/8
+  driver_read_minimization_tests 13/13      driver_location_tests 20/20
+  mutation_assignment_tests 19/19           mutation_privilege_tests 7/7
+  mutation_authorization_tests 4/4          rls_adversarial_tests 32/32
+  platform_admin_foundation_tests 58/58     team_services_operations_tests 106/106
+  notifications_activity_tests 42/42 (run in isolation -- see NOTE)
+Concurrency (real parallel psql sessions): driver_invite_concurrency_test.sh
+INVITE-CONCURRENCY-1 PASS (row-lock contention, one Membership, invite accepted once);
+S5A1 self-link concurrency: 8 parallel calls -> 0 errors, 1 linked=true, 7 linked=false,
+1 Driver row, 1 audit row.
+NOTE on test hygiene (not product issues): several older suites are not re-runnable on a
+dirty local DB (fixed fixture ids) and are order-dependent (notifications_activity_tests
+fails 5 recipient checks if team_services_operations_tests ran first, because that
+suite leaves an extra active Org A member; it passes 42/42 in isolation and did before
+this phase). An earlier rls_adversarial TEST Y "failure" and a mutation_assignment
+fixture collision were local-DB drift from re-runs and my earlier S5A E2E; both cleared
+on the fresh reset. Full historical battery was NOT run: no shared authorization or
+RLS helper changed.
+Application: npx tsc --noEmit PASS; npm run lint 0 errors (72 warnings, all in
+untracked .tmp-qa scratch, none in src); npm test 451/451; npm run build PASS;
+browser E2E (.tmp-qa/s5a1-owner-operator-e2e.mjs) re-run on the fresh DB: 52/52.
+
+----------------------------------------------------------------------
+FINAL RELEASE READINESS
+----------------------------------------------------------------------
+Migration chain for production (prod is at 20260920130000):
+  1. 20260921090000  unique index + link_self_as_driver + list_activity_events
+  2. 20260921100000  revoke client INSERT + drop INSERT policy
+Both apply cleanly to a fresh database and incrementally to an existing one. Both are
+safe on current production data (zero duplicate active drivers; all 7 drivers linked
+and active). Neither changes any table's data.
+Deploy order is not critical, migration first recommended: the deployed S5A code and
+the new S5A1 code both only call link_self_as_driver (same signature) and only SELECT
+from drivers, so neither depends on the INSERT grant; new code mapping two Activity
+actions is harmless before the migration.
+Rollback (if ever needed): recreate the previous function body / re-grant is possible but
+NOT recommended -- the INSERT revoke closes a real identity hole. The unique index can be
+dropped with `drop index public.drivers_one_active_link_per_user_org_idx`.
+Owner-gated steps NOT done here: git commit/push of S5A1 + S5A1R, `supabase db push`,
+Vercel deploy, and the still-open GitHub repository visibility decision (the repo was
+PUBLIC at the S5A release; pushing these migrations publishes the security fix
+description to a public repo -- decide visibility first).
+Remaining pre-existing note: Driver UPDATE (display_name/phone/status) by Organization
+Admin remains granted though no UI uses it; left as-is on purpose.
+
+======================================================================
+PRODUCTION ACTIVE DRIVER DUPLICATES:
+NONE
+
+DIRECT DRIVER INSERT WITH USER_ID:
+BLOCKED
+
+DIRECT DRIVER UPDATE USER_ID:
+BLOCKED
+
+OWNER SELF-LINK:
+PASS
+
+DRIVER INVITE:
+PASS
+
+MEMBERSHIP ROLE PRESERVED:
+PASS
+
+CLIENT PRIVILEGE SURFACE:
+PASS
+
+CONCURRENCY:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+451/451
+
+BUILD:
+PASS
+
+S5A1 READY FOR PRODUCTION:
+YES
+
+BLOCKERS:
+NONE for the code/migrations. Owner-gated before publishing: decide repository
+visibility (GitHub repo was public), then commit/push and `supabase db push`.
+
+NEXT IF PASS:
+
+P1-PILOT-S5A1 production release.
+
+Then:
+P1-PILOT-S4C Website Intake Acquisition Attribution Foundation.
+
+(S4C NOT started.)

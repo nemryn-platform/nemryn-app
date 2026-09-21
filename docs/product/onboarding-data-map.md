@@ -19,7 +19,7 @@ Every mutation the onboarding flow performs, its source, and its authorization b
 | RPC | Callable by | Effect |
 |---|---|---|
 | `signup_create_organization(business_name, display_name, business_stage, timezone)` | Any authenticated user | Atomically creates UserProfile + Organization + the caller's own `organization_admin` Membership |
-| `link_self_as_driver(organization_id, display_name, phone)` | Any active member of the org | Creates/reuses a Driver row linked to the caller's own `auth.uid()` — never touches Membership.role |
+| `link_self_as_driver(organization_id, display_name, phone)` | Organization Admin of the org (S5A1; was any active member) | Creates/reuses a Driver row linked to the caller's own `auth.uid()` — never touches Membership.role |
 | `create_driver_invite(organization_id, email, display_name, phone)` | Organization Admin, own org | Creates/refreshes a pending `driver_invites` row |
 | `revoke_driver_invite(invite_id)` | Organization Admin, own org, pending only | Marks an invite revoked |
 | `get_driver_invite_preview(token)` | Public (anon + authenticated) | Minimum-necessary invite preview — org name, invited name, email, status only |

@@ -151,3 +151,8 @@ Before this phase, `drivers.user_id` had a **broad, unconditional** client UPDAT
   **P0-S2A review (2026-09-11):** re-confirmed the cooldown is deliberately deferred rather than improvised — a genuinely *safe* (persistent, correct across Vercel's multiple/serverless instances) throttle needs either a `driver_invites` timestamp column or an external store, and this phase's own instruction was explicitly not to add a migration for it. An in-memory, per-process cooldown was considered and rejected: it would give false confidence (each serverless invocation can land on a different instance) without providing a real guarantee. Same phase also reviewed and hardened `src/lib/app-url.ts`'s origin resolution (malformed-URL/loopback-in-production guards — see the phase report for the crash this uncovered and fixed) with focused unit tests (`src/lib/app-url-core.test.mjs`, `npm test`).
 - Bulk/CSV invite import — one invite at a time, matching the work item's own scope.
 - A driver-facing view of their OWN past invite history — not needed for the redemption flow itself.
+
+
+## Addendum (P1-PILOT-S5A1R) — the INSERT side is closed too
+
+The UPDATE-side retirement described above left the original broad client INSERT grant on `drivers` in place, so an Organization Admin could still create a Driver row carrying any `user_id` directly. `20260921100000_retire_direct_driver_insert.sql` revokes client INSERT entirely (no legitimate client INSERT exists) and drops the unreachable `drivers_insert_org_admin` policy. After it, `link_self_as_driver` and `redeem_driver_invite` are the only paths that create or link a Driver row.
