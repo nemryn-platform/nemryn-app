@@ -61,6 +61,24 @@ export function buildSetupEnvExample(input: { endpoint: string; integrationId: s
   ].join("\n");
 }
 
+/**
+ * Developer example of the OPTIONAL `acquisition` object of the website intake payload (P1-PILOT-S4C), shown in
+ * Setup instructions. Every property is optional; nothing here is a credential. Values are examples only.
+ */
+export function buildAcquisitionExample(): string {
+  return [
+    '"acquisition": {',
+    '  "utmSource": "google",',
+    '  "utmMedium": "cpc",',
+    '  "utmCampaign": "dialysis_transport",',
+    '  "landingPath": "/dialysis-transportation",',
+    '  "submissionPath": "/request-transportation",',
+    '  "referrerHost": "google.com",',
+    '  "formVersion": "request-v2"',
+    "}",
+  ].join("\n");
+}
+
 /** "Sep 20, 2026, 3:14 PM" in the organization's own timezone; null when there is no timestamp. */
 export function formatIntegrationTimestamp(iso: string | null, timezone: string): string | null {
   if (!iso) return null;

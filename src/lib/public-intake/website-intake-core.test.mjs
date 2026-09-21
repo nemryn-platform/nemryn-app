@@ -516,3 +516,104 @@ test("validateWebsiteIntakePayload — a direct attempt to smuggle passengerId (
   const result = validateWebsiteIntakePayload(validPayload({ passengerName: "PILOT PASSENGER QA", passengerId: "10000000-0000-0000-0000-000000000000" }));
   assert.equal(result.ok, false);
 });
+
+// ---------------------------------------------------------------------
+// S4C. ACQUISITION ATTRIBUTION (P1-PILOT-S4C) -- optional, best effort, never a reason to reject.
+// ---------------------------------------------------------------------
+
+const { sanitizeAcquisition, ACQUISITION_LIMITS } = await import("./website-intake-core.ts");
+
+test("acquisition — old payload without it still validates unchanged (acquisition = null)", () => {
+  const result = validateWebsiteIntakePayload(validPayload());
+  assert.equal(result.ok, true);
+  assert.equal(result.value.acquisition, null);
+});
+
+test("acquisition — full valid object is kept verbatim (trimmed), case preserved", () => {
+  const acquisition = {
+    utmSource: "google", utmMedium: "cpc", utmCampaign: "Dialysis_Transport", utmContent: "ad-A", utmTerm: "ride near me",
+    landingPath: "/dialysis-transportation", submissionPath: "/request-transportation", referrerHost: "google.com", formVersion: "request-v2",
+  };
+  const result = validateWebsiteIntakePayload(validPayload({ acquisition: { ...acquisition, utmSource: "  google  " } }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value.acquisition, acquisition);
+});
+
+test("acquisition — invalid values NEVER make a valid Request invalid; they are dropped", () => {
+  const cases = [
+    "a string", 42, true, [], [1, 2], {}, { unknown: "x" },
+    { utmSource: 5, landingPath: "https://x.example/a", referrerHost: "https://google.com/x", formVersion: "bad version" },
+    { utmSource: "x".repeat(500), landingPath: "/" + "p".repeat(400) },
+  ];
+  for (const acquisition of cases) {
+    const result = validateWebsiteIntakePayload(validPayload({ acquisition }));
+    assert.equal(result.ok, true, JSON.stringify(acquisition).slice(0, 60));
+    assert.equal(result.value.acquisition, null, JSON.stringify(acquisition).slice(0, 60));
+  }
+});
+
+test("acquisition — a mix keeps only the valid fields", () => {
+  const result = validateWebsiteIntakePayload(validPayload({ acquisition: { utmSource: "  Facebook  ", utmMedium: "   ", utmCampaign: 12345, landingPath: "/request?utm_source=google", referrerHost: "Www.Facebook.com", formVersion: "intake_2026_09" } }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value.acquisition, { utmSource: "Facebook", referrerHost: "www.facebook.com", formVersion: "intake_2026_09" });
+});
+
+test("acquisition — unknown keys are ignored, never stored (privacy: no IP / UA / cookies / click ids / full URLs / arbitrary metadata)", () => {
+  const result = validateWebsiteIntakePayload(validPayload({
+    acquisition: { utmSource: "partner", gclid: "abc", fbclid: "x", msclkid: "y", ipAddress: "203.0.113.9", userAgent: "Mozilla/5.0", cookie: "a=b", fingerprint: "zz",
+      referrer: "https://google.com/full?q=1", landingUrl: "https://x.example/a?b=c", metadata: { a: 1 } },
+  }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value.acquisition, { utmSource: "partner" });
+});
+
+test("acquisition — top-level unknown keys are still rejected as before (only 'acquisition' was added to the closed set)", () => {
+  assert.equal(validateWebsiteIntakePayload(validPayload({ utmSource: "google" })).ok, false);
+  assert.equal(validateWebsiteIntakePayload(validPayload({ organizationId: "x" })).ok, false);
+});
+
+test("acquisition — length limits (120/120/160/160/160/300/300/253/64): at the limit kept, one over dropped", () => {
+  for (const [key, max] of Object.entries(ACQUISITION_LIMITS)) {
+    const make = (n) => {
+      if (key === "landingPath" || key === "submissionPath") return "/" + "p".repeat(n - 1);
+      if (key === "referrerHost") return "h".repeat(n);
+      return "v".repeat(n);
+    };
+    assert.equal(sanitizeAcquisition({ [key]: make(max) })?.[key], make(max), `${key} at limit`);
+    assert.equal(sanitizeAcquisition({ [key]: make(max + 1) }), null, `${key} over limit`);
+  }
+});
+
+test("acquisition — UTM: empty / whitespace / control characters / non-strings dropped, case never lowercased", () => {
+  assert.equal(sanitizeAcquisition({ utmSource: "", utmMedium: "   ", utmCampaign: "a\tb", utmContent: "a\nb", utmTerm: 7 }), null);
+  assert.equal(sanitizeAcquisition({ utmCampaign: "  Spring_SALE-2026 " }).utmCampaign, "Spring_SALE-2026");
+});
+
+test("acquisition — paths: pathname only", () => {
+  for (const ok of ["/", "/dialysis-transportation", "/request-transportation", "/a/b/c", "/with%20encoded", "/x_y.z"]) {
+    assert.equal(sanitizeAcquisition({ landingPath: ok }).landingPath, ok, ok);
+  }
+  for (const bad of ["https://example.com/dialysis", "http://x", "/request?utm_source=google", "/request#form", "//evil.example/x", "dialysis", "", "/with space", "/back\\slash", "javascript:alert(1)"]) {
+    assert.equal(sanitizeAcquisition({ landingPath: bad, submissionPath: bad }), null, bad);
+  }
+});
+
+test("acquisition — referrerHost: bare hostname only, lowercased", () => {
+  assert.equal(sanitizeAcquisition({ referrerHost: "Google.COM" }).referrerHost, "google.com");
+  assert.equal(sanitizeAcquisition({ referrerHost: "www.facebook.com" }).referrerHost, "www.facebook.com");
+  assert.equal(sanitizeAcquisition({ referrerHost: "localhost" }).referrerHost, "localhost");
+  for (const bad of ["https://google.com", "google.com/path", "google.com?q=1", "google.com:443", "a..b", "-bad.com", "bad-.com", "has space.com", "user@host.com"]) {
+    assert.equal(sanitizeAcquisition({ referrerHost: bad }), null, bad);
+  }
+});
+
+test("acquisition — formVersion: safe short identifier", () => {
+  assert.equal(sanitizeAcquisition({ formVersion: "request-v2" }).formVersion, "request-v2");
+  assert.equal(sanitizeAcquisition({ formVersion: "intake_2026_09" }).formVersion, "intake_2026_09");
+  for (const bad of ["bad version", "-leading", "a/b", "v".repeat(65), ""]) assert.equal(sanitizeAcquisition({ formVersion: bad }), null, bad);
+});
+
+test("acquisition — sanitizeAcquisition never throws on hostile input", () => {
+  const hostile = [undefined, null, NaN, () => 1, Symbol.iterator.toString(), { toString() { throw new Error("x"); } }, Object.create(null), { utmSource: { toString() { throw new Error("y"); } } }];
+  for (const h of hostile) assert.doesNotThrow(() => sanitizeAcquisition(h));
+});

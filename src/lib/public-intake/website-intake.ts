@@ -72,6 +72,10 @@ export async function submitWebsiteTransportationRequest(
     // this module or the RPC — see requested_passenger_name's own
     // column comment.
     p_requested_passenger_name: submission.requestedPassengerName ?? undefined,
+    // P1-PILOT-S4C -- already sanitised optional acquisition snapshot (undefined => Postgres default null =>
+    // no attribution). The RPC sanitises again and stores it best-effort, in the same transaction as the
+    // Request; it can never cause this call to be rejected.
+    p_acquisition: submission.acquisition ? { ...submission.acquisition } : undefined,
   });
 
   if (error || !data?.accepted) {

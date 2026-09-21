@@ -702,6 +702,69 @@ export type Database = {
           },
         ]
       }
+      request_acquisition_attributions: {
+        Row: {
+          created_at: string
+          form_version: string | null
+          id: string
+          landing_path: string | null
+          organization_id: string
+          referrer_host: string | null
+          request_id: string
+          submission_path: string | null
+          utm_campaign: string | null
+          utm_content: string | null
+          utm_medium: string | null
+          utm_source: string | null
+          utm_term: string | null
+        }
+        Insert: {
+          created_at?: string
+          form_version?: string | null
+          id?: string
+          landing_path?: string | null
+          organization_id: string
+          referrer_host?: string | null
+          request_id: string
+          submission_path?: string | null
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+        }
+        Update: {
+          created_at?: string
+          form_version?: string | null
+          id?: string
+          landing_path?: string | null
+          organization_id?: string
+          referrer_host?: string | null
+          request_id?: string
+          submission_path?: string | null
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "request_acquisition_attributions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "request_acquisition_attributions_request_fkey"
+            columns: ["request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       request_events: {
         Row: {
           actor_user_id: string | null
@@ -1428,6 +1491,7 @@ export type Database = {
         }[]
       }
       _require_platform_admin: { Args: never; Returns: undefined }
+      _sanitize_acquisition: { Args: { p_acquisition: Json }; Returns: Json }
       _staff_invite_token_hash: { Args: { p_token: string }; Returns: string }
       accept_staff_invite: {
         Args: { p_token: string }
@@ -1797,6 +1861,21 @@ export type Database = {
       get_organization_service_offerings: {
         Args: { p_organization_id: string }
         Returns: string[]
+      }
+      get_request_acquisition: {
+        Args: { p_organization_id: string; p_request_id: string }
+        Returns: {
+          captured_at: string
+          form_version: string
+          landing_path: string
+          referrer_host: string
+          submission_path: string
+          utm_campaign: string
+          utm_content: string
+          utm_medium: string
+          utm_source: string
+          utm_term: string
+        }[]
       }
       get_staff_invite_preview: {
         Args: { p_token: string }
@@ -2217,6 +2296,7 @@ export type Database = {
       }
       submit_public_transportation_request: {
         Args: {
+          p_acquisition?: Json
           p_additional_notes?: string
           p_assistance_notes?: string
           p_destination_description: string

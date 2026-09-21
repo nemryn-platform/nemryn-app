@@ -11,6 +11,9 @@
 --        docker exec supabase_db_ZenWard psql -U postgres -d postgres -c "drop function if exists public.rls_auto_enable()"
 --   2. Reference for restoring the previous grants if the hardening ever had to be reverted (review before use:
 --      it re-opens anon/authenticated/service_role privileges that the contract deliberately removed).
+-- NOTE (S4C): valid only against a database migrated through 20260921110000 (it names the 21-argument
+-- submit_public_transportation_request signature that migration 20260921120000 replaces). Apply it, then the SEC-01
+-- migration, BEFORE later migrations.
 -- It also creates a stand-in public.rls_auto_enable() event-trigger function (installed by the Supabase
 -- platform in production) so the migration's platform-helper branch is exercised locally.
 -- emulate PRODUCTION ACL starting state (from read-only inventory 2026-09-21)

@@ -458,10 +458,10 @@ begin
   -- superseded, so has_function_privilege must reference the current,
   -- full 20-arg signature or this lookup itself errors ("function does
   -- not exist") rather than returning a real answer.
-  select has_function_privilege('anon', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_anon;
-  select has_function_privilege('authenticated', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_authenticated;
-  select has_function_privilege('service_role', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_service_role;
-  select has_function_privilege('public', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE') into v_public;
+  select has_function_privilege('anon', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE') into v_anon;
+  select has_function_privilege('authenticated', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE') into v_authenticated;
+  select has_function_privilege('service_role', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE') into v_service_role;
+  select has_function_privilege('public', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE') into v_public;
 
   if v_service_role and not v_anon and not v_authenticated and not v_public then
     raise notice 'TEST 20 minimum-execute-privilege: PASS (service_role=true, anon=false, authenticated=false, public=false)';

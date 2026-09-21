@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/Input";
 import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge, type StatusCategory } from "@/components/ui/StatusBadge";
-import { buildSetupEnvExample, type WebsiteIntegrationStatus } from "@/lib/operations/website-integration-core";
+import { buildAcquisitionExample, buildSetupEnvExample, type WebsiteIntegrationStatus } from "@/lib/operations/website-integration-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -266,6 +266,7 @@ function ValueRow({ label, children, copy }: { label: string; children: React.Re
 // ---------------------------------------------------------------------------
 function SetupInstructions({ integration, endpoint }: { integration: WebsiteIntegrationView; endpoint: string }) {
   const env = buildSetupEnvExample({ endpoint, integrationId: integration.integrationId });
+  const acquisitionExample = buildAcquisitionExample();
   return (
     <div className="flex flex-col gap-zw-md border-t border-border-subtle pt-zw-md">
       <div>
@@ -307,6 +308,24 @@ function SetupInstructions({ integration, endpoint }: { integration: WebsiteInte
           <code className="font-mono text-text-primary">Origin: {integration.website ?? "<your website address>"}</code>. Nemryn only accepts
           requests that name the website configured here. It restricts where requests may come from — it is not a password.
         </p>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <p className={cn(typography.label, "text-text-primary")}>Optional: where the request came from</p>
+          <CopyValue value={acquisitionExample} label="acquisition example" />
+        </div>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>
+          Your website can add one optional <code className="font-mono text-text-primary">acquisition</code> object to each request so you can see
+          which campaign or page produced it. It appears under Acquisition on the request. Existing connections keep working without it.
+        </p>
+        <pre className={cn(typography.metadata, "overflow-x-auto rounded-sm bg-surface-secondary p-3 font-mono text-text-primary")}>{acquisitionExample}</pre>
+        <ul className={cn(typography.metadata, "list-disc pl-5 text-text-muted")}>
+          <li>Every property is optional, and so is the whole object.</li>
+          <li>Send paths like <code className="font-mono">/dialysis-transportation</code> and a host like <code className="font-mono">google.com</code> &mdash; not full URLs, query strings or click IDs.</li>
+          <li>Don&apos;t send anything about the customer or their answers as attribution.</li>
+          <li>A request is still accepted if the acquisition details are missing or can&apos;t be used, so a tracking problem never blocks a customer.</li>
+        </ul>
       </div>
 
       <div className="flex flex-col gap-1.5">

@@ -1,6 +1,7 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { deriveRequestReadiness, type RequestReadiness } from "./request-readiness-core";
+import { acquisitionFromRpcRow, type RequestAcquisition } from "./request-acquisition-core";
 
 /**
  * Server-side data access boundary for Operations Request Detail
@@ -314,4 +315,24 @@ export async function getRequestActivity(requestId: string, organizationId: stri
       reason,
     };
   });
+}
+
+/**
+ * Acquisition snapshot of a Request (P1-PILOT-S4C) -- the ONE read path is the controlled RPC
+ * `get_request_acquisition` (Organization Admin / Dispatcher of this organization; the raw table has no
+ * client privilege). Deliberately a SEPARATE, best-effort fetch like `getRequestActivity`: it is supplementary
+ * evidence, never part of the Request's own authoritative state, so any failure -- or the absence of a snapshot
+ * (every historical Request, and any submission that sent no valid acquisition) -- simply yields `null` and the
+ * page omits the section. Never throws, never logs the values.
+ */
+export async function getRequestAcquisition(requestId: string, organizationId: string): Promise<RequestAcquisition | null> {
+  if (!UUID_RE.test(requestId)) return null;
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("get_request_acquisition", {
+    p_organization_id: organizationId,
+    p_request_id: requestId,
+  });
+  if (error) return null;
+  const row = Array.isArray(data) ? data[0] : data;
+  return acquisitionFromRpcRow(row ?? null);
 }

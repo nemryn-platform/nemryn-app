@@ -36,3 +36,27 @@ https only; host of ≥2 labels with an alphabetic (or punycode) TLD; optional p
 ## Not in scope / tracked
 
 Origin *ownership* verification (an origin is a constraint, not proof of control) and a permanent Delete are deliberately not built; cleanup of the temporary manually-provisioned Zenward QA integration happens at the coordinated fresh-Zenward cutover (R4E).
+
+## Acquisition attribution (P1-PILOT-S4C)
+
+The website intake payload accepts ONE optional object, `acquisition`, so a tenant can later see which source, campaign or page produced a Request. Every property — and the object itself — is optional; existing integrations that send nothing behave exactly as before.
+
+```json
+"acquisition": {
+  "utmSource": "google",
+  "utmMedium": "cpc",
+  "utmCampaign": "dialysis_transport",
+  "landingPath": "/dialysis-transportation",
+  "submissionPath": "/request-transportation",
+  "referrerHost": "google.com",
+  "formVersion": "request-v2"
+}
+```
+
+Accepted fields and limits: `utmSource` / `utmMedium` ≤ 120, `utmCampaign` / `utmContent` / `utmTerm` ≤ 160 (trimmed, case preserved), `landingPath` / `submissionPath` ≤ 300 (pathname only: leading `/`, no scheme, host, query or fragment), `referrerHost` ≤ 253 (bare hostname, lowercased), `formVersion` ≤ 64 (`[A-Za-z0-9._-]`).
+
+**A valid transportation Request never fails because of attribution.** Missing, malformed or unknown acquisition data is discarded (values individually); if nothing valid remains no attribution is stored and the Request is created normally. Not accepted or stored: IP address, user agent, fingerprints, cookies, session ids, full referrer/landing URLs, query strings, click ids (gclid / fbclid / msclkid), or arbitrary metadata.
+
+Storage: `request_acquisition_attributions` — one immutable snapshot per Request, written in the same transaction as the Request by `submit_public_transportation_request`. An idempotent replay returns the original Request and never adds or rewrites a snapshot. There is no backfill: historical Requests have none, which means "no acquisition information recorded" (not "direct"). It is shown to Organization Admins and Dispatchers only, as **Acquisition** on Request Detail (omitted when absent). It is not exposed to Drivers, notifications, audit events or Platform Admin. Analytics and dashboards are a later phase; classifications such as paid / organic / social / direct are never stored.
+
+Developer notes: don't send sensitive customer answers as attribution; don't send full URLs or query strings; submit the Request even if attribution capture fails.

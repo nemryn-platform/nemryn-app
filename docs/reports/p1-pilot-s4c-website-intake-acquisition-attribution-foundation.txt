@@ -1,0 +1,370 @@
+NEMRYN PLATFORM
+P1-PILOT-S4C -- WEBSITE INTAKE ACQUISITION ATTRIBUTION FOUNDATION
+Local implementation. NOT committed, NOT pushed, NOT deployed, `supabase db push` NOT run, production untouched,
+Zenward-Web untouched. Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+Repository /Users/datamatics/Nemryn, branch main == origin/main == d0f1d18 (P1-SEC-01 released; production contract
+0 of 28). Production is at migration 20260921110000. Working tree before this phase: only the previously
+uncommitted SEC-01 release report edit. Local Supabase migrated through 20260921110000, then this phase's one migration.
+Not started: P1-COMM-D1, S5B, analytics/dashboards, ad-platform integrations, universal form/embed.
+
+======================================================================
+CURRENT PUBLIC INTAKE AUDIT   (read fresh before changing anything)
+======================================================================
+Flow: tenant website server -> POST /api/public-intake/website (Next route) -> body cap 8 KB -> JSON parse ->
+validateWebsiteIntakePayload (closed field set, REJECTS any unknown top-level key) -> durable rate limit
+(check_and_record_public_intake_rate_limit, service_role) -> submit_public_transportation_request (service_role,
+SECURITY DEFINER) -> 200 {"ok":true}; a new Request enqueues a notification event (after() dispatch). CORS resolves
+to the active integrations' configured origins only (cors.ts reads request_intake_integrations as service_role).
+The route never returns ids; every rejection is one generic invalid_request. No browser->database path exists.
+submit_public_transportation_request (21 positional/named args): resolves the organization ONLY from the integration
+external_id (no organization parameter); rejects unknown/disabled integration, suspended organization, origin
+mismatch (when an allow-list is configured), invalid fields, and a service_type the tenant has not enabled (all the
+identical ZW006); inserts the Request (state pending, source web, no passenger, no Trip) with ON CONFLICT
+(intake_integration_id, external_submission_ref) DO NOTHING; on the genuinely-new row only, writes a request_logged
+event (no PII in metadata) and enqueues a website_request notification; a replay returns the original Request and
+notification_event_id = null.
+Read side: Request Hub list/detail read transportation_requests directly through the authenticated client with RLS
+(Organization Admin / Dispatcher); Request Detail loads supplementary panels (Activity) with separate best-effort
+fetches. Provenance is intake_integration_id !== null ("Website" badge).
+IMPORTANT FINDING: because unknown top-level keys are rejected, a payload carrying `acquisition` was previously
+REFUSED (400). Adding the key to the closed set is therefore part of this change; the application must be deployed
+AFTER the migration (see MIGRATIONS / deploy order).
+Settings -> Integrations -> Setup instructions (WebsiteIntakeSection) shows the endpoint, Integration ID, server
+configuration example, the Origin rule and a "confirm it works" step.
+
+======================================================================
+SEC-01 PRIVILEGE BASELINE   (honoured)
+======================================================================
+Read: docs/security/database-privilege-contract.md, scripts/verify-db-privileges.sh, privilege_contract_tests.sql.
+New public table -> no anon/authenticated/service_role privilege by default; new function -> no PUBLIC/anon/
+authenticated/service_role EXECUTE by default (global default + explicit revokes); service_role stays least
+privilege; RLS mandatory; every new object added to the contract in the SAME phase; local verify = 0 of 28.
+Result: scripts/verify-db-privileges.sh local -> 0 violations of 28 after the migration, with the new table and
+functions in the contract; the drift-proof script (20 mutations) still catches every drift kind.
+
+======================================================================
+CURRENT REQUEST READ MODEL / REQUEST HUB
+======================================================================
+Detail: page.tsx composes panels; the secondary column holds Requester, Request Details, Activity. List: RequestsTable.
+Decision: attribution is DETAIL-ONLY in S4C (no list column, no redesign).
+
+======================================================================
+ATTRIBUTION PRODUCT DECISION
+======================================================================
+Capture the evidence first: an immutable factual snapshot of what arrived with the ORIGINAL website submission, one per
+Request, to support later derivation of Requests/Trips/recurring demand/completed transportation by source, medium,
+campaign, landing page and referrer host. No analytics, no scoring, no stored classification (paid/organic/social/
+direct are derived later from facts), no backfill, no editing.
+
+======================================================================
+PUBLIC CONTRACT
+======================================================================
+ONE optional object `acquisition`; the object and every property optional. Old integrations unchanged.
+  utmSource (<=120), utmMedium (<=120), utmCampaign (<=160), utmContent (<=160), utmTerm (<=160),
+  landingPath (<=300), submissionPath (<=300), referrerHost (<=253), formVersion (<=64)
+Example (also shown in Settings -> Integrations -> Setup instructions and docs/product/website-integration-self-service.md):
+  "acquisition": { "utmSource": "google", "utmMedium": "cpc", "utmCampaign": "dialysis_transport",
+    "landingPath": "/dialysis-transportation", "submissionPath": "/request-transportation",
+    "referrerHost": "google.com", "formVersion": "request-v2" }
+The public response is unchanged ({"ok":true}); nothing about attribution is echoed.
+
+======================================================================
+VALIDATION
+======================================================================
+Two independent, rule-identical layers: TypeScript fast pass (sanitizeAcquisition, website-intake-core.ts) and the
+authoritative SQL sanitiser (public._sanitize_acquisition, internal). Rules: UTM fields trimmed, non-empty, bounded
+(code points), no control characters, case preserved; paths = pathname only (leading "/", allowed RFC 3986 path
+characters, no "//", scheme, host, "?", "#", whitespace, backslash); referrerHost = bare hostname, lowercased (hostnames
+are case-insensitive; the only value normalised), no protocol/port/path/query, no "..", no "-." / ".-"; formVersion =
+[A-Za-z0-9][A-Za-z0-9._-]*. Non-strings, unknown keys, arrays, scalars: dropped. Defence in depth: the table itself
+enforces lengths, path/host/version shapes and "not empty" with CHECK constraints, so even the owner cannot store a
+full URL as a path.
+PRIVACY: never accepted or stored -- IP, raw user agent, fingerprints, screen data, cookies, session ids, full referrer
+or landing URLs, query strings, gclid/fbclid/msclkid, tracking pixels, email tracking ids, arbitrary metadata.
+
+======================================================================
+BEST-EFFORT INTAKE RULE   (critical invariant)
+======================================================================
+A VALID TRANSPORTATION REQUEST NEVER FAILS BECAUSE OF ATTRIBUTION. Enforced three ways: (1) the TS validator never
+returns invalid because of acquisition (garbage becomes null); (2) the SQL sanitiser never raises; (3) storage runs in
+a sub-transaction: even a deliberate internal failure (test BE forces a constraint violation) only raises a content-free
+warning -- the Request is still created, committed and notified with no snapshot. If no valid value survives, no row is
+created. Unknown TOP-LEVEL payload keys are still rejected exactly as before (only `acquisition` joined the closed set).
+
+======================================================================
+STORAGE MODEL
+======================================================================
+public.request_acquisition_attributions: id (uuid, extensions.gen_random_uuid()), organization_id, request_id,
+utm_source/medium/campaign/content/term, landing_path, submission_path, referrer_host, form_version, created_at.
+UNIQUE(request_id) (one snapshot per Request); composite FK (request_id, organization_id) ->
+transportation_requests(id, organization_id) so the snapshot's organization always equals its Request's; unique(id,
+organization_id) per convention; org index; prevent_organization_id_change trigger; CHECK constraints above.
+Attribution is NOT placed in notes, requester fields, Trip or Passenger. No audit event and no request_events metadata
+(campaign strings are not copied into immutable audit history; test P2 asserts it).
+
+======================================================================
+PRIVILEGE CLASSIFICATION   (class A: server / RPC only)
+======================================================================
+request_acquisition_attributions: anon none; authenticated none; service_role none; PUBLIC none. RLS ENABLED, NO
+policies (default deny, like every server-only table). Added to docs/security/database-privilege-contract.md and to
+privilege_contract_tests.sql (c_tables) in the same phase. Functions added/changed in the contract:
+  submit_public_transportation_request(... , jsonb)  service_role only (restated; old signature dropped)
+  get_request_acquisition(uuid, uuid)                authenticated only
+  _sanitize_acquisition(jsonb)                       internal (no client/service EXECUTE)
+Totals now: 27 tables, 93 migration-owned functions (production additionally has the platform helper rls_auto_enable, 94); authenticated executes 72; 17 internal.
+
+READ MODEL DECISION: a small controlled RPC, NOT direct table SELECT. Established Request Hub reads are direct RLS
+SELECTs, but this table is supplementary, server-written evidence and SEC-01 direction is RPC-only for such tables
+(audit_events, platform_admin_grants). get_request_acquisition(p_organization_id, p_request_id): SECURITY DEFINER,
+search_path pinned; Organization Admin or Dispatcher of that organization (has_org_role: active Membership + active
+organization); Driver, inactive Membership, foreign organization, Platform Admin without a Membership -> identical ZW002;
+unauthenticated ZW001; zero rows when no snapshot exists.
+
+======================================================================
+RLS
+======================================================================
+Enabled, default deny, no policies, no anon/PUBLIC policy, no Driver-specific path; the tenancy helpers were not modified.
+RLS is the second layer; the authorization is the RPC + the absence of any table privilege.
+
+======================================================================
+SERVICE_ROLE IMPACT
+======================================================================
+SERVICE_ROLE TABLE ACCESS ADDED: NONE. The canonical intake function (SECURITY DEFINER, owner) writes the row;
+service_role still holds SELECT on request_intake_integrations only plus EXECUTE on the same four RPCs (the intake RPC
+under its new signature). Contract check 11/18 unchanged and passing.
+
+======================================================================
+TRANSACTIONALITY / RPC CHANGE
+======================================================================
+Extended the canonical function with ONE optional trailing parameter `p_acquisition jsonb default null`. Because
+CREATE OR REPLACE with a different argument list would create a second overload (ambiguous for PostgREST named-argument
+calls), the migration DROPs the 21-argument function and creates the 22-argument one; test T4 asserts exactly one
+overload exists. Every existing caller (positional or named, without acquisition) is unaffected -- the legacy suites
+(public_request_intake, notifications, platform lifecycle, team services, privilege behaviour) run unchanged apart from
+the signature TEXT in has_function_privilege assertions. EXECUTE restated explicitly: revoke all from
+public/anon/authenticated/service_role, grant to service_role. The attribution insert is in the SAME transaction as the
+Request, on the new-row path only.
+
+======================================================================
+IDEMPOTENCY / SNAPSHOT SEMANTICS
+======================================================================
+Existing idempotency (intake_integration_id, external_submission_ref ON CONFLICT DO NOTHING) remains authoritative.
+Attribution is written only when the Request row was newly inserted, so a replay never adds, changes or duplicates it
+and never re-notifies. Tested: replay with DIFFERENT and with MISSING acquisition -> same Request, exactly one snapshot,
+original values intact, exactly one notification (G, P); a replay carrying acquisition for a Request that had none does
+NOT create one (G2). Real concurrency: 6 parallel identical submissions with 6 different acquisitions -> 1 Request,
+1 snapshot belonging to the winning submission, 1 notification, every caller accepted, exactly one "new".
+Snapshot = "acquisition context of the original website submission": immutable application evidence (no UPDATE/DELETE
+grant, organization_id change blocked); no edit UI; no correction tooling (a future audited feature).
+NO BACKFILL: historical Requests have none; absence displays nothing (never Direct/Organic/Unknown).
+
+======================================================================
+REQUEST HUB
+======================================================================
+Request Detail (secondary column, above Activity) gets an "Acquisition" panel ONLY when a snapshot with usable values
+exists: Source, Medium, Campaign, Content, Search term, Landing page, Submitted from, Referrer, Form version; plain text,
+no links, no raw JSON/ids/integration identifiers, absent rows skipped; omitted entirely otherwise. Loaded by a
+separate best-effort fetch (getRequestAcquisition -> get_request_acquisition) for website Requests only; any failure
+just omits the panel. The Request list is unchanged (no columns).
+
+======================================================================
+DRIVER / PLATFORM ADMIN PRIVACY; NOTIFICATIONS; AUDIT
+======================================================================
+Driver: no path. No driver_* RPC returns acquisition (test T5); get_request_acquisition denies drivers (R4); the raw
+table has no privilege; Driver PWA/Trip detail untouched (E2E: /operations/requests/<id> redirects a Driver to /driver,
+the Driver workspace contains no acquisition text). Platform Admin: PlatformAdminGrant alone -> ZW002 on the RPC and
+42501 on the table (R6, T1); no platform aggregate was added. Notifications: not touched; the website_request event
+still carries no Request content (P2). Audit: no event added.
+
+======================================================================
+INTEGRATION DOCUMENTATION
+======================================================================
+Settings -> Integrations -> Setup instructions: new "Optional: where the request came from" block with the copyable
+developer example and four rules (all optional; paths/host not full URLs/query strings/click IDs; nothing about the
+customer or their answers; a request is still accepted if acquisition is missing or unusable). No credentials.
+docs/product/website-integration-self-service.md: full contract section.
+
+======================================================================
+FUTURE GROWTH COMPATIBILITY
+======================================================================
+Facts only (UTM x5, landing/submission path, referrer host, form version, created_at) keyed by request_id and
+organization_id. Attribution -> Request -> Trip supports Requests/Trips/recurring demand/completed transportation by
+source/medium/campaign/landing page/referrer host without copying marketing fields onto Trip and without persisted
+classifications. Organization index and the request_id unique index cover the obvious joins.
+
+======================================================================
+MULTI-TENANT SECURITY
+======================================================================
+Org A snapshot invisible to Org B: R7/R8 (with Org A's id -> ZW002; with own org id and A's request -> zero rows; Org A
+cannot read Org B's either); composite FK + owner-written row guarantee the organization; Org B cannot infer campaign,
+landing page, referrer or form version. Dispatcher allowed (Request Hub semantics), Driver/inactive/Platform blocked.
+
+======================================================================
+TESTS
+======================================================================
+PUBLIC INTAKE / READ MODEL (supabase/tests/website_intake_acquisition_tests.sql, 52/52): brief matrix A-P (old
+payload; full; partial; malformed; all-invalid; unknown keys; replay with different acquisition; wrong origin;
+disabled integration; disabled service offering; tenant isolation; no auto Passenger/Trip/Recurring; notification
+exactly once), best-effort under forced internal failure, sanitiser boundaries (limits at/over, control characters,
+non-strings, every path/host/version rule), DB integrity constraints, read-model authorization matrix (Admin,
+Dispatcher, Driver, inactive, Platform Admin, anon, service_role, unauthenticated, null ids), raw-table denial for
+every role, RLS state, function EXECUTE, single-overload check.
+UNIT: website-intake-core (+13 acquisition tests), request-acquisition-core (5), website-integration-core (+1): total
+469/469.
+BROWSER E2E through the REAL public route and UI (.tmp-qa/s4c-acquisition-e2e.mjs, production build, 27/27):
+old/full/partial/mixed/each invalid type -> 200; snapshots correct; replay preserved; wrong origin 400; top-level unknown
+key still 400; response is exactly {"ok":true}; Admin and Dispatcher see the Acquisition section; a Request without
+attribution shows none; the list is unchanged; Driver blocked.
+REGRESSION on a fresh database: privilege_baseline_behavior 30/30, function_privilege 7/7, security_definer_exposure
+20/20, client_privilege_surface 21/21, rls_adversarial 32/32, public_request_intake 42/42, public_intake_rate_limit
+8/8, website_integration_self_service 72/72, team_services_operations 106/106 (service offerings), request_mutation
+38/38, request_mutation_privilege 18/18, driver_read_authorization/privilege/minimization 17/8/13, driver_identity_write
+37/37, owner_operator 49/49, operator_onboarding 40/40, tenant_settings_foundation 51/51; notifications_activity 42/42 and
+platform_admin_foundation 58/58 in isolation (and also when run right after the new suite; in a long alphabetical
+sequence they show the pre-existing order-dependent failures from data left by earlier suites -- the new suite leaves no
+residue: 0 attribution/notification/event/integration rows).
+CONCURRENCY (real parallel psql sessions): public_request_intake, public_intake_rate_limit, website_integration,
+notification_claim, platform_lifecycle, and the new website_intake_acquisition_concurrency_test.sh all PASS.
+PRIVILEGE CONTRACT: scripts/verify-db-privileges.sh local = 0 violations of 28; prove_contract_detects_drift.py: all 20
+drift kinds still detected.
+APPLICATION: npx tsc --noEmit PASS; npm run lint 0 errors (72 warnings, all untracked .tmp-qa; 0 in src); npm test 469/469;
+npm run build PASS.
+Regression scope: no shared tenancy/security helper was modified, so the full historical battery was not re-run.
+
+======================================================================
+FILES CREATED
+======================================================================
+supabase/migrations/20260921120000_website_intake_acquisition_attribution.sql
+supabase/tests/website_intake_acquisition_tests.sql
+supabase/tests/website_intake_acquisition_concurrency_test.sh
+src/lib/operations/request-acquisition-core.ts
+src/lib/operations/request-acquisition-core.test.mjs
+src/components/operations/requests/RequestAcquisitionPanel.tsx
+docs/reports/p1-pilot-s4c-website-intake-acquisition-attribution-foundation.txt
+(untracked scratch: .tmp-qa/s4c-acquisition-e2e.mjs)
+
+FILES MODIFIED
+src/lib/public-intake/website-intake-core.ts (+ acquisition type, closed-set key, sanitizer, limits)
+src/lib/public-intake/website-intake-core.test.mjs
+src/lib/public-intake/website-intake.ts (passes p_acquisition)
+src/lib/operations/request-detail.ts (getRequestAcquisition)
+src/app/operations/requests/[requestId]/page.tsx (best-effort fetch + panel)
+src/components/operations/settings/WebsiteIntakeSection.tsx (optional-acquisition instructions)
+src/lib/operations/website-integration-core.ts / .test.mjs (developer example helper)
+src/lib/supabase/database.types.ts (regenerated with `supabase gen types typescript --local`)
+supabase/tests/privilege_contract_tests.sql (new table + 3 function entries)
+supabase/tests/public_request_intake_tests.sql, team_services_operations_tests.sql (signature text of the replaced function)
+supabase/tests/support/emulate_production_acl_2026-09-21.sql (note: valid through 20260921110000)
+docs/security/database-privilege-contract.md, docs/product/website-integration-self-service.md
+
+======================================================================
+MIGRATIONS
+======================================================================
+20260921120000_website_intake_acquisition_attribution.sql (local only): create table + constraints + RLS + revokes;
+_sanitize_acquisition; DROP the 21-arg intake function and CREATE the 22-arg one (comment + explicit grants);
+get_request_acquisition. Data-free; no backfill. RLS/GRANT IMPACT: one new table with zero privileges; intake function
+service_role-only as before; one new authenticated-only read RPC; nothing else changed.
+DEPLOY ORDER (release, owner-gated): apply the migration FIRST (the currently deployed application keeps working: the new
+parameter has a default), then deploy the application that sends p_acquisition. After the release: run
+scripts/verify-db-privileges.sh production (must be 0 of 28) -- the contract already lists the new objects.
+Unrelated: the old application would REFUSE a payload containing `acquisition` (unknown key) -- no tenant sends it yet
+(Zenward-Web untouched); the field only becomes accepted with the new application.
+
+======================================================================
+OPEN ISSUES
+======================================================================
+1. Not released: needs owner review, commit, migration push, deploy, production contract verification.
+2. Zenward-Web does not send acquisition yet (out of scope; D1 / universal form).
+3. The SEC-01 report's production-release section is still an uncommitted edit from the previous phase.
+4. Pre-existing suite order-dependence (notifications_activity / platform_admin_foundation in long sequences) unchanged.
+5. TS and SQL sanitisers are mirrored by hand; both are unit/SQL tested at the same boundaries.
+
+======================================================================
+OLD INTEGRATION COMPATIBILITY:
+PASS
+
+OPTIONAL ACQUISITION:
+PASS
+
+ACQUISITION CAN BLOCK VALID REQUEST:
+NO
+
+TRANSACTIONAL ATTRIBUTION:
+PASS
+
+ONE ATTRIBUTION PER REQUEST:
+PASS
+
+IDEMPOTENT REPLAY:
+PASS
+
+REQUEST HUB:
+PASS
+
+DRIVER ATTRIBUTION ACCESS:
+BLOCKED
+
+PLATFORM ADMIN ATTRIBUTION:
+BLOCKED
+
+CROSS-TENANT ATTRIBUTION:
+BLOCKED
+
+SERVICE_ROLE TABLE ACCESS ADDED:
+NONE
+
+ACL CONTRACT:
+PASS
+
+LOCAL ACL VIOLATIONS:
+0/expected 0
+
+NO AUTO PASSENGER:
+PASS
+
+NO AUTO TRIP:
+PASS
+
+NO AUTO RECURRING:
+PASS
+
+NOTIFICATION REGRESSION:
+PASS
+
+RATE LIMIT REGRESSION:
+PASS
+
+ORIGIN REGRESSION:
+PASS
+
+SERVICE OFFERING REGRESSION:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+469/469
+
+BUILD:
+PASS
+
+READY FOR PRODUCTION RELEASE:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-COMM-D1
+Website Requests UX + Universal Form Foundation
+
+DO NOT BEGIN D1 AUTOMATICALLY.

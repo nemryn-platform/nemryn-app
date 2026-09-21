@@ -46,7 +46,7 @@ Facts, each proven with rolled-back probes in `supabase/tests/support/default_fu
 | Role | Tables | Sequences | Functions |
 |---|---|---|---|
 | `anon` | **none** | none | EXECUTE only `get_driver_invite_preview`, `get_staff_invite_preview` |
-| `authenticated` | only the grants in §3.2 — never DELETE / TRUNCATE / REFERENCES / TRIGGER / MAINTAIN | none | the 71 product-RPC / RLS-helper functions in the migration |
+| `authenticated` | only the grants in §3.2 — never DELETE / TRUNCATE / REFERENCES / TRIGGER / MAINTAIN | none | the 72 product-RPC / RLS-helper functions (the baseline 71 + `get_request_acquisition`, S4C) |
 | `service_role` | `SELECT` on `request_intake_integrations` only | none | EXECUTE on the four server-only RPCs (`check_and_record_public_intake_rate_limit`, `submit_public_transportation_request`, `claim_notification_dispatch`, `complete_notification_dispatch`) |
 | PUBLIC | none | none | none |
 
@@ -59,6 +59,7 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
 | audit_events | **A** | — | Read only through `list_activity_events` (whitelisted, human-projected). Raw before/after JSON must never reach a browser. *Revoked in P1-SEC-01 (was SELECT): no direct caller exists.* |
 | platform_admin_grants | **A** | — | Read only through `is_platform_admin()` (SECURITY DEFINER). *Revoked (was SELECT): no direct caller.* |
 | notification_events, organization_notification_settings, organization_service_offerings, public_intake_rate_limit_events, staff_invites | **A** | — | Server / RPC only (already so locally). |
+| request_acquisition_attributions (S4C) | **A** | — | Immutable acquisition snapshot of a website Request (UTM / landing+submission path / referrer host / form version). RLS on, NO policy, NO privilege for anon / authenticated / service_role. Written only by the SECURITY DEFINER intake function (as owner), read only through `get_request_acquisition` (Org Admin / Dispatcher of the Request's organization; Driver, inactive, foreign and Platform Admin without Membership get ZW002). service_role gained NO table privilege. |
 | request_intake_integrations | **A** + service | — | Integration secrets. Client access via RPCs; service_role SELECT for the website-intake CORS lookup (`src/lib/public-intake/cors.ts`). |
 | driver_invites | B | SELECT | Drivers page lists pending invites (2 callers). |
 | driver_location_updates | B | SELECT | Dispatch live location (1 caller). |
@@ -75,10 +76,10 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
 
 ### 3.3 Functions
 
-* **D — authenticated RPC (71):** every function the application calls with a user session, plus the RLS helpers that policies evaluate as the invoker (`has_org_role`, `is_org_member`, `current_driver_id`, `is_driver_assigned_to_trip`, `is_platform_admin`) and `is_valid_iana_timezone`. Every application `.rpc()` name was cross-checked against this list.
+* **D — authenticated RPC (72):** every function the application calls with a user session, plus the RLS helpers that policies evaluate as the invoker (`has_org_role`, `is_org_member`, `current_driver_id`, `is_driver_assigned_to_trip`, `is_platform_admin`) and `is_valid_iana_timezone`. Every application `.rpc()` name was cross-checked against this list.
 * **E — anon (2):** `get_driver_invite_preview`, `get_staff_invite_preview`: the `/join/[token]` and `/team-invite/[token]` pages render before sign-in with the publishable key. They are token-based and return nothing for an unknown token.
-* **F — service_role only (4):** `submit_public_transportation_request`, `check_and_record_public_intake_rate_limit` (website intake), `claim_notification_dispatch`, `complete_notification_dispatch` (notification dispatch).
-* **A — internal (16):** underscore helpers, trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
+* **F — service_role only (4):** `submit_public_transportation_request` (S4C: gained the optional trailing `p_acquisition jsonb`; the old 21-argument signature was dropped so there is one overload; EXECUTE restated service_role-only), `check_and_record_public_intake_rate_limit` (website intake), `claim_notification_dispatch`, `complete_notification_dispatch` (notification dispatch).
+* **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
 * Every SECURITY DEFINER function pins `search_path` (contract check 19). Functions executable by clients that contain no inline `auth.uid()` / role check are: the three service-only RPCs (validate the integration / dispatch event themselves), the six `driver_*` transition wrappers (delegate to `_driver_execute_trip_transition`, which authorises), the two anon previews (token-scoped), and `is_valid_iana_timezone` (pure).
 
 ## 4. What a new object must do

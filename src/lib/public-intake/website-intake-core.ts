@@ -87,6 +87,29 @@ export interface WebsiteIntakeSubmission {
   recurringSchedule: RecurringScheduleInput | null;
   /** P1-PILOT-S4B-R2A. A free-text SNAPSHOT of the passenger name the requester supplied — NOT a Passenger id, NOT matched/resolved against any Passenger record. `null` when not sent. See `transportation_requests.requested_passenger_name`'s own column comment for the full snapshot/entity distinction. */
   requestedPassengerName: string | null;
+  /**
+   * P1-PILOT-S4C. Optional acquisition attribution, ALREADY SANITISED by `sanitizeAcquisition`: only valid
+   * known fields survive, `null` when the caller sent nothing usable. It can never make the submission
+   * invalid -- a valid transportation Request must never fail because of marketing attribution.
+   */
+  acquisition: AcquisitionAttribution | null;
+}
+
+/**
+ * P1-PILOT-S4C -- the closed set of acquisition facts a website may send with a Request. Every property is
+ * optional. Nothing else is ever accepted (no IP, user agent, cookies, full URLs, query strings, click ids,
+ * arbitrary metadata).
+ */
+export interface AcquisitionAttribution {
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmContent?: string;
+  utmTerm?: string;
+  landingPath?: string;
+  submissionPath?: string;
+  referrerHost?: string;
+  formVersion?: string;
 }
 
 /**
@@ -113,6 +136,8 @@ const ALLOWED_KEYS = new Set([
   "serviceType",
   "recurringSchedule",
   "passengerName",
+  // P1-PILOT-S4C -- optional; sanitised leniently (see sanitizeAcquisition), never a reason to reject.
+  "acquisition",
 ]);
 
 /** Keys `recurringSchedule` itself may contain — a nested closed field set, exactly like the top-level `ALLOWED_KEYS` above. */
@@ -230,6 +255,72 @@ function validateRecurringSchedule(raw: unknown): RecurringScheduleInput | null 
   }
 
   return { daysOfWeek, startDate, endDate, appointmentTime, returnTripExpected };
+}
+
+/** Acquisition limits (P1-PILOT-S4C) -- kept in exact sync with public._sanitize_acquisition and the table CHECK constraints. */
+export const ACQUISITION_LIMITS = {
+  utmSource: 120,
+  utmMedium: 120,
+  utmCampaign: 160,
+  utmContent: 160,
+  utmTerm: 160,
+  landingPath: 300,
+  submissionPath: 300,
+  referrerHost: 253,
+  formVersion: 64,
+} as const;
+
+const ACQUISITION_UTM_KEYS = ["utmSource", "utmMedium", "utmCampaign", "utmContent", "utmTerm"] as const;
+/** pathname only: leading "/", RFC 3986 path characters, no "?", "#", whitespace or backslash. */
+const ACQUISITION_PATH_RE = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/;
+const ACQUISITION_HOST_RE = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
+const ACQUISITION_FORM_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+
+function codePoints(value: string): number {
+  return Array.from(value).length;
+}
+
+/**
+ * Reduces an UNTRUSTED `acquisition` value to the closed set of valid facts. NEVER throws and NEVER rejects:
+ * a non-object, unknown keys, non-string values and any value that fails its rule are simply dropped;
+ * `null` is returned when nothing valid remains (=> no attribution snapshot is created). Rules:
+ *  - UTM fields: trimmed, non-empty, within the limit, no control characters; case is preserved.
+ *  - landingPath / submissionPath: a pathname only (starts with "/", not "//", no scheme, host, query or fragment).
+ *  - referrerHost: a bare hostname (no protocol, port, path or query), lowercased -- hostnames are case-insensitive.
+ *  - formVersion: a short safe identifier.
+ * The database re-sanitises independently (`public._sanitize_acquisition`) -- this is the fast first pass.
+ */
+export function sanitizeAcquisition(raw: unknown): AcquisitionAttribution | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const body = raw as Record<string, unknown>;
+  const out: AcquisitionAttribution = {};
+
+  for (const key of ACQUISITION_UTM_KEYS) {
+    const value = body[key];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && codePoints(trimmed) <= ACQUISITION_LIMITS[key] && !CONTROL_CHARS_RE.test(trimmed)) out[key] = trimmed;
+  }
+
+  for (const key of ["landingPath", "submissionPath"] as const) {
+    const value = body[key];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length >= 1 && codePoints(trimmed) <= ACQUISITION_LIMITS[key] && ACQUISITION_PATH_RE.test(trimmed) && !trimmed.startsWith("//")) out[key] = trimmed;
+  }
+
+  if (typeof body.referrerHost === "string") {
+    const host = body.referrerHost.trim().toLowerCase();
+    if (host.length >= 1 && host.length <= ACQUISITION_LIMITS.referrerHost && ACQUISITION_HOST_RE.test(host) && !/\.\.|-\.|\.-/.test(host)) out.referrerHost = host;
+  }
+
+  if (typeof body.formVersion === "string") {
+    const version = body.formVersion.trim();
+    if (version.length >= 1 && version.length <= ACQUISITION_LIMITS.formVersion && ACQUISITION_FORM_VERSION_RE.test(version)) out.formVersion = version;
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 /**
@@ -356,6 +447,8 @@ export function validateWebsiteIntakePayload(raw: unknown): WebsiteIntakeValidat
       serviceType,
       recurringSchedule,
       requestedPassengerName: passengerName.value,
+      // P1-PILOT-S4C -- best effort: never a validation failure.
+      acquisition: sanitizeAcquisition(body.acquisition),
     },
   };
 }

@@ -15,6 +15,7 @@ const {
   deriveWebsiteIntegrationStatus,
   WEBSITE_INTEGRATION_STATUS_LABEL,
   buildSetupEnvExample,
+  buildAcquisitionExample,
   formatIntegrationTimestamp,
   formatIntegrationDate,
   WEBSITE_INTAKE_PATH,
@@ -104,4 +105,12 @@ test("timestamps render in the organization timezone; null passes through", () =
   assert.match(formatIntegrationTimestamp("2026-09-20T03:30:00Z", "America/New_York"), /Sep 19, 2026/);
   assert.match(formatIntegrationTimestamp("2026-09-20T03:30:00Z", "America/Los_Angeles"), /Sep 19, 2026/);
   assert.match(formatIntegrationDate("2026-09-20T03:30:00Z", "Pacific/Honolulu"), /Sep 19, 2026/);
+});
+
+test("acquisition developer example is a valid optional object with only allowed fields and no credential/full URL", () => {
+  const example = buildAcquisitionExample();
+  const parsed = JSON.parse(`{${example}}`);
+  assert.deepEqual(Object.keys(parsed.acquisition), ["utmSource", "utmMedium", "utmCampaign", "landingPath", "submissionPath", "referrerHost", "formVersion"]);
+  assert.match(parsed.acquisition.landingPath, /^\/[^?#]*$/);
+  assert.doesNotMatch(example, /https?:|\?|#|key|secret|token|password|service/i);
 });

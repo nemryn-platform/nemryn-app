@@ -627,9 +627,9 @@ begin
     pg_temp.try_as('service_role', null, format(v_call, v_a_ext, 'r4c-a-7', 'https://evil.example.test', '''medical_appointment''')) = 'ZW006'
     and (select count(*) from public.trips) = v_trips and (select count(*) from public.passengers) = v_pass and (select count(*) from public.recurring_arrangements) = v_arr);
   perform pg_temp.report('INTAKE-10 (grants unchanged: submit function is service_role-only)',
-    has_function_privilege('service_role', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE')
-    and not has_function_privilege('anon', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE')
-    and not has_function_privilege('authenticated', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text)', 'EXECUTE')
+    has_function_privilege('service_role', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.submit_public_transportation_request(text, text, text, text, text, text, text, text, text, date, time, text, text, text, text, text[], date, date, time, boolean, text, jsonb)', 'EXECUTE')
     and (select count(*) from pg_proc where proname = 'submit_public_transportation_request') = 1);
 end $$;
 

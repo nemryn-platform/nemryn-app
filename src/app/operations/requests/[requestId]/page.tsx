@@ -2,7 +2,8 @@ import Link from "next/link";
 import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getRequestDetail, getRequestActivity, type RequestActivityEvent } from "@/lib/operations/request-detail";
+import { getRequestDetail, getRequestActivity, getRequestAcquisition, type RequestActivityEvent } from "@/lib/operations/request-detail";
+import type { RequestAcquisition } from "@/lib/operations/request-acquisition-core";
 import { getLogRequestFormData } from "@/lib/operations/log-request";
 import { requestStatusLabel, requestStatusCategory, requestReadinessLabel, requestReadinessTextClass, formatOperationsLongDate } from "@/lib/operations/presentation";
 import { deriveRequestReadiness } from "@/lib/operations/request-readiness-core";
@@ -17,6 +18,7 @@ import { RequestRequesterPanel } from "@/components/operations/requests/RequestR
 import { RequestDetailsPanel } from "@/components/operations/requests/RequestDetailsPanel";
 import { RequestLinkedTripsPanel } from "@/components/operations/requests/RequestLinkedTripsPanel";
 import { RequestActivityPanel } from "@/components/operations/requests/RequestActivityPanel";
+import { RequestAcquisitionPanel } from "@/components/operations/requests/RequestAcquisitionPanel";
 import type { NewTripPassengerOption } from "@/lib/operations/new-trip-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -127,6 +129,17 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
     activityEvents = await getRequestActivity(request.id, organization.organizationId);
   } catch {
     activityEvents = null;
+  }
+
+  // Acquisition (P1-PILOT-S4C) -- supplementary, best effort, website Requests only. `null` (no snapshot, historical
+  // Request, or any failure) simply omits the section; it never affects the Request's own state or page load.
+  let acquisition: RequestAcquisition | null = null;
+  if (request.intakeIntegrationId !== null) {
+    try {
+      acquisition = await getRequestAcquisition(request.id, organization.organizationId);
+    } catch {
+      acquisition = null;
+    }
   }
 
   const identity = request.passenger?.displayName ?? request.requesterName;
@@ -265,6 +278,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             serviceType={request.serviceType}
             recurringSchedule={request.recurringSchedule}
           />
+          <RequestAcquisitionPanel acquisition={acquisition} />
           <RequestActivityPanel events={activityEvents} timezone={timezone} />
         </div>
       </div>
