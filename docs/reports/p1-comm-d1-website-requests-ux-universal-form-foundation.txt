@@ -205,3 +205,248 @@ Question: does "6 parallel first saves -> 1 row, version 6, 6 audits" mean ident
    event.
 5. Result: NO PRODUCT DEFECT. Only the test was extended. Production release status of D1 unchanged (READY after owner review;
    migration first, app second). ACL contract 0 of 28. Nothing deployed, pushed or committed; Zenward-Web untouched; D2 not started.
+
+
+======================================================================
+======================================================================
+P1-COMM-D1 -- PRODUCTION RELEASE   (2026-09-21)
+Owner approved D1 + D1R. Release order followed: DATABASE MIGRATION FIRST, APPLICATION DEPLOY SECOND.
+No D2, Zenward-Web, S5B, Vercel plan or GitHub visibility change; no public form / embed built.
+======================================================================
+
+----------------------------------------------------------------------
+RELEASE COMMIT
+----------------------------------------------------------------------
+f28adc71a617f1c11a4f2b0523e9c031a07a3c09   "feat: add Website Requests setup and form foundation"
+Nemryn <nemryn.app@gmail.com>. 35 files, +3397/-700 (the deletions are the removed WebsiteIntakeSection component and the
+renamed integrations/actions.ts). Preceded in the same push by 1a51ce9 "docs: record S4C production release" (the carried S4C
+report edit, inspected first: 217 insertions, 0 deletions, only the S4C production-release section; secret scan clean).
+Process note: my first docs commit accidentally swept in the already-staged D1 rename/delete; it was NOT pushed, was reset
+(`git reset HEAD~1`), and redone with a pathspec so 1a51ce9 contains exactly one file.
+Starting state verified: branch main, origin nemryn-platform/nemryn-app, HEAD == origin/main == 5333dcb2b59af20ddb1ab5e95d7a6877c9ae8e54;
+production project wyocbivzgrbekuyqdfts, latest remote migration 20260921120000, ONLY 20260921130000 pending.
+Diff review: only D1 scope (Website Requests UX, method/manager guidance, Nemryn form configuration + safe preview, developer
+package, Integrations redirect, two guidance columns, website_request_forms, three RPCs, Activity mapping, contract updates,
+tests, docs, this report). Grep of added code for iframe / <script / embed / hosted / analytics / pixel / ad SDK / Zenward returned
+only explanatory text and negative tests ("embed is the next phase", "no WordPress plugin yet"); zero Zenward references in src.
+No public form, embed, iframe, hosted page, plugin, Zenward-specific code, analytics or S5B work.
+Secret scan of the whole staged diff (JWT, sb_secret/publishable, Resend, GitHub tokens, private keys, connection strings,
+service-role key names, passwords, Bearer): the only hit is a NEGATIVE unit-test regex. No .env, no .tmp-qa, no PHI (fictional
+data only). The developer-package example contains one fabricated example idempotency key (a UUID literal), not a real id.
+Local gate before commit (fresh database): verify-db-privileges local 0/28; website_requests_form 37/37; website_integration_
+self_service 72; website_intake_acquisition 52; public_request_intake 42; public_intake_rate_limit 8; team_services_operations
+106; tenant_settings_foundation 51; privilege_baseline_behavior 30; client_privilege_surface 21; function_privilege 7;
+security_definer_exposure 20; rls_adversarial 32; notifications_activity 42 and platform_admin_foundation 58 (each on its own
+fresh reset). Concurrency (website_requests_form_concurrency_test.sh, 6 separate psql processes): CASE A identical first saves ->
+1 row, version 1, 1 audit, one caller changed; CASE B six different -> version 6/6 audits; CASE C two groups -> version ==
+audits == changes, contiguous; CASE D canonical-equivalent -> version 1; CASE E (added) identical saves against an EXISTING form
+-> version stays 1, no new audit, 0 callers report a change. tsc PASS; lint 0 errors (73 warnings, all untracked .tmp-qa);
+unit 483/483; build PASS.
+
+GITHUB PUSH
+PASS. One push, no force, GitHub identity "nemryn", AFTER the migration was applied and proven compatible with the old
+application: 5333dcb..f28adc7. local HEAD == origin/main == f28adc71a617f1c11a4f2b0523e9c031a07a3c09. Repository visibility unchanged.
+
+----------------------------------------------------------------------
+PRE-MIGRATION ACL CHECK   (contract-version distinction, as in S4C)
+----------------------------------------------------------------------
+Working-tree contract (already describing D1) against production: 2 violations of 28 -- check 02 (table website_request_forms
+does not exist yet) and check 14 (functions get_website_request_form, save_website_request_form,
+set_request_intake_integration_setup do not exist yet). Every other check ok (26 ok + SUMMARY). These are purely the structural
+consequence of the contract describing the pending migration, NOT privilege drift.
+The last committed production contract (5333dcb) against production: 0 violations (29 rows incl. SUMMARY). No unrelated ACL drift.
+MIGRATION DRY RUN: `supabase migration list --linked` pending only 20260921130000; `supabase db push --linked --dry-run` listed
+exactly 20260921130000_website_requests_form_foundation.sql.
+
+MIGRATION
+APPLIED via `supabase db push --linked --yes` BEFORE any GitHub push. (The CLI printed a pg-delta stack trace after the push
+but finished with "Finished supabase db push."; remote history and catalog were verified independently.) Remote history now
+ends 20260921110000, 20260921120000, 20260921130000; second dry run: "Remote database is up to date."
+
+POST-MIGRATION ACL CONTRACT
+scripts/verify-db-privileges.sh production immediately after: 0 violations of 28. (Hard gate passed.)
+Catalog (read-only): website_request_forms: RLS enabled, 0 policies, relacl {postgres only}; anon / authenticated / service_role
+have NO table privilege (select/insert/update/delete/truncate/references/trigger all false); PUBLIC has none.
+get_website_request_form(uuid), save_website_request_form(uuid,text,text,text,boolean,boolean,text,text,text[]),
+set_request_intake_integration_setup(uuid,text,text): SECURITY DEFINER, ACL {postgres, authenticated}; anon no, service_role no,
+PUBLIC no. No new service_role capability. Forms in production before the smoke: 0.
+
+MIGRATION-FIRST COMPATIBILITY   (old application still serving: build 5333dcb2b59a)
+PASS. After the migration and BEFORE the push: r4f-prod-smoke 31/31 (one earlier run hit a transient sign-in timing failure on the
+first attempt; the immediate re-run passed 31/31 -- same behaviour noted in S4C), s5a1-prod-smoke 27/27, Driver PWA verification
+41/41, /api/ping 204, public intake GET 405. The OLD Integrations page rendered fine against the new list RPC (extra columns
+ignored) and exposed no secrets.
+
+VERCEL DEPLOYMENT
+PASS. Push triggered the existing Nemryn project (https://vercel.com/nemryn/nemryn-app/EF6VtAL4ZPYqq5bKbWXR1rP1J9NV),
+sha f28adc7, "Deployment has completed". app.nemryn.com serves build f28adc71a617 (sw.js BUILD constant); /sign-in 200,
+/driver.webmanifest 200, /sw.js 200, /offline 200, /api/ping 204. No new project, plan change or Zenward change.
+
+----------------------------------------------------------------------
+PRODUCTION SMOKE   (SYNTHETIC QA tenants only: Siloan Medical Centre = Org A, Vemt Pro = Org B; tag D1-SYNTH-MUBFODC8)
+----------------------------------------------------------------------
+Script .tmp-qa/d1-prod-smoke.mjs (untracked). First run 70/74: 4 script-side items, all explained and resolved:
+(a) the "no UUID" scan flagged the fabricated example idempotency key in the developer package (not a real id; check
+adjusted); (b)-(d) my cleanup used the wrong dialog button so 3 synthetic Requests were not declined by the script -- declined
+afterwards with a corrected script (all 3 confirmed Declined). Every product check passed.
+WEBSITE REQUESTS: Settings home links Website Requests and no longer "Integrations". Landing shows title, description, flow strip
+(Customer -> Your website -> Nemryn Request Hub), three methods with the "Easiest" badge. No developer vocabulary, UUID or
+Integration ID on the landing page while Technical details is collapsed; opening it reveals Integration ID + endpoint.
+OLD ROUTE: /operations/settings/integrations redirects to /operations/settings/website-requests.
+EXISTING INTEGRATION: the pre-existing synthetic integration (web_4D8UV32FHFVD, Siloan) appeared without recreation, website and
+Disabled status preserved, connection_method NULL rendered "Existing connection"; read-only DB confirms it is STILL NULL/NULL
+and disabled after all activity. Real Zenward Mobility integrations untouched (zenward-web-87553280 active, its 5 Requests
+unchanged, web_KD7KGEJYYELS disabled, both method NULL).
+THREE CONNECTION METHODS: Nemryn form page, existing-form page (eight "Who manages your website?" options; "I'm not sure" shows
+both "Use a Nemryn form" and "Copy instructions for my website provider"; WordPress guidance has no plugin/one-click claim),
+developer page. In Org B (synthetic) a new integration was connected and "Save my choice" persisted existing_form/wix (RPC write
+path proven in production); no legacy integration was auto-assigned.
+FORM CONFIGURATION: Not configured -> edit -> Ready. VERSION SEMANTICS (read-only DB verified): first content save -> version 1
+(1 audit, created=true); IDENTICAL second save -> "No changes to save.", version still 1, NO additional audit; meaningful change
+(submit label) -> version 2 (audit); services subset save -> version 3 (audit). Exactly 3 audit events for 3 content saves.
+formVersion label nemryn-form-v<N> shown; landing shows form state independent of connection status.
+FORM PREVIEW: local only -- no <form>, disabled submit, ZERO public-intake network entries during editing/preview, and
+Requests/Passengers/Trips counts in the tenant unchanged by preview and saving.
+SERVICES: with no offerings configured the preview listed every service; after configuring dialysis + medical appointments +
+wheelchair (synthetic Org A) it listed only those; after disabling wheelchair in Services & Intake the form preview dropped it,
+its checkbox was disabled, and the operator notice appeared. RESIDUE: Siloan's synthetic service offerings are now configured as
+dialysis + medical_appointment (Services & Intake requires at least one), which restricts that synthetic tenant's intake.
+DEVELOPER PACKAGE: endpoint, Integration ID, approved website, Origin requirement, payload, optional acquisition, idempotency
+guidance and test steps present; no service-role key, Supabase internals, organization UUID, RPC names or secrets.
+AUTHORIZATION (production, synthetic accounts): Org A Driver blocked from all four routes; Org B Admin JWT with Org A's organization
+id: save/get form -> ZW002, set setup on Org A's integration -> ZW002; Org A Driver JWT: save/get/set -> ZW002; anon: 42501; raw
+website_request_forms read as anon, Org A Admin, Org B Admin and Org A Driver -> 42501 (no rows). Org B sees none of Org A's
+connection or form and cannot select it through ?connection=. Dispatcher, Platform Admin (no Membership) and suspended
+organization: MANUAL in production (no credentials / would require suspending a tenant); all three proven locally (SQL + browser).
+WEBSITE INTAKE REGRESSION (legacy synthetic integration temporarily turned on, then restored): legacy payload accepted (200);
+S4C acquisition with formVersion nemryn-form-v2 accepted and stored (form_version nemryn-form-v2, google, /dialysis-transportation)
+and shown in Request Detail; offered service (dialysis) accepted; non-offered service (rehabilitation) rejected 400; wrong origin
+rejected 400; unknown top-level key rejected 400; responses unchanged; notifications: exactly one event per accepted Request (3).
+Rate limit untouched (no hammering; unchanged code, local suite passes). CLEANUP: 3 synthetic Requests declined through the
+product; legacy synthetic integration Disabled again. Residue (synthetic tenants only): 3 declined Requests, 1 immutable
+attribution row, 3 notification events, Siloan form config (version 3, Ready) and service offerings, one disabled Vemt Pro
+integration (existing_form/wix).
+TENANT AUTH / DRIVER PWA on the NEW build: r4f-prod-smoke 30/31 and PWA verification 40/41 -- the only failure in each is the
+old assertion "/operations/settings/integrations renders", which now (intentionally) lands on /website-requests; s5a1 25/27 --
+the two failures are the old "Integrations" label in the Settings order check. Re-run with the label updated: s5a1 27/27 and
+r4f 30/31 (only the intentional redirect). No functional regression.
+
+ACL CONTRACT / ACL FINAL
+scripts/verify-db-privileges.sh production after deployment and smoke: 0 violations of 28. (Hard gate passed.)
+
+----------------------------------------------------------------------
+OPEN ITEMS
+----------------------------------------------------------------------
+1. MANUAL in production: Dispatcher, Platform Admin (no Membership) and suspended-organization checks (no credentials); proven locally.
+2. Synthetic residue listed above (Siloan form + service offerings; Vemt Pro disabled integration; declined Requests).
+3. Smoke scripts that assert the old "Integrations" label (r4f / s5a1 / s5a-prod-release-verify) should be updated for the rename.
+4. This report addendum is an UNCOMMITTED change to a tracked file (pushing it would trigger another identical deploy).
+5. Form configuration is per organization (not per integration); D2 must decide the binding when a form is actually served.
+6. Release control: keep running scripts/verify-db-privileges.sh production after every migration release.
+
+======================================================================
+D1 RELEASE COMMIT:
+f28adc71a617f1c11a4f2b0523e9c031a07a3c09
+
+GITHUB PUSH:
+PASS
+
+MIGRATION 20260921130000:
+APPLIED
+
+MIGRATION-FIRST COMPATIBILITY:
+PASS
+
+ACL CONTRACT:
+0/28 VIOLATIONS
+
+WEBSITE REQUESTS:
+PASS
+
+THREE CONNECTION METHODS:
+PASS
+
+EXISTING INTEGRATIONS:
+PASS
+
+OLD SETTINGS ROUTE:
+PASS
+
+FORM CONFIGURATION:
+PASS
+
+IDENTICAL SAVE VERSION:
+UNCHANGED
+
+MEANINGFUL CHANGE VERSION:
+INCREMENTED
+
+FORM PREVIEW:
+PASS
+
+PUBLIC FORM:
+NOT EXPOSED
+
+SERVICES:
+PASS
+
+DEVELOPER PACKAGE:
+PASS
+
+SECRETS:
+NONE
+
+DISPATCHER:
+BLOCKED   (MANUAL in production; proven locally)
+
+DRIVER:
+BLOCKED
+
+PLATFORM ADMIN:
+MANUAL   (no credential; Membership-only RPC + no table privilege, proven locally)
+
+CROSS-TENANT:
+BLOCKED
+
+WEBSITE INTAKE:
+PASS
+
+S4C ACQUISITION:
+PASS
+
+TENANT AUTH:
+PASS
+
+DRIVER PWA:
+PASS
+
+VERCEL:
+PASS
+
+APP.NEMRYN.COM:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+483/483
+
+BUILD:
+PASS
+
+PRODUCTION RELEASE:
+PASS
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+P1-COMM-D2
+Universal Website Request Form + Embed + Hosted Form + Acquisition Capture
+
+DO NOT BEGIN D2 AUTOMATICALLY.
