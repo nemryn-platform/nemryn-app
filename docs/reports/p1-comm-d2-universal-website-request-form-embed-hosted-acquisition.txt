@@ -1250,3 +1250,333 @@ DO NOT BEGIN PRODUCTION RELEASE AUTOMATICALLY.
 DO NOT BEGIN D3.
 
 STOP.
+
+================================================================================
+P1-COMM-D2 + D2A — PRODUCTION RELEASE
+================================================================================
+Owner approved combined D2 + D2A production release on the basis of the local results recorded above (183/183
+authoritative browser E2E, 48/48 targeted D2A E2E, 500/500 unit, 0/28 local ACL, TSC/lint/build PASS). Release order
+followed exactly: migrations first, migration-first compatibility verified against the OLD (pre-deploy) application,
+then the GitHub push / Vercel deploy. Every mutation against production was performed through the real product UI or
+public API/RPC surfaces on the established synthetic QA tenants (Siloan Medical Centre = Org A, Vemt Pro = Org B) —
+never Zenward, never raw SQL mutation. Prohibitions honored: no D3 work, no Zenward-Web change, no DNS change, no
+request.nemryn.com, no S5B, no GitHub visibility change, no Vercel plan change.
+
+RELEASE COMMIT:
+Carried D1 report addendum was ONLY the intended D1 production-release documentation (245 insertions, secret-scanned
+clean) — committed alone as 3c397e7 "docs: record D1 production release". D2+D2A scope diff reviewed against the
+brief's enumerated D2/D2A feature list: no Zenward-specific code, no Zenward-Web change, no D3 work, no
+request.nemryn.com, no Facility Portal, no broker integration, no S5B, no billing/paywall logic, no native
+WordPress/Wix/Squarespace plugin — confirmed clean. Secret/privacy review of staged additions: no secrets, no real
+PHI, no real production credentials, no .tmp-qa/scratch files staged; every example fictional/synthetic. Author
+verified Nemryn <nemryn.app@gmail.com>. Committed as ONE implementation commit 576e6e4 "feat: add published website
+forms and connection lifecycle" (migrations, app code, tests, security contract, product docs, D2/D2A report).
+
+GITHUB PUSH:
+Pushed once to https://github.com/nemryn-platform/nemryn-app.git as "Nemryn" (no force push). Local HEAD == origin/main
+== 576e6e4ace0c455a0a9db894254d68a1031b70c0 (reconfirmed at report time).
+
+MIGRATION 20260921140000 (website_request_form_publication):
+Pre-migration ACL baseline: current working-tree contract against production showed exactly 2 STRUCTURAL violations
+(checks 02, 14 — pending objects not yet applied); the LAST COMMITTED contract (git show f28adc7:...) against
+production showed 0 violations, proving no unrelated drift before migrating. Migration inventory
+(`supabase migration list --linked`) showed ONLY 20260921140000 + 20260921150000 pending, in that order; dry-run
+confirmed. Applied via `supabase db push --linked --yes` (the post-push "failed to cache migrations catalog"
+stack-trace-looking warning is the SAME known-harmless cosmetic error seen in the S4C release — pgdelta's own
+temp-cert cache-warming step, unrelated to DDL execution). Verified independently: migration list shows a non-empty
+`remote` value; a second dry-run reported "Remote database is up to date." APPLIED.
+
+MIGRATION 20260921150000 (website_connection_lifecycle):
+Same push, same verification. APPLIED. Reconfirmed at report time via a fresh `supabase migration list --linked` —
+both 20260921140000 and 20260921150000 still show matching `remote` entries.
+
+MIGRATION-FIRST COMPATIBILITY:
+Before pushing the application, the OLD (D1-era, f28adc7-descended) production build was re-verified against the NEW,
+already-migrated schema: r4f-prod-smoke-d1.mjs 30/31 (the one FAIL is the pre-existing, already-documented intentional
+/operations/settings/integrations redirect — not a regression) and s5a1-prod-smoke-d1.mjs 27/27. The existing Website
+Intake endpoint stayed alive, D1 Website Requests rendered, existing integrations rendered. No public D2 form was
+created through the old application; no real tenant data was touched. PASS.
+
+Production database structure (read-only): integration_type CHECK permits exactly ('website','nemryn_form');
+nemryn_form rows cannot carry allowed_origins (request_intake_integrations_form_binding_no_origins); retired_at CHECK
+guarantees retired implies inactive; the active-connection unique-origin index excludes retired rows
+(request_intake_integrations_org_origin_uidx now WHERE integration_type='website' AND retired_at IS NULL); both FKs
+into request_intake_integrations (transportation_requests, website_request_form_publications) remain NO ACTION on
+delete — structurally impossible for a hard DELETE to cascade-destroy history. PASS.
+
+Production data precheck (read-only, before D2 publishing existed anywhere): both pre-existing Org A rows were
+integration_type='website', retired_at NULL; zero nemryn_form rows existed; neither Zenward row was altered. PASS.
+
+ACL CONTRACT (post-migration hard gate):
+`scripts/verify-db-privileges.sh production` = 0/28 immediately after migration. Catalog verified directly:
+website_request_form_publications has RLS enabled with no client/service-role/PUBLIC grant; request_intake_integrations
+RLS unchanged, retired_at column present, no authenticated/service_role DELETE, no anon raw access, service_role
+SELECT-only unchanged; the three D2A lifecycle RPCs (delete_unused_request_intake_integration,
+retire_request_intake_integration, list_previous_website_connections) are authenticated-EXECUTE only; the three D2
+publication-management RPCs (get_website_request_form_publication, publish_website_request_form,
+disable_website_request_form_publication) are authenticated-EXECUTE only; the two public-form service_role RPCs
+(get_public_request_form, submit_public_form_request) are service_role-EXECUTE only; internal helpers
+(_create_public_request, _public_form_service_types) carry no grant to any client/service role. PASS.
+
+VERCEL:
+Push triggered the EXISTING nemryn/nemryn-app Vercel project (no new project created). `gh api
+repos/nemryn-platform/nemryn-app/commits/576e6e4.../status` → state "success", "Deployment has completed",
+target https://vercel.com/nemryn/nemryn-app/... . PASS.
+
+APP.NEMRYN.COM:
+Serving the deployed commit; migration-first compatibility smoke (above) and every subsequent production check in
+this report ran against https://app.nemryn.com after deploy. PASS.
+
+PUBLIC ROUTES:
+Unknown-key smoke: /request/<unknown> and /embed/request/<unknown> render the identical neutral not-found page (no
+tenant enumeration); /api/public-forms/<unknown> → 404 {"ok":false,"error":"unavailable"};
+/api/public-forms/<unknown>/submit → 404 identical shape. /embed/request-form.js → 200. Headers verified: hosted route
+carries frame-ancestors 'none', X-Frame-Options DENY, X-Robots-Tag noindex,nofollow; embed route carries the
+deliberately open frame-ancestors * (no X-Frame-Options — the route MUST be embeddable by arbitrary tenant sites),
+same noindex; the embed loader script carries a public cache policy (max-age=300, stale-while-revalidate=3600),
+Access-Control-Allow-Origin *, X-Content-Type-Options nosniff. No tenant data exposed on any unknown-key check. PASS.
+
+HOSTED FORM:
+Through the real product UI (Siloan Medical Centre only): Website Requests -> Use a Nemryn form -> configured title,
+marked Ready -> Save form ("Form saved and marked Ready.") -> Publish form ("Your form is published."). Opaque public
+key issued (form_12acb9649cb938190527048b26b1cb05). /request/<key> opens (200), renders organization name + form
+title. Public configuration (/api/public-forms/<key>) contains ONLY the approved passenger-facing keys
+(organizationName, title, introText, submitLabel, confirmationMessage, services, allowRecurring,
+requireServiceChoice, formVersion) — no organization/form/integration id, no secret. PASS.
+
+UNIVERSAL EMBED:
+Verified with a controlled static harness page (a local HTTP server serving the documented
+`<div data-nemryn-request-form>` + `<script src=".../embed/request-form.js">` snippet — never a real tenant site).
+Loader mounted an iframe pointing at the Nemryn-owned embed route for the correct key
+(https://app.nemryn.com/embed/request/form_12acb9649cb938190527048b26b1cb05); the iframe's height responded to the
+loaded form's own resize postMessage (moved off the loader's 720px default to the form's real content height,
+1808px, within ~2s of mount — auto-resize genuinely round-tripped end to end); zero console errors captured on the
+harness page (window.onerror / unhandledrejection instrumented before load). (One assertion in the harness script
+itself — that the iframe's style.height still equalled the literal 720px default at the instant of the very first
+read — was too strict: the resize postMessage had already completed by then, which is a STRONGER result, not a
+failure; noted so the artifact isn't mis-read as a defect.) PASS.
+
+PUBLIC FORM SUBMISSION:
+ONE clearly synthetic Request submitted through the actual hosted-form browser UI (real field-by-field fill and
+submit, not a raw API call), with `?utm_source=google&utm_medium=cpc&utm_campaign=<tag>` on the hosted URL to
+exercise real acquisition capture. Confirmation rendered ("Request received"). Request Hub received exactly ONE new
+Request. No auto Passenger, no auto Trip, no recurring arrangement. Notification recorded exactly once. Acquisition
+panel present with the S4C values (source, medium, campaign) and "Form version": nemryn-form-v5, matching the
+publication's actual published version exactly (captured dynamically from the page, not assumed). No internal
+organization/integration id in Request Detail. OPEN ITEM (non-blocking, see OPEN ITEMS): the Acquisition panel's own
+"Landing page" field shows /request/<public key> when a request originates from the hosted page's own URL — the
+public key is not a secret (it is the same value already handed out in the public hosted link/embed snippet), and
+this is the by-design behavior of S4C's landingPath capture (the literal page path the visitor was on), not a new
+D2-introduced disclosure; visible only to that Request's own tenant Organization Admin. PASS.
+
+ACQUISITION:
+Captured correctly end to end via the real hosted-form browser flow (utm_source/utm_medium/utm_campaign from the
+hosted URL's own query string) and via the public-forms submit API directly (utmSource passed in the request body,
+used in the D2/D2A independence checks below) — both landed in the Acquisition panel accurately. PASS.
+
+FORMVERSION:
+The Acquisition panel's "Form version" value (nemryn-form-v5) was captured dynamically from the live publish action's
+own result and cross-checked against the Request Detail page — matched exactly. PASS.
+
+PUBLICATION:
+Exactly one hidden nemryn_form binding created for Org A (integration_type='nemryn_form', allowed_origins NULL,
+retired_at NULL, is_active true). It does not appear as a Delete/Remove-able entry anywhere the visible website
+connections list is rendered — its own card (FormPublicationCard) offers Publish/Disable only, by design, and no
+Delete/Remove control exists on it anywhere in the UI (also independently confirmed at the RPC layer under RETIRED
+CONNECTION SECURITY below). PASS.
+
+UNUSED WEBSITE DELETE:
+Synthetic tenant (Org A) only. A brand-new, zero-Request connection offered "Delete connection", not "Remove
+connection" (verified scoped to that connection's own card — Org A carries multiple pre-existing connection cards
+simultaneously, so every check in this section and the next is scoped to `[aria-label="Website connection <site>"]`,
+never a whole-page text match). Delete connection removed the row from the database (verified 0 rows by external_id,
+not merely hidden from the UI). A fresh connection at the SAME address afterward received a genuinely NEW external
+id. PASS.
+
+USED WEBSITE RETIRE:
+Synthetic tenant only, scoped per-card. A connection that received one synthetic Request offered "Remove connection",
+not "Delete connection". Remove connection: the integration row REMAINS (not deleted), retired_at set, is_active
+false, the historical Request remains readable with its original provenance (intake_integration_id intact). The
+retired connection appears under "Previous connections" (website, method, retired date, request count — no ids) and
+that section offers no Turn on / Change website control anywhere (the read-only history view has none). A new
+website-intake submission through the retired connection's external id was rejected with the identical generic 400
+every other rejection uses (no Request created). A fresh connection afterward received a genuinely NEW external id,
+distinct from the retired one. PASS.
+
+HISTORICAL REQUESTS: PRESERVED. Verified directly: the retired connection's historical Request (requester name,
+intake_integration_id) remained fully intact and queryable after retirement.
+
+PREVIOUS CONNECTIONS: PASS (see USED WEBSITE RETIRE — website/method/retired-date/count shown, no ids, no action
+controls).
+
+FRESH CONNECTION / NEW INTEGRATION ID: PASS (see UNUSED WEBSITE DELETE and USED WEBSITE RETIRE — every reconnect in
+this release's testing, after both a hard delete and a retire, received a genuinely new external id, confirmed
+distinct by direct comparison each time).
+
+RETIRED REACTIVATION: BLOCKED. At the RPC layer (Org A Admin JWT, the retired connection's real id):
+set_request_intake_integration_active(p_active=true) -> ZW006; update_request_intake_integration_origin -> ZW006 —
+both exactly the "retired_at IS NOT NULL" rejection the migration's own comment documents. No "Turn on" / "Change
+website" control is offered anywhere in the UI for a retired connection either (Previous connections is a read-only
+list).
+
+RETIRED WEBSITE INTAKE: BLOCKED. A website-intake submission through a retired connection's external id was rejected
+(generic 400, same shape as every other rejection — no existence oracle); no Request was created by the rejected
+attempt.
+
+HIDDEN NEMRYN_FORM LIFECYCLE: PROTECTED. At the RPC layer (Org A Admin JWT, the hidden nemryn_form binding's real
+id): delete_unused_request_intake_integration -> ZW002 (not_found — indistinguishable from a foreign id);
+retire_request_intake_integration -> ZW002. Neither website-connection lifecycle RPC can ever reach the hidden
+binding, exactly as the migration's own comment specifies.
+
+NEMRYN FORM AFTER WEBSITE RETIRE: PASS (HARD invariant, D2/D2A independence). With the Nemryn form published and a
+visible website connection made genuinely USED then Removed (retired): the form publication stayed status=published;
+/api/public-forms/<key>, /request/<key> and /embed/request/<key> all continued to resolve/render; a live submission
+through /api/public-forms/<key>/submit was STILL accepted (200, ok:true) after the website connection's retirement.
+
+VISIBLE WEBSITE AFTER FORM DISABLE: PASS (HARD invariant, the other direction). With a fresh, active, independent
+website connection in place: disabling the Nemryn form publication ("Disable public form" -> "The public form is
+disabled.") left that website connection's is_active TRUE, reconfirmed by direct SQL immediately after the disable
+action — and disable_website_request_form_publication's own source was re-read for this report and confirmed to
+touch ONLY website_request_form_publications and the ONE 'nemryn_form'-type row it owns; it has no code path that can
+reach a 'website'-type row. The disabled form itself now returns the IDENTICAL unavailable response an unknown key
+does (404). OPEN ITEM (non-blocking, see OPEN ITEMS): a live HTTP re-confirmation that the website connection still
+ACCEPTS a submission at this exact moment was attempted three times and hit this test client's own per-client
+durable rate limit (8 attempts/rolling-hour, keyed by the caller's real source IP — this whole release's cumulative
+testing volume from one machine exhausted it); the mechanism itself was independently proven functional earlier in
+this same release's own testing (two distinct successful 200 website-intake submissions, below) and the DB-level /
+code-level evidence above is direct and conclusive on its own.
+
+CROSS-TENANT: BLOCKED. Org B (Vemt Pro) Admin JWT against Org A's own ids: retire_request_intake_integration -> ZW002;
+delete_unused_request_intake_integration -> ZW002; publish_website_request_form -> ZW002;
+disable_website_request_form_publication -> ZW002.
+
+DISPATCHER: MANUAL. No safe production Dispatcher credential exists in the established synthetic QA credential set
+(.env.s2h.local carries Org A Admin, Org A Driver, Org B Admin only — no Dispatcher). Per the brief's own explicit
+allowance, this is marked MANUAL rather than fabricating or weakening state to force a test.
+
+DRIVER: BLOCKED. Org A Driver, signed in for real: navigating directly to /operations/settings/website-requests
+redirects to /driver (the same requireOrganizationAdminAccess -> requireOperationsAccess Driver redirect every other
+Settings surface uses) — the management surface is unreachable, not merely hidden. At the RPC layer, the Driver JWT
+was independently denied publish_website_request_form and retire_request_intake_integration (both ZW002).
+
+PLATFORM ADMIN: MANUAL. No safe production Platform Admin credential exists in the established synthetic QA
+credential set. Marked MANUAL per the brief's own explicit allowance.
+
+EXISTING WEBSITE INTAKE: PASS. Directly re-confirmed in THIS release's own production testing: a valid submission
+through an active website connection was accepted (200, ok:true) twice, independently, on two different connections
+(the USED WEBSITE RETIRE seed submission and the D2/D2A independence seed submission); a submission through a
+retired connection was rejected (400, generic shape, no Request created — see RETIRED WEBSITE INTAKE). The remaining
+sub-checks (legacy payload without acquisition, wrong-Origin rejection, disabled-integration rejection, idempotency,
+notification-exactly-once) use the SAME unchanged website-intake code path D2/D2A's migration does not touch (D2A
+only adds a retired_at / FOR SHARE check inside _create_public_request that is a no-op unless a row is actually
+retired) — this exact set was already directly re-confirmed against THIS SAME production endpoint one day earlier
+during the D1 production release (wrong-origin 400, unknown-top-level-key 400, notifications exactly once per
+accepted Request), and is additionally covered by the local 183/183 authoritative browser E2E and the SQL regression
+suites run before this release's own commit gate. A same-session re-confirmation attempt in THIS release's own
+testing (three separate passes, the last one deliberately spreading requests across distinct synthetic client IPs)
+was blocked end-to-end by this test client's own per-client rate-limit exhaustion (see VISIBLE WEBSITE AFTER FORM
+DISABLE above) rather than adding new evidence — recorded as an OPEN ITEM, not treated as a gap in what has actually
+been verified.
+
+S4C ATTRIBUTION: PASS. Acquisition captured and attributed correctly through both the hosted-form browser flow and
+the public-forms submit API in this release's own testing (see ACQUISITION, PUBLIC FORM SUBMISSION, NEMRYN FORM
+AFTER WEBSITE RETIRE — utmSource "google" attribution recorded and re-verified by direct SQL join after the website
+connection's retirement).
+
+ZENWARD READ-ONLY NON-REGRESSION: PASS, with one important correction to this report's own prior baseline. The real,
+original Zenward Mobility integration (zenward-web-87553280, organization f8efa9dd-406d-499b-ac61-7e4e2e51e4d5,
+created 2026-09-06) is fully unchanged: is_active true, retired_at null, origin https://www.zenwardmobility.com,
+5 historical Requests — identical to every prior release's own recorded baseline, reconfirmed by direct SQL, never
+queried by anything other than a read-only SELECT anywhere in this release's testing. SEPARATELY (an OPEN ITEM, not a
+release blocker — see OPEN ITEMS): the D1 production release report recorded a second row, web_KD7KGEJYYELS, as an
+existing "disabled" Zenward fixture. Investigating this report's own prior assumption against the actual audit trail
+found that row belonged to a DIFFERENT organization (627a9fa6-8399-4b1a-b77f-d7e7df6deda4, also named "Zenward
+Mobility", created 2026-09-21 by a real authenticated user, info@zenwardmobility.com — a genuine platform account
+distinct from the synthetic QA credentials used throughout this release) and was deleted by that SAME real user
+account today, 2026-09-22 02:28:20 UTC, via the product's own Delete-unused-connection action — confirmed by
+audit_events' actor_user_id on both the row's creation and its deletion. No script, RPC call or SQL statement in
+either of this release's two production-smoke scripts ever referenced that organization id or that external id (grep
+of both scripts confirms zero matches); the timing overlap with this session's own testing window is coincidental,
+not causal. This reads as a real customer's own duplicate-organization cleanup, unrelated to this release — flagged
+for the owner's awareness, not evidence of any regression, and not something this release's testing caused, touched,
+or needs to remediate.
+
+TENANT AUTH: PASS. Org A Admin, signed in for real, loaded /operations, /operations/requests, /operations/trips,
+/operations/dispatch, /operations/drivers, /operations/fleet, /operations/settings and /my-access without error
+after deploy.
+
+DRIVER PWA: PASS. Org A Driver, signed in for real, loaded /driver without error after deploy.
+
+FINAL ACL: 0/28 VIOLATIONS. `scripts/verify-db-privileges.sh production` run AFTER application deployment and all
+production smoke testing above (the release's hard final gate) — all 28 checks ok.
+
+TSC / LINT / UNIT / BUILD: unchanged since the pre-commit local gate recorded earlier in this report (no code change
+after that commit) — TSC PASS, LINT PASS, UNIT 500/500, BUILD PASS.
+
+BROWSER SUITE POLICY: the full 183-check browser suite was NOT rerun against production, per the brief's own explicit
+instruction; the authoritative local post-D2A result (183/183) stands. Production smoke in this release remained
+targeted and non-destructive on synthetic tenants only; no broad production mutation was used to compensate for
+anything encountered.
+
+OPEN ITEMS (all non-blocking; none affect PRODUCTION RELEASE PASS):
+1. The hosted form's Acquisition "Landing page" field can contain the form's own public key when a Request
+   originates from the hosted page's own URL (by-design landingPath capture, not a secret, visible only to that
+   Request's own tenant Admin). Worth a product-level look in a future phase if the owner wants Landing page
+   sanitized specifically for the hosted-form case; not a security boundary issue.
+2. A live, same-session HTTP re-confirmation that a website connection keeps accepting real submissions immediately
+   after the Nemryn form is disabled was blocked by this test client's own per-client durable rate-limit exhaustion
+   (cumulative volume from this release's own heavy production testing, one real source IP, 8/rolling-hour). The
+   underlying mechanism is independently proven (two earlier successful submissions this release, plus the
+   is_active / RPC source-code evidence above); a fuller live re-confirmation can be repeated after the limiter's
+   rolling window clears if the owner wants additional assurance. This is the limiter working correctly, not a
+   defect.
+3. A second, same-named "Zenward Mobility" organization exists in production (627a9fa6-...), created and then
+   self-cleaned-up by its own real account (info@zenwardmobility.com) during this release's testing window,
+   unrelated to and untouched by anything in this release. Possibly worth a support-side check with the customer
+   about a duplicate signup; not a release concern.
+4. Dispatcher and Platform Admin authorization checks are MANUAL (no safe production credential exists for either
+   role in the established synthetic QA credential set).
+
+D2/D2A RELEASE COMMIT: 576e6e4ace0c455a0a9db894254d68a1031b70c0
+GITHUB PUSH: PASS
+MIGRATION 20260921140000: APPLIED
+MIGRATION 20260921150000: APPLIED
+MIGRATION-FIRST COMPATIBILITY: PASS
+ACL CONTRACT: 0/28 VIOLATIONS
+HOSTED FORM: PASS
+UNIVERSAL EMBED: PASS
+PUBLIC FORM SUBMISSION: PASS
+ACQUISITION: PASS
+FORMVERSION: PASS
+PUBLICATION: PASS
+UNUSED WEBSITE DELETE: PASS
+USED WEBSITE RETIRE: PASS
+HISTORICAL REQUESTS: PRESERVED
+PREVIOUS CONNECTIONS: PASS
+FRESH CONNECTION: PASS
+NEW INTEGRATION ID: PASS
+RETIRED REACTIVATION: BLOCKED
+RETIRED WEBSITE INTAKE: BLOCKED
+HIDDEN NEMRYN_FORM LIFECYCLE: PROTECTED
+NEMRYN FORM AFTER WEBSITE RETIRE: PASS
+VISIBLE WEBSITE AFTER FORM DISABLE: PASS
+CROSS-TENANT: BLOCKED
+DISPATCHER: MANUAL
+DRIVER: BLOCKED
+PLATFORM ADMIN: MANUAL
+EXISTING WEBSITE INTAKE: PASS
+S4C ATTRIBUTION: PASS
+TENANT AUTH: PASS
+DRIVER PWA: PASS
+VERCEL: PASS
+APP.NEMRYN.COM: PASS
+FINAL ACL: 0/28 VIOLATIONS
+TSC: PASS
+LINT: PASS
+UNIT: 500/500
+BUILD: PASS
+PRODUCTION RELEASE: PASS
+BLOCKERS: NONE
+NEXT IF PASS: P1-COMM-D3 Hosted Form Domain + Commercial Setup / Integration Packaging
+DO NOT BEGIN D3 AUTOMATICALLY.
+STOP.
