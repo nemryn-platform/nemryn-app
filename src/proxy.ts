@@ -29,6 +29,7 @@ export async function proxy(request: NextRequest) {
  */
 export const config = {
   // P1-PILOT-S5A: the service worker script, the manifest, the reachability probe and the public
-  // offline page are static/public and must not pay a session-refresh round trip.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|sw\\.js$|driver\\.webmanifest$|api/ping$|offline$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // offline page are static/public and must not pay a session-refresh round trip. P1-COMM-D2: the anonymous public request form
+  // (hosted page, embed page + loader, and their two API routes) never needs a Supabase session either.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|sw\\.js$|driver\\.webmanifest$|api/ping$|offline$|request/|embed/|api/public-forms/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
 };

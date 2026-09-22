@@ -131,6 +131,50 @@ export async function updateWebsiteIntegrationOriginAction(
   };
 }
 
+/**
+ * Delete an UNUSED website connection permanently. Organization Admin only -- the guard re-derives the role and the
+ * database re-authorizes and re-checks eligibility (zero Requests) under a row lock immediately before DELETE; the
+ * handle is an opaque management id, never trusted as belonging to the caller's organization until the RPC's own
+ * check passes. A connection that has ever received a Request is refused (ZW006) -- Remove connection is the only
+ * option for those. A hidden Nemryn-form binding is rejected by the database the same way an unknown id would be.
+ */
+export async function deleteUnusedWebsiteConnectionAction(
+  _prev: WebsiteIntegrationActionState,
+  formData: FormData,
+): Promise<WebsiteIntegrationActionState> {
+  await guard();
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("delete_unused_request_intake_integration", {
+    p_integration_id: stringField(formData, "integrationHandle"),
+  });
+  if (error) {
+    return { status: "error", message: websiteIntegrationErrorMessage(mapWebsiteIntegrationError(error.code), "delete") };
+  }
+  refresh();
+  return { status: "success", message: "This connection was deleted. Connect a new website whenever you're ready." };
+}
+
+/**
+ * Permanently remove (retire) a website connection: new requests stop, but the row, every historical Request and
+ * its S4C attribution stay untouched -- never deleted. Organization Admin only, same authorization discipline as
+ * every other connection mutation. Idempotent: retiring an already-retired connection is a safe no-op.
+ */
+export async function removeUsedWebsiteConnectionAction(
+  _prev: WebsiteIntegrationActionState,
+  formData: FormData,
+): Promise<WebsiteIntegrationActionState> {
+  await guard();
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("retire_request_intake_integration", {
+    p_integration_id: stringField(formData, "integrationHandle"),
+  });
+  if (error) {
+    return { status: "error", message: websiteIntegrationErrorMessage(mapWebsiteIntegrationError(error.code), "retire") };
+  }
+  refresh();
+  return { status: "success", message: "This connection was removed. Previous requests and their history stay available in Nemryn." };
+}
+
 // ---------------------------------------------------------------------------
 // D1 additions: guidance preferences and the Nemryn form configuration
 // ---------------------------------------------------------------------------
@@ -223,4 +267,49 @@ export async function saveWebsiteRequestFormAction(
   revalidatePath(FORM_PAGE);
   refresh();
   return { status: "success", message: data?.changed ? (config.status === "ready" ? "Form saved and marked Ready." : "Draft saved.") : "No changes to save." };
+}
+
+export interface FormPublicationActionState {
+  status: "idle" | "success" | "error";
+  message?: string;
+}
+
+const PUBLICATION_ERROR = "We couldn't update your public form right now. Please try again.";
+
+/**
+ * Publish (or publish an UPDATE of, or re-enable) the organization's Nemryn form. Organization Admin only -- the guard
+ * re-derives the role and the database checks Membership, role and an ACTIVE organization again. The organization is ALWAYS the
+ * session workspace; the request carries nothing else. The RPC creates the internal delivery binding on first publish, so the
+ * operator never handles an integration id or token. Only a Ready form can be published (ZW006 otherwise).
+ */
+export async function publishWebsiteRequestFormAction(
+  _prev: FormPublicationActionState,
+  _formData: FormData,
+): Promise<FormPublicationActionState> {
+  void _formData;
+  const organization = await guard();
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("publish_website_request_form", { p_organization_id: organization.organizationId });
+  if (error) {
+    if (error.code === "ZW006") return { status: "error", message: "Save the form and mark it Ready before publishing." };
+    return { status: "error", message: PUBLICATION_ERROR };
+  }
+  revalidatePath(FORM_PAGE);
+  refresh();
+  return { status: "success", message: data?.changed ? "Your form is published." : "Your form is already published and up to date." };
+}
+
+/** Disable the public form: the hosted link and embed stop working; the history and every received Request stay. Admin only. */
+export async function disableWebsiteRequestFormAction(
+  _prev: FormPublicationActionState,
+  _formData: FormData,
+): Promise<FormPublicationActionState> {
+  void _formData;
+  const organization = await guard();
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("disable_website_request_form_publication", { p_organization_id: organization.organizationId });
+  if (error) return { status: "error", message: PUBLICATION_ERROR };
+  revalidatePath(FORM_PAGE);
+  refresh();
+  return { status: "success", message: data?.changed ? "The public form is disabled. New requests can't be sent through it." : "The public form is already disabled." };
 }

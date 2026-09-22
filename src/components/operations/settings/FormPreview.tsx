@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 
 const CONTROL = "w-full rounded-sm border border-border-subtle bg-surface-primary px-3 py-2 text-text-primary";
 
-function PreviewControl({ field, id }: { field: PreviewField; id: string }) {
+function PreviewControl({ field, id, onToggle }: { field: PreviewField; id: string; onToggle?: (checked: boolean) => void }) {
   // Inert on purpose: nothing typed here is kept, and nothing on this preview can be sent anywhere.
   switch (field.kind) {
     case "textarea":
@@ -34,8 +34,19 @@ function PreviewControl({ field, id }: { field: PreviewField; id: string }) {
           ))}
         </div>
       );
+    case "weekdays":
+      return (
+        <div className="flex flex-wrap gap-3" role="group" aria-labelledby={`${id}-label`}>
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+            <label key={d} className={cn(typography.bodySmall, "flex items-center gap-1.5 text-text-primary")}>
+              <input type="checkbox" disabled /> {d}
+            </label>
+          ))}
+        </div>
+      );
     case "checkbox":
-      return <input id={id} type="checkbox" disabled />;
+      // The recurring checkbox is the ONE live control: it only reveals the disabled recurring fields (local state, nothing is sent).
+      return onToggle ? <input id={id} type="checkbox" onChange={(e) => onToggle(e.target.checked)} /> : <input id={id} type="checkbox" disabled />;
     default:
       return <input id={id} type={field.kind} disabled className={CONTROL} />;
   }
@@ -47,6 +58,7 @@ function PreviewControl({ field, id }: { field: PreviewField; id: string }) {
  */
 export function FormPreview({ preview }: { preview: FormPreviewModel }) {
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [recurringOn, setRecurringOn] = useState(false);
   return (
     <div data-testid="form-preview" className="flex flex-col gap-zw-md rounded-md border border-dashed border-border-strong bg-surface-elevated p-zw-md">
       <p className={cn(typography.label, "self-start rounded-sm bg-surface-secondary px-2 py-0.5 text-text-secondary")}>
@@ -71,7 +83,7 @@ export function FormPreview({ preview }: { preview: FormPreviewModel }) {
           {preview.sections.map((section, s) => (
             <div key={section.heading} className="flex flex-col gap-zw-sm">
               <h4 className={cn(typography.label, "text-text-primary")}>{section.heading}</h4>
-              {section.fields.map((field) => {
+              {section.fields.filter((field) => field.showWhen !== "recurring" || recurringOn).map((field) => {
                 const id = `preview-${s}-${field.key}`;
                 return (
                   <div key={field.key} className="flex flex-col gap-1">
@@ -79,7 +91,7 @@ export function FormPreview({ preview }: { preview: FormPreviewModel }) {
                       {field.label}
                       {field.required ? <span aria-hidden> *</span> : <span className="text-text-muted"> (optional)</span>}
                     </label>
-                    <PreviewControl field={field} id={id} />
+                    <PreviewControl field={field} id={id} onToggle={field.key === "recurring" ? setRecurringOn : undefined} />
                     {field.help && <span className={cn(typography.metadata, "text-text-muted")}>{field.help}</span>}
                   </div>
                 );

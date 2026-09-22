@@ -6,17 +6,30 @@ import { ArrowRight, GlobeHemisphereWest, Plus } from "@phosphor-icons/react/dis
 import {
   ActivateButton,
   ConnectDialog,
+  DeleteConnectionDialog,
   DisableDialog,
   EditDialog,
+  RemoveConnectionDialog,
   SoftBreak,
   STATUS_CATEGORY,
   ValueRow,
+  type PreviousConnectionView,
   type WebsiteRequestsConnectionView,
 } from "./WebsiteConnectionControls";
+import { connectionMethodLabel } from "@/lib/operations/website-requests-core";
 import { Button } from "@/components/ui/Button";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { CONNECTION_METHOD_CARDS, FORM_STATE_LABEL, type FormState } from "@/lib/operations/website-requests-core";
+import {
+  CONNECTION_METHOD_CARDS,
+  FORM_STATE_LABEL,
+  PUBLICATION_STATE_LABEL,
+  FORM_CONNECTION_EXPLANATION,
+  WEBSITE_REQUESTS_STATUS_LABEL,
+  derivePublicationState,
+  formConnectionStatus,
+  type FormState,
+} from "@/lib/operations/website-requests-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -26,6 +39,57 @@ export interface WebsiteRequestsOverviewProps {
   formState: FormState;
   formVersionLabel: string | null;
   servicesSummary: { configured: boolean; text: string } | null;
+  /** P1-COMM-D2: the published Nemryn form (null = never published). */
+  publication: { status: "published" | "disabled"; versionLabel: string; requestCount: number; lastRequestReceived: string | null } | null;
+  /** P1-COMM-D2A: retired connections (history only -- a deleted, never-used connection no longer exists anywhere). */
+  previousConnections: PreviousConnectionView[];
+}
+
+function PreviousConnectionsSection({ connections }: { connections: PreviousConnectionView[] }) {
+  if (connections.length === 0) return null;
+  return (
+    <details className="rounded-sm border border-border-subtle">
+      <summary className={cn(typography.label, "cursor-pointer select-none px-3 py-2 text-text-secondary")}>
+        Previous connections ({connections.length})
+      </summary>
+      <div className="flex flex-col divide-y divide-border-subtle border-t border-border-subtle">
+        {connections.map((connection, index) => (
+          <div key={`${connection.website ?? "connection"}-${index}`} className="flex flex-col gap-1 p-3">
+            <p className={cn(typography.body, "min-w-0 break-words text-text-primary")}>{connection.website ?? "Website not set"}</p>
+            <p className={cn(typography.metadata, "text-text-muted")}>
+              {connectionMethodLabel(connection.connectionMethod)} · retired {connection.retiredAt} · {connection.requestCount} request{connection.requestCount === 1 ? "" : "s"} received
+            </p>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function FormPublicationCard({ publication }: { publication: NonNullable<WebsiteRequestsOverviewProps["publication"]> }) {
+  const connection = formConnectionStatus(publication);
+  return (
+    <Panel className="flex flex-col gap-zw-sm" data-testid="form-publication-card">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className={cn(typography.metadata, "text-text-muted")}>Nemryn form</span>
+          <span className={cn(typography.subsectionHeading, "text-text-primary")}>
+            {PUBLICATION_STATE_LABEL[derivePublicationState(publication)]} · {publication.versionLabel}
+          </span>
+        </div>
+        <StatusBadge label={WEBSITE_REQUESTS_STATUS_LABEL[connection]} category={STATUS_CATEGORY[connection]} />
+      </div>
+      <p className={cn(typography.bodySmall, "text-text-secondary")}>{FORM_CONNECTION_EXPLANATION[connection]}</p>
+      <p className={cn(typography.metadata, "text-text-muted")}>
+        Requests received: {publication.requestCount}
+        {publication.lastRequestReceived ? ` · last ${publication.lastRequestReceived}` : ""}
+      </p>
+      <Link href="/operations/settings/website-requests/form" className={cn(typography.label, "inline-flex items-center gap-1 text-text-link")}>
+        Manage your form, link and embed code
+        <ArrowRight className="size-3.5" aria-hidden />
+      </Link>
+    </Panel>
+  );
 }
 
 function FlowStrip() {
@@ -46,17 +110,25 @@ function ConnectionCard({
   connection,
   endpoint,
   servicesSummary,
+  onGone,
 }: {
   connection: WebsiteRequestsConnectionView;
   endpoint: string;
   servicesSummary: { configured: boolean; text: string } | null;
+  /** Delete/Remove make this card disappear -- the confirmation message is shown at the PAGE level, not inside the card. */
+  onGone: (message: string) => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [disableOpen, setDisableOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const closeEdit = useCallback(() => setEditOpen(false), []);
   const closeDisable = useCallback(() => setDisableOpen(false), []);
+  const closeDelete = useCallback(() => setDeleteOpen(false), []);
+  const closeRemove = useCallback(() => setRemoveOpen(false), []);
   const onDone = useCallback((message: string) => setNotice(message || null), []);
+  const isUnused = connection.requestCount === 0;
 
   return (
     <Panel className="flex flex-col gap-zw-md" aria-label={`Website connection ${connection.website ?? ""}`}>
@@ -110,6 +182,15 @@ function ConnectionCard({
         <Button type="button" size="sm" variant="outline" onClick={() => { setNotice(null); setEditOpen(true); }}>
           Change website
         </Button>
+        {isUnused ? (
+          <Button type="button" size="sm" variant="text" className="ml-auto text-critical-text" onClick={() => { setNotice(null); setDeleteOpen(true); }}>
+            Delete connection
+          </Button>
+        ) : (
+          <Button type="button" size="sm" variant="text" className="ml-auto text-critical-text" onClick={() => { setNotice(null); setRemoveOpen(true); }}>
+            Remove connection
+          </Button>
+        )}
       </div>
 
       <details className="group rounded-sm border border-border-subtle">
@@ -137,15 +218,18 @@ function ConnectionCard({
 
       <EditDialog open={editOpen} onClose={closeEdit} onDone={onDone} integration={connection} />
       <DisableDialog open={disableOpen} onClose={closeDisable} onDone={onDone} integration={connection} />
+      <DeleteConnectionDialog open={deleteOpen} onClose={closeDelete} onDone={onGone} integration={connection} />
+      <RemoveConnectionDialog open={removeOpen} onClose={closeRemove} onDone={onGone} integration={connection} />
     </Panel>
   );
 }
 
-export function WebsiteRequestsOverview({ connections, endpoint, formState, formVersionLabel, servicesSummary }: WebsiteRequestsOverviewProps) {
+export function WebsiteRequestsOverview({ connections, endpoint, formState, formVersionLabel, servicesSummary, publication, previousConnections }: WebsiteRequestsOverviewProps) {
   const [connectOpen, setConnectOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
   const onConnected = useCallback((message: string) => setNotice(message || null), []);
+  const onGone = useCallback((message: string) => setNotice(message || null), []);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 6000);
@@ -167,13 +251,14 @@ export function WebsiteRequestsOverview({ connections, endpoint, formState, form
           <h2 id="wr-connection-heading" className={cn(typography.subsectionHeading, "text-text-primary")}>
             Your website
           </h2>
-          {connections.length > 0 && (
+          {(connections.length > 0 || publication) && (
             <Button type="button" size="sm" variant="outline" leadingIcon={<Plus className="size-3.5" aria-hidden />} onClick={() => setConnectOpen(true)}>
               Connect another website
             </Button>
           )}
         </div>
-        {connections.length === 0 ? (
+        {publication && <FormPublicationCard publication={publication} />}
+        {connections.length === 0 && publication ? null : connections.length === 0 ? (
           <Panel className="flex flex-col items-start gap-zw-md">
             <div className="flex items-start gap-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-sm bg-surface-secondary text-text-muted">
@@ -181,24 +266,25 @@ export function WebsiteRequestsOverview({ connections, endpoint, formState, form
               </span>
               <div className="flex flex-col gap-1">
                 <div>
-                  <StatusBadge label="Not connected" category="neutral" />
+                  <StatusBadge label="No active website connection" category="neutral" />
                 </div>
                 <p className={cn(typography.bodySmall, "text-text-secondary")}>
-                  No website is connected yet. Connect your website to start receiving transportation requests in your Nemryn Request Hub.
+                  Connect your website to receive transportation requests directly in Nemryn.
                 </p>
               </div>
             </div>
             <Button type="button" onClick={() => setConnectOpen(true)}>
-              Connect your website
+              Connect website
             </Button>
           </Panel>
         ) : (
           <div className="flex flex-col gap-zw-md">
             {connections.map((connection) => (
-              <ConnectionCard key={connection.handle} connection={connection} endpoint={endpoint} servicesSummary={servicesSummary} />
+              <ConnectionCard key={connection.handle} connection={connection} endpoint={endpoint} servicesSummary={servicesSummary} onGone={onGone} />
             ))}
           </div>
         )}
+        <PreviousConnectionsSection connections={previousConnections} />
       </section>
 
       <section aria-labelledby="wr-methods-heading" className="flex flex-col gap-zw-md">

@@ -112,6 +112,23 @@ export function describeActivity(record: ActivityRecord, helpers: ActivityHelper
       };
     }
 
+    case "website_request_form_published": {
+      const version = typeof after.version === "number" ? `nemryn-form-v${after.version}` : null;
+      if (after.first === true) return { title: "Website form published", summary: version };
+      if (str(after.previous_status) === "disabled") return { title: "Website form turned back on", summary: version };
+      return { title: "Website form update published", summary: version };
+    }
+    case "website_request_form_unpublished":
+      return { title: "Website form disabled", summary: "New requests can't be sent through the public form." };
+
+    case "website_connection_deleted":
+      return { title: "Website connection deleted", summary: str(after.website) };
+    case "website_connection_retired": {
+      const website = str(after.website);
+      const count = typeof after.request_count === "number" ? after.request_count : null;
+      return { title: "Website connection removed", summary: website ? `${website}${count ? ` — ${count} request${count === 1 ? "" : "s"} preserved` : ""}` : null };
+    }
+
     case "staff_invitation_created":
       return { title: `${roleLabel(after.role)} invitation sent`, summary: str(after.email) };
     case "staff_invitation_resent":

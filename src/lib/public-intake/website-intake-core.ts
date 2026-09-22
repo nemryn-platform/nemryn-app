@@ -507,3 +507,24 @@ export function formatRecurringDaysOfWeek(daysOfWeek: number[]): string {
     .filter((label): label is string => Boolean(label))
     .join(", ");
 }
+
+/**
+ * P1-COMM-D2 -- a submission through a PUBLISHED NEMRYN FORM. Exactly the website-intake field contract (one canonical Request
+ * semantics, no second schema), minus the integration: the tenant is resolved from the public key in the URL, so a body that
+ * names `integrationExternalId` (or any other key outside the closed set: organizationId, passengerId, state, source, ...)
+ * is rejected outright. Validation is delegated to `validateWebsiteIntakePayload` so the two delivery modes can never drift.
+ */
+export type PublicFormSubmission = Omit<WebsiteIntakeSubmission, "integrationExternalId">;
+
+export type PublicFormValidationResult = { ok: true; value: PublicFormSubmission } | { ok: false; error: PublicIntakeErrorCode };
+
+export function validatePublicFormPayload(raw: unknown): PublicFormValidationResult {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return INVALID;
+  const body = raw as RawWebsiteIntakePayload;
+  if ("integrationExternalId" in body) return INVALID;
+  const result = validateWebsiteIntakePayload({ ...body, integrationExternalId: "public-form" });
+  if (!result.ok) return result;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { integrationExternalId, ...value } = result.value;
+  return { ok: true, value };
+}

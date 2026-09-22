@@ -820,6 +820,7 @@ export type Database = {
           integration_type: string
           is_active: boolean
           organization_id: string
+          retired_at: string | null
           updated_at: string
           website_manager: string | null
         }
@@ -832,6 +833,7 @@ export type Database = {
           integration_type?: string
           is_active?: boolean
           organization_id: string
+          retired_at?: string | null
           updated_at?: string
           website_manager?: string | null
         }
@@ -844,6 +846,7 @@ export type Database = {
           integration_type?: string
           is_active?: boolean
           organization_id?: string
+          retired_at?: string | null
           updated_at?: string
           website_manager?: string | null
         }
@@ -1418,6 +1421,91 @@ export type Database = {
           },
         ]
       }
+      website_request_form_publications: {
+        Row: {
+          allow_recurring: boolean
+          confirmation_message: string
+          created_at: string
+          form_id: string
+          id: string
+          intake_integration_id: string
+          intro_text: string | null
+          offered_service_types: string[] | null
+          organization_id: string
+          public_key: string
+          published_at: string
+          published_version: number
+          published_versions: number[]
+          require_service_choice: boolean
+          status: string
+          submit_label: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          allow_recurring: boolean
+          confirmation_message: string
+          created_at?: string
+          form_id: string
+          id?: string
+          intake_integration_id: string
+          intro_text?: string | null
+          offered_service_types?: string[] | null
+          organization_id: string
+          public_key: string
+          published_at?: string
+          published_version: number
+          published_versions: number[]
+          require_service_choice: boolean
+          status?: string
+          submit_label: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          allow_recurring?: boolean
+          confirmation_message?: string
+          created_at?: string
+          form_id?: string
+          id?: string
+          intake_integration_id?: string
+          intro_text?: string | null
+          offered_service_types?: string[] | null
+          organization_id?: string
+          public_key?: string
+          published_at?: string
+          published_version?: number
+          published_versions?: number[]
+          require_service_choice?: boolean
+          status?: string
+          submit_label?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "website_request_form_publications_form_fk"
+            columns: ["form_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "website_request_forms"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "website_request_form_publications_integration_fk"
+            columns: ["intake_integration_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "request_intake_integrations"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "website_request_form_publications_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       website_request_forms: {
         Row: {
           allow_recurring: boolean
@@ -1479,6 +1567,38 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      _create_public_request: {
+        Args: {
+          p_acquisition?: Json
+          p_additional_notes?: string
+          p_assistance_notes?: string
+          p_destination_description: string
+          p_idempotency_key: string
+          p_integration_id: string
+          p_pickup_description: string
+          p_preferred_date?: string
+          p_preferred_time?: string
+          p_recurring_appointment_time?: string
+          p_recurring_days_of_week?: string[]
+          p_recurring_end_date?: string
+          p_recurring_return_trip_expected?: boolean
+          p_recurring_start_date?: string
+          p_requested_passenger_name?: string
+          p_requester_email?: string
+          p_requester_name: string
+          p_requester_phone: string
+          p_requester_relationship: string
+          p_return_trip_needed: string
+          p_service_type?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["public_request_submission_result"]
+        SetofOptions: {
+          from: "*"
+          to: "public_request_submission_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       _driver_execute_trip_transition: {
         Args: {
           p_close_assignment?: boolean
@@ -1551,6 +1671,10 @@ export type Database = {
           status: string
           utc: string
         }[]
+      }
+      _public_form_service_types: {
+        Args: { p_offered: string[]; p_organization_id: string }
+        Returns: string[]
       }
       _require_platform_admin: { Args: never; Returns: undefined }
       _sanitize_acquisition: { Args: { p_acquisition: Json }; Returns: Json }
@@ -1754,6 +1878,26 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      delete_unused_request_intake_integration: {
+        Args: { p_integration_id: string }
+        Returns: Database["public"]["CompositeTypes"]["website_connection_lifecycle_result"]
+        SetofOptions: {
+          from: "*"
+          to: "website_connection_lifecycle_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      disable_website_request_form_publication: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["website_request_form_publish_result"]
+        SetofOptions: {
+          from: "*"
+          to: "website_request_form_publish_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       driver_arrive_at_destination: {
         Args: { p_expected_current_state: string; p_trip_id: string }
         Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
@@ -1924,6 +2068,20 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string[]
       }
+      get_public_request_form: {
+        Args: { p_public_key: string }
+        Returns: {
+          allow_recurring: boolean
+          confirmation_message: string
+          form_version: number
+          intro_text: string
+          organization_name: string
+          require_service_choice: boolean
+          service_types: string[]
+          submit_label: string
+          title: string
+        }[]
+      }
       get_request_acquisition: {
         Args: { p_organization_id: string; p_request_id: string }
         Returns: {
@@ -1963,6 +2121,16 @@ export type Database = {
           updated_at: string
           version: number
         }[]
+      }
+      get_website_request_form_publication: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["website_request_form_publication_state"][]
+        SetofOptions: {
+          from: "*"
+          to: "website_request_form_publication_state"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       has_org_role: {
         Args: { p_org_id: string; p_roles: string[] }
@@ -2027,6 +2195,16 @@ export type Database = {
           recipient_count: number
           sent_count: number
           status: string
+        }[]
+      }
+      list_previous_website_connections: {
+        Args: { p_organization_id: string }
+        Returns: {
+          connection_method: string
+          request_count: number
+          retired_at: string
+          website: string
+          website_manager: string
         }[]
       }
       list_request_intake_integrations: {
@@ -2208,6 +2386,16 @@ export type Database = {
           trip_count: number
         }[]
       }
+      publish_website_request_form: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["website_request_form_publish_result"]
+        SetofOptions: {
+          from: "*"
+          to: "website_request_form_publish_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       reassign_trip: {
         Args: {
           p_driver_id: string
@@ -2284,6 +2472,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "recurring_arrangement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      retire_request_intake_integration: {
+        Args: { p_integration_id: string }
+        Returns: Database["public"]["CompositeTypes"]["website_connection_lifecycle_result"]
+        SetofOptions: {
+          from: "*"
+          to: "website_connection_lifecycle_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2397,6 +2595,38 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "recurring_occurrence_exception_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      submit_public_form_request: {
+        Args: {
+          p_acquisition?: Json
+          p_additional_notes?: string
+          p_assistance_notes?: string
+          p_destination_description: string
+          p_idempotency_key: string
+          p_pickup_description: string
+          p_preferred_date?: string
+          p_preferred_time?: string
+          p_public_key: string
+          p_recurring_appointment_time?: string
+          p_recurring_days_of_week?: string[]
+          p_recurring_end_date?: string
+          p_recurring_return_trip_expected?: boolean
+          p_recurring_start_date?: string
+          p_requested_passenger_name?: string
+          p_requester_email?: string
+          p_requester_name: string
+          p_requester_phone: string
+          p_requester_relationship: string
+          p_return_trip_needed: string
+          p_service_type?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["public_request_submission_result"]
+        SetofOptions: {
+          from: "*"
+          to: "public_request_submission_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2709,6 +2939,25 @@ export type Database = {
         trip_id: string | null
         previous_state: string | null
         current_state: string | null
+        changed: boolean | null
+      }
+      website_connection_lifecycle_result: {
+        integration_id: string | null
+        external_id: string | null
+        changed: boolean | null
+      }
+      website_request_form_publication_state: {
+        public_key: string | null
+        publication_status: string | null
+        published_version: number | null
+        published_at: string | null
+        request_count: number | null
+        last_request_received_at: string | null
+      }
+      website_request_form_publish_result: {
+        public_key: string | null
+        publication_status: string | null
+        published_version: number | null
         changed: boolean | null
       }
       website_request_form_save_result: {

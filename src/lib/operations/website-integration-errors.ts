@@ -21,7 +21,7 @@ export function mapWebsiteIntegrationError(code: string | undefined): WebsiteInt
   }
 }
 
-export type WebsiteIntegrationOperation = "create" | "activate" | "disable" | "update_origin";
+export type WebsiteIntegrationOperation = "create" | "activate" | "disable" | "update_origin" | "delete" | "retire";
 
 export function websiteIntegrationErrorMessage(code: WebsiteIntegrationErrorCode, operation: WebsiteIntegrationOperation): string {
   switch (code) {
@@ -34,6 +34,12 @@ export function websiteIntegrationErrorMessage(code: WebsiteIntegrationErrorCode
         return "This connection needs a website address before it can be activated. Edit the website first.";
       }
       if (operation === "disable") {
+        return "That change couldn't be applied. Refresh the page and try again.";
+      }
+      if (operation === "delete") {
+        return "This connection has already received transportation requests, so it can't be deleted. Remove it instead to keep its history.";
+      }
+      if (operation === "retire") {
         return "That change couldn't be applied. Refresh the page and try again.";
       }
       return "That website address can't be used. Enter your site's address, for example https://www.example.com — it may also already be connected, or you may have reached the connection limit.";

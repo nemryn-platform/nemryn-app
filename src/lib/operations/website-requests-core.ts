@@ -201,26 +201,121 @@ export function existingFormGuidance(manager: WebsiteManager): ManagerGuidance {
   }
 }
 
-/** Placement guidance for "Use a Nemryn form". The embed itself is the NEXT phase; D1 configures and previews the form only. */
-export function nemrynFormPlacementGuidance(manager: WebsiteManager): string {
-  const generic = "The next step will give you an embed that works with an HTML or embed block.";
+/**
+ * Where to paste the embed code, per website builder (P1-COMM-D2). Precise about platform constraints and never a claim of native
+ * marketplace integration: every builder below just accepts an HTML / embed block. Whether a builder runs <script> in that block
+ * depends on the builder and the customer's plan, so each answer names the safe fallback (the iframe, or a link to the hosted form).
+ */
+export interface EmbedPlacementGuidance {
+  where: string;
+  limits: string | null;
+}
+export function embedPlacementGuidance(manager: WebsiteManager): EmbedPlacementGuidance {
+  const fallback = "If your website removes the script, use the iframe version below or link to the hosted form instead.";
   switch (manager) {
     case "wordpress":
-      return `${generic} On WordPress that is typically a Custom HTML block.`;
+      return {
+        where: "In the WordPress editor add a Custom HTML block on the page where the form should appear, then paste the embed code.",
+        limits: `Some WordPress plans and user roles remove scripts from posts. ${fallback}`,
+      };
     case "wix":
-      return `${generic} On Wix that is typically an HTML embed element.`;
+      return {
+        where: "In the Wix editor choose Add → Embed Code → Embed HTML, choose Code, and paste the embed code.",
+        limits: "Wix runs embedded code inside its own frame, so the form works but Nemryn can only see limited page details (campaign and page-level attribution may be missing).",
+      };
     case "squarespace":
-      return `${generic} On Squarespace that is typically a Code or Embed block; which blocks are available depends on your plan.`;
+      return {
+        where: "Add a Code Block to the page and paste the embed code (leave \"Display Source\" off).",
+        limits: `Running scripts in a Code Block depends on your Squarespace plan. ${fallback}`,
+      };
     case "webflow":
-      return `${generic} On Webflow that is typically an Embed element.`;
+      return {
+        where: "Add an Embed element to the page where the form should appear and paste the embed code, then publish the site.",
+        limits: null,
+      };
     case "developer":
-      return `${generic} Your developer or agency will only need to paste it into a page.`;
+      return {
+        where: "Send your developer or agency the embed code: it is one small snippet to paste where the form should appear.",
+        limits: null,
+      };
     case "other_builder":
+      return {
+        where: "Find your builder's HTML, embed or custom code block, place it where the form should appear, and paste the embed code.",
+        limits: fallback,
+      };
     case "self":
-      return `${generic} Most website builders have one.`;
+      return {
+        where: "Paste the embed code into your page's HTML where the form should appear.",
+        limits: null,
+      };
     case "not_sure":
-      return `${generic} Whoever manages your website will know where it goes.`;
+      return {
+        where: "Whoever manages your website will know where it goes: send them the embed code, or link to the hosted form from your site.",
+        limits: null,
+      };
   }
+}
+
+/** Single-string placement guidance (kept for the Nemryn-form editor's "where will this form go?" helper). */
+export function nemrynFormPlacementGuidance(manager: WebsiteManager): string {
+  const g = embedPlacementGuidance(manager);
+  return g.limits ? `${g.where} ${g.limits}` : g.where;
+}
+
+// ---------------------------------------------------------------------------
+// Publication (P1-COMM-D2): three distinct concepts -- FORM authoring state, PUBLICATION state, CONNECTION status
+// ---------------------------------------------------------------------------
+export type PublicationState = "NOT_PUBLISHED" | "PUBLISHED" | "DISABLED";
+export const PUBLICATION_STATE_LABEL: Record<PublicationState, string> = { NOT_PUBLISHED: "Not published", PUBLISHED: "Published", DISABLED: "Disabled" };
+export function derivePublicationState(publication: { status: string } | null): PublicationState {
+  if (!publication) return "NOT_PUBLISHED";
+  return publication.status === "published" ? "PUBLISHED" : "DISABLED";
+}
+
+export type PublishAction = "not_ready" | "publish" | "update" | "republish" | "up_to_date";
+/**
+ * What the operator can do next. Editing a form never changes a live publication -- only an explicit publish does.
+ * `not_ready`: the (saved) form is not Ready, so it can't be published (an existing publication keeps running its snapshot).
+ */
+export function publishAction(
+  form: { status: string; version: number } | null,
+  publication: { status: string; publishedVersion: number } | null,
+): PublishAction {
+  if (!form || form.status !== "ready") return "not_ready";
+  if (!publication) return "publish";
+  if (publication.status !== "published") return "republish";
+  return form.version > publication.publishedVersion ? "update" : "up_to_date";
+}
+
+/**
+ * Connection status for a published form, from EXISTING semantics: Published never means Connected. Disabled / not published
+ * map to the existing labels; Ready to test until the first real Request arrives through the form, then Connected.
+ */
+export function formConnectionStatus(publication: { status: string; requestCount: number } | null): WebsiteRequestsStatus {
+  if (!publication) return "NOT_CONFIGURED";
+  if (publication.status !== "published") return "DISABLED";
+  return publication.requestCount > 0 ? "CONNECTED" : "READY_TO_TEST";
+}
+
+/** Explanation for a published FORM's connection status (the website wording of WEBSITE_REQUESTS_STATUS_EXPLANATION does not fit a hosted / embedded form). */
+export const FORM_CONNECTION_EXPLANATION: Record<WebsiteRequestsStatus, string> = {
+  NOT_CONFIGURED: "Publish your form to start receiving requests.",
+  DISABLED: "The public form is turned off. New requests can't be sent through it.",
+  READY_TO_TEST: "Your form is live. Send one test request through it to confirm everything works.",
+  CONNECTED: "Nemryn has received a real request through your form. New requests appear in your Request Hub.",
+};
+
+export function buildHostedFormUrl(origin: string, publicKey: string): string {
+  return `${origin.replace(/\/+$/, "")}/request/${publicKey}`;
+}
+export function buildEmbedSnippet(origin: string, publicKey: string): string {
+  const o = origin.replace(/\/+$/, "");
+  return [`<div data-nemryn-request-form="${publicKey}"></div>`, `<script src="${o}/embed/request-form.js" async></script>`].join("\n");
+}
+/** For builders that strip scripts: a plain iframe. No automatic height and no page attribution (the loader provides both). */
+export function buildIframeFallback(origin: string, publicKey: string): string {
+  const o = origin.replace(/\/+$/, "");
+  return `<iframe src="${o}/embed/request/${publicKey}" title="Transportation request form" width="100%" height="900" style="border:0;max-width:100%" loading="lazy"></iframe>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,8 +478,10 @@ export function formServicesNeedAttention(orgServices: string[], offered: string
 export interface PreviewField {
   key: string;
   label: string;
-  kind: "text" | "tel" | "email" | "date" | "time" | "select" | "radio" | "textarea" | "checkbox";
+  kind: "text" | "tel" | "email" | "date" | "time" | "select" | "radio" | "textarea" | "checkbox" | "weekdays";
   required: boolean;
+  /** Shown only while the "recurring" checkbox is ticked. */
+  showWhen?: "recurring";
   help?: string;
   options?: { value: string; label: string }[];
 }
@@ -429,7 +526,13 @@ export function buildFormPreview(input: { organizationName: string; config: Form
     },
   );
   if (config.allowRecurring) {
-    trip.push({ key: "recurring", label: "This trip repeats on a regular schedule", kind: "checkbox", required: false, help: "You can tell us the days and dates after you check this." });
+    trip.push(
+      { key: "recurring", label: "This trip repeats on a regular schedule", kind: "checkbox", required: false, help: "You can tell us the days and dates after you check this." },
+      { key: "recurringDays", label: "Which days of the week?", kind: "weekdays", required: true, showWhen: "recurring" },
+      { key: "recurringStartDate", label: "First date", kind: "date", required: true, showWhen: "recurring" },
+      { key: "recurringEndDate", label: "Last date", kind: "date", required: false, showWhen: "recurring", help: "Leave blank if the rides continue until you tell us otherwise." },
+      { key: "recurringTime", label: "Appointment time", kind: "time", required: false, showWhen: "recurring" },
+    );
   }
   trip.push({ key: "assistanceNotes", label: "Help the passenger may need", kind: "textarea", required: false, help: "For example, mobility aids or someone to help at the door." });
 
@@ -468,7 +571,7 @@ export function buildFormPreview(input: { organizationName: string; config: Form
       },
       { heading: "Anything else?", fields: [{ key: "additionalNotes", label: "Other details", kind: "textarea", required: false }] },
     ],
-    safetyNote: "If this is an emergency, call 911.",
+    safetyNote: "This form is for non-emergency transportation requests. If this is an emergency, contact your local emergency service.",
     privacyNote: "Please don't include medical record numbers or detailed medical information.",
     formVersion: formVersionLabel(input.version),
   };

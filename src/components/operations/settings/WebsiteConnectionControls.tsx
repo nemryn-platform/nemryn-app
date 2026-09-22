@@ -3,6 +3,8 @@
 import { useActionState, useEffect } from "react";
 import {
   createWebsiteIntegrationAction,
+  deleteUnusedWebsiteConnectionAction,
+  removeUsedWebsiteConnectionAction,
   setWebsiteIntegrationActiveAction,
   updateWebsiteIntegrationOriginAction,
   type WebsiteIntegrationActionState,
@@ -34,6 +36,14 @@ export interface WebsiteRequestsConnectionView {
   connectionMethod: string | null;
   websiteManager: string | null;
   methodLabel: string;
+}
+
+/** One retired connection as "Previous connections" shows it (P1-COMM-D2A; customer wording, no database ids). */
+export interface PreviousConnectionView {
+  website: string | null;
+  connectionMethod: string | null;
+  retiredAt: string;
+  requestCount: number;
 }
 
 const IDLE: WebsiteIntegrationActionState = { status: "idle" };
@@ -231,6 +241,95 @@ export function DisableDialog({
           </Button>
           <Button type="submit" variant="destructive" loading={pending} disabled={pending}>
             Turn off
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Delete (unused) / Remove (used) -- two DIFFERENT, never-interchangeable destructive actions (P1-COMM-D2A).
+// Only one is ever offered for a given connection: Delete when it has received zero requests, Remove once it has.
+// ---------------------------------------------------------------------------
+export function DeleteConnectionDialog({
+  open,
+  onClose,
+  onDone,
+  integration,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDone: (message: string) => void;
+  integration: WebsiteRequestsConnectionView;
+}) {
+  const [state, action, pending] = useActionState(deleteUnusedWebsiteConnectionAction, IDLE);
+  useEffect(() => {
+    if (state.status === "success") {
+      onDone(state.message ?? "");
+      onClose();
+    }
+  }, [state, onClose, onDone]);
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Delete this website connection?"
+      description="This connection has not received any transportation requests. Deleting it removes its setup so you can start again with a new connection."
+    >
+      <form action={action} className="flex flex-col gap-zw-md">
+        <input type="hidden" name="integrationHandle" value={integration.handle} />
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>This can&apos;t be undone. A new connection will receive a new connection ID.</p>
+        {state.status === "error" && <FormMessage state={state} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="destructive" loading={pending} disabled={pending}>
+            Delete connection
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+export function RemoveConnectionDialog({
+  open,
+  onClose,
+  onDone,
+  integration,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDone: (message: string) => void;
+  integration: WebsiteRequestsConnectionView;
+}) {
+  const [state, action, pending] = useActionState(removeUsedWebsiteConnectionAction, IDLE);
+  useEffect(() => {
+    if (state.status === "success") {
+      onDone(state.message ?? "");
+      onClose();
+    }
+  }, [state, onClose, onDone]);
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Remove this website connection?"
+      description="New requests from this connection will stop. Previous requests and their history will remain available in Nemryn."
+    >
+      <form action={action} className="flex flex-col gap-zw-md">
+        <input type="hidden" name="integrationHandle" value={integration.handle} />
+        {state.status === "error" && <FormMessage state={state} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="destructive" loading={pending} disabled={pending}>
+            Remove connection
           </Button>
         </div>
       </form>

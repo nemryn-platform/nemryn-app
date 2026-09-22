@@ -1,0 +1,1252 @@
+P1-COMM-D2 — UNIVERSAL WEBSITE REQUEST FORM + EMBED + HOSTED FORM + ACQUISITION CAPTURE
+Scope: LOCAL IMPLEMENTATION ONLY. Nothing committed, pushed or deployed; no `supabase db push`; no DNS/domain change;
+Zenward-Web untouched; D3 / Facility Portal / S5B not started. Returned for owner review.
+
+================================================================================
+STARTING STATE
+================================================================================
+D1 (Website Requests UX + form authoring foundation) was released to production before this phase began
+(commit f28adc71a617f1c11a4f2b0523e9c031a07a3c09; migration 20260921130000; ACL contract 0 of 28). D2 was
+implemented locally on top of that baseline. Local git status at the start of D2: only the D1 production-release
+addendum to its own report was an uncommitted edit to a tracked file (unrelated to D2, left as found).
+
+================================================================================
+D1 BASELINE
+================================================================================
+website_request_forms (one row per organization; status draft|ready; title/intro/submit label/confirmation
+message; optional service subset; allow_recurring; require_service_choice; version) and its RPCs
+(get_website_request_form, save_website_request_form, set_request_intake_integration_setup) are unchanged by D2.
+Settings -> Website Requests -> Use a Nemryn form still authors this row; D2 adds what happens after "Ready".
+
+================================================================================
+CURRENT INTAKE AUDIT
+================================================================================
+Read fresh before building: `request_intake_integrations` (id, organization_id, external_id, integration_type
+CHECK 'website' only, is_active, allowed_origins, connection_method/website_manager from D1);
+`submit_public_transportation_request` (SECURITY DEFINER, service_role only; resolves the organization solely
+from `p_integration_external_id`; validates every field with the same bounds as `log_transportation_request`;
+enforces tenant service offerings and the optional Origin allow-list; inserts the Request with `source='web'`,
+`state='pending'`, idempotent per (integration, key) via a partial unique index + `ON CONFLICT DO NOTHING`; on the
+genuinely-new path only, writes `request_events`, a best-effort S4C attribution snapshot and enqueues one
+notification); `_sanitize_acquisition` (the closed S4C field set); `check_and_record_public_intake_rate_limit`
+(service_role only, per-integration 120/hour + per-client 8/hour, atomic via transaction-scoped advisory locks,
+client key = SHA-256 of the IP with a fixed non-secret salt, no raw IP stored); the Route Handler
+`src/app/api/public-intake/website/route.ts` (schema validation -> rate limit -> RPC -> best-effort post-response
+notification, generic uninformative rejections, real CORS allow-list from active integrations' own origins);
+`resolveAllowedCorsOrigin` (courtesy layer only, never the authorization boundary); Services & Intake
+(`organization_service_offerings`, unconfigured = unrestricted); Request Hub provenance
+(`requestProvenanceLabel`: "Website" badge when `intake_integration_id` is not null, otherwise no badge);
+website integration lifecycle/status (`deriveWebsiteIntegrationStatus`, never stored); the SEC-01 privilege
+contract and `scripts/verify-db-privileges.sh`; `next.config.ts` (existing headers, no CSP before D2); current
+Request payload fields (`transportation_requests` columns touched by public intake). No second transportation
+Request schema was invented anywhere in D2 — see PUBLICATION ARCHITECTURE / INTAKE BINDING below.
+
+================================================================================
+PUBLICATION ARCHITECTURE
+================================================================================
+`website_request_forms` (D1) = "what should our passenger form contain?" stays exactly that: organization-level
+authored content, Draft/Ready, never public itself.
+`website_request_form_publications` (new, D2) = "where/how is that form publicly available?": id,
+organization_id, form_id, intake_integration_id, public_key, status (published|disabled), published_version,
+published_versions (int[]), a SNAPSHOT of the form content (title/intro/submit_label/confirmation_message/
+offered_service_types/allow_recurring/require_service_choice), published_at/created_at/updated_at. One row per
+form for the D2 MVP (`unique (form_id)`, `unique (intake_integration_id)`), but modeled with its own id and a
+composite `(id, organization_id)` FK anchor (Nemryn's established cross-tenant-integrity pattern) so multiple
+forms/brands are not precluded structurally later — nothing about the schema assumes exactly one.
+
+================================================================================
+FORM / PUBLICATION SEPARATION
+================================================================================
+Editing the form (title, copy, services, switches) never touches a live publication — confirmed by
+`_public_form_service_types`/`get_public_request_form` reading the publication's own snapshot columns, never
+`website_request_forms` directly. Only `publish_website_request_form` copies the current form content into the
+publication (first publish, or an explicit "Publish update"). Moving the form back to Draft does not un-publish
+(publication state is independent) and does not allow publishing again until it is Ready. Verified: SQL PU11a
+(edit after publish -> public config still v1) and PU12 (Draft -> live publication untouched, publish refused);
+browser E2E Part 2 ("editing != publishing") and Part 7 (form back to Draft leaves a live publication running).
+
+================================================================================
+INTAKE BINDING
+================================================================================
+`request_intake_integrations.integration_type` gained a second value, `'nemryn_form'` (CHECK narrowed from
+`in ('website')` to `in ('website', 'nemryn_form')`), plus a CHECK that a `nemryn_form` binding can never carry
+`allowed_origins` (no fabricated Origin). `publish_website_request_form`'s first call creates ONE such binding
+(same `_generate_intake_external_id()` opaque generator D1 already used, is_active=true, connection_method=
+'nemryn_form') — the operator never creates, sees or names an integration id to publish. Every website-only code
+path was audited and updated to filter `integration_type = 'website'` explicitly: `list_request_intake_integrations`
+(the operator's connection list — the hidden binding never appears there), the CORS origin union in
+`resolveAllowedCorsOrigin` (already origin-based; a `nemryn_form` binding has no origin to union in), and
+`submit_public_transportation_request` itself (its `select ... where external_id = ... and integration_type =
+'website'` means the public website-origin endpoint structurally cannot reach a form binding — SQL PU4b, and
+browser E2E confirms a raw POST to `/api/public-intake/website` naming the binding's external id is rejected 400).
+Reused, not duplicated: the body of `submit_public_transportation_request` AFTER tenant/suspension/Origin
+resolution — every field validation, the tenant-service-offerings check, the recurring-schedule description
+handling, the idempotent insert, `request_events`, the S4C attribution sub-transaction and the notification
+enqueue — was extracted VERBATIM into a new owner-only primitive `_create_public_request(p_integration_id, ...)`
+(no client/service EXECUTE for any role). `submit_public_transportation_request` now resolves+authorizes the
+website integration (unchanged behaviour) and calls the primitive; `submit_public_form_request` resolves+
+authorizes the publication (below) and calls the SAME primitive. This is the one place a Request is ever created
+from public intake, for either delivery mode. No Origin is fabricated by either caller; the primitive itself
+never reads `p_origin` or Origin at all — Origin enforcement lives solely in
+`submit_public_transportation_request`'s own pre-check, which the form path never runs (it has no Origin
+concept — the operator's website Origin is meaningless for a Nemryn-hosted page).
+
+================================================================================
+PUBLIC IDENTIFIER
+================================================================================
+`public_key text ... check (public_key ~ '^form_[0-9a-f]{32}$')`, generated as `'form_' || encode(gen_random_bytes(16),
+'hex')` — 128 bits of CSPRNG, not sequential, not derived from any organization/form/integration id, globally
+unique (`unique (public_key)`), URL-safe. Explicitly an addressing identifier, not a secret credential: the form
+is intentionally public, and no code path treats the key as authentication beyond "names this one publication".
+Stable across content updates and disable/re-enable (SQL PU14d: republish returns the SAME key).
+
+================================================================================
+PUBLIC CONFIG
+================================================================================
+`get_public_request_form(p_public_key text)` (service_role only) returns exactly: organization_name, title,
+intro_text, submit_label, confirmation_message, service_types (the snapshot subset intersected with the
+organization's CURRENT Services & Intake offerings via `_public_form_service_types`, unconfigured = every
+canonical service), allow_recurring, require_service_choice, form_version (integer). No organization/form/
+integration id, no Membership data, no raw row, no internal audit field, no private Setting. Route
+`GET /api/public-forms/[publicKey]` wraps it 1:1 and returns HTTP 404 with a fixed generic body for anything not
+published+active (malformed key, unknown key, unpublished, disabled, suspended organization — SQL PU6c; browser
+E2E confirms identical 404 shape/body across all of these). `Cache-Control: no-store` on the route.
+
+================================================================================
+HOSTED FORM
+================================================================================
+`GET /request/[publicKey]` — no authentication, no Nemryn account, `force-dynamic`, `noindex`. Renders
+organization name, form title, intro, the canonical fields (below), submit action, and a restrained
+"Powered by Nemryn" footer only on the hosted page (never inside the embed, so a tenant's own page carries the
+branding, not a second one from the iframe). An unavailable key renders the identical neutral "This form isn't
+available right now / please contact the transportation company directly" page via Next's `notFound()` +
+`not-found.tsx` (no organization name, no reason). The hosted page never claims to be anything other than the
+transportation company's form — the confirmation and intro copy are entirely the operator's own configured text.
+
+================================================================================
+UNIVERSAL EMBED
+================================================================================
+One method: `public/embed/request-form.js` (a small, dependency-free, ES5-compatible loader) + an isolated
+iframe pointed at `GET /embed/request/[publicKey]` (the same public form, no app chrome). Operator snippet:
+`<div data-nemryn-request-form="form_…"></div><script src="https://app.nemryn.com/embed/request-form.js" async></script>`.
+The loader finds every `[data-nemryn-request-form]` container on the page (idempotent — a re-run of `mount()`
+never double-mounts), builds one iframe per valid, not-yet-mounted container, sets `loading="lazy"` and
+`referrerpolicy="strict-origin-when-cross-origin"`, and auto-resizes each iframe from `resize` messages the form
+sends (validation errors, revealing the recurring fields, the confirmation screen, and the unavailable state all
+trigger a resize — confirmed for every case in browser E2E). CSS isolation is structural (a same-origin iframe
+document has its own stylesheet scope): verified against a deliberately hostile 30px red-italic-Georgia tenant
+theme — it never leaks into the form, and the form's own styling never leaks into the tenant page, in every
+builder-shaped harness page tested.
+
+================================================================================
+EMBED LOADER
+================================================================================
+Reads acquisition from the TENANT page only (never the iframe's page): the five `utm_*` query parameters, the
+current pathname (`landingPath`/`submissionPath`), and `document.referrer`'s bare hostname (same-site referrers
+dropped). Maintains first-touch across the tenant's own pages within one browser session via
+`sessionStorage["nemryn:request-form:<key>:acquisition"]`, holding ONLY the closed S4C key set — re-sanitised on
+every read, so even a tampered stored value can't smuggle anything else through. No third-party origin is ever
+contacted, no cookie/localStorage/IndexedDB/XHR/fetch/eval is used anywhere in the file (asserted by a unit test
+that scans the actual shipped file, not a copy). Honest about its limit: it can only observe pages it actually
+ran on in that session — documented in the product doc and demonstrated by the Wix-like harness case, where the
+loader runs only inside the builder's own nested frame and correctly records no cross-page campaign data rather
+than inventing one.
+
+================================================================================
+POSTMESSAGE SECURITY
+================================================================================
+Never `'*'` for anything containing acquisition or state, in either direction. Loader -> iframe: the content-free
+`ready` hello is the ONE message sent to `'*'` (the iframe's own origin is not yet confirmed at that point);
+every message the loader sends after that (`context`, the acquisition payload) is addressed to the exact origin
+the iframe was created with (this app's own origin — never derived from anything on the tenant page). Iframe ->
+loader / iframe -> parent: a message is honoured only if (a) `event.source === window.parent` (a sibling frame,
+popup, or unrelated window is ignored outright), (b) it matches the fixed protocol shape (`source`,
+`v`, `type`, `key`), and (c) `key` names THIS form (a message for a different form key is dropped). The loader
+additionally checks `event.origin` against the origin it loaded its own script from before honouring anything.
+Payloads carry only what's necessary: a numeric height (clamped 200-6000px, non-finite/non-number rejected), a
+"submitted" signal with no data, and the re-sanitised acquisition object — never credentials, never authenticated
+tenant data, never passenger input. Adversarially tested in browser E2E: a hostile sibling frame forging a giant
+`resize` (to visually hide/distort the form) and a forged `context` claiming `utmSource=EVIL` were both silently
+ignored (wrong source window / wrong origin), while the legitimate parent context still worked afterward.
+
+================================================================================
+PUBLIC SUBMISSION
+================================================================================
+`POST /api/public-forms/[publicKey]/submit`: closed-schema JSON validation (`validatePublicFormPayload`, a thin
+wrapper around the SAME `validateWebsiteIntakePayload` used by website intake, with `integrationExternalId`
+structurally absent from the accepted key set) -> durable rate limit (the EXISTING limiter, the public key as its
+"integration" bucket, the client key a one-way hash of the IP — no new rate-limit code) -> `submit_public_form_request`
+(service_role only) -> the shared `_create_public_request` primitive. No CORS is opened: a browser `Origin` header
+present and not equal to this deployment's own origin is refused outright (400); a request with no Origin
+(server-to-server / the embed iframe's fetch, which is same-origin) is allowed. The tenant website's Origin is
+never inspected, forwarded, or required — the embed's fetch call is made from the Nemryn-owned iframe page, not
+from the tenant page's own JavaScript, so there is nothing to fake. `p_organization_id`/`p_integration_id` are
+never client-supplied anywhere in this path; the organization is resolved exclusively from the opaque key inside
+`submit_public_form_request`, re-validated against publication status, organization status and the snapshot's
+own service/recurring rules before the primitive ever runs. Response is minimal and uniform: `{"ok":true}` or a
+fixed passenger-safe message; no Request id, ZW code, Postgres text, RPC name or stack trace is ever returned
+(asserted directly against a real 400 body in both SQL and browser/API E2E).
+
+================================================================================
+RATE LIMITING
+================================================================================
+Reused the P1-PILOT-S4B limiter unchanged: `check_and_record_public_intake_rate_limit` (atomic via
+transaction-scoped advisory locks, fails closed), 8/client/hour + 120/"integration"(here: per public key)/hour,
+`hashClientIp` (SHA-256, fixed non-secret salt, no raw IP ever stored — asserted directly against the table:
+`client_key ~ '^[0-9a-f]{64}$'` for every row). No new rate-limit table, function or threshold was added. Browser
+E2E: 8 accepted then 429 with a generic message (no counters/window disclosed); a honeypot was considered and
+rejected (accessibility/autofill false-positive risk) — the durable limiter is the spam control, no CAPTCHA/
+third-party anti-bot service added.
+
+================================================================================
+IDEMPOTENCY
+================================================================================
+The form generates ONE client submission reference (`crypto.randomUUID()`) per form instance on first submit and
+reuses it for every retry of that same instance (a genuinely new submission — "Submit another request" — gets a
+fresh one). The submit button is disabled and reads "Sending…" (`aria-busy` on the form) for the duration of the
+request. Server-side idempotency remains authoritative: the same partial unique index
+`(intake_integration_id, external_submission_ref)` D1/S4C already relied on, now reached through the shared
+`_create_public_request` primitive for either delivery mode. Tested: a real double-click, a real triple-click
+mid-flight, 8 genuinely parallel duplicate POSTs from the API layer, and 6 genuinely parallel duplicate psql
+submissions in SQL concurrency CASE B — every one produced exactly ONE Request, ONE attribution snapshot, ONE
+notification.
+
+================================================================================
+CONFIRMATION
+================================================================================
+Shows the operator's OWN configured confirmation message (never a fixed Nemryn sentence), focused for screen
+readers/keyboard users on success. Never exposes a Request UUID, database id or the internal integration binding
+id — the response body itself never contains one. "Submit another request" clears all passenger fields and
+issues a fresh submission reference; verified the returned form is genuinely empty (no stale data carried over).
+
+================================================================================
+ERROR HANDLING
+================================================================================
+Client-side validation failure: "Please check the highlighted information.", focus moves to a live error summary
+listing each problem as a jump-link, every field carries `aria-invalid`/`aria-describedby` to a real error
+element. Network/server failure: "We couldn't send your request right now. Please try again." — verified against
+a real simulated offline network condition (not a mocked response), with the entered data preserved so the
+passenger doesn't retype. A closed-schema rejection, an unknown/malformed/unpublished/disabled/suspended key, and
+a 429 all return the same two friendly sentences at the HTTP layer — no ZW code, Postgres error, RPC name,
+stack trace or rate-limit internal ever reaches the browser (grepped directly against real 400/429 response
+bodies). The emergency note is deliberately non-US-specific: "This form is for non-emergency transportation
+requests. If this is an emergency, contact your local emergency service." (no "911").
+
+================================================================================
+ACQUISITION CAPTURE
+================================================================================
+S4C's schema used exactly as-is: `utmSource, utmMedium, utmCampaign, utmContent, utmTerm, landingPath,
+submissionPath, referrerHost, formVersion` — nothing added. `_sanitize_acquisition` (unchanged) is the
+authoritative server-side reducer for both delivery modes; a garbage/absent acquisition object never blocks a
+Request (SQL PU10b: an object stuffed with an empty utmSource, a full URL as landingPath, a URL as referrerHost,
+an invalid formVersion, a gclid, an IP and a user agent still accepts the Request and stores NOTHING from it
+except the server's own formVersion). No gclid/fbclid/IP/raw user agent/fingerprinting/cookie/full URL/query
+string is ever accepted or stored by either the client helpers or the server sanitiser (grepped directly against
+real stored rows and real client-sent bodies throughout SQL and browser E2E).
+
+================================================================================
+HOSTED ATTRIBUTION
+================================================================================
+Captured client-side from the top-level hosted browser context only: the five UTM query parameters, the hosted
+pathname as `landingPath`=`submissionPath`, and `document.referrer`'s bare hostname. The full query string,
+click ids and full URLs are constructed nowhere and never sent — the network body itself was inspected (not just
+the stored row) and contains only the closed key set. Verified end-to-end with a URL carrying `gclid`, `fbclid`
+and an email address in the query string: none of the three reached sessionStorage, the network body, or the
+database row.
+
+================================================================================
+EMBED ATTRIBUTION
+================================================================================
+The loader reads the TENANT page (never the iframe's own page) and passes only the closed, normalized field set
+to the form via the validated postMessage protocol above. First-touch across the tenant's own pages in one
+browser session is honest and explicit: browser E2E drove a real two-page journey (a search-referral landing
+page with UTM parameters, then a second, different tenant page holding the actual embedded form) and confirmed
+the recorded `landingPath`/`referrerHost`/UTM values are the FIRST page's, while `submissionPath` reflects the
+second (request) page — exactly the "first observation this loader made in this session" contract, documented as
+such (no full-site first-touch claim). Where the loader only ever ran on one page (plain HTML/WordPress-like/
+Webflow-like/Squarespace-like harness cases run independently), attribution is correctly limited to that page's
+own path and referrer, with no invented campaign data. The Wix-like case (builder runs the snippet inside its own
+nested, same-site-but-separate-origin frame) correctly yields NO page-level attribution beyond `formVersion` —
+demonstrating the loader never overclaims. The plain-iframe fallback (script-stripped builder) has no loader at
+all, so it correctly stores nothing but `formVersion`.
+
+================================================================================
+FORMVERSION / PUBLICATION SNAPSHOT
+================================================================================
+Decision taken, as the brief preferred: PUBLISHED VERSION SNAPSHOT, not "render whatever the form currently is".
+`website_request_form_publications` carries its own copy of the content plus `published_version` and the full
+history `published_versions int[]` of every version ever published under this key. `formVersion` sent by a client
+is honoured ONLY if it names a version that was genuinely published under this SAME key at some point
+(`v_declared = any(v_pub.published_versions)`); otherwise it is silently replaced by the CURRENT published
+version — a client can never make the evidence name a version that was never actually live. Proven directly: SQL
+PU11 (editing while published keeps serving v1; publish-UPDATE moves the live config to v2 under the identical
+public key; a submission still claiming v1 — a passenger who had the old page open — is correctly recorded as
+v1, not silently rewritten to v2; a submission claiming a never-published v99 is recorded as the actual current
+version) and SQL concurrency CASE D (6 real parallel submissions race a real "publish v2" call; every one is
+recorded as the version it actually saw, none rewritten, none duplicated, none lost).
+
+================================================================================
+PUBLISH UPDATE FLOW
+================================================================================
+Editing != publishing, by explicit design decision. Settings -> Website Requests -> Use a Nemryn form shows a
+`FormPublishPanel`: Not published / Published / Disabled state, "Publish form" once the SAVED form is Ready,
+"Publish update" once a later save produced a newer version than what's live (with a plain warning that the
+public form still shows the older version), and the publish action is disabled while there are unsaved edits in
+the editor ("save the form first — publishing uses the saved form"). Publishing an already-current version is a
+harmless no-op (`changed=false`, no new audit, SQL PU3). Hosted link ("Open form" / "Copy link") and one embed
+snippet ("Copy embed code", collapsed by default, plus a collapsed "My website removes scripts" plain-iframe
+fallback) appear only once published. No API/key/RPC/CORS vocabulary appears anywhere on this panel (grepped
+against the rendered text in browser E2E).
+
+================================================================================
+DISABLE / UNPUBLISH
+================================================================================
+"Disable public form" is a two-step confirm ("The link and the embedded form will stop accepting requests.
+Requests you already received are kept." / Disable / "Keep it published"). Result: the hosted URL and the API
+config both return the identical neutral 404 the same as an unknown key; the hidden binding is set inactive;
+submissions are rejected with the same generic message; the publication ROW and every historical Request are
+kept (never deleted — SQL PU14a/PU14b). "Publish again" re-enables under the exact SAME public key (SQL PU14d) —
+no new link to redistribute. SQL concurrency CASE E: a real disable races 6 real parallel submissions; every
+submission is either cleanly accepted (if it started before the disable committed) or cleanly rejected (after) —
+Requests created always equal accepted submissions, never a half-committed row, and the public config is
+confirmed gone the instant the disable transaction commits.
+
+================================================================================
+SERVICES
+================================================================================
+`_public_form_service_types(organization_id, snapshot_subset)` is the single source of the effective list for
+BOTH the public config endpoint and the submission-time validation: the snapshot's own subset (or every canonical
+service, if the snapshot has none configured) intersected with the organization's CURRENT
+`organization_service_offerings` (unconfigured organization = unrestricted, matching every other intake path in
+this codebase). A service the organization has since stopped offering silently disappears from the public form
+without a republish; a submitted `serviceType` outside that live-intersected list is rejected (SQL PU13b/PU13d;
+browser E2E: disabling a service in Services & Intake immediately removes it from the live published form and
+disables its checkbox in the D1 editor, with the operator warned there too). A form's own subset can further
+narrow what the organization offers (e.g. "Dialysis rides only", require-service-choice on) — proven end to end
+with a real published subset form rejecting an org-offered-but-form-excluded service.
+
+================================================================================
+MOBILE / ACCESSIBILITY
+================================================================================
+Tested at 390px (hosted + embed across all harness builder shapes) and desktop: no horizontal overflow anywhere,
+including with visible validation errors and the recurring fields expanded. Every input/select/textarea has a
+real associated label (asserted programmatically, not visually); errors are associated via `aria-describedby` to
+a real element containing the exact friendly sentence; `aria-invalid` is set; failed validation moves focus to a
+live error summary (`role="alert"`, tabindex-focused) listing each problem as a jump link to its field; a
+successful submission moves focus to the confirmation region. Sensible input types/autocomplete (`tel`, `email`,
+`date`, `time`, `name`/`tel`/`email` autocomplete hints) verified directly against the rendered DOM. Submit is
+disabled with a visible "Sending…" state and `aria-busy` while pending. The iframe never clips: it auto-resizes
+on every content-height change (validation errors, toggling "recurring", reaching the confirmation screen, and
+the unavailable state), verified for the confirmation case (114px of real content correctly clamped to the 200px
+floor, not truncated) and the growth cases (iframe height tracks content height within a few pixels on every
+transition, including the two builder-shaped pages that inject the snippet after page load).
+
+================================================================================
+PRIVACY
+================================================================================
+No passenger-submitted data is ever written to localStorage, sessionStorage, IndexedDB, a cookie, or any cache
+(browser Cache API / service worker) — asserted directly against every one of those APIs, on both the hosted page
+and inside the embed iframe, after a real submission. `localStorage.length === 0` and `sessionStorage` contains
+ONLY the single namespaced acquisition key at all times, holding exclusively the closed S4C field set (asserted
+by reading and JSON-parsing the actual stored value and checking every key against the allow-list) — never a
+name, phone, address, note, or any other passenger field. The Driver PWA's own service worker and cache rules
+(P1-PILOT-S5A) are untouched and unrelated; the public form registers no service worker of its own and `caches.keys()`
+is confirmed empty after a submission. Component state (React `useState`) is cleared to empty on every successful
+submission and on "Submit another request", so passenger data does not persist even in memory beyond the
+lifetime it's needed for.
+
+================================================================================
+CSP / FRAME SECURITY
+================================================================================
+Audited current headers first: `next.config.ts` set no CSP/frame-ancestors/X-Frame-Options anywhere before D2.
+Added, scoped narrowly: `/request/:path*` gets `Content-Security-Policy: frame-ancestors 'none'` +
+`X-Frame-Options: DENY` (the hosted form itself must never be frameable — clickjacking) + `X-Robots-Tag: noindex,
+nofollow`; `/embed/request/:path*` gets `Content-Security-Policy: frame-ancestors *` + the same noindex (this ONE
+route exists purely to be framed by an unknown, unpredictable set of tenant/builder/staging domains — narrowing
+`frame-ancestors` reliably to "the operator's website" was assessed and rejected as unreliable, since operators
+legitimately preview on builder subdomains, staging hosts and page builders whose origin can't be enumerated in
+advance); `/embed/request-form.js` gets a short public cache + `nosniff` + an explicit `Access-Control-Allow-Origin: *`
+(it is a public static script, not a data endpoint). Documented honestly: because `frame-ancestors` cannot be the
+authoritative control for the embed route, the publication state + closed submission schema + rate limit remain
+the real security boundary regardless of what frames it — the same "CORS/Origin is a courtesy layer, the RPC is
+authoritative" pattern this codebase already uses for website intake. Verified the REST of the app is unaffected:
+`/sign-in` carries no new `X-Frame-Options` or CSP header (nothing was globally loosened or tightened to support
+this). No cookies are ever set by either public route.
+
+================================================================================
+BUILDER GUIDANCE
+================================================================================
+Precise, tested against a representative DOM/container shape for each, never a marketplace/native-integration
+claim: WordPress (Custom HTML block; "some plans/roles strip scripts" -> iframe/hosted fallback named explicitly),
+Wix (Add -> Embed Code -> Embed HTML; explicitly honest that Wix runs it in its own frame, so page-level
+attribution is limited — not silently claimed as full), Squarespace (Code Block, Display Source off; "depends on
+your plan" -> fallback named), Webflow (Embed element, then publish), Custom HTML (paste where the form should
+appear). Each builder's harness page in the E2E used a representative real container shape for that platform
+(WordPress `wp-block-html`, Webflow `w-embed` with the script placed before the container the way Webflow does,
+Squarespace's own async-inject-after-load pattern, a genuine nested cross-origin frame for Wix) — not just a
+plain `<div>` in every case. A collapsed "My website removes scripts" panel gives a plain `<iframe>` fallback and
+says plainly it loses auto-resize and page attribution.
+
+================================================================================
+AUTHORIZATION
+================================================================================
+Publish / disable / read-publication-state: Organization Admin of an ACTIVE organization only
+(`has_org_role(..., array['organization_admin'])`); Dispatcher, Driver, inactive Membership, a foreign
+organization's Admin, Platform Admin with no Membership at all, and a suspended organization's own Admin all get
+the identical ZW002 (no existence oracle) — proven in SQL (PU5a/PU15/PU16c) and in browser E2E against real
+seeded Dispatcher/Driver/Platform-Admin accounts (no publish panel renders for any of them) and a real second
+tenant (Org B Admin cannot publish, disable, or even read Org A's publication state; cannot resolve Org A's
+connection through `?connection=`). Public passenger: may READ only an active published form's public-safe
+config, and may SUBMIT only through the controlled public endpoint — no raw table access exists for any role
+(anon, authenticated or service_role) at all; the service_role RPCs are the ONLY way a passenger's request ever
+reaches a table.
+
+================================================================================
+RLS
+================================================================================
+`website_request_form_publications`: `enable row level security`, ZERO policies, and every privilege revoked
+from public/anon/authenticated/service_role explicitly. Confirmed both structurally (`relrowsecurity=true`,
+`select count(*) from pg_policies where tablename=...` = 0) and behaviourally: a direct `select` as anon,
+authenticated (even the owning Admin's own session) and service_role all return 42501 with zero rows (SQL PU5c).
+
+================================================================================
+PRIVILEGE CONTRACT
+================================================================================
+`supabase/tests/privilege_contract_tests.sql` updated: new table `website_request_form_publications` (class A);
+new `authenticated`-only functions `get_website_request_form_publication`, `publish_website_request_form`,
+`disable_website_request_form_publication`; new `service_role`-only functions `get_public_request_form`,
+`submit_public_form_request`; the two internal helpers `_create_public_request` and `_public_form_service_types`
+added to the "no grant to any role" list. `scripts/verify-db-privileges.sh local` = 0 violations of 28 both
+before and after the migration was applied to the local stack. Drift-proof harness
+(`prove_contract_detects_drift.py`) still detects every injected drift kind against the updated contract.
+`docs/security/database-privilege-contract.md` updated: authenticated RPC count 75 -> 78; service_role-only RPC
+count 4 -> 6 (both new ones EXECUTE-only, no table access); new table-classification row for
+`website_request_form_publications` with the same "class A, no client/service privilege" language as every other
+locked-down table in this schema.
+
+================================================================================
+SERVICE_ROLE IMPACT
+================================================================================
+Exactly two new service_role EXECUTE grants, nothing else: `get_public_request_form(text)` and
+`submit_public_form_request(text, ...)`. NO new service_role TABLE privilege of any kind — the D2 tables and the
+new internal helper functions are unreachable by service_role. service_role's table privilege remains exactly
+`SELECT` on `request_intake_integrations` (unchanged by D2; that table's own CORS lookup is still the only
+service_role table read in this codebase). The SEC-01/SEC-01R invariant ("service_role narrowing is a security
+invariant; do not restore broad access") was respected — every new capability was the smallest possible EXECUTE
+grant, never a table grant.
+
+================================================================================
+REQUEST HUB
+================================================================================
+No redesign, and no separate "Form Requests" queue. Requests created through a published Nemryn form appear in
+the SAME Request Hub list as every other Request, through the EXISTING provenance model: `intake_integration_id`
+is set (to the hidden `nemryn_form` binding), so `requestProvenanceLabel` renders the same "Website" badge a
+website-intake Request already gets (factual — it did arrive over the public website-request path — and low-cost:
+zero new UI). Request Detail shows the S4C Acquisition panel exactly as it already did for website intake, now
+also populated for hosted/embedded submissions, and never displays the public key or the hidden binding's
+external id.
+
+================================================================================
+EXISTING FORM REGRESSION
+================================================================================
+`/api/public-intake/website` is byte-for-byte the same public contract it was before D2 (its Route Handler file
+is untouched; only its underlying RPC was refactored internally to delegate to the shared primitive, with its
+signature, its own field validation, Origin check, rate limit and response shape all identical). Verified live: a
+legacy payload with no acquisition, and a payload carrying S4C acquisition, both still accepted with the same
+`{"ok":true}` response and the same stored attribution shape; the "Connect my existing form" and "Developer
+connection" D1 screens are unmodified and unaffected; a pre-D2 website integration continues to work, appear in
+the operator's connection list, and receive Requests exactly as before, with the hidden `nemryn_form` binding
+never appearing alongside it.
+
+================================================================================
+ZENWARD NON-SPECIALIZATION
+================================================================================
+Zero references to "Zenward" anywhere in the D2 diff (grepped). Zenward-Web was not opened, read or modified.
+Zenward's existing website integration continues to use `/api/public-intake/website` exactly as before, unaware
+that a second delivery mode (`nemryn_form`) now exists on the same underlying primitive. D2 introduced no
+partner-specific code path, config flag, or special-case branch of any kind — the entire feature is generic to
+every organization.
+
+================================================================================
+CONCURRENCY
+================================================================================
+SQL, genuinely separate psql processes (never simulated in a single connection):
+  website_request_form_publication_concurrency_test.sh — CASE A: 6 parallel FIRST publishes -> exactly 1
+  publication row, 1 hidden binding, 1 audit event, every caller receives the SAME public key, exactly 1 caller
+  reports changed=true. CASE B: 6 parallel submissions with the SAME idempotency key -> exactly 1 Request, 1
+  attribution snapshot (belonging to the one winning submission, values internally consistent), 1 notification,
+  every caller accepted, exactly 1 sees a genuinely-new Request. CASE C: 6 parallel submissions with 6 DIFFERENT
+  keys -> 6 distinct Requests, 6 notifications (proves nothing is over-collapsed). CASE D: a real "publish update
+  to v2" races 6 real submissions that all saw v1 -> every submission accepted, one Request each, one attribution
+  snapshot each, every one correctly recorded as v1 (the version actually rendered), publication correctly ends
+  at v2/published, one notification each. CASE E: a real "disable" races 6 real submissions -> Requests created
+  == accepted submissions exactly (no half-committed row), every submission cleanly accepted or cleanly rejected,
+  and the public config is confirmed gone the instant the disable transaction commits. All FAIL_COUNT=0.
+  website_requests_form_concurrency_test.sh (D1, re-verified unaffected by the D2 migration): CASES A-E, 0
+  failures. website_intake_acquisition_concurrency_test.sh and public_request_intake_concurrency_test.sh (S4A/S4C,
+  re-verified unaffected): 0 failures.
+Browser: parallel duplicate POSTs (8 concurrent, same idempotency key, different acquisition each) -> exactly 1
+Request/1 attribution/1 notification, every caller received `{"ok":true}`.
+
+================================================================================
+SQL TESTS
+================================================================================
+Fresh `supabase db reset --local` before the run (isolated suites re-run after their own fresh reset):
+  website_requests_form_tests 37/37 (D1, re-verified unaffected)
+  website_request_form_publication_tests 50/50 (new, D2)
+  website_integration_self_service_tests 72/72
+  website_intake_acquisition_tests 52/52
+  public_request_intake_tests 42/42
+  public_intake_rate_limit_tests 8/8
+  team_services_operations_tests 106/106
+  tenant_settings_foundation_tests 51/51
+  privilege_baseline_behavior_tests 30/30
+  client_privilege_surface_tests 21/21
+  function_privilege_tests 7/7
+  security_definer_exposure_tests 20/20
+  rls_adversarial_tests 32/32
+  notifications_activity_tests 42/42 (isolated, own fresh reset)
+  platform_admin_foundation_tests 58/58 (isolated, own fresh reset)
+Plus the concurrency suites above. `scripts/verify-db-privileges.sh local`: 0 violations of 28.
+`prove_contract_detects_drift.py`: every injected drift kind still detected.
+
+================================================================================
+BROWSER E2E
+================================================================================
+Script: .tmp-qa/d2-e2e.mjs (+ .tmp-qa/d2-harness.mjs, a small local HTTP server simulating fictional tenant
+websites in representative builder-shaped page structures). Fictional tenants only, production build
+(`next build` + `next start`), the real onboarding flow for a fresh tenant. Covers: operator authoring ->
+Publish -> Publish update -> Disable -> re-publish; hosted form (rendering, validation/focus/a11y, pending state,
+double/triple-submit, offline retry, recurring, confirmation, "Submit another request", storage privacy, no
+console errors); the public API layer directly (closed schema, 8 parallel duplicates, Origin enforcement, size
+limits, malformed JSON, garbage acquisition, formVersion honesty, unknown service rejection, the 8/hour rate
+limit); neutral unavailability (unknown/malformed/Draft-unpublished/disabled/suspended-organization, identical
+shape everywhere); two-tenant isolation (distinct keys, cross-tenant reads/writes all denied); Dispatcher/Driver/
+Platform-Admin denial; embed across 4 realistic builder-shaped pages plus a Wix-like nested-frame case and a
+script-stripped iframe-fallback case (mount, CSS isolation both directions, auto-resize through every state
+transition, first-touch acquisition across a real two-page journey, storage privacy inside the iframe); hostile
+postMessage from an unrelated origin/sibling frame (ignored, both directions); the hosted form's own
+un-frameability; response headers on all four new routes; existing website-intake and legacy-integration
+regression; mobile 390px on both delivery modes.
+
+Two genuine PRODUCT defects were found and fixed during this validation (both before the harness issues below;
+both re-verified passing after the fix, and again in the final clean run):
+  1. `PublicRequestForm.tsx` — the return-trip and recurring-day radio/checkbox inputs were missing their
+     `value` attribute. Added it (a correctness/accessibility fix; the component's own onChange handlers already
+     read the option value from closure, so this had no observed behavioural effect, but it is the correct,
+     standards-compliant markup and was fixed on sight).
+  2. `FormPublishPanel.tsx` — the "Disable public form" confirmation `<form>` reset its own local confirmation
+     state via `onSubmit`, racing the server action; this could make the panel discard the confirmation UI before
+     the disable actually completed. Fixed by removing that premature client-side reset (the form's own re-render
+     after the server action now drives the UI state correctly). Confirmed by the "disabled message" assertion
+     passing reliably afterward.
+
+TEST HARNESS HANG (no product defect): the first full run advanced normally to 111 PASS checks and then never
+advanced again. Diagnosis performed live against the still-running Chrome session over CDP, not guessed:
+  - the product UI had already reached the expected state (the Nemryn iframe was mounted, auto-resized to
+    1764px, with correct acquisition already computed in sessionStorage, zero console errors);
+  - no network request was pending;
+  - the harness script had awaited a `Runtime.evaluate("...click()...")` on a link whose click triggers a
+    cross-origin navigation; the CDP response for that specific evaluate call was lost when Chrome swapped
+    renderer process for the navigation, so the awaited Promise never resolved and Node never moved past that
+    line — a known class of CDP fragility around navigating clicks, not a Nemryn defect.
+  - the Node process stayed alive holding two harness HTTP listeners (ports 3200/3201) and several Chrome
+    debug sessions open; the app's own dev server (port 3100) was unaffected throughout.
+Harness-only correction (zero product code touched): the two navigation-triggering clicks in the harness were
+changed to fire-and-forget (`setTimeout(() => el.click(), 0)`, not awaited), a 40-minute hard watchdog was added
+so a future stall fails loudly instead of hanging silently, the flaky-Part-10 section was refactored into a
+standalone function runnable in isolation via `D2_ONLY=embed`, and a hosted-only equivalent (`D2_ONLY=hosted`)
+was added for the same reason.
+Targeted embed rerun: 64/64 PASS, process exited cleanly in under 100 seconds, confirming the hang fix without
+re-running the whole suite blind.
+A full rerun with the hang fix in place then completed naturally (it did NOT hang again) but reported 5 FAILures,
+all in one family: "no passenger data in browser storage" assertions on the hosted form and three of the four
+embed builder cases. Root cause, confirmed by reading the actual stored JSON directly (not assumed): these were
+FALSE POSITIVES in the test harness's own regex, which matched the literal substring "555" occurring INSIDE the
+random hex public key (e.g. `form_a8218f7fc28bae0366c05557a9fa25dd` contains "...c05557a...") rather than in any
+real phone number — the actual stored sessionStorage value in every failing case contained only the closed S4C
+acquisition keys and no passenger data whatsoever.
+Privacy-assertion correction (harness only): the offending regex now has the public key stripped out of the
+string before matching (`.split(KEY).join("")`), and the phone-number pattern was tightened to the exact
+formatted value the harness types (`"(404) 555-0142"`) so a coincidental digit run inside an unrelated random
+value can no longer trigger it. Verified in two independent isolated reruns after the fix: `D2_ONLY=hosted`
+4/4 PASS, `D2_ONLY=embed` 64/64 PASS (covering all three previously-flagged builder cases plus plain HTML).
+FINAL AUTHORITATIVE FULL RUN: 183 PASS, 0 FAIL. The process exited on its own; no leaked Chrome processes, no
+harness HTTP listeners left bound, no console errors logged anywhere across the run; the app's dev server
+remained responsive throughout and afterward. Log preserved at /tmp/d2-e2e-final.log; the original hung session's
+log, the isolated embed verification logs, and the 178/5 intermediate full-run log were all preserved as well
+(nothing deleted).
+Confirmed: no product code was changed to resolve either the hang or the five false-positive privacy assertions
+— both were pure test-harness corrections, confined entirely to .tmp-qa/d2-e2e.mjs and .tmp-qa/d2-harness.mjs,
+which are untracked scratch files outside the application.
+
+================================================================================
+APPLICATION TESTS
+================================================================================
+npx tsc --noEmit: PASS (clean). npm run lint: 0 errors, 80 warnings (all in untracked .tmp-qa scratch scripts;
+zero warnings anywhere under src/ or public/). npm test: 500/500 (includes 15 new pure-module unit tests for
+public-form-core.ts covering the public-key format, client-side form validation, the submission-body builder
+against the real intake validator, the closed-schema guard, hosted/embedded acquisition extraction rules,
+sessionStorage sanitisation and first-touch merging, the postMessage protocol guards, and a full set of tests
+that load and execute the REAL shipped embed loader file — not a copy — against a minimal fake browser, including
+CSS/iframe isolation setup, message-origin/source verification, height clamping, first-touch across two pages,
+storage-key namespacing, and a static scan of the loader source for any cookie/localStorage/XHR/fetch/eval usage
+or a stray `postMessage(..., "*")`). npm run build: PASS.
+
+================================================================================
+FILES CREATED
+================================================================================
+supabase/migrations/20260921140000_website_request_form_publication.sql
+supabase/tests/website_request_form_publication_tests.sql
+supabase/tests/website_request_form_publication_concurrency_test.sh
+src/lib/public-forms/public-form-core.ts
+src/lib/public-forms/public-form-core.test.mjs
+src/lib/public-forms/public-form.ts
+src/lib/operations/website-request-form-publication.ts
+src/components/public-form/PublicRequestForm.tsx
+src/components/public-form/useEmbedParent.ts
+src/components/public-form/UnavailableForm.tsx
+src/components/operations/settings/FormPublishPanel.tsx
+src/app/request/[publicKey]/page.tsx
+src/app/request/[publicKey]/not-found.tsx
+src/app/embed/request/[publicKey]/page.tsx
+src/app/embed/request/[publicKey]/not-found.tsx
+src/app/api/public-forms/[publicKey]/route.ts
+src/app/api/public-forms/[publicKey]/submit/route.ts
+public/embed/request-form.js
+docs/product/website-request-form-publication.md
+
+================================================================================
+FILES MODIFIED
+================================================================================
+next.config.ts (frame/CSP headers for the two new routes + the loader script; nothing else changed)
+src/proxy.ts (proxy matcher excludes the new anonymous public routes, same pattern as the existing public routes)
+src/lib/public-intake/website-intake-core.ts (added validatePublicFormPayload, reusing the existing validator;
+  the website-intake contract itself is unchanged)
+src/lib/supabase/database.types.ts (regenerated after the migration)
+src/lib/operations/website-requests-core.ts (publication state / publish-action / connection-status helpers,
+  builder placement guidance, hosted-URL/embed-snippet/iframe-fallback builders, recurring fields added to the
+  shared preview model used by both the D1 operator preview and the real public form)
+src/lib/operations/activity-core.ts / activity-core.test.mjs (website_request_form_published /
+  _unpublished mapped to plain-language Activity entries)
+src/components/operations/settings/FormPreview.tsx (recurring-day fields; emergency copy aligned with the public
+  form's non-US-specific wording)
+src/components/operations/settings/NemrynFormEditor.tsx / WebsiteRequestsOverview.tsx (wired in FormPublishPanel;
+  publication-aware connection status/copy)
+src/app/operations/settings/website-requests/actions.ts / .../form/page.tsx / .../page.tsx (publish/disable
+  server actions; publication data loaded and passed to the panel/landing page)
+src/lib/operations/website-requests-core.test.mjs (new coverage for the above)
+supabase/tests/privilege_contract_tests.sql (D2 table/functions added — see PRIVILEGE CONTRACT)
+docs/security/database-privilege-contract.md, docs/product/website-requests.md (updated for D2; see those
+  sections above)
+docs/reports/p1-comm-d1-website-requests-ux-universal-form-foundation.txt — UNRELATED to D2: this is the D1
+  production-release addendum from the prior phase, an uncommitted edit to a tracked file that predates D2 and
+  was left exactly as found.
+
+================================================================================
+MIGRATIONS
+================================================================================
+20260921140000_website_request_form_publication.sql (923 lines; NOT applied to production). Adds the second
+`integration_type` value and its no-origins CHECK to `request_intake_integrations`; recreates
+`list_request_intake_integrations` to filter website-only; creates `website_request_form_publications` (class A)
+and its two result composite types; creates the internal helpers `_public_form_service_types` and
+`_create_public_request`; recreates `submit_public_transportation_request` to delegate to the shared primitive
+(identical external signature and behaviour); creates `get_website_request_form_publication`,
+`publish_website_request_form`, `disable_website_request_form_publication` (authenticated), `get_public_request_form`,
+`submit_public_form_request` (service_role); recreates `list_activity_events` with the two new whitelisted
+actions.
+
+================================================================================
+OPEN ISSUES
+================================================================================
+1. Site-wide first-touch attribution (a loader present on every tenant page, not just the request page) is
+   explicitly out of scope for D2 and documented as a possible later enhancement.
+2. No vanity/branded hosted domain (`request.nemryn.com`) yet — D3 scope per the brief.
+3. `frame-ancestors` on the embed route is intentionally broad (`*`); the publication/schema/rate-limit stack is
+   the real control, documented honestly rather than claiming a frame-level guarantee that can't be kept given
+   arbitrary builder/staging origins.
+4. The pre-existing absence of any frame-ancestors/X-Frame-Options header on the rest of the app (authenticated
+   pages) is unchanged by D2 and was not in scope to fix here; noted as a general recommendation, not a D2 defect.
+5. Two small, low-risk product fixes were made during E2E validation (see BROWSER E2E) — disclosed there in full;
+   neither changes any security-relevant behaviour.
+6. This report itself, and the file list above, are all uncommitted local changes — nothing has been committed,
+   pushed, or deployed for D2.
+
+================================================================================
+HOSTED FORM:
+PASS
+
+UNIVERSAL EMBED:
+PASS
+
+PUBLIC FORM AUTH REQUIRED:
+NO
+
+DRAFT PUBLICLY ACCESSIBLE:
+NO
+
+UNPUBLISHED PUBLICLY ACCESSIBLE:
+NO
+
+DISABLED PUBLICATION ACCESS:
+BLOCKED
+
+PUBLIC IDENTIFIER:
+OPAQUE
+
+FORM/PUBLICATION SEPARATION:
+PASS
+
+PUBLICATION SNAPSHOT:
+PASS
+
+FORMVERSION ACCURATE:
+PASS
+
+VALID SUBMISSION:
+PASS
+
+DOUBLE SUBMIT:
+ONE REQUEST
+
+IDEMPOTENT RETRY:
+PASS
+
+NOTIFICATION:
+ONCE
+
+ACQUISITION:
+PASS
+
+BAD ACQUISITION BLOCKS REQUEST:
+NO
+
+FULL URL STORED:
+NO
+
+CLICK IDS STORED:
+NO
+
+PASSENGER DATA IN BROWSER STORAGE:
+NONE
+
+SERVICES:
+PASS
+
+SUSPENDED ORG:
+BLOCKED
+
+CROSS-TENANT:
+BLOCKED
+
+DISPATCHER PUBLISH:
+BLOCKED
+
+DRIVER PUBLISH:
+BLOCKED
+
+PLATFORM ADMIN TENANT PUBLISH:
+BLOCKED
+
+ANON RAW TABLE ACCESS:
+NONE
+
+SERVICE_ROLE TABLE ACCESS ADDED:
+NONE
+
+SERVICE_ROLE RPC EXECUTE ADDED:
+get_public_request_form(text), submit_public_form_request(text,text,text,text,text,text,text,text,text,date,
+time without time zone,text,text,text,text[],date,date,time without time zone,boolean,text,jsonb)
+
+ACL CONTRACT:
+PASS
+
+LOCAL ACL VIOLATIONS:
+0/28
+
+EXISTING WEBSITE INTAKE:
+PASS
+
+S4C ATTRIBUTION:
+PASS
+
+D1 FORM CONFIG:
+PASS
+
+MOBILE 390PX:
+PASS
+
+ACCESSIBILITY:
+PASS
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+500/500
+
+BUILD:
+PASS
+
+BROWSER E2E (FINAL, AUTHORITATIVE):
+183/183 PASS
+
+BROWSER E2E HISTORY:
+Original full run: hung at 111 PASS (TEST HARNESS HANG, not a product defect — lost CDP response from an awaited
+navigation-triggering click). Root cause diagnosed live against the running session (product UI had already
+reached the correct state; no pending network request; no console error). Harness-only correction: navigating
+clicks made fire-and-forget, 40-minute watchdog added, Part 10 made independently runnable. Targeted embed
+rerun: 64/64 PASS. Next full run completed (did not hang) but surfaced 5 FALSE-POSITIVE privacy assertions (a
+regex matching "555" inside the random hex public key, not a real phone number — confirmed by inspecting the
+actual stored data, which held only S4C-safe values). Privacy-assertion correction: the public key is now
+stripped from the string before matching, and the phone pattern tightened. Re-verified in isolation:
+D2_ONLY=hosted 4/4 PASS, D2_ONLY=embed 64/64 PASS. Final full clean run: 183/183 PASS, 0 FAIL, process exited
+cleanly with no leaked processes or listeners. NO PRODUCT CODE WAS CHANGED to resolve the hang or the five false
+positives — both corrections were confined to the untracked test-harness scripts (.tmp-qa/d2-e2e.mjs,
+.tmp-qa/d2-harness.mjs). (Two small, unrelated, genuine product fixes were made during earlier E2E validation and
+are disclosed in full in the BROWSER E2E section above.)
+
+READY FOR D2 PRODUCTION RELEASE:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+Owner review -> D2 production release.
+
+After D2 production release:
+
+P1-COMM-D3
+Hosted Form Domain + Commercial Setup / Integration Packaging
+
+DO NOT BEGIN D3 AUTOMATICALLY.
+
+================================================================================================================
+================================================================================================================
+P1-COMM-D2A — WEBSITE CONNECTION LIFECYCLE (DELETE UNUSED + RETIRE USED)
+================================================================================================================
+Scope: LOCAL IMPLEMENTATION ONLY, on top of the already-implemented (still uncommitted) D2. Nothing committed,
+pushed or deployed; no `supabase db push`; no production integration touched; Zenward-Web untouched; D3/S5B not
+started. A recovery audit was performed before any D2A work began, confirming the D2 baseline (183/183 browser
+E2E, all SQL/concurrency suites, ACL 0/28) was fully intact and that no prior D2A attempt had reached disk.
+
+================================================================================================================
+ACTUAL D2 INTEGRATION TYPES
+================================================================================================================
+Read fresh, not assumed: `request_intake_integrations.integration_type` has exactly two values, enforced by a
+CHECK constraint. `'website'` rows are created by `create_request_intake_integration` (the "Connect website" flow)
+and are the ONLY rows `list_request_intake_integrations` ever returns (it already filtered
+`integration_type = 'website'` before D2A) -- these are what the operator sees and manages on Settings -> Website
+Requests. `'nemryn_form'` rows are created ONLY by `publish_website_request_form`'s first call, exactly one per
+organization, and are referenced by exactly one `website_request_form_publications` row
+(`unique (intake_integration_id)`); no other code path ever creates, activates, edits or deletes one. A `'website'`
+row is NEVER referenced by a publication (publish always creates its own fresh `'nemryn_form'` row), and a
+`'nemryn_form'` row is NEVER returned by `list_request_intake_integrations`. This is a real, pre-existing
+structural separation -- D2A did not have to invent it, only preserve and defend it.
+
+================================================================================================================
+VISIBLE WEBSITE VS HIDDEN FORM BINDING
+================================================================================================================
+D2A's two new lifecycle RPCs (`delete_unused_request_intake_integration`, `retire_request_intake_integration`)
+operate ONLY on the row they are given, but the FIRST thing each does after locking it is reject anything whose
+`integration_type <> 'website'` with the identical ZW002 a nonexistent/foreign id gets -- a caller can never
+reach the hidden binding through these RPCs even if it somehow obtained the uuid (SQL tests L/M). The hidden
+binding's own lifecycle continues to be owned exclusively by `publish_website_request_form` /
+`disable_website_request_form_publication`, unchanged by D2A. Symmetrically, publishing/disabling the Nemryn form
+never touches, activates, retires or deletes any `'website'` row (SQL tests N/O; browser E2E "D2 independence").
+No UI surface (the "Your website" cards, the Nemryn-form card, "Previous connections") ever exposes the hidden
+binding's existence, id, or any Delete/Remove action for it.
+
+================================================================================================================
+DELETE VS RETIRE
+================================================================================================================
+Three genuinely distinct, never-conflated operations:
+  TURN OFF / TURN ON (existing, unchanged): `is_active` toggles, `retired_at` stays null. Reversible. Same
+    Integration ID, same configuration, still in the primary "Your website" list.
+  DELETE (new): permanent, real `DELETE FROM request_intake_integrations`. Allowed ONLY when the connection has
+    NEVER received a Request. The row is gone -- nothing remains to look up.
+  RETIRE / "Remove connection" (new): permanent state, NOT a delete. `is_active = false`, `retired_at = now()`,
+    the row (and everything that references it) is kept forever. Not reversible through any ordinary tenant RPC.
+No button ever offers both Delete and Remove for the same connection -- the UI decides which ONE to show from
+`requestCount === 0` (§ WEBSITE REQUESTS UI below), and the database independently re-derives and enforces the
+same rule from the authoritative Requests table, never trusting the client's label choice.
+
+================================================================================================================
+UNUSED ELIGIBILITY
+================================================================================================================
+`delete_unused_request_intake_integration(p_integration_id)`:
+  1. Resolves the owning organization from the row itself and authorizes the caller via `has_org_role(...,
+     ['organization_admin'])` -- ACTIVE Membership, Organization Admin role, ACTIVE organization; foreign,
+     nonexistent, Dispatcher, Driver, inactive Membership, suspended organization and Platform Admin without
+     Membership are ALL the identical ZW002 (no oracle). The organization is NEVER accepted from the browser.
+  2. Takes the SAME per-organization advisory lock `create_request_intake_integration` /
+     `update_request_intake_integration_origin` already use, so a concurrent create/edit/delete on that
+     organization's connections fully serialises.
+  3. `SELECT ... FOR UPDATE` on the row -- not found: ZW002. `integration_type <> 'website'`: ZW002 (the hidden
+     binding). `retired_at IS NOT NULL`: ZW006 (already retired -- delete is not the un-retire path).
+  4. Re-checks, UNDER THE LOCK, immediately before DELETE -- never trusting an earlier, unlocked read -- that
+     ZERO `transportation_requests` reference the row. This is the ONLY dependency that exists in the real
+     schema for a `'website'`-type row: a `'website'` row is (by construction) never referenced by a publication,
+     `request_acquisition_attributions` references `request_id` only, and `audit_events.entity_id` is a bare,
+     FK-free uuid used generically for every entity type in this schema (confirmed directly against
+     `information_schema` -- see FK SAFETY) -- so no other table can make a zero-Request `'website'` row unsafe
+     to delete.
+  5. Deletes the row, then writes `website_connection_deleted` (website address + connection-method preference
+     only -- never the Integration ID or any secret) referencing the now-deleted row's id; safe, since nothing
+     has an FK to `audit_events.entity_id`.
+
+================================================================================================================
+RETIREMENT MODEL
+================================================================================================================
+`retire_request_intake_integration(p_integration_id)` follows the identical authorization/locking discipline
+above, then: already retired -> `changed:false`, no second audit (idempotent); otherwise sets `is_active = false,
+retired_at = now()`, writes `website_connection_retired` (website, connection-method preference, and a
+point-in-time request count -- never the Integration ID, never a secret), and returns. The row, and every
+Request/attribution/notification/audit entry that already referenced it, is untouched. No status enum was
+introduced: the brief's own preferred "smallest clean model" is a single nullable `retired_at timestamptz` on the
+existing table (matching this schema's own established idiom of nullable "since" timestamp columns), plus the
+CHECK `retired_at IS NULL OR is_active = false` so "retired implies inactive" is a database invariant, not just
+application discipline.
+
+================================================================================================================
+TURN OFF VS RETIRE
+================================================================================================================
+Every ordinary tenant RPC that could reactivate or edit a connection now rejects a retired row with ZW006, under
+the SAME row lock, so hiding a button in the UI is never the only control:
+  `set_request_intake_integration_active` -- Turn on AND Turn off both refused once retired (SQL test I + "retired:
+    Turn off is ALSO blocked").
+  `update_request_intake_integration_origin` -- "Change website" refused once retired.
+  `set_request_intake_integration_setup` -- the D1 connection-method/website-manager preference setter refused
+    once retired.
+`create_request_intake_integration`'s idempotent "same organization + same normalized origin returns the existing
+row" lookup now excludes retired rows (`AND retired_at IS NULL`), and the unique index
+`request_intake_integrations_org_origin_uidx` was relaxed the same way (`WHERE ... AND retired_at IS NULL`) -- so
+reconnecting the SAME website address after a delete or a retire always creates a genuinely NEW row with a NEW
+opaque external id; a retired row can never be silently revived as "the" connection for that address (SQL tests
+J/K; browser E2E "fresh connection ... NEW external id", both journeys).
+
+================================================================================================================
+PREVIOUS CONNECTIONS
+================================================================================================================
+New read-only RPC `list_previous_website_connections(p_organization_id)` (Organization Admin only, same ZW002
+matrix) returns retired `'website'` rows only (never the hidden binding, never a hard-deleted row -- it no longer
+exists anywhere) with exactly: website address, connection-method preference, retired date, historical request
+count -- no database id, no Integration ID, no public form key, no technical/credential detail of any kind. The
+Website Requests landing page renders this as a collapsed `<details>` "Previous connections (N)" section,
+collapsed by default (its content is correctly excluded from the accessible/rendered text until opened -- asserted
+directly in browser E2E), below the active-connections list. `list_request_intake_integrations` itself now excludes
+retired rows (`AND retired_at IS NULL`), so a retired connection disappears from the primary/active view the
+instant retirement commits, with no separate UI-only filtering step to get wrong.
+
+================================================================================================================
+CLEAN-SLATE WORKFLOW
+================================================================================================================
+Website Requests: normal actions (Turn on/off, Change website) are unchanged. A restrained destructive control sits
+at the end of the same actions row, styled as a `text`-variant, critical-colored button (matching this codebase's
+own existing "Deactivate access" convention on the Team page) -- never a separate menu, never both Delete and
+Remove shown together: `requestCount === 0` -> "Delete connection"; otherwise -> "Remove connection". Delete's
+confirmation dialog uses the brief's exact copy ("Delete this website connection? / This connection has not
+received any transportation requests. Deleting it removes its setup so you can start again with a new connection.
+/ This can't be undone. A new connection will receive a new connection ID." / Cancel / Delete connection). Remove's
+confirmation uses the brief's exact copy ("Remove this website connection? / New requests from this connection will
+stop. Previous requests and their history will remain available in Nemryn." / Cancel / Remove connection) and
+DELIBERATELY never mentions the Nemryn form (generated-form publication is an independent D2 path -- see below).
+After either action, the page returns to the same clean empty state D1 already used ("No active website
+connection" / "Connect your website to receive transportation requests directly in Nemryn." / "Connect website"),
+from which the operator can start over with any of the three connection methods.
+
+================================================================================================================
+HIDDEN BINDING PROTECTION
+================================================================================================================
+Covered in full under ACTUAL D2 INTEGRATION TYPES / VISIBLE WEBSITE VS HIDDEN FORM BINDING above: rejected by
+`integration_type` at the database layer inside both new RPCs (SQL L/M), never exposed by any read model, never
+offered a Delete/Remove action anywhere in the UI (browser E2E: the Nemryn-form card's own text never contains
+"Delete connection" or "Remove connection").
+
+================================================================================================================
+FORM PUBLICATION INDEPENDENCE
+================================================================================================================
+Explicitly tested both directions, at the database layer (SQL N/O) and end-to-end in the browser (Journey 3 / "D2
+independence"): with an active `'website'` connection AND an independently published Nemryn form on the same
+organization, Removing the website connection leaves the publication `status = 'published'`, the hosted form page,
+the embed page, the public config endpoint and a real form submission (S4C attribution captured, exactly one
+notification) all still working -- proven by actually retiring a real connection and then actually submitting a
+real request through the still-live hosted form. Conversely, Disabling the Nemryn-form publication leaves an
+independent, separately-created `'website'` connection fully active and still able to accept a real public
+submission. Neither lifecycle can affect the other because they act on different rows in the same table.
+
+================================================================================================================
+REQUEST PROVENANCE
+================================================================================================================
+`transportation_requests.intake_integration_id` is never rewritten or nulled by retire (delete is refused for any
+row it references, by construction). Request Hub, the "Website" provenance badge, Request Detail, the S4C
+Acquisition panel, Trip relationships, notification history and Activity all continue to resolve exactly as
+before, since they all key off the Request row itself, not off the integration's current lifecycle state --
+verified directly: SQL "historical Request row still points at the (now retired) connection" and "historical
+Request still readable with provenance"; browser E2E confirms the same Request remains visible and the retired
+connection's website intake path is rejected going forward without disturbing anything already recorded. No
+internal identifier is ever displayed for old context; where the UI names the connection at all (Previous
+connections), it shows the plain website address, never a database id.
+
+================================================================================================================
+AUDIT
+================================================================================================================
+Two new whitelisted actions, both written by the same SECURITY DEFINER RPCs that perform the mutation (never a
+separate step that could be skipped): `website_connection_deleted` (Activity title "Website connection deleted"),
+`website_connection_retired` (Activity title "Website connection removed" -- "removed" chosen over "archived" per
+the brief; summary includes the website and, when useful, the preserved request count). Metadata is deliberately
+minimal: website address and connection-method preference (plus a point-in-time request count for retire) --
+never the Integration ID, a database id, a public form key, PHI, or any secret. A pre-delete audit event was
+considered and rejected as unnecessary: `audit_events.entity_id` has no FK to `request_intake_integrations`
+(confirmed directly against the schema, not assumed), so recording the event immediately after the DELETE, using
+the already-captured row values, is both simpler and exactly as durable.
+
+================================================================================================================
+FK SAFETY
+================================================================================================================
+Audited every FK into `request_intake_integrations` directly against `information_schema` before writing any
+code (not assumed): exactly two, both `transportation_requests(intake_integration_id, organization_id)` and
+`website_request_form_publications(intake_integration_id, organization_id)`, and both `NO ACTION` on delete --
+never `CASCADE`. This means a raw `DELETE` on a referenced row already fails at the database level by default;
+D2A's own eligibility check (zero Requests) is what makes the *intended* delete path succeed cleanly rather than
+relying on that failure as the safety net. `request_acquisition_attributions` and `notification_events` reference
+`request_id`/generic entity ids, never the integration, so they can never block or be corrupted by an integration
+delete. A `'nemryn_form'` row's own publication is never touched by these RPCs (rejected before reaching that
+logic), so the FK from `website_request_form_publications` is never exercised by D2A's delete path at all in
+practice -- confirmed structurally, since `delete_unused_request_intake_integration` refuses any non-`'website'`
+row before it would ever reach a DELETE statement.
+
+================================================================================================================
+RLS / PRIVILEGES
+================================================================================================================
+No new table. `request_intake_integrations` remains class A (RLS on, no policy, no anon/authenticated/service_role
+privilege beyond the existing service_role `SELECT` for the CORS lookup) -- the new `retired_at` column changes
+nothing about that posture. No `DELETE` privilege of any kind was granted to `authenticated`, `service_role` or
+`anon` on the raw table (asserted directly in SQL: `has_table_privilege(..., 'delete')` false for all three) --
+the ONLY way a row is ever removed is through `delete_unused_request_intake_integration`, a SECURITY DEFINER
+function granted `EXECUTE` to `authenticated` only, revoked from `public`/`anon`/`service_role`/`postgres`'s
+default grants explicitly. `retire_request_intake_integration` and `list_previous_website_connections` are the
+same: `authenticated` EXECUTE only, internal `has_org_role` enforcement, revoked everywhere else. `docs/security/
+database-privilege-contract.md` and `supabase/tests/privilege_contract_tests.sql` were both updated (authenticated
+RPC count 78 -> 81); `scripts/verify-db-privileges.sh local` = 0 violations of 28 both immediately after the
+migration and after the full regression pass; the drift-proof harness still detects every injected drift kind.
+
+================================================================================================================
+DELETE/SUBMISSION CONCURRENCY
+================================================================================================================
+The authoritative fix is a single change to the ONE shared canonical Request-creation primitive
+`_create_public_request` (used by both website intake and published-form submission): its integration lookup now
+takes `FOR SHARE`, and rejects `retired_at IS NOT NULL`. Combined with `delete_unused_request_intake_integration`'s
+own `FOR UPDATE` on the identical row, this makes the two paths genuinely serialise inside Postgres: whichever
+transaction acquires the row lock first determines the outcome, and the other transaction's own read (shared or
+exclusive) blocks until the first commits or rolls back -- never a race window where both can partially succeed.
+Proven with real concurrent OS processes (`website_connection_lifecycle_concurrency_test.sh` CASE A: 6 parallel
+submissions racing 1 delete on a genuinely unused integration): every run resolved to exactly one of the two valid
+outcomes (a Request committed and the delete was then correctly refused, OR the delete committed and every racing
+submission was then correctly rejected) -- never an orphaned Request, never a caller-visible error beyond the
+existing generic rejection.
+
+================================================================================================================
+RETIRE/SUBMISSION CONCURRENCY
+================================================================================================================
+Same underlying lock pair. CASE B (6 parallel submissions racing 1 retire on a genuinely used, active integration):
+retirement always eventually succeeded (retiring a used connection is exactly its purpose, so there is no
+"refusal" outcome to race against), every racing submission was deterministically either accepted (if it acquired
+the shared lock before the retire's exclusive lock) or cleanly rejected (if retirement committed first) -- no
+half-committed state, no orphaned Request, confirmed directly against the database after each run.
+
+================================================================================================================
+TARGETED E2E
+================================================================================================================
+`.tmp-qa/d2a-e2e.mjs` (untracked scratch, fictional tenants, production build via `next start`): Journey 1 (connect
+-> zero Requests -> Delete -> confirmation copy -> clean state -> row genuinely gone -> reconnect -> new external
+id), Journey 2 (connect -> one real Request -> Remove -> confirmation copy with no mention of the Nemryn form ->
+clean state -> Previous connections collapsed-then-opened with correct content and no ids -> historical Request
+still readable -> retired website intake rejected -> reconnect -> new external id), Journey 3 / D2 independence
+(publish a Nemryn form, seed a real Request through a second website connection, Remove that connection, verify
+the publication/hosted form/embed/submission/attribution/notification are all untouched, then connect a THIRD,
+independent website connection and disable the Nemryn form, verifying that connection stays active and can still
+accept a real submission), the hidden binding never exposing a Delete/Remove action, and role-based UI denial for
+Dispatcher/Driver/Platform Admin plus an API-level cross-tenant RPC denial for Org B's Admin. Final stable result:
+**48/48 PASS, 0 FAIL**, confirmed twice in a row with a clean process exit both times.
+
+Harness troubleshooting encountered and resolved along the way, disclosed in full (no product code changed for any
+of these):
+  - Local environment: two `supabase db reset --local` calls left Kong (the local API gateway) holding a stale
+    cached route to the Auth container's old internal Docker IP after Auth restarted, causing every signup to fail
+    with a generic upstream error. Diagnosed by reading Kong's own error log directly. Fixed both times with a full
+    `supabase stop` + `supabase start` (confirmed the schema and all data survived intact both times) -- a local
+    Docker networking quirk, unrelated to any Nemryn code.
+  - Repeated crashed/retried attempts left up to ~50 orphaned headless Chrome processes (each `newChromeSession`
+    that crashes mid-script skips its own cleanup); cleaned up directly (`pkill`) and confirmed by inspecting
+    `ps aux` before continuing -- this, not a code defect, is what caused one run to be silently killed by the OS
+    partway through with no error output.
+  - Genuine harness bugs found and fixed in `.tmp-qa/d2a-e2e.mjs` itself: (a) the confirmation dialog's OWN submit
+    button shares its exact visible text with the card's trigger button ("Delete connection" / "Remove
+    connection" / "Connect website"), so a naive "click the button with this text" helper could match either one;
+    fixed by excluding any button inside a `<dialog>` from trigger-matching, and by driving the dialog's own
+    submission through `form.requestSubmit()` rather than a second text-based click, everywhere in the script. (b)
+    One test scenario's own precondition was wrong: it tried to "Remove" a connection that had never actually
+    received a Request, so the app correctly offered "Delete connection" instead and the script's click legitimately
+    found nothing -- fixed by seeding a real Request through that connection first, matching the scenario's own
+    stated intent. (c) Fixture data used fixed (non-STAMP-suffixed) requester names, so a leftover row from an
+    earlier crashed attempt could make a "the matching Request" lookup ambiguous; fixed with an explicit cleanup
+    step at the start of the script, scoped by name prefix, matching the established SQL-suite convention.
+
+================================================================================================================
+FINAL D2 E2E
+================================================================================================================
+Per instruction, the full 183-check D2 suite was NOT re-run repeatedly during D2A development -- only the targeted
+D2A suite above, plus the existing D1/D2 SQL and concurrency suites, were used while iterating. After the targeted
+D2A E2E was stable and green, the full authoritative D2 browser E2E (`.tmp-qa/d2-e2e.mjs`, the same already-fixed
+harness -- fire-and-forget navigation clicks, the 40-minute watchdog, `D2_ONLY` modes, the privacy-regex key-scrub
+correction, all left exactly as they were, none reverted) was run exactly ONCE against the post-D2A schema and
+application build: **183/183 PASS, 0 FAIL, clean process exit**, confirming the D2A migration and its RPC/function
+changes (`_create_public_request`, `list_request_intake_integrations`, `create_request_intake_integration`,
+`set_request_intake_integration_active`, `update_request_intake_integration_origin`,
+`set_request_intake_integration_setup`) introduced no regression to hosted form, embed, publication, formVersion
+snapshot semantics, acquisition capture or existing website intake.
+
+================================================================================================================
+OPEN ISSUES
+================================================================================================================
+1. Recovery through a future audited support/admin workflow for a retired connection is explicitly out of scope
+   for D2A (brief §14) -- not built, not started.
+2. As with D2, no vanity/branded hosted domain and no site-wide first-touch attribution helper -- unchanged D3
+   scope.
+3. The local Kong/Auth stale-route quirk (see TARGETED E2E) is a pre-existing local development environment
+   behavior, not a Nemryn code issue; noted here in case a future session resets the local stack repeatedly in
+   quick succession and hits the same signup failures -- the fix is `supabase stop` + `supabase start`.
+4. This report addendum, the D2A migration, and every other D2A file are all uncommitted local changes -- nothing
+   has been committed, pushed, or deployed for D2 or D2A.
+
+================================================================================================================
+FILES CREATED (D2A)
+================================================================================================================
+supabase/migrations/20260921150000_website_connection_lifecycle.sql
+supabase/tests/website_connection_lifecycle_tests.sql
+supabase/tests/website_connection_lifecycle_concurrency_test.sh
+
+================================================================================================================
+FILES MODIFIED (D2A)
+================================================================================================================
+src/app/operations/settings/website-requests/actions.ts (deleteUnusedWebsiteConnectionAction,
+  removeUsedWebsiteConnectionAction)
+src/lib/operations/website-integration.ts (listPreviousWebsiteConnections, PreviousWebsiteConnection)
+src/lib/operations/website-integration-errors.ts ("delete" / "retire" operations + messages)
+src/components/operations/settings/WebsiteConnectionControls.tsx (DeleteConnectionDialog,
+  RemoveConnectionDialog, PreviousConnectionView)
+src/components/operations/settings/WebsiteRequestsOverview.tsx (destructive action wiring,
+  PreviousConnectionsSection, clean-state copy)
+src/app/operations/settings/website-requests/page.tsx (previousConnections data)
+src/lib/operations/activity-core.ts / activity-core.test.mjs (website_connection_deleted / _retired)
+src/lib/supabase/database.types.ts (regenerated after the migration)
+supabase/tests/privilege_contract_tests.sql (3 new RPCs)
+docs/security/database-privilege-contract.md (RPC count 78 -> 81; request_intake_integrations note)
+
+================================================================================================================
+UNUSED WEBSITE HARD DELETE:
+PASS
+
+USED WEBSITE HARD DELETE:
+BLOCKED
+
+USED WEBSITE RETIRE:
+PASS
+
+HISTORICAL REQUESTS:
+PRESERVED
+
+TEMPORARY DISABLE:
+PASS
+
+RETIRED REACTIVATION:
+BLOCKED
+
+RETIRED WEBSITE INTAKE:
+BLOCKED
+
+HIDDEN NEMRYN_FORM DELETE:
+BLOCKED
+
+HIDDEN NEMRYN_FORM RETIRE:
+BLOCKED
+
+NEMRYN FORM AFTER WEBSITE RETIRE:
+PASS
+
+VISIBLE WEBSITE AFTER FORM DISABLE:
+PASS
+
+PREVIOUS CONNECTIONS:
+PASS
+
+CLEAN SHEET:
+PASS
+
+NEW INTEGRATION ID:
+PASS
+
+DELETE/SUBMISSION RACE:
+PASS
+
+RETIRE/SUBMISSION RACE:
+PASS
+
+CROSS-TENANT:
+BLOCKED
+
+DISPATCHER:
+BLOCKED
+
+DRIVER:
+BLOCKED
+
+PLATFORM ADMIN:
+BLOCKED
+
+ACL CONTRACT:
+PASS
+
+LOCAL ACL VIOLATIONS:
+0/28
+
+TARGETED D2A E2E:
+PASS (48/48)
+
+FINAL AUTHORITATIVE D2 E2E:
+183/183
+
+TSC:
+PASS
+
+LINT:
+PASS
+
+UNIT:
+500/500
+
+BUILD:
+PASS
+
+D2 + D2A READY FOR PRODUCTION:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT IF PASS:
+
+Owner review
+-> combined D2 + D2A production release
+
+DO NOT BEGIN PRODUCTION RELEASE AUTOMATICALLY.
+
+DO NOT BEGIN D3.
+
+STOP.

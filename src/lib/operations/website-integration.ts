@@ -59,3 +59,31 @@ export async function listWebsiteIntegrations(organizationId: string): Promise<W
 export async function getWebsiteIntakeEndpoint(): Promise<string> {
   return `${await getAppOrigin()}${WEBSITE_INTAKE_PATH}`;
 }
+
+export interface PreviousWebsiteConnection {
+  website: string | null;
+  connectionMethod: string | null;
+  websiteManager: string | null;
+  retiredAt: string;
+  requestCount: number;
+}
+
+/**
+ * Retired website connections, for the collapsed "Previous connections" history (P1-COMM-D2A). Goes through
+ * `list_previous_website_connections`, which authorizes the caller as an Organization Admin and never returns a
+ * database id, Integration ID, public form key or any technical/credential detail -- a hard-deleted (never-used)
+ * connection is correctly absent here since it no longer exists anywhere. `organizationId` is ALWAYS the
+ * server-resolved workspace, never a browser value.
+ */
+export async function listPreviousWebsiteConnections(organizationId: string): Promise<PreviousWebsiteConnection[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("list_previous_website_connections", { p_organization_id: organizationId });
+  if (error) throw new Error("Failed to load previous website connections");
+  return (data ?? []).map((row) => ({
+    website: row.website,
+    connectionMethod: row.connection_method,
+    websiteManager: row.website_manager,
+    retiredAt: row.retired_at,
+    requestCount: Number(row.request_count),
+  }));
+}

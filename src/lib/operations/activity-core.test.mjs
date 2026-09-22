@@ -12,7 +12,7 @@ const helpers = {
 const ACTIONS = [
   "organization_created", "organization_settings_updated", "organization_operating_schedule_updated",
   "organization_services_configured", "organization_service_offerings_updated",
-  "website_integration_created", "website_integration_activated", "website_integration_disabled", "website_integration_origin_updated", "website_request_form_updated",
+  "website_integration_created", "website_integration_activated", "website_integration_disabled", "website_integration_origin_updated", "website_request_form_updated", "website_request_form_published", "website_request_form_unpublished", "website_connection_deleted", "website_connection_retired",
   "staff_invitation_created", "staff_invitation_resent", "staff_invitation_cancelled", "staff_invitation_accepted",
   "membership_role_changed", "membership_deactivated", "membership_reactivated", "notification_preferences_updated",
   "platform_organization_suspended", "platform_organization_reactivated",
@@ -54,6 +54,13 @@ test("services, schedule, website and notification summaries are readable", () =
   assert.equal(describeActivity({ action: "website_integration_created", actorName: "V", before: null, after: { external_id: "web_ABC", allowed_origins: ["https://www.example.com"], is_active: false } }, helpers).summary, "https://www.example.com");
   assert.equal(describeActivity({ action: "website_integration_origin_updated", actorName: "V", before: {}, after: { allowed_origins: ["https://new.example.com"], auto_disabled: true } }, helpers).summary, "Now https://new.example.com. Intake was turned off until reactivated.");
   assert.equal(describeActivity({ action: "website_request_form_updated", actorName: "V", before: null, after: { status: "ready", version: 2, created: false } }, helpers).summary, "Form is Ready");
+  assert.equal(describeActivity({ action: "website_request_form_published", actorName: "V", before: null, after: { status: "published", version: 1, first: true } }, helpers).title, "Website form published");
+  assert.equal(describeActivity({ action: "website_request_form_published", actorName: "V", before: null, after: { status: "published", version: 3, previous_status: "published", previous_version: 2 } }, helpers).summary, "nemryn-form-v3");
+  assert.equal(describeActivity({ action: "website_request_form_published", actorName: "V", before: null, after: { status: "published", version: 3, previous_status: "disabled", previous_version: 3 } }, helpers).title, "Website form turned back on");
+  assert.equal(describeActivity({ action: "website_request_form_unpublished", actorName: "V", before: null, after: { status: "disabled", version: 3 } }, helpers).title, "Website form disabled");
+  assert.equal(describeActivity({ action: "website_connection_deleted", actorName: "V", before: null, after: { website: "https://www.example.test" } }, helpers).title, "Website connection deleted");
+  assert.equal(describeActivity({ action: "website_connection_retired", actorName: "V", before: null, after: { website: "https://www.example.test", connection_method: "developer", request_count: 3 } }, helpers).summary, "https://www.example.test — 3 requests preserved");
+  assert.equal(describeActivity({ action: "website_connection_retired", actorName: "V", before: null, after: { website: "https://www.example.test", request_count: 1 } }, helpers).summary, "https://www.example.test — 1 request preserved");
   assert.equal(describeActivity({ action: "website_request_form_updated", actorName: "V", before: null, after: { status: "draft", version: 1, created: true } }, helpers).title, "Website request form created");
   assert.equal(describeActivity({ action: "notification_preferences_updated", actorName: "V", before: {}, after: { event_type: "website_request", recipient_roles: ["organization_admin", "dispatcher"] } }, helpers).summary, "New website request: Organization Admins and Dispatchers");
   assert.equal(describeActivity({ action: "notification_preferences_updated", actorName: "V", before: {}, after: { event_type: "trip_exception", recipient_roles: [] } }, helpers).summary, "Trip exception: Off");

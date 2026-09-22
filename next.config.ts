@@ -16,6 +16,39 @@ const nextConfig: NextConfig = {
       // The Driver workspace is authenticated, per-user data: never stored by a browser
       // cache, an intermediary or bfcache (P1-PILOT-S5A cache policy).
       { source: "/driver/:path*", headers: [{ key: "Cache-Control", value: "private, no-store, max-age=0" }] },
+      // P1-COMM-D2 public request form. The HOSTED page is never framed (clickjacking); only the dedicated EMBED page may be
+      // framed, so the rest of the app keeps its current (unchanged) framing behaviour. frame-ancestors cannot be narrowed to the
+      // operator's website reliably (they may embed on any staging / builder preview domain) so the publication + rate limit,
+      // not framing, remain the authoritative controls for submissions. Both pages: not indexed, referrer trimmed to an origin.
+      {
+        source: "/request/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
+      {
+        source: "/embed/request/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors *" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
+      // The embed loader is a public static script (cached briefly so a fix reaches sites within minutes).
+      {
+        source: "/embed/request-form.js",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=3600" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Access-Control-Allow-Origin", value: "*" },
+        ],
+      },
+      { source: "/api/public-forms/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
     ];
   },
   // Pin the workspace root explicitly: this project's git repo root is the

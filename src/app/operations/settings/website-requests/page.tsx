@@ -1,10 +1,11 @@
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getWebsiteIntakeEndpoint, listWebsiteIntegrations } from "@/lib/operations/website-integration";
+import { getWebsiteIntakeEndpoint, listPreviousWebsiteConnections, listWebsiteIntegrations } from "@/lib/operations/website-integration";
 import { deriveWebsiteIntegrationStatus, formatIntegrationDate, formatIntegrationTimestamp } from "@/lib/operations/website-integration-core";
 import { getServiceOfferings } from "@/lib/operations/organization-services";
 import { summarizeServices } from "@/lib/operations/organization-services-core";
 import { getWebsiteRequestForm } from "@/lib/operations/website-request-form";
+import { getWebsiteRequestFormPublication } from "@/lib/operations/website-request-form-publication";
 import {
   WEBSITE_REQUESTS_STATUS_EXPLANATION,
   WEBSITE_REQUESTS_STATUS_LABEL,
@@ -29,11 +30,13 @@ export default async function WebsiteRequestsPage() {
   const pathname = await getCurrentPathname("/operations/settings/website-requests");
   const organization = await requireOrganizationAdminAccess(pathname);
 
-  const [integrations, endpoint, services, form] = await Promise.all([
+  const [integrations, endpoint, services, form, publication, previous] = await Promise.all([
     listWebsiteIntegrations(organization.organizationId),
     getWebsiteIntakeEndpoint(),
     getServiceOfferings(organization.organizationId).catch(() => null),
     getWebsiteRequestForm(organization.organizationId).catch(() => null),
+    getWebsiteRequestFormPublication(organization.organizationId).catch(() => null),
+    listPreviousWebsiteConnections(organization.organizationId).catch(() => []),
   ]);
 
   const tz = organization.organizationTimezone;
@@ -68,7 +71,23 @@ export default async function WebsiteRequestsPage() {
         endpoint={endpoint}
         formState={deriveFormState(form)}
         formVersionLabel={form ? formVersionLabel(form.version) : null}
+        publication={
+          publication
+            ? {
+                status: publication.status,
+                versionLabel: formVersionLabel(publication.publishedVersion),
+                requestCount: publication.requestCount,
+                lastRequestReceived: formatIntegrationTimestamp(publication.lastRequestReceivedAt, tz),
+              }
+            : null
+        }
         servicesSummary={services === null ? null : { configured: services.length > 0, text: summarizeServices(services) }}
+        previousConnections={previous.map((connection) => ({
+          website: connection.website,
+          connectionMethod: connection.connectionMethod,
+          retiredAt: formatIntegrationDate(connection.retiredAt, tz),
+          requestCount: connection.requestCount,
+        }))}
       />
     </div>
   );

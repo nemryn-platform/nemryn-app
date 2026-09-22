@@ -10,7 +10,7 @@ const { sanitizeAcquisition } = await import("../public-intake/website-intake-co
 
 const {
   WEBSITE_REQUESTS_STATUS_LABEL, WEBSITE_REQUESTS_STATUS_EXPLANATION, CONNECTION_METHOD_CARDS, connectionMethodLabel, WEBSITE_MANAGER_OPTIONS,
-  existingFormGuidance, nemrynFormPlacementGuidance, FORM_SERVICE_VALUES, FORM_LIMITS, DEFAULT_FORM_CONFIG, deriveFormState, formVersionLabel,
+  existingFormGuidance, nemrynFormPlacementGuidance, embedPlacementGuidance, derivePublicationState, publishAction, formConnectionStatus, buildHostedFormUrl, buildEmbedSnippet, buildIframeFallback, FORM_SERVICE_VALUES, FORM_LIMITS, DEFAULT_FORM_CONFIG, deriveFormState, formVersionLabel,
   validateFormInput, effectiveFormServices, formServicesNeedAttention, buildFormPreview, buildDeveloperPackage, isWebsiteManager,
 } = core;
 
@@ -68,13 +68,52 @@ test("'I'm not sure' never dead-ends: it offers both next steps", () => {
   for (const other of WEBSITE_MANAGER_OPTIONS.filter((o) => o.value !== "not_sure")) assert.equal(existingFormGuidance(other.value).offerNextSteps, false);
 });
 
-test("Nemryn-form placement guidance describes the NEXT step, not something that exists today", () => {
+test("embed placement guidance: concrete, precise about platform limits, never a native-integration / plugin claim", () => {
   for (const { value } of WEBSITE_MANAGER_OPTIONS) {
-    const t = nemrynFormPlacementGuidance(value);
-    assert.match(t, /next step will give you an embed/i, value);
-    assert.doesNotMatch(t, /plugin|app store|one-click/i, value);
+    const g = embedPlacementGuidance(value);
+    assert.ok(g.where.length > 20, value);
+    const t = `${g.where} ${g.limits ?? ""} ${nemrynFormPlacementGuidance(value)}`;
+    assert.doesNotMatch(t, /plugin|app store|marketplace|one-click|automatically connects|certified|official integration/i, value);
   }
+  assert.match(embedPlacementGuidance("wordpress").where, /Custom HTML block/);
+  assert.match(embedPlacementGuidance("wix").where, /Embed HTML/);
+  assert.match(embedPlacementGuidance("wix").limits, /own frame/);
+  assert.match(embedPlacementGuidance("squarespace").where, /Code Block/);
+  assert.match(embedPlacementGuidance("squarespace").limits, /depends on your Squarespace plan/);
+  assert.match(embedPlacementGuidance("webflow").where, /Embed element/);
+  // builders that may strip scripts always name the fallback
+  for (const m of ["wordpress", "squarespace", "other_builder"]) assert.match(embedPlacementGuidance(m).limits, /iframe version|hosted form/i, m);
 });
+
+test("publication state, publish action and connection status are three separate concepts", () => {
+  assert.equal(derivePublicationState(null), "NOT_PUBLISHED");
+  assert.equal(derivePublicationState({ status: "published" }), "PUBLISHED");
+  assert.equal(derivePublicationState({ status: "disabled" }), "DISABLED");
+  assert.equal(publishAction(null, null), "not_ready");
+  assert.equal(publishAction({ status: "draft", version: 1 }, null), "not_ready");
+  assert.equal(publishAction({ status: "ready", version: 1 }, null), "publish");
+  assert.equal(publishAction({ status: "ready", version: 3 }, { status: "published", publishedVersion: 3 }), "up_to_date");
+  assert.equal(publishAction({ status: "ready", version: 4 }, { status: "published", publishedVersion: 3 }), "update");
+  assert.equal(publishAction({ status: "ready", version: 3 }, { status: "disabled", publishedVersion: 3 }), "republish");
+  // editing back to Draft never un-publishes: the action is just not_ready, the publication is untouched
+  assert.equal(publishAction({ status: "draft", version: 5 }, { status: "published", publishedVersion: 3 }), "not_ready");
+  // Published is NOT Connected
+  assert.equal(formConnectionStatus(null), "NOT_CONFIGURED");
+  assert.equal(formConnectionStatus({ status: "published", requestCount: 0 }), "READY_TO_TEST");
+  assert.equal(formConnectionStatus({ status: "published", requestCount: 1 }), "CONNECTED");
+  assert.equal(formConnectionStatus({ status: "disabled", requestCount: 9 }), "DISABLED");
+});
+
+test("hosted URL / embed snippet / iframe fallback: opaque key only, no credentials, no internal ids", () => {
+  const key = "form_0123456789abcdef0123456789abcdef";
+  assert.equal(buildHostedFormUrl("https://app.example.test/", key), "https://app.example.test/request/" + key);
+  const snippet = buildEmbedSnippet("https://app.example.test", key);
+  assert.equal(snippet, `<div data-nemryn-request-form="${key}"></div>\n<script src="https://app.example.test/embed/request-form.js" async></script>`);
+  const iframe = buildIframeFallback("https://app.example.test", key);
+  assert.match(iframe, /^<iframe src="https:\/\/app\.example\.test\/embed\/request\/form_[0-9a-f]{32}"/);
+  for (const t of [snippet, iframe]) assert.doesNotMatch(t, /supabase|service_role|eyJ|sb_|integration|web_[A-Z0-9]{6}|[0-9a-f]{8}-[0-9a-f]{4}-/i);
+});
+
 
 test("service list parity: form, Services & Intake and the intake allow-list are the same closed set", () => {
   assert.deepEqual([...FORM_SERVICE_VALUES], SERVICE_OFFERING_OPTIONS.map((o) => o.value));
@@ -141,7 +180,7 @@ test("preview: canonical fields only; required fields cannot be hidden; services
   assert.ok(withRecurring.sections.flatMap((s) => s.fields).some((f) => f.key === "recurring"));
   assert.equal(withRecurring.sections.flatMap((s) => s.fields).some((f) => f.key === "serviceType"), false);
   // every preview field key exists in the canonical intake payload
-  const allowed = new Set(["serviceType", "pickupDescription", "destinationDescription", "preferredDate", "preferredTime", "returnTripNeeded", "recurring", "assistanceNotes", "passengerName", "requesterName", "requesterRelationship", "requesterPhone", "requesterEmail", "additionalNotes"]);
+  const allowed = new Set(["serviceType", "pickupDescription", "destinationDescription", "preferredDate", "preferredTime", "returnTripNeeded", "recurring", "assistanceNotes", "passengerName", "requesterName", "requesterRelationship", "requesterPhone", "requesterEmail", "additionalNotes", "recurringDays", "recurringStartDate", "recurringEndDate", "recurringTime"]);
   for (const f of fields) assert.ok(allowed.has(f.key), f.key);
 });
 
@@ -149,7 +188,7 @@ test("preview copy makes no operational claims (emergency / guaranteed / ambulan
   const p = buildFormPreview({ organizationName: "Acme", config: DEFAULT_FORM_CONFIG, services: [...FORM_SERVICE_VALUES], version: 1 });
   const text = JSON.stringify({ t: p.title, i: p.intro, c: p.confirmationMessage, s: p.submitLabel });
   assert.doesNotMatch(text, /guarantee|ambulance|emergency service|medicaid|24\/7|available now|we will pick you up/i);
-  assert.match(p.safetyNote, /call 911/);
+  assert.match(p.safetyNote, /non-emergency.*local emergency service/);
 });
 
 test("developer package: required technical content, and no secrets / internal ids / RPC names", () => {

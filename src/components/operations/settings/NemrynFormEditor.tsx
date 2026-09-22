@@ -4,7 +4,7 @@ import { useActionState, useMemo, useState, useTransition, type FormEvent } from
 import { saveWebsiteRequestFormAction, type WebsiteRequestFormActionState } from "@/app/operations/settings/website-requests/actions";
 import { FormPreview } from "./FormPreview";
 import { UseMethodForm } from "./ConnectionSetupControls";
-import { CopyValue } from "./CopyValue";
+import { FormPublishPanel, type FormPublishPanelProps } from "./FormPublishPanel";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
@@ -14,14 +14,12 @@ import {
   FORM_SERVICE_LABELS,
   FORM_SERVICE_VALUES,
   FORM_STATE_LABEL,
-  WEBSITE_MANAGER_OPTIONS,
   buildFormPreview,
   deriveFormState,
   effectiveFormServices,
   formServicesNeedAttention,
   formVersionLabel,
   isWebsiteManager,
-  nemrynFormPlacementGuidance,
   type FormConfig,
   type WebsiteManager,
 } from "@/lib/operations/website-requests-core";
@@ -39,10 +37,13 @@ export interface NemrynFormEditorProps {
   orgServices: string[];
   connectionHandle: string | null;
   websiteManager: string | null;
+  /** P1-COMM-D2: publication state of the SAVED form (null = never published) and this deployment's origin. */
+  publication: FormPublishPanelProps["publication"];
+  origin: string;
 }
 
 /** Nemryn form configuration: the operator chooses wording and which offered services appear. Fields required by intake can't be hidden. */
-export function NemrynFormEditor({ organizationName, saved, initial, orgServices, connectionHandle, websiteManager }: NemrynFormEditorProps) {
+export function NemrynFormEditor({ organizationName, saved, initial, orgServices, connectionHandle, websiteManager, publication, origin }: NemrynFormEditorProps) {
   const [state, action, pending] = useActionState(saveWebsiteRequestFormAction, IDLE);
   const [, startTransition] = useTransition();
   const [title, setTitle] = useState(initial.title);
@@ -54,7 +55,7 @@ export function NemrynFormEditor({ organizationName, saved, initial, orgServices
   const [allowRecurring, setAllowRecurring] = useState(initial.allowRecurring);
   const [requireService, setRequireService] = useState(initial.requireServiceChoice);
   const [status, setStatus] = useState<"draft" | "ready">(initial.status);
-  const [manager, setManager] = useState<WebsiteManager | "">(isWebsiteManager(websiteManager) ? websiteManager : "");
+  const manager: WebsiteManager | "" = isWebsiteManager(websiteManager) ? websiteManager : "";
 
   const orgOffered = useMemo(() => effectiveFormServices(orgServices, null), [orgServices]);
   const offeredNow = effectiveFormServices(orgServices, allServices ? null : subset);
@@ -74,7 +75,11 @@ export function NemrynFormEditor({ organizationName, saved, initial, orgServices
   const preview = buildFormPreview({ organizationName, config: draftConfig, services: offeredNow, version: previewVersion });
   const formState = deriveFormState(saved);
   const fieldError = (field: string) => (state.status === "error" && state.field === field ? state.message : undefined);
-  const placement = manager ? nemrynFormPlacementGuidance(manager) : null;
+  const dirty = saved
+    ? saved.status !== draftConfig.status || saved.title !== draftConfig.title || (saved.introText ?? null) !== draftConfig.introText || saved.submitLabel !== draftConfig.submitLabel
+      || saved.confirmationMessage !== draftConfig.confirmationMessage || saved.allowRecurring !== draftConfig.allowRecurring || saved.requireServiceChoice !== draftConfig.requireServiceChoice
+      || JSON.stringify(saved.offeredServiceTypes === null ? null : [...saved.offeredServiceTypes].sort()) !== JSON.stringify(draftConfig.offeredServiceTypes === null ? null : [...draftConfig.offeredServiceTypes].sort())
+    : false;
 
   // Submitted through a handler instead of <form action>: React resets an action form's DOM after it runs, which would
   // desynchronise these controlled radios/checkboxes from their state and make the next save silently change the form.
@@ -103,7 +108,7 @@ export function NemrynFormEditor({ organizationName, saved, initial, orgServices
             Set up the form your passengers and families will see. Nemryn always asks for the details dispatch needs to schedule a trip, so those questions can&apos;t be removed.
           </p>
           <p className={cn(typography.metadata, "text-text-muted")}>
-            Changing the form doesn&apos;t change whether your website is connected. Placing the form on your website comes next.
+            Editing the form never changes what is live: publish below when you&apos;re ready. Publishing is separate from whether a website is connected.
           </p>
         </Panel>
 
@@ -191,29 +196,21 @@ export function NemrynFormEditor({ organizationName, saved, initial, orgServices
           </Panel>
         </form>
 
-        <Panel className="flex flex-col gap-zw-sm">
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Where will this form go?</h3>
-          <label className={cn(typography.bodySmall, "flex flex-col gap-1 text-text-primary")}>
-            Who manages your website?
-            <select
-              value={manager}
-              onChange={(e) => setManager(isWebsiteManager(e.target.value) ? e.target.value : "")}
-              className="w-full max-w-xs rounded-sm border border-border-subtle bg-surface-primary px-3 py-2 text-text-primary"
-            >
-              <option value="">Choose…</option>
-              {WEBSITE_MANAGER_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-          {placement && <p className={cn(typography.bodySmall, "text-text-secondary")}>{placement}</p>}
-          {connectionHandle ? (
+        <FormPublishPanel
+          savedForm={saved ? { status: saved.status, version: saved.version } : null}
+          dirty={dirty}
+          publication={publication}
+          origin={origin}
+          websiteManager={websiteManager}
+        />
+
+        {connectionHandle && (
+          <Panel className="flex flex-col gap-zw-sm">
+            <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Your website connection</h3>
+            <p className={cn(typography.bodySmall, "text-text-secondary")}>Note on your website connection that you use a Nemryn form. This only changes the instructions Nemryn shows you.</p>
             <UseMethodForm handle={connectionHandle} method="nemryn_form" manager={manager || null} label="Use a Nemryn form for my website" />
-          ) : (
-            <p className={cn(typography.metadata, "text-text-muted")}>Connect your website on the Website Requests page to finish setting up.</p>
-          )}
-          {manager && placement && <CopyValue value={placement} label="placement guidance" buttonLabel="Copy these instructions" size="md" />}
-        </Panel>
+          </Panel>
+        )}
       </div>
 
       <div className="flex flex-col gap-zw-sm lg:sticky lg:top-4 lg:self-start">

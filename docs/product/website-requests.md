@@ -30,6 +30,9 @@ Pure presentation of the (possibly unsaved) configuration: no `<form>`, no netwo
 ## Developer package
 Copy-ready text: endpoint, Integration ID, approved website / `Origin` requirement (a restriction, not a password), JSON payload, optional acquisition object, idempotency key, example server configuration, test steps. It never contains a service-role key, Supabase details, database ids, internal RPC names or the organization id.
 
+## Superseded by D2
+The "Not in D1" limits below were lifted by P1-COMM-D2 (hosted form, embed, publication, acquisition capture) — see [website-request-form-publication.md](website-request-form-publication.md).
+
 ## Not in D1 (handoff to D2)
 No public/hosted form, no embed, no acquisition capture script, no binding of a form configuration to a specific integration (the configuration is per organization; D2 decides how a published form is served and stamps `formVersion`). The Nemryn-form page says placement comes next.
 
