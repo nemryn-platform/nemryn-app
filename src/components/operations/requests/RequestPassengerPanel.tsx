@@ -9,6 +9,7 @@ import { IconButton } from "@/components/ui/IconButton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Combobox } from "@/components/ui/Combobox";
 import { AddPassengerDialog } from "@/components/operations/new-trip/AddPassengerDialog";
+import { requestPassengerPrefill } from "@/lib/operations/request-passenger-prefill";
 import { linkPassengerAction, type LinkPassengerActionState } from "@/app/operations/requests/[requestId]/actions";
 import { linkPassengerErrorMessage } from "@/lib/operations/link-passenger-errors";
 import type { NewTripPassengerOption } from "@/lib/operations/new-trip-options";
@@ -51,7 +52,8 @@ export interface RequestPassengerPanelProps {
  *     below once opened.
  *   - Unresolved + pending: explicit "Search existing Passenger"
  *     (Combobox, selection alone never mutates anything — §14) +
- *     "Add New Passenger" (reuses AddPassengerDialog unmodified) +  an
+ *     "Add New Passenger" (reuses AddPassengerDialog; P1-OPS-R1A prefills Full Name
+ *     from the requested-passenger snapshot only, editable, never requester data) + an
  *     explicit "Link Passenger" confirm step.
  *   - Not linkable (declined/cancelled, or a Trip already exists), OR
  *     linked+active: plain read-only presentation, no actions at all —
@@ -263,6 +265,7 @@ export function RequestPassengerPanel({
 
       {addPassengerOpen && (
         <AddPassengerDialog
+          initialDisplayName={requestPassengerPrefill(requestedPassengerName).displayName}
           onClose={() => setAddPassengerOpen(false)}
           onCreated={(created) => {
             setCandidates((prev) => [...prev, created]);

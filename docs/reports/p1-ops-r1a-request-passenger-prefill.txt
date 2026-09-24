@@ -1,0 +1,151 @@
+NEMRYN PLATFORM
+P1-OPS-R1A -- REQUEST PASSENGER PREFILL
+Local implementation only. NOT committed, NOT pushed, NOT deployed. No migration, no Supabase change. The real Zenward
+Request and the old Zenward organization were not touched. D3 / S5B not started. Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+main at e354356 ("docs: record P1-OPS-R1 production release", local; origin/main = 71c5676, the released R1 commit).
+Production runs P1-OPS-R1 + R1R (final ACL 0/29). Trigger: during real Zenward owner QA, "Add New Passenger" on a
+Request opened with a blank Full Name even though the Request shows "Requested passenger: <name>".
+
+======================================================================
+CURRENT ADD PASSENGER FLOW   (audited before changing anything)
+======================================================================
+AddPassengerDialog (src/components/operations/new-trip/AddPassengerDialog.tsx) is shared by four entry points:
+Request Detail (RequestPassengerPanel), New Trip, Log Request and the Passengers page.
+  - fields: Full Name (displayName, required) and Phone. There is NO email field.
+  - uncontrolled inputs, no initial-value prop; mounted only while open (`{open && <AddPassengerDialog/>}`), so
+    Cancel / X / ESC unmount it: no draft survives and a reopen starts fresh (the existing Nemryn convention)
+  - submit -> addPassengerAction (server action): trims, requires a name, then an RLS-protected `passengers`
+    INSERT scoped to the session organization (organization_id never taken from the client)
+  - on Request Detail, onCreated then auto-submits the existing Link Passenger form -> link_request_passenger RPC
+    (R1 rules: pending, or accepted with no Trip yet; never changes the decision state)
+Request data: transportation_requests.requested_passenger_name (website intake snapshot, P1-PILOT-S4B-R2A) plus the
+requester fields (requester_name / relationship / phone / email). No passenger phone or passenger email field exists
+on the Request.
+Duplicate handling: none exists at Passenger creation (the "Search existing Passenger" combobox is the first
+option). Nothing to preserve; nothing added.
+
+======================================================================
+PREFILL DECISION
+======================================================================
+When Add New Passenger is opened FROM a Request, Full Name starts with the Request's requested_passenger_name
+(trimmed). It is only an initial value: the operator may edit, extend or replace it, and nothing is created or linked
+until "Add Passenger" is submitted. The other three entry points are unchanged (blank).
+
+======================================================================
+SOURCE FIELD
+======================================================================
+requested_passenger_name ONLY, through the pure helper requestPassengerPrefill(requestedPassengerName)
+(src/lib/operations/request-passenger-prefill.ts), whose single input makes requester data unreachable. Empty,
+whitespace or null -> blank. No fallback to requester_name, even for relationship = self (per the brief: prefer no
+fallback to guessing).
+
+======================================================================
+REQUESTER / PASSENGER SEPARATION
+======================================================================
+The Request stays the historical evidence of what was submitted; the Passenger record holds what the operator
+confirms. Request Detail still shows "Requested passenger" and "Linked passenger" as separate concepts. E2E: requester
+"Victor Example" is never copied; the new Passenger is the edited "Angela N. Example" while requested_passenger_name
+stays "Angela Example".
+
+======================================================================
+EDITABILITY
+======================================================================
+The value seeds the existing uncontrolled <Input> via defaultValue: not read-only, not disabled, no "verified"
+styling. E2E asserts readOnly = false / disabled = false and submits an edited value.
+
+======================================================================
+PHONE / EMAIL DECISION
+======================================================================
+Phone: always blank. The Request has no passenger phone, and the requester's phone belongs to the requester
+(E2E: requester phone (404) 555-0123 not copied; the created Passenger's phone is NULL).
+Email: unchanged. The dialog has no email field, and requester email is never used.
+
+======================================================================
+CANCEL / CLOSE
+======================================================================
+Existing convention kept: Cancel and X (and ESC / backdrop) unmount the dialog without submitting. E2E: edit ->
+Cancel -> 0 Passengers created; reopen -> starts again from the snapshot; edit -> X -> 0 Passengers created. No
+browser persistence introduced.
+
+======================================================================
+PASSENGER CREATION
+======================================================================
+Unchanged: same server action, same trimming / required validation, same RLS-protected insert, same auto-link through
+link_request_passenger. The prefill only sets an initial input value, so no validation path is bypassed (an emptied
+field still fails `required` in the browser and on the server). No new RPC, table, migration or authorization
+change; creation stays server-side.
+
+======================================================================
+REQUEST SNAPSHOT PRESERVATION
+======================================================================
+Nothing writes requested_passenger_name or any requester field. E2E: md5 of every Request column except state /
+updated_at / passenger_id is identical before and after, and requested_passenger_name is still the original.
+
+======================================================================
+READINESS
+======================================================================
+Existing R1 logic, unchanged: after linking, the Request stays accepted, readiness becomes "Ready to schedule", and
+Create Trip is offered. No Trip is created until the operator chooses Create Trip (E2E: 0 Trips).
+
+======================================================================
+TESTS
+======================================================================
+Unit: src/lib/operations/request-passenger-prefill.test.mjs, 4/4 (A prefill, trim, F blank / no fallback, G/H only
+the snapshot is an input and phone is blank). Full suite: 513/513.
+Browser E2E (.tmp-qa/p1-ops-r1a-prefill-e2e.mjs; local production build + local Supabase; fictional seed Org A as
+Dispatcher; Requests created through the real website-intake route with requester "Victor Example" (phone + email)
+and requested passenger "Angela Example"): 24/24 PASS.
+  A prefill; G requester name not used; H phone blank + no email copied; editable; D Cancel -> none created;
+  reopen -> snapshot again; E X -> none created; nothing linked before confirm; B/I edited name created + linked,
+  exactly one Passenger, phone NULL; C snapshot + provenance unchanged; J still accepted; K Ready to schedule +
+  Create Trip available; L no Trip; UI keeps Requested vs Linked separate; F no snapshot -> blank; regression: New
+  Trip's Add New Passenger still opens blank.
+tsc PASS. lint PASS (0 errors; 90 warnings, all in untracked .tmp-qa/, 0 in src). build PASS.
+Release-time PHI review: the unit-test fixtures first used the real Zenward passenger's name (taken from the owner's
+QA description). Before commit they were replaced with the fictional "Angela Example" (tests only; 4/4 still pass).
+The committed tree and the outgoing history contain no real passenger name.
+No SQL regression run: no database, RPC or security change (the brief's condition).
+
+======================================================================
+FILES MODIFIED
+======================================================================
+Created:  src/lib/operations/request-passenger-prefill.ts
+          src/lib/operations/request-passenger-prefill.test.mjs
+          docs/reports/p1-ops-r1a-request-passenger-prefill.txt
+          .tmp-qa/p1-ops-r1a-prefill-e2e.mjs (untracked QA harness)
+Modified: src/components/operations/new-trip/AddPassengerDialog.tsx  (optional initialDisplayName -> Full Name
+                                                                     defaultValue; doc comment)
+          src/components/operations/requests/RequestPassengerPanel.tsx (passes the snapshot prefill; doc comment)
+
+======================================================================
+OPEN ISSUES
+======================================================================
+1. Duplicate-passenger detection is still deferred (the brief puts it out of scope); "Search existing Passenger"
+   remains the first option.
+2. The same prefill also applies in the existing inactive-linked-Passenger recovery flow (same dialog on the same
+   panel). This is intentional: the snapshot is the right starting point there too.
+3. After release, the owner verifies manually with the real Zenward Request.
+
+REQUESTED PASSENGER PREFILL:       PASS
+PREFILL EDITABLE:                  PASS
+REQUESTER NAME AUTO-COPIED:        NO
+REQUESTER PHONE AUTO-COPIED:       NO
+REQUESTER EMAIL AUTO-COPIED:       NO
+REQUEST SNAPSHOT MUTATED:          NO
+PASSENGER CREATED BEFORE CONFIRM:  NO
+REQUEST STATE AFTER LINK:          ACCEPTED
+READY TO SCHEDULE AFTER LINK:      PASS
+TRIP AUTO-CREATED:                 NO
+TSC:                               PASS
+LINT:                              PASS
+UNIT:                              513/513
+BUILD:                             PASS
+READY FOR PRODUCTION RELEASE:      YES
+BLOCKERS:                          NONE
+
+DO NOT DEPLOY.
+STOP.
