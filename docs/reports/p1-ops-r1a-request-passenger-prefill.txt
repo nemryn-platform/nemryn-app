@@ -149,3 +149,114 @@ BLOCKERS:                          NONE
 
 DO NOT DEPLOY.
 STOP.
+
+
+######################################################################
+P1-OPS-R1A -- PRODUCTION RELEASE
+######################################################################
+Released 2026-09-24. Application-only: no migration, RPC, RLS, privilege or Supabase change. The production ACL stays
+as released for R1 (0/29); nothing in this release touches it. Synthetic QA tenant "Siloan Medical Centre" only; the
+real Zenward Request and the old Zenward organization were not touched.
+
+======================================================================
+RELEASE COMMIT
+======================================================================
+e9cd8f1  "fix: prefill passenger name from request snapshot"   (author Nemryn <nemryn.app@gmail.com>)
+Scope: exactly request-passenger-prefill.ts (+ test), AddPassengerDialog.tsx, RequestPassengerPanel.tsx and this
+report. Pre-commit gate: tsc PASS, lint PASS (0 errors, 0 warnings in src), unit 513/513, build PASS.
+PHI review caught a real passenger name in the unit-test fixtures (see TESTS). It was replaced with a fictional name
+before commit; `git grep` on the pushed tree and the outgoing history found no occurrence.
+
+======================================================================
+GITHUB PUSH
+======================================================================
+Identity nemryn. One push, no force: 71c5676..e9cd8f1. It also carried the earlier local-only commit e354356
+("docs: record P1-OPS-R1 production release"). Local HEAD == origin/main == e9cd8f1. PASS.
+
+======================================================================
+VERCEL
+======================================================================
+Existing nemryn/nemryn-app project (no new project). Commit status e9cd8f1: "Vercel success -- Deployment has
+completed". https://app.nemryn.com serves the new build (the prefill below only exists in e9cd8f1). PASS.
+
+======================================================================
+SYNTHETIC PREFILL
+======================================================================
+.tmp-qa/r1a-prod-smoke.mjs: 25/25 PASS. One synthetic Request was created through Siloan's own hosted form, the only
+way to record requested_passenger_name. The form was published for that single submission and disabled straight
+after (Siloan ends with no active intake path, as before). Requester "Victor Example R1A-<stamp>" (family, phone
+555-0194, fictional email), requested passenger "Angela Example"; Request pending, then accepted (R1).
+Add New Passenger -> Full Name "Angela Example".
+
+======================================================================
+EDITABILITY
+======================================================================
+Full Name is not read-only or disabled. Edited to "Angela N. Example" and submitted.
+
+======================================================================
+CANCEL/CLOSE
+======================================================================
+Edit -> Cancel: dialog closed, 0 Passengers created. Reopen: Full Name back to "Angela Example". Edit -> X: dialog
+closed, 0 Passengers created.
+
+======================================================================
+REQUEST SNAPSHOT
+======================================================================
+After the Passenger was created and linked: requested_passenger_name is still "Angela Example", and the md5 of every
+Request column except state / updated_at / passenger_id is identical to before.
+
+======================================================================
+REQUESTER CONTACT SEPARATION
+======================================================================
+Phone blank. No dialog input contained the requester's name, phone or email. The created Passenger's phone is NULL.
+
+======================================================================
+READINESS
+======================================================================
+Passenger "Angela N. Example" created + linked (exactly one new Passenger). Request remains Accepted; "Ready to
+schedule"; Create Trip offered; 0 Trips (none auto-created).
+
+======================================================================
+OTHER ENTRY POINTS
+======================================================================
+Production: New Trip, the Passengers page and Log Request each open Add New Passenger with a blank Full Name.
+Cancelled; no Passenger created. R1A stays Request-specific.
+
+======================================================================
+REAL ZENWARD OWNER QA
+======================================================================
+NOT automated (by design). The owner opens the real Zenward Request -> Add New Passenger. Expected: Full Name =
+the Request's requested passenger name; Phone blank; name editable before confirming. After Add Passenger: Request
+stays Accepted, "Ready to schedule", Create Trip available. The owner decides whether to create the actual Trip.
+STATUS: PENDING (owner).
+
+Synthetic data added to Siloan: 1 Request (requester "Victor Example R1A-<stamp>") and 1 Passenger
+"Angela N. Example". No Trip.
+
+R1A RELEASE COMMIT:           e9cd8f1
+GITHUB PUSH:                  PASS
+VERCEL:                       PASS
+APP.NEMRYN.COM:               PASS
+REQUESTED PASSENGER PREFILL:  PASS
+PREFILL EDITABLE:             PASS
+PHONE BLANK:                  PASS
+REQUESTER CONTACT COPIED:     NO
+CANCEL CREATES PASSENGER:     NO
+REQUEST SNAPSHOT PRESERVED:   PASS
+REQUEST REMAINS ACCEPTED:     PASS
+READY TO SCHEDULE:            PASS
+TRIP AUTO-CREATED:            NO
+OTHER ENTRY POINTS:           PASS
+REAL ZENWARD OWNER QA:        PENDING
+TSC:                          PASS
+LINT:                         PASS
+UNIT:                         513/513
+BUILD:                        PASS
+PRODUCTION RELEASE:           PASS
+BLOCKERS:                     NONE
+
+NEXT AFTER OWNER ZENWARD QA PASS:
+Explicit old Zenward organization cleanup.
+
+DO NOT BEGIN D3 AUTOMATICALLY.
+STOP.
