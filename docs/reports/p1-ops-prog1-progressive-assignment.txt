@@ -333,3 +333,197 @@ Owner review
 → PROG1 production release
 DO NOT BEGIN PROG2 AUTOMATICALLY.
 STOP.
+
+
+######################################################################
+P1-OPS-PROG1 — PRODUCTION RELEASE
+######################################################################
+Owner decision: PROG1 approved for production, including the Trip Detail assignment entry point, which the owner
+counts as part of PROG1, not PROG2. PROG2 was not started.
+
+======================================================================
+RELEASE COMMIT
+======================================================================
+8df57efe6cc44cd71b784695319dfeda40dffea2  "feat: add progressive trip assignment"
+  - Author: Nemryn <nemryn.app@gmail.com>.
+  - Contents: 12 application/test files plus this report.
+  - Excluded: .tmp-qa, logs and scratch files.
+  - A secret/PHI scan of the committed files was clean (no keys, tokens, emails, credentials or real customer data;
+    fixtures are fictional).
+Scope review:
+  - Assignment defaults core, driver-day read model, dialog defaults/context, Trip Detail entry point, Dispatch
+    zero-driver actions, current_driver_id used as a presentation input only, tests and report.
+  - Not included: Tomorrow inline assign, New Trip assign-now, navigation changes, duration, availability, vehicle
+    capability, drag-and-drop, billing, D4, S5B.
+
+======================================================================
+GITHUB PUSH
+======================================================================
+Pushed once as GitHub user `nemryn` to https://github.com/nemryn-platform/nemryn-app.git (b3ac058..8df57ef), with no
+force push. Local HEAD == origin/main == 8df57ef.
+
+======================================================================
+VERCEL
+======================================================================
+The existing `nemryn-app` project was used; no new project was created. The GitHub deployment status for 8df57ef
+reached Production: success. https://app.nemryn.com/sign-in returns 200. The production smoke below exercised PROG1-only
+UI (prefill help, "(you)", driver-day panel, Trip Detail dialog), which confirms the new code is served.
+
+======================================================================
+FINAL E2E
+======================================================================
+.tmp-qa/p1-ops-prog1-assignment-e2e.mjs was rerun against a fresh build of the FINAL code (including the "use Clear
+vehicle" wording): 46/46 PASS, 0 failures. Covered:
+  - 1 driver / 1 vehicle prefill; Cancel writes nothing
+  - owner-as-driver ordering
+  - tomorrow driver-day filtering
+  - currently-on-trip fact
+  - multiple vehicles: no prefill
+  - reassignment preservation
+  - stale reassign rejection
+  - zero-driver admin/dispatcher behaviour
+  - 1440px and 768px
+The final application gate (tsc, lint, unit tests, build) was run on the same code; results are in the table at the
+end.
+
+======================================================================
+PRODUCTION SMOKE   (.tmp-qa/p1-ops-prog1-prod-smoke.mjs -- synthetic QA tenant "Siloan Medical Centre" only)
+======================================================================
+A tenant guard confirmed the organization name before any write. Zenward production data was not touched.
+Fixtures, all labelled "PROG1 QA":
+  - 3 drivers with no login
+  - 1 vehicle
+  - 1 passenger
+  - 9 trips
+Siloan's own drivers and vehicle had their status toggled temporarily. In `finally` all fixtures (and their child
+rows and notification events) were deleted, and every original status was restored. Verified: 36/36 checks PASS,
+0 failures.
+
+======================================================================
+ONE DRIVER / ONE VEHICLE
+======================================================================
+  - PASS: Driver and Vehicle were prefilled and both selects stayed enabled.
+  - PASS: no assignment existed before confirmation.
+  - PASS: Cancel left the trip unassigned, and reopening showed the same defaults.
+  - PASS: Assign created exactly one active TripAssignment (fixture driver + the tenant's vehicle, assigned_by =
+    admin).
+
+======================================================================
+OWNER-AS-DRIVER
+======================================================================
+  - PASS: the Siloan admin's own linked Driver was listed first as "<name> (you)", followed by the two fixture drivers.
+  - PASS: it was NOT auto-selected with multiple drivers.
+
+======================================================================
+DRIVER-DAY
+======================================================================
+Target: a Trip scheduled tomorrow at 11:00 AM. The selected driver also had:
+  - tomorrow 8:30 AM
+  - tomorrow 2:00 PM
+  - today 4:00 PM
+  - a completed trip tomorrow at 7:00 AM
+  - a cancelled trip tomorrow at 5:00 PM
+Results:
+  - PASS: only 8:30 AM and 2:00 PM were shown, under "Also scheduled Friday, September 25 · 2 other trips" (the
+    org-local date of the target trip).
+  - PASS: today's trip, the terminal trips and the target itself were excluded.
+  - PASS: no passenger names were shown, and no conflict/overlap/double-booked wording appeared.
+
+======================================================================
+CURRENT TRIP FACT
+======================================================================
+  - PASS: "Currently on a trip · Passenger Onboard" was shown for a driver on a passenger_onboard trip today.
+  - PASS: no availability estimate appeared.
+
+======================================================================
+MULTIPLE VEHICLES
+======================================================================
+  - PASS: with two active vehicles, no vehicle was preselected and the no-vehicle note was shown.
+  - PASS: with exactly one active vehicle, it was preselected while the driver was not.
+
+======================================================================
+REASSIGNMENT
+======================================================================
+  - PASS: Manage Assignment kept the existing eligible driver and vehicle.
+  - PASS: a concurrent change (the same synthetic method as local QA: the active assignment was ended and replaced
+    via SQL while the dialog was open) caused the backend to reject the submit. An alert was shown and nothing was
+    written.
+
+======================================================================
+TRIP DETAIL TOMORROW ASSIGNMENT
+======================================================================
+  - PASS: Trip Detail for a trip scheduled TOMORROW opened the same AssignmentDialog in place.
+  - PASS: before assignment, Tomorrow Readiness listed it with "Driver needed".
+  - PASS: the assignment (fixture driver + vehicle) succeeded before the service day.
+  - PASS: Tomorrow Readiness then listed the trip as "Ready".
+The previous today-only Dispatch dead end is closed.
+
+======================================================================
+ZERO DRIVER
+======================================================================
+Admin, with every Siloan driver temporarily inactive:
+  - PASS: Dispatch showed "Add a driver" (/operations/drivers) and "I also drive" (/operations/settings/my-access).
+Dispatcher:
+  - No synthetic dispatcher login exists, and no new production credential was created. The synthetic Siloan driver
+    account's membership was therefore set to `dispatcher` for this check only, by direct SQL (no audit_events row),
+    and then set back to `driver`. The restore was verified.
+  - PASS: the dispatcher reached Dispatch, saw NO admin-only setup actions, and saw "An organization admin can add
+    drivers."
+
+======================================================================
+DRIVER AUTHORIZATION
+======================================================================
+PASS: the synthetic driver account (driver role, original statuses restored) was redirected to /driver from both
+/operations/dispatch and an assignable Trip Detail. No assignment controls were exposed.
+
+======================================================================
+DATABASE / ACL
+======================================================================
+  - Precheck: `supabase projects list` showed Nemryn / wyocbivzgrbekuyqdfts (linked). This was after an earlier stop
+    for the wrong CLI account, which the owner corrected.
+  - `supabase migration list --linked`: every local migration equals remote; head is 20260924091000; nothing is
+    pending. PROG1 added no migration.
+  - `scripts/verify-db-privileges.sh production`: SUMMARY violations = 0 of 29.
+
+======================================================================
+OPEN ITEMS
+======================================================================
+  1. There is no synthetic dispatcher credential for production QA. The dispatcher check used a temporary, restored
+     role change on the synthetic driver account. Creating a dedicated synthetic dispatcher login would avoid this in
+     future releases (owner decision).
+  2. The Dispatch board remains today-only. Tomorrow scope and inline Tomorrow assignment are PROG2 and not started.
+  3. docs/reports/p1-ops-prog-progressive-operations-model.txt is still untracked locally (it was not part of this
+     release's file list). Its Trip Detail audit line is corrected by this report.
+
+PROG1 RELEASE COMMIT: 8df57efe6cc44cd71b784695319dfeda40dffea2
+FINAL LOCAL E2E: PASS
+GITHUB PUSH: PASS
+VERCEL: PASS
+ONE DRIVER PREFILL: PASS
+ONE VEHICLE PREFILL: PASS
+PREFILL WRITES ASSIGNMENT: NO
+OPERATOR CONFIRMATION: REQUIRED
+OWNER DRIVER FIRST: PASS
+OWNER DRIVER AUTOSELECT WITH MULTIPLE: NO
+DRIVER DAY ORG-LOCAL: PASS
+TERMINAL TRIPS EXCLUDED: PASS
+CONFLICT CLAIMS: NONE
+CURRENT TRIP FACT: PASS
+MULTIPLE VEHICLES NO GUESS: PASS
+REASSIGN PRESERVATION: PASS
+STALE REASSIGN: BLOCKED
+TOMORROW TRIP ASSIGNABLE FROM DETAIL: PASS
+ZERO DRIVER ADMIN: PASS
+DRIVER: BLOCKED
+DATABASE MIGRATION: NONE
+ACL: 0/29 VIOLATIONS
+TSC: PASS
+LINT: PASS
+UNIT: 544/544
+BUILD: PASS
+PRODUCTION RELEASE: PASS
+BLOCKERS: NONE
+NEXT IF PASS:
+Return for owner review.
+DO NOT BEGIN PROG2 AUTOMATICALLY.
+STOP.
