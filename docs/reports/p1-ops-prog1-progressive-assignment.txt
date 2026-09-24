@@ -527,3 +527,20 @@ NEXT IF PASS:
 Return for owner review.
 DO NOT BEGIN PROG2 AUTOMATICALLY.
 STOP.
+
+
+######################################################################
+P1-OPS-PROG1 — CLOSEOUT: PRODUCTION QA ROLE-MUTATION POLICY
+######################################################################
+PROG1 is closed. Implementation release: 8df57efe6cc44cd71b784695319dfeda40dffea2; production PASS; ACL 0/29.
+
+Release-process rule (owner decision, applies to all future production smoke):
+  Production QA must NOT temporarily change Membership roles through direct SQL merely to obtain a missing role
+  credential.
+  For a role check in production smoke:
+    - use an existing safe synthetic credential for that role when one is available;
+    - otherwise mark that role check MANUAL and rely on local authorization / adversarial coverage;
+    - never mutate a production Membership role solely for QA.
+The PROG1 release's dispatcher zero-driver check did exactly this once. The synthetic Siloan driver account was set to
+`dispatcher` and restored, and it caused no product defect. It is recorded above for transparency and must NOT become
+the standard test method. No new Dispatcher credential was created at closeout.

@@ -1,0 +1,798 @@
+NEMRYN PLATFORM
+P1-OPS-PROG -- PROGRESSIVE OPERATIONS MODEL
+"Same operational architecture, progressively revealed complexity."
+Documentation / product-architecture phase only. NO implementation: no application code, no Supabase change, no
+migration, no RLS change, no production change, not pushed, not deployed, no Vercel / DNS change. D4, S5B, billing,
+route optimization, native navigation, broker integrations, Facility Portal and a major UI redesign were NOT started.
+Written from a read-only audit of the repository at main = b3ac058 (migration head 20260924091000), not from memory.
+
+======================================================================
+EXECUTIVE SUMMARY
+======================================================================
+Nemryn already has ONE operational model that is correct for every operation size:
+  Organization -> Memberships (organization_admin / dispatcher / driver) -> Drivers (a separate entity with an optional
+  user link) -> Vehicles -> Requests -> Trips -> one active TripAssignment per Trip (Driver required, Vehicle optional)
+  -> driver lifecycle -> exceptions / proof of service.
+A one-vehicle owner-operator and a 40-vehicle dispatch office use the same tables, the same RPCs and the same
+invariants today. Nothing in the data model would have to fork for either end. The backend already supports multiple
+vehicles, multiple drivers, the owner as a driver (link_self_as_driver + current_driver_id + conditional "Drive" nav),
+and one owner running several vehicles from the office alone.
+
+The weak point is the EXPERIENCE, not the architecture. Every operation sees the same full ceremony:
+  - A one-driver, one-vehicle owner still opens an assignment dialog and picks "the only driver" from a list. The
+    Vehicle field defaults to "No vehicle", and Tomorrow readiness then flags NEEDS_VEHICLE on that trip.
+  - The Dispatch Board (a 6 AM–8 PM time-axis grid with a capacity rail) is as prominent for one vehicle as for thirty.
+  - Assigning never shows the driver's other trips that day. No time-proximity signal of any kind exists.
+  - Signup asks "How are you operating today?" (Starting 1–2 / Growing 3–10 / Established 10+). This is a
+    self-reported size label. Nothing behavioural reads it, and it contradicts this phase's rule that customers are
+    never asked their size.
+
+Recommendation: do not build size modes. Derive a small set of FACTUAL signals (active drivers, active vehicles, staff
+memberships, owner-linked driver, trip volume) and use them only to choose defaults, emphasis and copy. They never
+decide what is allowed. Authorization stays in RLS/RPCs. Complexity gets less prominent when it is not needed. It
+never disappears mysteriously.
+
+The recommended next slice is P1-OPS-PROG1, PROGRESSIVE ASSIGNMENT. It is UI/server-read only:
+  - prefill the Driver and Vehicle when exactly one active option exists (the operator still confirms)
+  - show the chosen driver's other trips that day inside the dialog, as facts with no invented "conflict" formula
+  - put "You" first when the operator is also a linked driver
+It needs no schema change and no security change, and it removes the most frequent friction for small operators
+while also helping large ones.
+
+======================================================================
+CURRENT PRODUCT AUDIT
+======================================================================
+Operations navigation (src/components/operations/OperationsSidebar.tsx):
+  Overview, Requests, Trips, Dispatch, Passengers, Facilities, Drivers, Fleet, the conditional "Drive" item (only when
+  the signed-in user has a linked active Driver row), and the conditional "Settings" item (only when the user can
+  manage settings). The comment records P1-E3-S9 "progressive complexity": the nav is the same for everyone, and the
+  Drive item appears only when a driver link exists.
+Routes that exist but are NOT in the sidebar. They are reachable from Overview Brief cards and in-page links:
+  /operations/tomorrow (8 in-app links), /operations/recurring-care (+new, [id], create-missing),
+  /operations/proof-of-service. /operations/reports and /operations/billing are stubs.
+Overview (/operations): the OnboardingChecklistBanner and the OperationsBrief.
+  - OnboardingChecklist has six items: business profile, first vehicle, driver setup, first facility, first
+    passenger, first trip.
+  - OperationsBrief contains:
+      - day state (NO_TRIPS / ALL_COMPLETE / ACTIVE_DAY / UNAVAILABLE)
+      - the attention queue: one row per trip, deduplicated
+      - active now
+      - next departures: the next 2 hours, excluding trips already in attention
+      - a driver snapshot (drivers currently on a trip)
+      - pending requests
+      - the Tomorrow readiness summary (total / ready / needs preparation)
+      - the Recurring Care summary (active arrangements, missing occurrences)
+      - the Proof-of-Service summary (completed / ready for review / needs review / evidence gaps)
+    The Brief is explicitly derived from facts, never from organizations.business_stage (OperationsBrief.tsx comment).
+Attention queue (src/lib/operations/todays-operations.ts + trip-assurance): codes OPEN_EXCEPTION > NEEDS_ASSIGNMENT >
+  LOCATION_STALE > LOCATION_UNAVAILABLE, in deterministic priority. ON_TRACK / TERMINAL are not attention.
+Dispatch (/operations/dispatch, src/lib/operations/dispatch-board.ts, dispatch-grid.ts):
+  - Scope is today only.
+  - Left: NeedsAssignmentQueue, listing state='scheduled' trips with no active assignment.
+  - Centre: AssignmentGrid, a fixed 6:00–20:00 org-local time axis, with one row per active driver and equal-width
+    blocks positioned by scheduled_pickup_at. Blocks are equal width because trips have no duration (GAP-11). This
+    is recorded as an honest simplification.
+  - Right: DriverCapacityPanel, which shows only "On Trip". "Available" is never fabricated, because no availability
+    schema exists (GAP-6).
+  - Empty states: "Nothing needs assignment", "No active drivers".
+  - DispatchLiveRefresh keeps the board current.
+AssignmentDialog (src/components/operations/dispatch/AssignmentDialog.tsx):
+  - The Driver select is required ("Choose a driver"). The Vehicle select is optional ("No vehicle").
+  - An optional reassign reason is offered.
+  - There is NO prefill, even when exactly one option exists.
+  - Reassign passes p_expected_assignment_id, which gives optimistic concurrency.
+  - The same actions are reachable from Trip Detail (CurrentStatusPanel).
+Trip Detail: TripReadinessPanel, TripExceptionsPanel (report / resolve), NoShowDialog, CancelTripDialog,
+  TripNotesPanel.
+Readiness (src/lib/operations/trip-readiness-core.ts):
+  - States: READY / NEEDS_PREPARATION / NOT_APPLICABLE.
+  - Reasons are ALL reported together, in fixed order: NO_SCHEDULE, NEEDS_DRIVER, NEEDS_VEHICLE, DRIVER_INACTIVE,
+    VEHICLE_INACTIVE, PASSENGER_INACTIVE, OPEN_EXCEPTION.
+  - Tomorrow (tomorrow-readiness-core.ts) aggregates the same derivation for the next org-local day.
+New Trip (/operations/trips/new): creates a trip only. Assignment is a separate later step. There is no
+  assign-at-creation path.
+Recurring Care: arrangements store the passenger, pickup/destination, pickup_time, days_of_week, start/end date,
+  timezone and status (active/paused/ended). Occurrence exceptions and "create missing" trip creation exist. There
+  is NO preferred driver or vehicle on an arrangement, so every generated trip lands unassigned.
+Driver PWA (/driver: Today, Trips, History, Profile):
+  - Today shows "Next Trip" and "Later Today". The empty state reads "You're clear for now".
+  - Lifecycle actions run through six named RPC wrappers.
+  - DriverLocationTracker shares location on the active assignment only.
+  - Report Issue is available.
+  - Includes an install card, network status and a service worker.
+Onboarding (/onboarding):
+  - Step 1 asks "How are you operating today?" and is required when business_stage is null (complete-signup
+    redirects there).
+  - Then: basics, vehicle ("Add your first vehicle"), driver ("Do you also drive?" -> "Yes, I also drive" calls
+    link_self_as_driver), facility, passenger.
+  - Settings -> My Access provides the same self-link later.
+Team & Access: staff invitations and role changes use organization_admin / dispatcher only. A Driver has its own
+  lifecycle (invite + link), because Driver != Membership.
+
+======================================================================
+CURRENT DATA MODEL FITNESS
+======================================================================
+organizations: this is the tenancy root. business_stage is a nullable column (starting / growing / established) that
+  is self-reported at signup. Its comment says it is "UI emphasis only", never RLS, never a pricing input. Today it
+  is read only by complete-signup (to force the question) and by the platform-admin org page.
+memberships: unique (organization_id, user_id), one role per user per org, role in (organization_admin, dispatcher,
+  driver), with a status. One human therefore has exactly one staff role per org. Being a driver is expressed by a
+  separate Driver row, not by a second membership.
+drivers: (organization_id, user_id -> auth.users ON DELETE SET NULL, display_name, phone, status active|inactive).
+  drivers_one_active_link_per_user_org_idx allows at most one active linked Driver per user per org.
+  current_driver_id(org) resolves the caller's active linked Driver when the caller has ANY active membership. This
+  is what makes owner-as-driver work without a "driver" membership.
+vehicles: (organization_id, label, status). This is deliberately minimal. It has no capacity, wheelchair/ambulatory
+  capability, plate, maintenance or inspection fields (decision-register: capability taxonomy unresolved).
+trips:
+  - state in scheduled, en_route_to_pickup, arrived_at_pickup, passenger_onboard, en_route_to_destination,
+    arrived_at_destination, completed, cancelled, no_show
+  - scheduled_pickup_at, appointment_at
+  - free-text pickup/destination plus optional facility ids, assistance_notes, instructions, terminal timestamps
+  - NO duration, expected drop-off, distance or geo coordinates (GAP-11)
+trip_assignments:
+  - fields: driver_id NOT NULL, vehicle_id nullable, assigned_by/at, ended_at/end_reason
+  - a unique partial index enforces one ACTIVE assignment per trip, and history is kept
+  - assign_trip / reassign_trip enforce: same org; driver and vehicle active; trip state scheduled /
+    en_route_to_pickup / arrived_at_pickup; ZW005 when a different active assignment exists
+  - NOTHING prevents one driver (or one vehicle) from holding overlapping assignments. No overlap concept exists.
+trip_exceptions: exception_type is deliberately unconstrained free text ("taxonomy not yet finalized"). Status goes
+  open -> resolved. A driver may report on their own assigned trip. Only a dispatcher or admin resolves.
+driver location tracking: point samples (lat, lng, accuracy, recorded_at) tied to driver + trip + assignment, and
+  only during an active assignment. These feed LOCATION_STALE / LOCATION_UNAVAILABLE.
+recurring_arrangements (+ occurrence exceptions): a schedule template. It does not bind a driver or vehicle.
+Fitness verdict:
+  - The core model is size-neutral and correct from 1 to 100+ vehicles.
+  - The missing concepts are all ADDITIVE and matter mostly at the larger end: time extent (duration), availability,
+    vehicle capability, and structured exception types.
+  - None of them requires changing an existing table's meaning.
+
+======================================================================
+REFERENCE OPERATION ARCHETYPES   (analysis anchors ONLY -- never tiers, never asked, never stored as a mode)
+======================================================================
+A1 Owner-operator (1 vehicle):
+  - One human is admin + driver. They take calls, drive, and do the paperwork at night.
+  - Needs: capture the request fast; "what do I drive tomorrow"; one-tap lifecycle; proof for billing.
+  - Pain: ceremony.
+A2 Small fleet (2–5 vehicles):
+  - The owner drives part-time, with one or two hired drivers.
+  - Needs: know who has which ride; avoid double-promising a time.
+  - Pain: holding it in their head.
+A3 Growing (6–15 vehicles):
+  - A part-time or full-time office person (the first dispatcher), with standing orders (dialysis).
+  - Needs: coordination, tomorrow preparation, recurring care.
+  - Pain: handoffs and forgotten assignments.
+A4 Dispatch operation (15–40 vehicles):
+  - One or more dedicated dispatchers.
+  - Needs: the not-ready / unassigned queue, driver-day overview, exceptions.
+  - Pain: volume; spotting the one problem among many normal trips.
+A5 Larger (40–100+ vehicles):
+  - Shifts and multiple dispatchers.
+  - Needs: exceptions first, capacity, reliability, audit.
+  - Pain: capacity, lateness, accountability.
+Hypothesis, formalized. The dominant cognitive job shifts from
+  small = REMEMBER (the system is a memory aid for one person)
+  growing = COORDINATE (the system is a shared truth between a few people)
+  dispatch = NOT-READY / UNASSIGNED (the system is a work queue)
+  large = EXCEPTIONS / CAPACITY / RELIABILITY (the system is a monitor that shows only what deviates).
+Every level still needs the lower levels' jobs. A 40-vehicle dispatcher still has to "remember" a standing order. The
+product therefore ADDS emphasis layers and never swaps models.
+
+======================================================================
+ADAPTATION SIGNALS   (adapt from facts, not labels)
+======================================================================
+Each signal is classified as CURRENTLY AVAILABLE (already read by the product), DERIVABLE WITH EXISTING DATA (a simple
+query on existing tables, not yet read), or REQUIRES FUTURE DATA.
+  S1  Active driver count ............................ CURRENTLY AVAILABLE (dispatch options, capacity rail)
+  S2  Active vehicle count ........................... CURRENTLY AVAILABLE (dispatch options, onboarding checklist)
+  S3  Caller has an active linked Driver ............. CURRENTLY AVAILABLE (Drive nav, current_driver_id)
+  S4  Linked-driver share (owner is the only driver)  DERIVABLE WITH EXISTING DATA (drivers.user_id = caller AND S1 = 1)
+  S5  Staff membership count / dispatcher present .... DERIVABLE WITH EXISTING DATA (memberships by role/status)
+  S6  Trips per day (today / trailing 14 days) ....... today CURRENTLY AVAILABLE; trailing window DERIVABLE
+  S7  Unassigned-at-day-start rate ................... DERIVABLE WITH EXISTING DATA (assignment assigned_at vs trip day)
+  S8  Who assigns (self vs. another member) .......... DERIVABLE WITH EXISTING DATA (trip_assignments.assigned_by)
+  S9  Reassignment frequency ......................... DERIVABLE WITH EXISTING DATA (ended_at / end_reason history)
+  S10 Recurring arrangements active .................. CURRENTLY AVAILABLE (Brief recurring summary)
+  S11 Open exceptions / attention volume ............. CURRENTLY AVAILABLE (attention queue)
+  S12 Same driver, multiple trips in close succession  DERIVABLE WITH EXISTING DATA (pickup times only; no end time)
+  S13 Tomorrow needs-preparation count ............... CURRENTLY AVAILABLE
+  S14 Concurrent active trips at once ................ CURRENTLY AVAILABLE (activeNow / On Trip count)
+  S15 Self-reported business_stage ................... CURRENTLY AVAILABLE, but NOT A VALID SIGNAL (a label, not a fact)
+  S16 Driver availability / shifts / time off ........ REQUIRES FUTURE DATA (GAP-6)
+  S17 Trip duration / expected drop-off .............. REQUIRES FUTURE DATA (GAP-11)
+  S18 Vehicle capability / seats / wheelchair ........ REQUIRES FUTURE DATA
+  S19 Travel time between trips / deadhead ........... REQUIRES FUTURE DATA (geo + routing)
+Signal hygiene rules:
+  - A signal changes a default, ordering, copy or prominence. It never changes permission, validation or data shape.
+  - A signal is computed per request from live data. It is never cached as a "mode" that can go stale.
+  - Hysteresis is required where emphasis would flip-flop (e.g. a second driver added then deactivated). Prefer
+    "ever had" or trailing windows over the instantaneous count for layout-level emphasis. Use the instantaneous
+    count only for prefill.
+
+AUTO-PREFILL vs AUTO-ASSIGN vs OPERATOR CONFIRMATION (definitions used throughout this report):
+  AUTO-PREFILL: the UI pre-selects a value in a form the operator still submits. It writes nothing. It is always
+    visible and changeable. Allowed whenever the choice is factually unique (one active driver) or strongly implied
+    (the operator is the linked driver and it is their own new trip).
+  AUTO-ASSIGN: the system writes a trip_assignment with no operator action. NOT recommended in any phase covered here.
+    It hides a consequential decision and creates silent failure modes (the driver was deactivated overnight, the
+    recurring pattern changed), and no availability model exists to make it safe. It may be reconsidered only after
+    GAP-6, and only as an explicit per-arrangement opt-in with a visible audit trail.
+  OPERATOR CONFIRMATION: an explicit, attributed submit by a human (assigned_by is recorded). This remains the only
+    path that writes assignments.
+
+======================================================================
+OWNER-OPERATOR EXPERIENCE   (one vehicle, one human)
+======================================================================
+What works today:
+  - Signup, then the vehicle step, then "Do you also drive?" -> Yes. This creates a linked Driver, the Drive nav
+    appears, and the owner can use the Driver PWA.
+  - Requests from the website land in the Request Hub. Accept, create the trip, and it appears on Today / Tomorrow.
+What is friction today:
+  (a) Signup opens with a size question.
+  (b) After creating a trip, the owner must separately open Assign, pick themselves from a one-item list, and
+      remember to pick the vehicle. Otherwise Tomorrow shows NEEDS_VEHICLE.
+  (c) Dispatch is a full grid with a capacity rail for one row.
+  (d) There is no "my day" consolidation in Operations. The owner switches to /driver for the driving view.
+Target experience:
+  - A new trip offers "Assign to you (and <the vehicle>)" pre-selected. The trip is created unassigned only if they
+    untick it.
+  - Overview reads as "Today: 3 rides. Next: 9:30 dialysis pickup. Tomorrow: 4 rides, all ready."
+  - Dispatch stays in the nav, but Overview/Trips carry the assignment actions, so the owner rarely needs it.
+  - Proof of service and recurring care work unchanged.
+Principle: a one-vehicle operator is FIRST-CLASS when every step they take is necessary. The same screens must never
+be missing.
+
+======================================================================
+OWNER AS DRIVER
+======================================================================
+Model (keep as-is):
+  - The owner has ONE membership (organization_admin) and ONE linked Driver row (drivers.user_id = owner).
+  - The owner does NOT get a second "driver" membership, and memberships are unique per (org, user) anyway.
+  - current_driver_id() accepts any active membership plus an active linked driver, so driver RPCs authorize the
+    owner exactly as they authorize a hired driver, and only for trips assigned to that Driver row.
+  - Do NOT merge Membership and Driver. The two lifecycles must stay independent:
+      - Driver history survives the user (ON DELETE SET NULL).
+      - A Driver can exist before any login (phone-only).
+      - Revoking staff access must not rewrite trip history.
+  - At most one active linked Driver per user per org, enforced by drivers_one_active_link_per_user_org_idx.
+Experience progression:
+  - With one driver who is the owner, "You" is the only choice and is prefilled.
+  - Once other drivers exist, "You" is listed FIRST with a "(you)" suffix, but NOT prefilled. Prefill applies only
+    when the choice is unique.
+  - As a dispatcher is hired, the owner may stop driving: Settings -> My Access unlinks and the Drive nav disappears.
+    That disappearance is explained, because it follows the owner's own action.
+
+======================================================================
+SECOND VEHICLE TRANSITION
+======================================================================
+Trigger fact: S2 goes 1 -> 2.
+  - No data change.
+  - The assignment dialog stops prefilling the vehicle and asks for one, with the last vehicle used by this driver
+    listed first. That is DERIVABLE WITH EXISTING DATA from trip_assignments.
+  - Fleet shows the current assignment per vehicle (it already does).
+  - Tomorrow's NEEDS_VEHICLE reason becomes meaningful rather than noise.
+  - If one driver still drives both vehicles (the owner switches vans), the model already permits it. vehicle_id is
+    per assignment, not per driver.
+
+======================================================================
+MULTIPLE DRIVER TRANSITION
+======================================================================
+Trigger fact: S1 goes 1 -> 2 (often the owner plus the first hire).
+  - The Driver prefill stops.
+  - The dialog shows each driver's other trips that day (count + times) so the owner can see the spread. This is
+    the core of PROG1.
+  - The Overview driver snapshot becomes useful ("1 of 2 drivers on a trip").
+  - The hired driver gets the Driver PWA through driver invite + link. This is already built (GAP-15 resolved).
+  - The attention queue starts to matter: NEEDS_ASSIGNMENT on today's trips is now a coordination signal, not a
+    self-reminder.
+
+======================================================================
+OWNER-ONLY OFFICE OPERATION   (e.g. 5 vehicles, owner in the office, never drives)
+======================================================================
+Supported today:
+  - The owner is organization_admin with no linked Driver (so no Drive nav), five active Driver rows (hired), and
+    five vehicles.
+  - The owner performs all assignment, tomorrow preparation and exception resolution.
+  - No dispatcher membership is required. The admin role already includes every dispatcher capability.
+UX needs:
+  - The Tomorrow page should be one click away. Today it is reachable only from Brief links, and it deserves
+    sidebar presence or a prominent Overview action once S6/S1 show more than trivial volume.
+  - Bulk readiness fixing (assign the NEEDS_DRIVER items in sequence) is valuable here.
+  - No role or UI change is needed to support this shape.
+
+======================================================================
+DISPATCHER TRANSITION
+======================================================================
+Trigger facts: S5 shows the first dispatcher membership, and/or S8 shows assignments by someone other than the owner.
+  - The data model is already complete: the dispatcher role, has_org_role checks, and assigned_by attribution.
+  - What changes is ACCOUNTABILITY. Reassign reasons and assignment attribution ("Assigned by Maria 07:42") should
+    be visible on Trip Detail and in Activity. Attribution is stored today; surfacing it is a UI item.
+  - Handoff: "what did the last person leave unfinished" is exactly the attention queue plus Tomorrow
+    needs-preparation. No new concept is needed.
+  - The owner loses nothing. Settings stays admin-only (a server-enforced role check, not just nav hiding).
+
+======================================================================
+TODAY / OPERATIONS BRIEF
+======================================================================
+The Brief is the right primitive: it is derived, it deduplicates, and it already ranks attention first. The
+progression concerns ordering and emphasis only:
+  1 vehicle: next departure + today's list + tomorrow status. Attention appears only when non-empty. No "drivers on
+             trip" tile (it is always 0 or 1, and the operator knows).
+  3 vehicles: add the driver snapshot and the "unassigned today" count.
+  10 vehicles: attention queue first, then tomorrow needs-preparation, then recurring missing occurrences.
+  30+ vehicles: the attention queue dominates. The normal trip list folds behind "N on track".
+Vanity-metric rule (keep enforcing):
+  - No totals-for-their-own-sake (lifetime trips, "efficiency %", invented utilisation).
+  - Every number shown must lead to an action or a list, and must be derived from live facts.
+  - "All clear" is a valid, celebrated state (ALL_COMPLETE / "You're clear for now").
+
+======================================================================
+DISPATCH PROGRESSION
+======================================================================
+  1 vehicle: Dispatch remains in the nav, unchanged, and is never hidden. Assignment happens inline (New Trip, Trip
+             Detail, Tomorrow). The board shows a one-row grid, which is honest, not broken.
+  3 vehicles: The board becomes useful for the spread. The left queue plus the dialog with the driver's day is
+              sufficient.
+  10 vehicles: The queue is the primary tool. Add a "tomorrow" scope toggle, since the board is today-only now and
+               most preparation happens the day before.
+  30 vehicles: The grid needs real durations (GAP-11) to show overlap honestly. Until then, blocks stay equal-width
+               and nothing claims to be a "conflict".
+No drag-and-drop just because competitors have it:
+  - Drag-and-drop on an equal-width, duration-less grid would imply precision the data does not have. It also makes
+    optimistic-concurrency failures (ZW005 / expected-assignment mismatch) harder to explain.
+  - The explicit dialog with reason capture is the better control for regulated, attributable work.
+  - Revisit drag-and-drop only after durations exist and only if pilot operators ask for it.
+
+======================================================================
+ASSIGNMENT UX
+======================================================================
+Case matrix (PREFILL = UI preselects; CONFIRM = operator submits; WARN = non-blocking fact shown; BLOCK = backend
+rejects):
+  One active driver, one active vehicle ............ PREFILL both; CONFIRM
+  Operator is linked driver, other drivers exist ... list "You" first; no prefill; CONFIRM
+  Multiple drivers, driver chosen, one vehicle ..... PREFILL vehicle; CONFIRM
+  Driver's last-used vehicle known ................. order it first; no prefill unless unique; CONFIRM
+  Driver has other trips that day .................. WARN (informational list of times). Never BLOCK: no duration
+                                                     exists, so "overlap" cannot be proven.
+  Driver has another trip in progress right now .... WARN ("Currently on a trip until done")
+  No vehicle chosen while vehicles exist ........... WARN ("Tomorrow will show this trip as needing a vehicle"); CONFIRM
+  Driver or vehicle inactive ....................... BLOCK (already enforced by assign_trip); the UI already filters
+                                                     these out
+  Trip already assigned by someone else ............ BLOCK (ZW005 / expected-assignment check, already enforced)
+  Trip in a non-assignable state ................... BLOCK (already enforced)
+  Zero active drivers .............................. there is no dialog. The empty state explains what is missing and
+                                                     links to Drivers (or to "I also drive" for the admin).
+Assign-at-creation (later phase):
+  - New Trip gets an optional "Assign now" section using the same rules.
+  - It is two calls (create_trip, then assign_trip), which is not atomic. The success copy must say "Trip created;
+    assignment failed: <reason>" if the second call fails. A combined RPC is not required.
+
+======================================================================
+CONFLICT DETECTION
+======================================================================
+  Two active assignments on one trip ................. ALREADY ENFORCED (unique partial index + ZW005)
+  Assigning an inactive driver/vehicle ............... ALREADY ENFORCED (assign_trip / reassign_trip)
+  Cross-org driver/vehicle/trip ...................... ALREADY ENFORCED (composite FKs + org checks)
+  Stale reassign (acting on a superseded assignment) . ALREADY ENFORCED (p_expected_assignment_id)
+  Driver has multiple trips the same day ............. DETECTABLE NOT SURFACED (dialog does not show it)
+  Driver has a trip whose pickup is within N minutes . DETECTABLE NOT SURFACED (pickup times exist; N is a product
+                                                       decision; gap register: "no formula defined")
+  Vehicle assigned to two trips the same day ......... DETECTABLE NOT SURFACED
+  Driver currently mid-trip when newly assigned ...... DETECTABLE NOT SURFACED (activeNow per driver)
+  True time overlap (trip A still running at B's start) NOT REPRESENTED (no duration / drop-off, GAP-11)
+  Driver off shift / on leave ........................ NOT REPRESENTED (no availability, GAP-6)
+  Vehicle lacks wheelchair capability for a passenger  NOT REPRESENTED (no capability fields)
+  Travel-time infeasibility between consecutive trips  FUTURE (requires geo + routing)
+  Driver hours-of-service limits ..................... FUTURE (requires shift data; no regulatory claim made here)
+Rule: WARN on facts, BLOCK only on invariants. Nemryn must not call something a "conflict" until the data can prove it.
+
+======================================================================
+DRIVER PWA
+======================================================================
+This surface is already size-neutral. A driver sees only their own assigned trips, whichever operation they work in.
+Progression items:
+  - The owner-as-driver switches between Operations and /driver. Keep the explicit switch. Never merge the two
+    views into one hybrid screen, because the driver view is deliberately minimal for use in motion.
+  - At larger scale, the driver-facing exception status list (GAP-7, partially open) and "Completed Today" (GAP-10)
+    matter more, because drivers stop talking to the owner directly.
+  - Location sharing stays scoped to the active assignment. No background tracking outside trips.
+  - Nothing here needs size adaptation. It is the constant core.
+
+======================================================================
+VEHICLE PROGRESSION
+======================================================================
+  - Now: label + status. This is sufficient for 1–15 vehicles, where the operator knows each van.
+  - Next (additive, later): capability flags (wheelchair lift / ramp, stretcher, seats). These are needed before
+    vehicle-aware assignment warnings are possible. The taxonomy is an open product decision (decision-register).
+  - Later: maintenance and out-of-service windows. This is a time-bounded unavailability, the vehicle analogue of
+    GAP-6.
+  - This report makes NO claim about regulatory vehicle requirements (inspections, NEMT permits, ADA standards). Any
+    such field must be defined with the operator and their jurisdiction, and must never be implied by Nemryn copy.
+
+======================================================================
+TOMORROW READINESS
+======================================================================
+  - It exists and is correct. It reports all reasons, not only the first, uses org-local day bounds, and treats
+    NOT_APPLICABLE trips separately.
+  - Its only weakness is discoverability plus action distance. The operator sees "needs driver" but must open each
+    trip to fix it.
+  - Progression:
+      1 vehicle: a single line on Overview ("Tomorrow: 4 rides, all ready" / "2 need you").
+      Growing: the Tomorrow page with inline assign for NEEDS_DRIVER / NEEDS_VEHICLE, using the same dialog and rules.
+      Dispatch: a Tomorrow scope on the Dispatch queue.
+  - Readiness remains derived and is never stored.
+
+======================================================================
+EXCEPTION-LED OPERATIONS
+======================================================================
+CURRENTLY SUPPORTED (these derive "what deviates" today):
+  - open trip exceptions (report / resolve)
+  - NEEDS_ASSIGNMENT
+  - LOCATION_STALE
+  - LOCATION_UNAVAILABLE
+  - no-show
+  - cancellation
+  - readiness reasons (tomorrow)
+  - recurring missing occurrences
+  - proof-of-service review / evidence gaps
+  - pending requests
+FUTURE (not representable now):
+  - running late: inputs exist, but the threshold is undefined, which is a product decision
+  - early / late drop-off: needs duration
+  - driver over capacity: needs availability
+  - vehicle capability mismatch: needs capability data
+  - structured exception categories: exception_type is free text by design
+  - SLA breach on requests: needs a response-time definition
+The large-operation model is to show deviations, fold normal work, and never hide the path to the full list.
+
+======================================================================
+RECURRING CARE
+======================================================================
+  - This is standing orders (dialysis, rehab): already one of the strongest fits for small AND large operators.
+  - Gap for small operators: every generated occurrence lands unassigned, so a one-driver operator re-assigns
+    themselves to the same Monday/Wednesday/Friday ride every week.
+  - Options, in order of safety:
+      (1) PREFILL at occurrence assignment from "the driver/vehicle of the most recent completed occurrence of this
+          arrangement". DERIVABLE WITH EXISTING DATA. Still operator-confirmed.
+      (2) A "preferred driver/vehicle" on the arrangement, used only as prefill. This is additive and nullable, a
+          later schema change.
+      (3) Auto-assign on creation. NOT recommended (see AUTO-ASSIGN above).
+  - With a single active driver, the ordinary PROG1 prefill already solves this.
+
+======================================================================
+CAPACITY / DEAD TIME
+======================================================================
+  Drivers on a trip right now ....................... AVAILABLE NOW
+  Trips per driver today / tomorrow ................. POSSIBLE WITH CURRENT DATA
+  Idle gap between a driver's consecutive pickups ... POSSIBLE WITH CURRENT DATA (pickup-to-pickup only; not true idle)
+  Unassigned volume by hour ......................... POSSIBLE WITH CURRENT DATA
+  True dead time / deadhead miles ................... REQUIRES ROUTE DATA
+  Where is the nearest free driver .................. REQUIRES DRIVER LOCATION (outside active trips) + availability
+                                                      (NOT recommended now; privacy)
+  "Available" drivers / shift coverage .............. REQUIRES NEW MODEL (GAP-6)
+  Vehicle utilisation (hours in service) ............ REQUIRES NEW MODEL (duration + availability)
+Capacity is a large-operation concern. Nothing in this area should be shown to a 1–5 vehicle operator until it is
+factual.
+
+======================================================================
+NAVIGATION PROGRESSION
+======================================================================
+Rules:
+  - Never remove a nav item because of size. Items may be REORDERED or DE-EMPHASISED, e.g. grouped under "More".
+  - Every item is always reachable by the same URL.
+  - A change in prominence must follow a fact the operator can see and understand ("You have one driver: assign from
+    the trip itself"). It must never silently happen overnight.
+  - The conditional items that exist today (Drive, Settings) are correct precedents. They follow capability /
+    identity facts, and Settings is enforced server-side.
+Candidate progression (a GAP-16 resolution, to be specified precisely before building):
+  - Promote Tomorrow into the sidebar for everyone. It is valuable at every size.
+  - Consider Recurring Care in the sidebar once an arrangement exists.
+  - Consider Dispatch after Trips while S1 <= 1, but never hide it.
+UI hiding is never authorization. Every mutation stays guarded by RLS and the RPC role checks.
+
+======================================================================
+EMPTY STATES
+======================================================================
+Empty states are the main progressive-disclosure surface. They should explain the next fact-changing step:
+  - Dispatch "No active drivers": for an admin with no linked driver, offer both "Add a driver" and "I also drive".
+  - Dispatch "Nothing needs assignment": good. Keep it as a success state.
+  - Fleet with 0 vehicles: link to onboarding/vehicle.
+  - Tomorrow with no trips: "Nothing scheduled for tomorrow yet". Link to New Trip and Requests.
+  - Recurring Care, none: explain standing orders in one line, then "Create".
+  - Driver PWA "You're clear for now": keep.
+  - Never show an empty chart or a zero-filled grid as if it carried information.
+
+======================================================================
+ONBOARDING
+======================================================================
+Current path:
+  - size question (required) -> basics -> vehicle -> "Do you also drive?" -> facility -> passenger
+  - then the checklist banner on Overview: vehicle / driver / facility / passenger / first trip
+Recommended path (facts, not labels):
+  - Retire the required size question. The profile collects only what the product uses. business_stage is never read
+    behaviourally, and asking contradicts the "never ask size" principle.
+  - Two safe options:
+      (a) Stop routing to it. Keep the column nullable and read-only for platform context (no migration needed).
+      (b) Later contract-drop the column.
+    Option (a) is recommended, which is expand/contract-friendly.
+  - Keep "Do you also drive?". It captures a real fact (owner-as-driver) with a real effect.
+  - Driver setup should allow "Only me for now" to count as complete. Today it does, because a linked driver counts
+    in the drivers count.
+  - The first-trip checklist step should end with the prefilled assign, so a one-vehicle operator reaches "ready for
+    tomorrow" in one sitting.
+
+======================================================================
+ROLE PROGRESSION
+======================================================================
+  - organization_admin: can do everything. The owner at every size.
+  - dispatcher: the first hire at A3/A4. Same operations capabilities, no tenant settings.
+  - driver: via a Driver row plus a link; sees only their own assigned trips.
+  - Owner-as-driver = organization_admin + linked Driver. No role combination hack is needed.
+  - Future (NOT now): read-only / billing clerk, multi-dispatcher shift ownership, facility-side roles (Facility
+    Portal is out of scope).
+  - Invariant: UI hiding is never authorization. Every role difference is enforced by RLS / RPC (has_org_role,
+    current_driver_id) and verified by the privilege contract (scripts/verify-db-privileges.sh, 29 checks).
+
+======================================================================
+PRODUCT ADAPTATION MATRIX   (archetype anchors -> the same model with different emphasis)
+======================================================================
+Surface            | A1 owner-op 1v        | A2 small 2–5          | A3 growing 6–15        | A4 dispatch 15–40      | A5 large 40–100+
+-------------------+-----------------------+-----------------------+------------------------+------------------------+------------------------
+Overview/Brief     | next ride + tomorrow  | + driver snapshot     | attention first        | attention dominant     | exceptions only; fold
+                   | line                  | + unassigned count    | + recurring gaps       | + tomorrow prep        | normal work
+Assignment         | prefilled, confirm    | driver's-day facts    | + last-vehicle order   | queue-driven           | queue + (future)
+                   |                       |                       |                        |                        | availability
+Dispatch board     | present, low emphasis | useful for spread     | primary for today      | + tomorrow scope       | + durations (future)
+Tomorrow           | one line on Overview  | page, inline assign   | page, inline assign    | dispatch scope         | dispatch scope
+Recurring care     | prefill from last     | prefill from last     | preferred driver       | preferred driver       | + capacity (future)
+                   | (single driver)       | occurrence            | (future, additive)     |                        |
+Exceptions         | attention when present| same                  | same                   | primary workflow       | + structured types
+Driver PWA         | owner switches to     | same core             | same core              | same core              | same core
+                   | Drive                 |                       |                        |                        |
+Roles              | admin + linked driver | + drivers             | + dispatcher           | multiple dispatchers   | + future roles
+Schema             | unchanged             | unchanged             | unchanged              | + duration (GAP-11)    | + availability (GAP-6)
+
+======================================================================
+SIGNAL -> UX MATRIX
+======================================================================
+Signal (class)                         -> UX effect (never permission)
+S1 active drivers = 1 (AVAILABLE)      -> prefill Driver in assign dialogs (PROG1)
+S2 active vehicles = 1 (AVAILABLE)     -> prefill Vehicle; hide the "No vehicle" nudge copy (PROG1)
+S3 caller linked driver (AVAILABLE)    -> "You" first in the driver list; Drive nav (exists)
+S4 owner is the only driver (DERIVABLE)-> "Assign to you" default on New Trip (PROG2)
+S5 dispatcher present (DERIVABLE)      -> surface assigned_by / reassign reasons more prominently (PROG3)
+S6 trips/day trend (DERIVABLE)         -> Brief section ordering; Tomorrow promotion (PROG3, with hysteresis)
+S7 unassigned at day start (DERIVABLE) -> emphasise Tomorrow preparation (PROG3)
+S8 assigner != owner (DERIVABLE)       -> attribution in Trip Detail / Activity (PROG3)
+S9 reassign frequency (DERIVABLE)      -> nothing yet; candidate reliability insight later
+S10 recurring active (AVAILABLE)       -> Recurring Care prominence; last-occurrence prefill (PROG2)
+S11 attention volume (AVAILABLE)       -> fold "on track" trips behind a count when large (PROG3)
+S12 same-driver same-day (DERIVABLE)   -> informational "also driving at 09:30, 13:00" in the dialog (PROG1)
+S13 tomorrow needs-prep (AVAILABLE)    -> Overview line + inline fix (PROG2)
+S15 business_stage (label)             -> NO UX effect; retire the question (PROG3)
+S16–S19 (FUTURE DATA)                  -> nothing until the data exists; no placeholders, no fabricated values
+
+======================================================================
+BACKEND FITNESS
+======================================================================
+  Multi-vehicle ......................... FIT (vehicles table, per-assignment vehicle_id, org scoping)
+  Multi-driver .......................... FIT (drivers table, assignment history, driver invites)
+  Owner-as-driver ....................... FIT (link_self_as_driver, current_driver_id, one-active-link index)
+  Owner alone, many vehicles ............ FIT (admin includes dispatch capabilities)
+  Dispatcher hire ....................... FIT (role, invitations, role change RPCs, attribution)
+  Assignment integrity .................. FIT for identity / state / concurrency. NOT FIT for time-based conflicts
+                                          (no duration, no availability)
+  Readiness / attention ................. FIT (pure derivations with tests)
+  Recurring ............................. FIT for schedule; no driver/vehicle preference
+  Exceptions ............................ FIT mechanically; taxonomy intentionally open
+  Capacity / availability ............... NOT PRESENT (GAP-6)
+  Vehicle capability .................... NOT PRESENT
+Conservative conclusion: nothing in PROG1–PROG3 needs a backend change. Backend work starts at PROG4 (duration) and
+PROG5 (availability). Each is additive, expand-only, and privilege-contract verified.
+
+======================================================================
+SCHEMA GAPS   (none required immediately)
+======================================================================
+  G-A Trip expected duration / drop-off (GAP-11): needed for true overlap, grid widths and dead time. Additive
+      nullable column(s) or an org default. Product decision: operator-entered, org default, or derived.
+  G-B Driver availability / shifts / time off (GAP-6): a new table; RLS for admin/dispatcher write and driver
+      read-own. It carries privacy considerations.
+  G-C Vehicle capability flags / seats: additive nullable columns, or a small typed table. The taxonomy decision is
+      required first.
+  G-D Recurring arrangement preferred driver / vehicle: additive nullable FKs (composite, same-org). Used ONLY as
+      prefill.
+  G-E Structured exception category: an optional enum alongside the free-text exception_type (expand), once the
+      taxonomy is settled.
+  G-F Running-late threshold: an org setting, not a schema change on trips. It needs a product definition.
+  G-G organizations.business_stage: candidate for a later CONTRACT (drop) once no reader remains. Not urgent.
+
+======================================================================
+PRICING INPUT CANDIDATES   (PRICING INPUT CANDIDATE ONLY -- no prices, no plans, not a billing design)
+======================================================================
+Candidate inputs that are factual, auditable and already or easily derivable:
+  - active vehicles
+  - active drivers
+  - completed trips per month
+  - staff seats (admin + dispatcher memberships)
+  - active recurring arrangements
+  - website request connections
+Candidate inputs to AVOID: self-reported size (business_stage). Also avoid feature gating that removes operational
+safety features (readiness, exceptions, proof of service) from smaller customers. Safety is never a premium tier.
+Competitor complexity trap:
+  - Incumbent NEMT / dispatch products tend to sell complexity (optimization, drag-and-drop boards, dozens of
+    modules) and then charge small operators for features they cannot use.
+  - Nemryn's position is that the small operator gets the same trustworthy core with less ceremony, and complexity
+    appears when facts demand it.
+  - Pricing should follow the same facts that drive adaptation, not the module count.
+
+======================================================================
+PRODUCT INVARIANTS
+======================================================================
+  I1  One operational model for every size. No size modes, no schema forks, no per-size tables.
+  I2  Customers are never asked their size in order to change behaviour. Adaptation uses observed facts.
+  I3  Signals change defaults, order, copy and prominence only. Never permission, validation or data shape.
+  I4  UI hiding is never authorization. RLS / RPC checks enforce every capability, and the privilege contract stays
+      green.
+  I5  Membership != Driver != AuthUser. Owner-as-driver is a linked Driver row, never a merged identity.
+  I6  Only an attributed operator confirmation writes an assignment. There is no silent auto-assign.
+  I7  Prefill only when the choice is factually unique or explicitly implied, and it is always visible and
+      changeable.
+  I8  Warn on facts, block only on invariants. Never call something a conflict the data cannot prove.
+  I9  Nothing disappears mysteriously. Every nav destination stays reachable, and prominence changes are explainable.
+  I10 Statuses, readiness and attention are derived, never stored for display.
+  I11 No vanity metrics. Every number leads to an action or a list.
+  I12 No fabricated availability, duration, capability or regulatory claim.
+  I13 The Driver PWA stays minimal and size-neutral.
+  I14 Schema changes are additive expand/contract, with a zero-downtime deploy order.
+
+======================================================================
+NEXT IMPLEMENTATION SLICE
+======================================================================
+P1-OPS-PROG1 -- PROGRESSIVE ASSIGNMENT (prefill + driver-day facts). UI + server read only.
+  Scope:
+    1. AssignmentDialog (Dispatch + Trip Detail):
+         - PREFILL Driver when exactly one active driver exists.
+         - PREFILL Vehicle when exactly one active vehicle exists.
+         - Otherwise list the operator's own linked driver first as "<name> (you)".
+    2. When a driver is selected, show a factual list of that driver's other non-terminal trips on the same org-local
+       day (pickup times + short labels), and whether they are on a trip right now. No threshold, no "conflict" word.
+    3. With no vehicle chosen while active vehicles exist, show the non-blocking note that Tomorrow will show "needs
+       a vehicle".
+    4. Dispatch "No active drivers" empty state for an admin without a linked driver: add an "I also drive" link to
+       Settings -> My Access.
+  Out of scope: auto-assign, any RPC change, durations, availability, drag-and-drop, nav changes, New Trip changes
+  (that is PROG2).
+  Acceptance:
+    - assign_trip / reassign_trip are called with the same parameters as today.
+    - ZW005 and expected-assignment errors are unchanged.
+    - The privilege contract stays 0/29 (untouched).
+    - Unit tests on a pure prefill/driver-day derivation (same style as trip-readiness-core).
+    - E2E with synthetic tenants: 1v/1d, owner-as-driver, and multi-driver.
+  DB impact: none. Security impact: none (reads use existing RLS-scoped queries; writes are unchanged).
+
+======================================================================
+NEXT 3-5 PHASES
+======================================================================
+PROG1 -- Progressive Assignment (above)
+  Objective: remove single-choice ceremony and make the driver's day visible while assigning.
+  User problem: the owner picks "the only driver" and forgets the vehicle, and a growing operator cannot see a
+    driver's spread when assigning.
+  Why now: it is the most frequent operator action, and it helps every archetype.
+  Dependencies: none.
+  DB impact: none. Security impact: none.
+  Pilot value: high. It is visible on the first day of a one-vehicle pilot.
+
+PROG2 -- Readiness to Action (assign-at-creation + inline Tomorrow fixes + recurring last-occurrence prefill)
+  Objective:
+    - "Assign now" on New Trip, using the PROG1 rules.
+    - Inline assign from the Tomorrow page for NEEDS_DRIVER / NEEDS_VEHICLE.
+    - Prefill from the most recent completed occurrence for recurring trips.
+    - A one-line Tomorrow status on Overview.
+  User problem: readiness says what is wrong but not how to fix it in place, and standing orders are re-assigned by
+    hand every week.
+  Why now: it builds directly on PROG1's dialog logic, and Tomorrow preparation is the growing operator's core ritual.
+  Dependencies: PROG1.
+  DB impact: none. It uses the existing create_trip + assign_trip, is non-atomic, and has explicit partial-failure
+    copy.
+  Security impact: none.
+  Pilot value: high for recurring-care (dialysis) pilots.
+
+PROG3 -- Fact-Signal Emphasis + Onboarding Cleanup (GAP-16 resolution)
+  Objective:
+    - One server helper that derives S1–S13.
+    - Brief section ordering and "fold on-track" by signal, with hysteresis.
+    - Tomorrow in the sidebar.
+    - Attribution surfaced when a dispatcher exists.
+    - Stop routing signup to the size question (column retained).
+  User problem: a small operator sees large-operator emphasis, and signup asks a question that changes nothing.
+  Why now: it needs PROG1/PROG2 in place so the emphasis has good destinations. The target nav/brief compositions must
+    be written precisely first, as GAP-16 requires.
+  Dependencies: PROG1, plus a written composition spec.
+  DB impact: none (business_stage stays nullable; a later contract is optional).
+  Security impact: none. Nav emphasis only; routes and guards are unchanged.
+  Pilot value: medium. It is a clarity and first-impression gain.
+
+PROG4 -- Trip Time Extent (GAP-11) + honest overlap warnings
+  Objective:
+    - An additive expected duration / drop-off (operator-entered, with an org default).
+    - Proportional grid blocks.
+    - An overlap WARNING for the same driver or vehicle.
+    - A Tomorrow scope on Dispatch.
+  User problem: at 10–30+ vehicles, "is this driver double-booked" cannot be answered today.
+  Why now: only after PROG1–3 prove the warning UX on facts that already exist.
+  Dependencies: a product decision on the duration source and the running-late threshold.
+  DB impact: an additive nullable column (expand-only); RPC parameters are optional/defaulted.
+  Security impact: low. New columns follow the existing trip RLS; the privilege contract must be extended.
+  Pilot value: medium, rising with fleet size.
+
+PROG5 -- Availability Foundation (GAP-6) + vehicle capability
+  Objective:
+    - Driver shifts / time off.
+    - Vehicle out-of-service windows and capability flags.
+    - A real "Available" in the capacity rail.
+    - Capability-aware assignment warnings.
+  User problem: large operations assign against people and vehicles that are not actually available or suitable.
+  Why now: last. It is the first genuinely new model, and it is needed only at A4/A5.
+  Dependencies: PROG4 and the capability taxonomy decision.
+  DB impact: new tables plus additive columns.
+  Security impact: significant. It needs new RLS (drivers read their own availability; admin/dispatcher write), a
+    privacy review, and privilege-contract additions.
+  Pilot value: low for current pilots, high for larger prospects.
+
+======================================================================
+OPEN QUESTIONS
+======================================================================
+  Q1 Retire the signup size question now (PROG3), or keep it optional purely for sales context on the platform-admin
+     page?
+  Q2 Should the owner-as-driver default on New Trip ("Assign to you") be ON when they are the only driver, or should
+     the trip always be created unassigned unless they opt in?
+  Q3 Should the driver-day list in the dialog include tomorrow when the trip is tomorrow? (Recommended: yes, use the
+     trip's own org-local day.)
+  Q4 What source should the trip duration have (PROG4): operator-entered per trip, an org default, or a per-facility
+     default?
+  Q5 What is the running-late threshold definition (minutes past scheduled pickup), and is it per org?
+  Q6 What is the vehicle capability taxonomy (wheelchair lift vs. ramp, stretcher, seats)? It needs operator input.
+     Nemryn makes no regulatory claims.
+  Q7 Should recurring arrangements get an explicit preferred driver/vehicle (G-D), or is last-occurrence prefill
+     sufficient?
+  Q8 Should Tomorrow and Recurring Care join the sidebar for everyone, or only once the operator has trips /
+     arrangements?
+  Q9 Should drag-and-drop on the Dispatch board be explicitly deferred until durations exist? (Recommended: yes.)
+
+======================================================================
+ONE-VEHICLE FIRST-CLASS: PARTIAL -- fully functional on the same model today (owner-as-driver, Driver PWA, requests,
+  readiness, proof of service). The remaining ceremony (single-choice assignment, missed vehicle -> NEEDS_VEHICLE, the
+  required size question) is removed by PROG1–PROG3.
+SAME CORE MODEL AT SCALE: YES -- one organization / membership / driver / vehicle / trip / assignment model serves 1 to
+  100+ vehicles. The missing concepts (duration, availability, capability) are additive.
+HARD BUSINESS SIZE MODES: NO -- none exist behaviourally, and none are recommended. The self-reported business_stage
+  column exists, but nothing behavioural reads it. The recommendation is to stop asking it (PROG3).
+CURRENT BACKEND SUPPORTS MULTI-VEHICLE: YES
+CURRENT BACKEND SUPPORTS MULTI-DRIVER: YES
+OWNER CAN OPERATE MULTIPLE VEHICLES ALONE: YES -- as organization_admin the owner assigns, prepares and resolves for
+  every vehicle without a dispatcher. As a driver, vehicle_id is per assignment, so the owner can move between
+  vehicles.
+OWNER-AS-DRIVER MODEL: SUPPORTED -- an organization_admin membership plus a separately linked Driver row
+  (link_self_as_driver, current_driver_id, one-active-link index, Drive nav). Membership and Driver are NOT merged.
+PROGRESSIVE ASSIGNMENT: NOT YET -- there is no prefill, no driver-day context and no assign-at-creation. It is the
+  recommended next slice.
+PROGRESSIVE DISPATCH: PARTIAL -- the queue, board and attention scale by content. Emphasis is not signal-driven, and
+  the board is today-only.
+OPERATIONS BRIEF PROGRESSION: PARTIAL -- the Brief is fact-derived and attention-first (the right primitive).
+  Section ordering and folding are not yet signal-driven.
+TOMORROW READINESS: SUPPORTED -- derived with all reasons. Its gaps are discoverability (not in the sidebar) and
+  inline fixing.
+EXCEPTION-LED SCALE MODEL: PARTIAL -- the attention queue (OPEN_EXCEPTION / NEEDS_ASSIGNMENT / LOCATION_STALE /
+  LOCATION_UNAVAILABLE), readiness, recurring gaps and proof-of-service review exist. Late-running, overlap,
+  availability and capability exceptions await data.
+SCHEMA CHANGE REQUIRED IMMEDIATELY: NO
+RECOMMENDED NEXT IMPLEMENTATION: P1-OPS-PROG1 -- Progressive Assignment (single-option Driver/Vehicle prefill,
+  "(you)" ordering for a linked operator, factual same-day driver trips in the assignment dialog, a no-vehicle note,
+  and the "I also drive" empty-state link). UI + server reads only.
+WHY: Assignment is the most frequent operator action and the clearest place where the one-vehicle experience carries
+  large-fleet ceremony. The same change gives growing operators the driver-day visibility they lack. It needs no
+  schema, RPC or security change, preserves every invariant (operator confirmation, warn-not-block, no fabricated
+  conflicts), and is the foundation that PROG2–PROG4 reuse.
+IMPLEMENTATION STARTED: NO
+BLOCKERS: NONE for this report or for PROG1. Later phases need product decisions: Q4/Q5 for PROG4, Q6 for PROG5, and
+  a written nav/brief composition spec for PROG3.
