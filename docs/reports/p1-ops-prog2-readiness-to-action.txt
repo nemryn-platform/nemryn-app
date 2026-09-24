@@ -435,3 +435,247 @@ Owner review
 → PROG2 production release
 DO NOT BEGIN PROG3 AUTOMATICALLY.
 STOP.
+
+
+######################################################################
+P1-OPS-PROG2 — PRODUCTION RELEASE
+######################################################################
+
+======================================================================
+OWNER DECISIONS
+======================================================================
+  - The mutually-exclusive NEEDS_DRIVER / NEEDS_VEHICLE readiness model is retained. trip-readiness-core is
+    unchanged.
+  - Operator terminology is standardized to Trip / Trips. The Overview Tomorrow line reads "N trips · …" (copy-only
+    change applied before release; tests updated).
+
+======================================================================
+RELEASE COMMIT
+======================================================================
+6126ce8db56e8214457131b2f8439705a07d911d  "feat: make trip readiness actionable"
+  - Author: Nemryn <nemryn.app@gmail.com>.
+  - 22 files: application code, unit tests and this report.
+  - Excluded: .tmp-qa, logs, scratch files, env files and unrelated untracked reports.
+  - A secret/PHI scan of the committed files was clean.
+Scope review:
+  - Included only: Assign now, AssignmentFields, create-then-assign, partial-success UX, Tomorrow Assign / Add
+    vehicle, recurring-history prefill, the Overview Tomorrow line, tests and report.
+  - Not included: PROG3–5, navigation redesign, duration, availability, vehicle capability, auto-assignment, new RPC,
+    migration, RLS, billing, D4, S5B.
+
+======================================================================
+FINAL E2E
+======================================================================
+Run against a fresh build of the FINAL code (including the "trips" copy):
+  - PROG2 .tmp-qa/p1-ops-prog2-readiness-e2e.mjs: 56/56 PASS, 0 failures. Verified "Nothing scheduled for tomorrow",
+    "4 trips · All ready", "4 trips · 2 need preparation", and that Review tomorrow links to /operations/tomorrow.
+  - PROG1 regression .tmp-qa/p1-ops-prog1-assignment-e2e.mjs: 46/46 PASS.
+Application gate on the same code: tsc PASS, lint PASS (0 errors), unit 559/559, build PASS.
+
+======================================================================
+GITHUB PUSH
+======================================================================
+Pushed once as `nemryn` to nemryn-platform/nemryn-app (4b5b5e7..6126ce8), with no force push. Local HEAD ==
+origin/main == 6126ce8.
+
+======================================================================
+VERCEL
+======================================================================
+The existing `nemryn-app` project was used. The GitHub Production deployment for 6126ce8 reached success.
+app.nemryn.com returns 200, and the smoke below exercised PROG2-only UI (Assign now, Tomorrow Assign / Add vehicle,
+"trips" copy), which confirms the new commit is served.
+
+======================================================================
+SUPABASE PREFLIGHT
+======================================================================
+`supabase projects list` showed Nemryn / wyocbivzgrbekuyqdfts (linked). It was run before the migration list, the
+privilege check, the smoke, and the post-smoke cleanup verification.
+
+======================================================================
+DATABASE / ACL
+======================================================================
+  - `supabase migration list --linked`: 68/68 local == remote; head is 20260924091000; nothing pending. PROG2 added
+    no migration.
+  - `scripts/verify-db-privileges.sh production`: violations = 0 of 29.
+
+======================================================================
+PRODUCTION SMOKE   (.tmp-qa/p1-ops-prog2-prod-smoke.mjs; synthetic tenant "Siloan Medical Centre" only)
+======================================================================
+A tenant guard confirmed the organization name before any write, and Zenward was not touched. NO Membership role was
+changed (QA policy). Fixtures were labelled "PROG2 QA":
+  - 4 drivers with no login
+  - 2 vehicles
+  - 1 passenger
+  - 1 PAUSED recurring arrangement
+  - synthetic trips
+Siloan's own driver and vehicle statuses were toggled temporarily and restored. 36 product checks PASS (see CLEANUP
+for the one bookkeeping check).
+
+======================================================================
+ASSIGN NOW
+======================================================================
+With 1 driver and 1 vehicle:
+  - PASS: Assign now was initially OFF. Turning it on prefilled the driver and vehicle, and nothing was written.
+  - PASS: Create Trip produced exactly one Trip and one active assignment, with the "Trip created and assigned."
+    notice.
+  - PASS: Tomorrow showed the trip Ready.
+
+======================================================================
+ASSIGN NOW OFF
+======================================================================
+PASS: the trip was created with no active assignment and no notice, which is the existing behaviour.
+
+======================================================================
+MULTI-RESOURCE
+======================================================================
+With 3 drivers (including the admin's own linked driver) and 2 vehicles:
+  - PASS: no resource was guessed.
+  - PASS: the owner's driver was listed first as "<name> (you)".
+  - PASS: driver-day context was available for the chosen date ("No other trips for … on Friday, September 25."),
+    with no conflict wording.
+
+======================================================================
+PARTIAL SUCCESS
+======================================================================
+The fixture driver was deactivated between page load and submit (the method validated locally):
+  - PASS: exactly one Trip existed, with 0 active assignments.
+  - PASS: "Trip created, but the assignment could not be completed." was shown.
+  - PASS: assigning from Current Status succeeded, and there was still one Trip.
+
+======================================================================
+TOMORROW INLINE ASSIGN
+======================================================================
+  - PASS: before, the row showed "Driver needed" with an Assign button.
+  - PASS: the dialog was prefilled and nothing was written on open.
+  - PASS: after confirming, readiness was re-derived as Ready.
+
+======================================================================
+ADD VEHICLE
+======================================================================
+  - PASS: the row showed "Vehicle needed" with an "Add vehicle" button.
+  - PASS: it opened the same dialog in reassign mode, with the current driver preserved.
+  - PASS: after confirming a vehicle, there were 2 assignment rows (history kept) and the trip was Ready.
+
+======================================================================
+MULTI-REASON
+======================================================================
+  - PASS: before, the row showed "Driver needed" + "Open issue".
+  - PASS: after assigning, only "Open issue" remained. The row stayed in Needs preparation and was never forced to
+    Ready.
+
+======================================================================
+RECURRING PREFILL
+======================================================================
+The history held a completed occurrence 14 days ago (Driver C), a completed one 7 days ago (Driver A + the tenant's
+vehicle) and a cancelled one 2 days ago (Driver B).
+  - PASS: Driver A and the vehicle were prefilled from the most recent completed occurrence, with the helper text.
+  - PASS: nothing was written, and Cancel left the occurrence unassigned.
+
+======================================================================
+RECURRING FALLBACK
+======================================================================
+  - PASS: with historical Driver A and the vehicle inactive and several others active, there was no default.
+  - PASS: with exactly one other option each, the PROG1 prefill ("Prefilled: the only active driver") applied.
+  - PASS: no auto-assignment happened.
+
+======================================================================
+OVERVIEW
+======================================================================
+PASS for all of:
+  - "Nothing scheduled for tomorrow"
+  - "4 trips · All ready"
+  - "4 trips · 2 need preparation" (TRIPS, not rides; no percentage)
+  - Review tomorrow links to /operations/tomorrow
+The counts are derived live from readiness, with no stored status.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+  - Driver: PASS. The synthetic driver account was redirected to /driver from /operations/trips/new and
+    /operations/tomorrow.
+  - Dispatcher: MANUAL. No synthetic dispatcher credential exists, and by QA policy no Membership role was changed.
+    The dispatcher's existing create/assign capability is covered by local tests; authorization code is unchanged.
+
+======================================================================
+CLEANUP
+======================================================================
+The in-script cleanup removed all trips, the passenger, the arrangement, 3 of 4 fixture drivers and both fixture
+vehicles, and restored every Siloan status.
+  - Its final check reported one mismatch: the fixture "PROG2 QA Driver C" (inactive, no remaining references) had
+    not been deleted. This was most likely a transient CLI query failure.
+  - After a fresh preflight, that single row was deleted by id + organization + name guard.
+  - Re-verified: 0 PROG2 drivers / vehicles / trips / passengers / arrangements remain. Siloan's 3 drivers and 1
+    vehicle are at their original status (all active).
+No product defect was involved.
+
+======================================================================
+OPEN ITEMS
+======================================================================
+  1. Pre-existing Overview copy outside PROG2 still says "rides" (Recurring Care block: "recurring rides need
+     scheduling", "All expected rides…"). It was left unchanged per "do not otherwise redesign". It could be aligned
+     in a later copy pass.
+  2. There is still no synthetic dispatcher credential; dispatcher production smoke remains MANUAL.
+  3. create_trip still has no server-side idempotency (unchanged; see OPEN ISSUES 3).
+  4. This release section was committed in the PROG2 closeout docs commit.
+
+PROG2 RELEASE COMMIT: 6126ce8db56e8214457131b2f8439705a07d911d
+FINAL PROG2 E2E: PASS
+PROG1 REGRESSION: PASS
+GITHUB PUSH: PASS
+VERCEL: PASS
+ASSIGN NOW: PASS
+ASSIGN NOW DEFAULT: OFF
+ASSIGN NOW AUTO-WRITES: NO
+CREATE + ASSIGN: PASS
+PARTIAL FAILURE: SAFE
+DUPLICATE TRIP: NO
+TOMORROW INLINE ASSIGN: PASS
+ADD VEHICLE: PASS
+MULTI-REASON READINESS: PASS
+RECURRING PREFILL: PASS
+RECURRING AUTO-ASSIGN: NO
+OVERVIEW TERMINOLOGY: TRIPS
+OVERVIEW TOMORROW: PASS
+DRIVER: BLOCKED
+DISPATCHER: MANUAL
+DATABASE MIGRATION: NONE
+ACL: 0/29 VIOLATIONS
+TSC: PASS
+LINT: PASS
+UNIT: 559/559
+BUILD: PASS
+PRODUCTION RELEASE: PASS
+BLOCKERS: NONE
+NEXT:
+Return for owner review.
+DO NOT BEGIN PROG3.
+STOP.
+
+
+######################################################################
+P1-OPS-PROG2 — CLOSEOUT
+######################################################################
+PROG2 is closed. Implementation release: 6126ce8db56e8214457131b2f8439705a07d911d. Production: PASS. ACL: 0/29.
+No application or database change was made at closeout.
+Final status:
+  PROG2 RELEASE: PASS
+  ASSIGN NOW: PASS
+  ASSIGN NOW DEFAULT: OFF
+  AUTO-ASSIGN: NO
+  PARTIAL FAILURE: SAFE
+  TOMORROW INLINE ASSIGN: PASS
+  RECURRING PREFILL: PASS
+  RECURRING AUTO-ASSIGN: NO
+  OVERVIEW TERMINOLOGY: TRIPS
+  DRIVER: BLOCKED
+  DISPATCHER: MANUAL
+  DATABASE MIGRATION: NONE
+  ACL: 0/29
+  BLOCKERS: NONE
+Retained open items (documented, deliberately not fixed at closeout):
+  1. Pre-existing "rides" copy elsewhere (Overview Recurring Care block).
+  2. No synthetic Dispatcher credential; dispatcher production smoke stays MANUAL.
+  3. create_trip has no server-side idempotency.
+  4. The recurring-history prefill is bounded to 90 days before the target trip.
+  5. Tomorrow inline actions cover NEEDS_DRIVER / NEEDS_VEHICLE only; inactive-driver / inactive-vehicle rows use
+     View trip -> Manage Assignment.
