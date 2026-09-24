@@ -689,3 +689,244 @@ Secret / PHI review of the committed file set: no keys, tokens, JWTs, passwords,
 only email address is the fictional org-a-dispatcher@example.test; no production row data (aggregate counts only).
 Scope review: Request decision workflow only. No D3, Zenward-Web, old Zenward organization deletion, S5B, billing,
 Facility Portal, broker integration or unrelated redesign.
+
+
+######################################################################
+P1-OPS-R1 + R1R -- PRODUCTION RELEASE
+######################################################################
+Production project Nemryn (wyocbivzgrbekuyqdfts), app https://app.nemryn.com, Vercel project nemryn/nemryn-app.
+Released 2026-09-24 as EXPAND -> old-app gate -> push/deploy -> new-app smoke -> CONTRACT -> final ACL -> final smoke.
+All mutating smoke used the synthetic QA tenant "Siloan Medical Centre" (plus "Vemt Pro" as the foreign tenant).
+The real Zenward QA Request, the Zenward tenants and the old Zenward organization were not touched.
+
+Tooling note: the release was paused once because the Supabase CLI was logged into a different account
+("monatriq's Project"), so every --linked command returned 403. The owner re-logged into the Nemryn account;
+`supabase projects list` then showed Nemryn / wyocbivzgrbekuyqdfts (linked). No other credential or route was used.
+During the smokes `supabase db query --linked` failed intermittently (non-JSON / transient); SQL reads were retried.
+No product step depended on a failed read.
+
+======================================================================
+OWNER PRODUCTION STATE CHECK
+======================================================================
+Recorded above (accepted 4/4 with Trips, cancelled 1/0, declined 14/0, pending 5/0; accepted_without_trip = 0).
+PASS. No remediation or data migration.
+
+======================================================================
+RELEASE COMMIT
+======================================================================
+71c567631238d780ed1dfdc7881096e50123e01d  "feat: add explicit request acceptance workflow"
+(single implementation commit on top of bcf66c9; author Nemryn <nemryn.app@gmail.com>, GitHub login nemryn)
+
+======================================================================
+CURRENT ACL BASELINE   (before any production mutation)
+======================================================================
+Contract as of bcf66c9 (28 checks) run read-only against production: SUMMARY violations = 0 of 28. No drift.
+
+======================================================================
+EXPAND MIGRATION
+======================================================================
+`supabase migration list --linked`: every earlier migration applied, nothing remote-only, exactly 20260924090000 and
+20260924091000 pending. `db push` applies everything pending, so for this one push the CONTRACT file was moved out of
+supabase/migrations/. Dry run: "Would push 20260924090000_request_decision_workflow_expand.sql" only.
+`supabase db push --linked --yes` applied it. The known post-push pg-delta "catalog cache / missing temp certificate"
+message appeared (same harmless cache step as D2). Verified independently:
+  - second push: "Remote database is up to date."
+  - catalog: accept_transportation_request, _validate_request_decision_reason, the new (uuid,uuid,text,text) decline/
+    cancel AND the legacy decline(uuid,uuid,text) / cancel(uuid,uuid) present; request_events.reason_code/reason_note
+    present; request_events_decision_reason_required absent
+  - migration history: 20260924090000 applied, 20260924091000 pending
+The CONTRACT file was restored to the repo right after (working tree clean). APPLIED.
+
+======================================================================
+EXPAND ACL STATE
+======================================================================
+scripts/verify-db-privileges.sh production (29-check contract): violations = 1 of 29, and it's exactly check 29
+(transitional overloads remain: cancel_transportation_request(uuid,uuid), decline_transportation_request(uuid,uuid,text)).
+All other 28 checks ok. EXPECTED.
+
+======================================================================
+OLD APP + EXPAND PRODUCTION
+======================================================================
+While app.nemryn.com still served bcf66c9 (.tmp-qa/r1-prod-old-app-expand.mjs): 16/16 PASS.
+  Org Admin sign-in; Operations, Requests, Trips, Dispatch, Settings load without error; 3 synthetic Requests via Log
+  Request -> pending; old UI (Decline + Cancel, no Accept); Add New Passenger on pending; Create Trip from PENDING
+  succeeds and implicitly accepts (legacy create_trip); legacy Decline with free-text reason (metadata.reason, no
+  reason_code); legacy Cancel on PENDING; no error text; Driver PWA sign-in -> /driver renders.
+
+======================================================================
+GITHUB PUSH
+======================================================================
+`gh` active account: nemryn (the stored ternivex account is inactive); git uses the gh credential helper.
+`git push origin main` (no force): bcf66c9..71c5676. Local HEAD == origin/main == 71c5676. GitHub commit author:
+nemryn / nemryn.app@gmail.com. PASS.
+
+======================================================================
+VERCEL
+======================================================================
+The push triggered the EXISTING nemryn/nemryn-app project (no new project). Commit status for 71c5676: "Vercel success
+-- Deployment has completed". The new UI (Accept Request on a pending Request) is served at https://app.nemryn.com. PASS.
+
+======================================================================
+NEW APP + EXPAND
+======================================================================
+.tmp-qa/r1-prod-new-app-smoke.mjs MODE=expand: 41/41 PASS (details in SYNTHETIC ACCEPT / DECLINE / CANCEL / PASSENGER
+READINESS / TRIP CREATION / AUTHORIZATION). In EXPAND the pending-create_trip invariant was deliberately NOT probed:
+the legacy path would really have created a Trip. It was probed after CONTRACT.
+
+======================================================================
+SYNTHETIC ACCEPT
+======================================================================
+PENDING header: Accept Request + Decline Request visible; Cancel Request and Create Trip NOT visible.
+Accept (double click): Accepted; DB state accepted; request_accepted RequestEvent exactly once; AuditEvent exactly
+once; no Passenger created or linked; no Trip created. Passed in both EXPAND and CONTRACT runs.
+
+======================================================================
+SYNTHETIC DECLINE
+======================================================================
+Dialog "Decline this request?" + copy; confirm disabled until a reason is chosen; reason duplicate_request stored on
+the request_declined event; Declined is terminal (no decision actions). Backend: declined -> accept ZW004,
+declined -> cancel ZW004. After CONTRACT: legacy free-text decline and reason-less decline -> PGRST202 (functions
+gone); unknown reason code -> ZW006; the Request stayed pending with 0 decline events.
+
+======================================================================
+SYNTHETIC CANCEL
+======================================================================
+Pending -> Accept -> Cancel: dialog "Cancel this request?" + copy; confirm disabled until a reason is chosen; reason
+requester_cancelled stored on the request_cancelled event; Cancelled is terminal. Backend: cancelled -> accept ZW004.
+
+======================================================================
+PASSENGER READINESS
+======================================================================
+Accepted without Passenger: "Passenger needed" + exactly "Link or create the passenger before this request can be
+scheduled." Add New Passenger on the ACCEPTED Request -> linked, "Ready to schedule", Request still accepted. Backend:
+link_request_passenger on a PENDING Request allowed and the state stays pending (linking never accepts).
+
+======================================================================
+TRIP CREATION
+======================================================================
+Accepted + ready: Create Trip offered, Trip created through the real New Trip form, Request stays accepted.
+Accepted + Trip: Request-level Cancel unavailable, "Manage cancellation from the linked trip." shown, backend cancel
+ZW004. After CONTRACT: create_trip on a PENDING Request with a linked active Passenger -> ZW006, no Trip. Provenance
+(every Request column except state/updated_at/passenger_id) unchanged through accept / link / Trip.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+Organization Admin (Siloan): allowed, every flow above.
+Driver (Siloan): /operations/requests/<id> -> /driver; no decision actions. BLOCKED.
+Foreign tenant (Vemt Pro admin) opening a Siloan Request: "Request unavailable", no content. BLOCKED.
+Dispatcher: MANUAL. No safe production Dispatcher credential exists and none was created. Covered locally
+  (request_decision_workflow_tests S / auth matrix; concurrency runs as Dispatcher).
+Platform Admin (no Membership): MANUAL. No safe production credential; covered locally (ZW002 in
+  request_decision_workflow_tests and the EXPAND compat suite).
+
+======================================================================
+CONTRACT MIGRATION
+======================================================================
+Applied only after the new app was live and NEW + EXPAND passed. Dry run: only
+20260924091000_request_decision_workflow_contract.sql. `supabase db push --linked --yes`: "Applying migration
+20260924091000..."; second dry run "Remote database is up to date"; migration history 20260924090000 + 20260924091000,
+nothing pending. APPLIED.
+
+======================================================================
+FINAL ACL
+======================================================================
+scripts/verify-db-privileges.sh production: SUMMARY violations = 0 of 29. HARD GATE PASS.
+Catalog: legacy decline(uuid,uuid,text) / cancel(uuid,uuid) gone. EXECUTE:
+  accept_transportation_request(uuid,uuid)            authenticated only (no anon / service_role / PUBLIC), SECURITY DEFINER
+  decline_transportation_request(uuid,uuid,text,text) authenticated only, SECURITY DEFINER
+  cancel_transportation_request(uuid,uuid,text,text)  authenticated only, SECURITY DEFINER
+  _validate_request_decision_reason(text,text,text)   no client / service EXECUTE
+Table-level grants to authenticated on transportation_requests / request_events: SELECT only (unchanged). No raw
+table write grant added.
+
+======================================================================
+FINAL WORKFLOW SMOKE
+======================================================================
+.tmp-qa/r1-prod-new-app-smoke.mjs MODE=contract: the full UI journey (pending header, accept, passenger readiness, Trip,
+decline, cancel, Hub, 768 px, Driver, foreign tenant) printed no FAIL line, plus the CONTRACT backend probes:
+  pending -> create_trip ZW006 (no Trip); pending -> cancel ZW004; accepted + Trip -> cancel ZW004;
+  declined/cancelled -> accept ZW004; declined -> cancel ZW004; legacy 2-arg cancel PGRST202 (Request untouched).
+The run's final probe hit a transient `supabase db query` failure before it could assert. It was re-run alone
+(.tmp-qa/r1-prod-contract-probe.mjs) without creating anything: legacy free-text decline PGRST202, reason-less decline
+PGRST202, unknown code ZW006; Request still pending with 0 decline events. PASS.
+
+======================================================================
+WEBSITE INTAKE REGRESSION
+======================================================================
+Siloan had no active intake path, so for this step it was temporarily given one through the real admin UI:
+  - Nemryn form published -> ONE hosted-form submission (/request/<key>) and ONE embed-route submission
+    (/embed/request/<key>): both state pending, source web, intake-linked, events = request_logged only; no Passenger,
+    no Trip.
+  - fictional website connection (https://www.r1prod-<stamp>.example.test) -> Turn on -> ONE POST to
+    /api/public-intake/website with that Origin: 200; Request pending, source web, request_logged only, acquisition
+    snapshot captured; no Passenger, no Trip.
+Incident during this step, found and fully reverted: the first intake script clicked the first "Turn on" button on the
+page. That RE-ACTIVATED a leftover synthetic D2 connection (https://www.d2rel-muc2hgia-v2four.example.test, 0 Requests,
+inactive before) instead of the new one, so the first website POST correctly got 400 (inactive connection). No Request
+was created by the misfire and no submission went through the D2 connection while it was on. A follow-up script
+scoped every click to the card showing that connection's own address: it turned the D2 connection back OFF,
+turned the R1 connection on, ran the website check above, then removed (retired) the R1 connection.
+Siloan end state: Nemryn form disabled, D2 connection inactive, R1 connection retired, 0 active intake paths (as before).
+3 submissions total, well within rate limits. WEBSITE REQUESTS ENTER PENDING: PASS.
+
+======================================================================
+REAL ZENWARD OWNER QA
+======================================================================
+NOT performed by tooling (by design). Every precondition is met: EXPAND applied, new app deployed, synthetic smoke
+PASS, CONTRACT applied, final ACL 0/29, final synthetic smoke PASS. The owner may now open the real Zenward Request
+(expected: Pending; header Decline Request + Accept Request; no Cancel Request), Accept it (expected: Accepted;
+"Passenger needed"; "Link or create the passenger before this request can be scheduled."), link/create the correct
+Passenger (expected: "Ready to schedule"; Create Trip), and decide whether to create the actual Trip.
+STATUS: PENDING (owner).
+
+======================================================================
+OPEN ITEMS
+======================================================================
+1. Owner QA with the real Zenward Request (above), then the separate, explicit old Zenward organization cleanup.
+2. Synthetic data left in Siloan (clearly tagged R1PROD-*): Requests from the OLD, EXPAND, CONTRACT and INTAKE runs;
+   3 synthetic Passengers ("R1PROD-* Rider"); 3 synthetic scheduled Trips about 5 days out (from the OLD-app run and
+   the two new-app runs). They're harmless in the QA tenant. Cancel them from Trip Detail if a clean Dispatch board
+   is wanted.
+3. Dispatcher and Platform Admin production smoke: MANUAL (no safe production credential; covered locally).
+4. Siloan still holds the old, now-inactive D2 synthetic connection (…d2rel…v2four). It was left as found.
+5. Supabase CLI 2.109.0 (2.117.0 available). The intermittent `db query --linked` failures and the post-push pg-delta
+   certificate message are tooling-side.
+
+OWNER STATE CHECK:              PASS
+ACCEPTED WITHOUT TRIP:          0
+R1 RELEASE COMMIT:              71c567631238d780ed1dfdc7881096e50123e01d
+EXPAND MIGRATION:               APPLIED
+OLD APP + EXPAND:               PASS
+EXPAND ACL:                     1/29 EXPECTED
+NEW APP + EXPAND:               PASS
+VERCEL:                         PASS
+CONTRACT MIGRATION:             APPLIED
+FINAL ACL:                      0/29 VIOLATIONS
+PENDING ACCEPT:                 PASS
+PENDING DECLINE:                PASS
+PENDING CANCEL:                 BLOCKED
+ACCEPT CREATES PASSENGER:       NO
+ACCEPT CREATES TRIP:            NO
+PASSENGER LINK IMPLIES ACCEPT:  NO
+PENDING TRIP CREATION:          BLOCKED
+ACCEPTED READY TRIP CREATION:   PASS
+DECLINE REASON:                 REQUIRED
+CANCEL REASON:                  REQUIRED
+DRIVER:                         BLOCKED
+DISPATCHER:                     MANUAL
+PLATFORM ADMIN:                 MANUAL
+WEBSITE REQUESTS ENTER PENDING: PASS
+REAL ZENWARD OWNER QA:          PENDING
+TSC:                            PASS
+LINT:                           PASS
+UNIT:                           509/509
+BUILD:                          PASS
+PRODUCTION RELEASE:             PASS
+BLOCKERS:                       NONE
+
+NEXT AFTER OWNER ZENWARD QA PASS:
+Explicit old Zenward organization cleanup.
+
+DO NOT BEGIN D3 AUTOMATICALLY.
+STOP.
