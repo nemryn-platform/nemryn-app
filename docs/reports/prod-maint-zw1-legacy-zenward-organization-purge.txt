@@ -1,0 +1,197 @@
+NEMRYN PLATFORM
+PROD-MAINT-ZW1 -- LEGACY ZENWARD ORGANIZATION PERMANENT PURGE
+Explicit one-off destructive production maintenance, executed 2026-09-24 against Nemryn production
+(wyocbivzgrbekuyqdfts) only. No code, migration, schema object, RPC, privilege, Auth configuration, Vercel, DNS or
+Zenward-Web change. No reusable delete feature was added. Full UUIDs are shortened here; the complete identifiers,
+the SQL and the raw outputs stay in the private session scratchpad (not committed). This report contains no PHI.
+
+======================================================================
+OWNER AUTHORIZATION
+======================================================================
+The owner explicitly authorized permanent deletion of the OLD Zenward organization and all its tenant-scoped
+operational data, including historical Requests / Trips / events, after the NEW Zenward tenant passed real
+production QA (onboarding, Website Requests connection, real request received -> Pending -> Accepted, passenger
+prefill + linking). Auth users were explicitly out of scope and were not to be deleted.
+
+======================================================================
+TARGET IDENTIFICATION
+======================================================================
+`supabase projects list`: Nemryn / wyocbivzgrbekuyqdfts / ACTIVE_HEALTHY / linked; repo link = wyocbivzgrbekuyqdfts.
+Resolved READ-ONLY from request_intake_integrations.external_id (never from the display name; both orgs are named
+"Zenward Mobility"):
+  OLD (delete)   zenward-web-87553280  -> org f8efa9dd…  created 2026-09-06
+  NEW (protect)  web_3TYSNYYD38D4      -> org 627a9fa6…  created 2026-09-21
+Both exist; OLD <> NEW.
+
+======================================================================
+OLD VS NEW ORGANIZATION PROOF
+======================================================================
+- Different organization ids, different creation dates, one website integration each.
+- Both integrations were active on the same origin (https://www.zenwardmobility.com), so the live traffic was
+  checked: the legacy integration's last Request was 2026-09-19 (before the NEW org existed); the real Zenward-Web
+  Request arrived through web_3TYSNYYD38D4 on 2026-09-23. Zenward-Web sends only to the NEW connection.
+- NEW holds the QA'd Request (accepted, Passenger linked, intake via web_3TYSNYYD38D4) and one active
+  organization_admin Membership.
+- The two OLD Memberships' users have no Membership anywhere else and neither is the NEW tenant's admin.
+
+======================================================================
+NEW ORGANIZATION PROTECTION BASELINE
+======================================================================
+Per table: row count AND md5 over the full text of every NEW-org row (organizations included).
+  organizations 1, memberships 1, request_intake_integrations 1, transportation_requests 1, passengers 1,
+  drivers 1, vehicles 1, request_events 3, notification_events 1, audit_events 9; trips 0, facilities 0, all other
+  organization-scoped tables 0.
+  auth.users total 11; migrations 68 (head 20260924091000).
+
+======================================================================
+OLD ORGANIZATION ROW MANIFEST   (read-only, before mutation)
+======================================================================
+Every public table carrying organization_id was counted (26 tables). Non-zero:
+  organizations 1, memberships 2, request_intake_integrations 1, transportation_requests 5 (4 pending, 1 accepted),
+  request_events 7, trips 3, trip_events 3, passengers 2, drivers 1, vehicles 1, audit_events 5      TOTAL 31
+All others 0: driver_invites, driver_location_updates, facilities, notification_events, organization_notification_
+settings, organization_service_offerings, recurring_arrangements, recurring_occurrence_exceptions,
+request_acquisition_attributions, staff_invites, trip_assignments, trip_exceptions, trip_notes,
+website_request_form_publications, website_request_forms.
+Indirect children: none. Every child FK in the schema is composite (id, organization_id), so an old-org child can
+only reference old-org parents. Cross-org references were checked and found 0: audit rows of other orgs pointing at
+the old org or its rows, notification events of other orgs pointing at old Requests, rate-limit rows mentioning the
+legacy integration.
+Tables without organization_id: user_profiles and platform_admin_grants (global, user-scoped: untouched),
+public_intake_rate_limit_events (no reference to the legacy integration).
+
+======================================================================
+AUTH USER SAFETY
+======================================================================
+OLD Memberships: 2 (both organization_admin, active). Their users hold no other Membership and no
+PlatformAdminGrant. The old Driver row was linked to one of those users. Only the Membership and Driver rows
+were deleted. auth.users, user_profiles and platform_admin_grants were not touched. The two users now have no
+Membership; they were left intact, as instructed (no unrelated account cleanup).
+
+======================================================================
+FOREIGN KEY AUDIT
+======================================================================
+All 67 public foreign keys were read from pg_constraint.
+- Every FK to organizations (23 tables) is NO ACTION: nothing cascades, and a bare `DELETE FROM organizations`
+  would fail. The purge therefore deletes children explicitly, in dependency order.
+- Tenant child FKs are composite NO ACTION: Trip -> Request, Trip -> Passenger / RecurringArrangement,
+  TripAssignment / TripEvent / TripNote / TripException / DriverLocationUpdate -> Trip, Request -> integration /
+  Passenger, attribution / RequestEvent -> Request, publication -> form / integration, assignment -> driver / vehicle.
+- SET NULL: trips -> facilities (pickup / destination); drivers.user_id -> auth.users.
+- CASCADE: only from auth.users (memberships, user_profiles, platform_admin_grants). Not exercised; no Auth user
+  was deleted.
+- audit_events.entity_id and notification_events.entity_id are FK-free references; covered by the cross-org
+  checks above.
+No DELETE triggers exist on any public table.
+
+======================================================================
+PURGE TRANSACTION
+======================================================================
+One PL/pgSQL DO block, atomic: any exception rolls back everything. Inside the transaction it:
+  1. re-resolves both orgs from their integration external ids; asserts both exist, match the audited ids and
+     differ; locks both organization rows
+  2. snapshots the NEW org's per-table counts + the auth.users count
+  3. deletes old-org rows in FK-safe order (driver_location_updates, trip_notes, trip_exceptions, trip_events,
+     trip_assignments, trips, recurring_occurrence_exceptions, recurring_arrangements, request_acquisition_
+     attributions, request_events, notification_events, transportation_requests, website_request_form_
+     publications, website_request_forms, request_intake_integrations, passengers, facilities, vehicles, drivers,
+     driver_invites, staff_invites, organization_notification_settings, organization_service_offerings,
+     audit_events, memberships, organizations), and after EVERY table asserts the deleted row count equals the
+     manifest exactly
+  4. asserts: OLD org gone, legacy integration gone, NEW org count = 1, web_3TYSNYYD38D4 present and not
+     retired, total deleted = 31, NEW per-table counts + auth.users count unchanged
+DRY RUN first: the same block ending in a forced exception. Result "ZW1 DRY RUN OK (rolled back): total=31" with
+every per-table count matching the manifest; a re-count afterwards confirmed nothing changed.
+LIVE RUN (the same block without the forced exception): committed, exit 0, no error. SUCCESS.
+
+======================================================================
+ROWS DELETED
+======================================================================
+trip_events 3, trips 3, request_events 7, transportation_requests 5, request_intake_integrations 1, passengers 2,
+vehicles 1, drivers 1, audit_events 5, memberships 2, organizations 1                              TOTAL 31
+(every other table 0; each count asserted equal to the manifest inside the transaction)
+Note: audit_events is append-only for application roles. Its 5 old-org rows were removed only because the owner
+authorized purging the entire tenant, history included.
+
+======================================================================
+OLD ORGANIZATION POSTCHECK
+======================================================================
+Every organization-scoped table for the OLD org: 0 rows (organization, integration, Memberships, Requests,
+request events, Trips, trip events, Passengers, Drivers, Vehicles, Facilities, forms / publications, settings,
+service offerings, audit events).
+zenward-web-87553280: 0.
+Full sweep: all 94 uuid columns across every public base table searched for the old org id: 0 hits.
+No orphaned rows.
+
+======================================================================
+NEW ORGANIZATION POSTCHECK
+======================================================================
+The baseline query re-run: every table's row count AND content md5 is IDENTICAL to the pre-purge baseline
+(organization, Membership, integration, Request, Passenger, Driver, Vehicle, request events, notification event,
+audit events; Trips / Facilities still 0). web_3TYSNYYD38D4 active, not retired, origin
+https://www.zenwardmobility.com. Nothing belonging to the NEW tenant was modified or deleted.
+
+======================================================================
+APPLICATION SMOKE
+======================================================================
+Not automated. This session holds no credential for the real Zenward tenant and created none. OWNER ACTION: sign in to
+the NEW Zenward tenant and check Overview, Requests, Trips, Passengers, Drivers, Fleet, Settings and Website Requests,
+then open the QA'd Request. Expected: Accepted, the linked Passenger shown, "Ready to schedule", Website provenance.
+The database side of this is already proven unchanged (identical content md5 for the Request, the Passenger, the
+Membership and the integration). No additional real data was created.
+
+======================================================================
+WEBSITE CONNECTION
+======================================================================
+Read-only: web_3TYSNYYD38D4 exists, is active and not retired, approved website https://www.zenwardmobility.com.
+The legacy connection on the same origin no longer exists, so Zenward-Web traffic has only one possible target.
+No production request was submitted.
+
+======================================================================
+AUTH USER VERIFICATION
+======================================================================
+auth.users: 11 before, 11 after. No Auth user deleted. user_profiles and platform_admin_grants untouched.
+
+======================================================================
+ACL / DATABASE HEALTH
+======================================================================
+scripts/verify-db-privileges.sh production: SUMMARY violations = 0 of 29.
+Migrations: 68 before, 68 after, head 20260924091000, none pending. No schema object, RPC, grant or policy
+added or changed. No repository file changed apart from this report.
+
+======================================================================
+OPEN ITEMS
+======================================================================
+1. Owner: sign-in smoke of the NEW Zenward tenant (APPLICATION SMOKE above).
+2. The two former OLD-org admin accounts remain as Auth users with no Membership, as instructed. If either
+   signs in, the app treats it like any account without a workspace. Any account cleanup would be a separate,
+   explicit decision.
+
+OLD INTEGRATION:                  zenward-web-87553280
+NEW PROTECTED INTEGRATION:        web_3TYSNYYD38D4
+OLD / NEW ORG SAME:               NO
+OLD ORGANIZATION DELETED:         YES
+OLD INTEGRATION DELETED:          YES
+OLD MEMBERSHIPS DELETED:          YES
+OLD OPERATIONAL DATA REMAINING:   0
+AUTH USERS DELETED:               0
+NEW ORGANIZATION PRESERVED:       YES
+NEW INTEGRATION PRESERVED:        YES
+NEW REQUESTS PRESERVED:           YES
+NEW PASSENGERS PRESERVED:         YES
+NEW TRIPS PRESERVED:              YES (0 before, 0 after)
+NEW MEMBERSHIPS PRESERVED:        YES
+ZENWARD TENANT LOGIN:             OWNER ACTION REQUIRED (no credential in this session; data proven unchanged)
+WEBSITE REQUESTS:                 PASS (read-only verification)
+ACL:                              0/29 VIOLATIONS
+MIGRATIONS CHANGED:               NO
+SCHEMA CHANGED:                   NO
+PURGE:                            PASS
+BLOCKERS:                         NONE (the owner sign-in smoke is outstanding)
+
+NEXT IF PASS:
+Legacy Zenward cleanup CLOSED.
+Then return for owner review before beginning D3.
+
+DO NOT BEGIN D3 AUTOMATICALLY.
+STOP.
