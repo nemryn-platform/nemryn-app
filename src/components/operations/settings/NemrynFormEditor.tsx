@@ -40,10 +40,12 @@ export interface NemrynFormEditorProps {
   /** P1-COMM-D2: publication state of the SAVED form (null = never published) and this deployment's origin. */
   publication: FormPublishPanelProps["publication"];
   origin: string;
+  /** P1-COMM-D3: dedicated hosted-form origin, or null. */
+  requestFormOrigin: string | null;
 }
 
 /** Nemryn form configuration: the operator chooses wording and which offered services appear. Fields required by intake can't be hidden. */
-export function NemrynFormEditor({ organizationName, saved, initial, orgServices, connectionHandle, websiteManager, publication, origin }: NemrynFormEditorProps) {
+export function NemrynFormEditor({ organizationName, saved, initial, orgServices, connectionHandle, websiteManager, publication, origin, requestFormOrigin }: NemrynFormEditorProps) {
   const [state, action, pending] = useActionState(saveWebsiteRequestFormAction, IDLE);
   const [, startTransition] = useTransition();
   const [title, setTitle] = useState(initial.title);
@@ -201,6 +203,7 @@ export function NemrynFormEditor({ organizationName, saved, initial, orgServices
           dirty={dirty}
           publication={publication}
           origin={origin}
+          requestFormOrigin={requestFormOrigin}
           websiteManager={websiteManager}
         />
 

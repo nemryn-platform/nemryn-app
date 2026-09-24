@@ -46,3 +46,54 @@ export function resolveClientIpFromHeaders(headers: { get(name: string): string 
   if (realIp) return realIp.trim();
   return "unknown";
 }
+
+// ---------------------------------------------------------------------------
+// P1-COMM-D3R -- server-to-server website intake: separate buckets for VERIFIED connections vs everything else.
+// ---------------------------------------------------------------------------
+
+/** The subset of a request_intake_integrations row the classification needs (read by the service-role lookup). */
+export interface IntakeConnectionRow {
+  integration_type: string;
+  is_active: boolean;
+  retired_at: string | null;
+  allowed_origins: string[] | null;
+}
+
+/**
+ * True only for a request the intake RPC would treat as coming from a live, correctly-configured website connection:
+ * exact Integration ID found, website connection, turned on, not retired, and (when an approved-website list exists) the
+ * Origin header exactly one of them -- the same rule submit_public_transportation_request applies. (Organization suspension
+ * is still enforced by the RPC itself; a suspended tenant's connection is merely limited by its own integration bucket.)
+ */
+export function isVerifiedWebsiteConnection(row: IntakeConnectionRow | null, origin: string | null): boolean {
+  if (!row || row.integration_type !== "website" || row.is_active !== true || row.retired_at !== null) return false;
+  const allowed = row.allowed_origins ?? [];
+  if (allowed.length === 0) return true;
+  return origin !== null && allowed.includes(origin);
+}
+
+export interface IntakeRateLimitKeys {
+  /** Passed as p_integration_external_id: the bucket the 120/hour integration limit counts. */
+  integrationKey: string;
+  /** Passed as p_client_key: the bucket the 8/hour per-client limit counts. */
+  clientKey: string;
+}
+
+/**
+ * Bucket selection for /api/public-intake/website.
+ *  - VERIFIED connection: the integration's own bucket (120/hour, the commercial boundary). The per-client bucket is scoped
+ *    to (integration, idempotencyKey), so distinct submissions from one outbound server IP never share a tiny IP bucket,
+ *    while repeated replays of the SAME submission are still capped.
+ *  - Everything else (unknown ID, off, retired, wrong Origin): the per-IP abuse bucket as before, and a separate
+ *    "unverified:" integration bucket, so garbage traffic naming a real Integration ID can't consume that customer's
+ *    capacity.
+ */
+export function websiteIntakeRateLimitKeys(input: { verified: boolean; integrationExternalId: string; idempotencyKey: string; clientIp: string }): IntakeRateLimitKeys {
+  if (input.verified) {
+    return {
+      integrationKey: input.integrationExternalId,
+      clientKey: createHash("sha256").update(`${CLIENT_KEY_SALT}:connection:${input.integrationExternalId}:${input.idempotencyKey}`).digest("hex"),
+    };
+  }
+  return { integrationKey: `unverified:${input.integrationExternalId}`, clientKey: hashClientIp(input.clientIp) };
+}

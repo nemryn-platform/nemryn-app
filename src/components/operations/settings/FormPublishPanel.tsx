@@ -14,7 +14,6 @@ import {
   FORM_CONNECTION_EXPLANATION,
   WEBSITE_REQUESTS_STATUS_LABEL,
   buildEmbedSnippet,
-  buildHostedFormUrl,
   buildIframeFallback,
   derivePublicationState,
   embedPlacementGuidance,
@@ -24,6 +23,7 @@ import {
   publishAction,
   type WebsiteManager,
 } from "@/lib/operations/website-requests-core";
+import { preferredHostedFormUrl } from "@/lib/operations/website-requests-setup-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -37,6 +37,8 @@ export interface FormPublishPanelProps {
   publication: { publicKey: string; status: "published" | "disabled"; publishedVersion: number; requestCount: number; lastRequestReceived: string | null } | null;
   /** This deployment's canonical origin, resolved on the server. */
   origin: string;
+  /** P1-COMM-D3: the dedicated hosted-form origin (e.g. https://request.nemryn.com), or null when not configured. */
+  requestFormOrigin: string | null;
   websiteManager: string | null;
 }
 
@@ -48,7 +50,7 @@ const ACTION_LABEL = { publish: "Publish form", update: "Publish update", republ
  * CONNECTION status ("Ready to test" until a real request arrives). Editing never changes a live form -- only "Publish" does.
  * Nothing technical is shown by default: no API, keys, or ids -- only the link and the paste-in code the operator asked for.
  */
-export function FormPublishPanel({ savedForm, dirty, publication, origin, websiteManager }: FormPublishPanelProps) {
+export function FormPublishPanel({ savedForm, dirty, publication, origin, requestFormOrigin, websiteManager }: FormPublishPanelProps) {
   const [publishState, publishAct, publishing] = useActionState(publishWebsiteRequestFormAction, IDLE);
   const [disableState, disableAct, disabling] = useActionState(disableWebsiteRequestFormAction, IDLE);
   const [confirmDisable, setConfirmDisable] = useState(false);
@@ -58,7 +60,8 @@ export function FormPublishPanel({ savedForm, dirty, publication, origin, websit
   const action = publishAction(savedForm, publication);
   const connection = formConnectionStatus(publication);
   const live = publication?.status === "published";
-  const hostedUrl = publication ? buildHostedFormUrl(origin, publication.publicKey) : null;
+  // Preferred link: the dedicated hosted-form origin when configured; otherwise the existing app link (which always keeps working).
+  const hostedUrl = publication ? preferredHostedFormUrl({ requestFormOrigin, appOrigin: origin, publicKey: publication.publicKey }) : null;
   const embed = publication ? buildEmbedSnippet(origin, publication.publicKey) : null;
   const iframe = publication ? buildIframeFallback(origin, publication.publicKey) : null;
   const placement = manager ? embedPlacementGuidance(manager) : null;

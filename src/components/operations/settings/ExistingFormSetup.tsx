@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { CopyValue } from "./CopyValue";
 import { ConnectWebsiteFirst, UseMethodForm } from "./ConnectionSetupControls";
+import { OriginNote, ServerSideNote, TurnOnCallout } from "./WebsiteRequestsSetup";
 import { Panel } from "@/components/ui/Panel";
 import { LinkButton } from "@/components/ui/LinkButton";
 import type { WebsiteRequestsConnectionView } from "./WebsiteConnectionControls";
@@ -23,6 +24,8 @@ import { cn } from "@/lib/cn";
  * same for everyone and stays behind "Technical details" until requested.
  */
 export function ExistingFormSetup({ connection, endpoint }: { connection: WebsiteRequestsConnectionView | null; endpoint: string }) {
+  const [notice, setNotice] = useState<string | null>(null);
+  const onDone = useCallback((message: string) => setNotice(message || null), []);
   const [manager, setManager] = useState<WebsiteManager | null>(isWebsiteManager(connection?.websiteManager) ? (connection?.websiteManager as WebsiteManager) : null);
   const guidance = manager ? existingFormGuidance(manager) : null;
   const managerLabel = manager ? (WEBSITE_MANAGER_OPTIONS.find((o) => o.value === manager)?.label ?? null) : null;
@@ -43,6 +46,12 @@ export function ExistingFormSetup({ connection, endpoint }: { connection: Websit
         <ConnectWebsiteFirst />
       ) : (
         <>
+          <TurnOnCallout connection={connection} onDone={onDone} />
+          {notice && (
+            <p role="status" className={cn(typography.bodySmall, "rounded-sm bg-surface-secondary px-3 py-2 text-text-primary")}>
+              {notice}
+            </p>
+          )}
           <Panel className="flex flex-col gap-zw-md">
             <fieldset className="flex flex-col gap-zw-sm">
               <legend className={cn(typography.subsectionHeading, "text-text-primary")}>Who manages your website?</legend>
@@ -94,8 +103,9 @@ export function ExistingFormSetup({ connection, endpoint }: { connection: Websit
                   )}
                 </div>
               )}
+              <ServerSideNote />
               <p className={cn(typography.metadata, "text-text-muted")}>
-                You don&apos;t need to share any Nemryn login or database credential with your website. The instructions contain everything your website needs.
+                You don&apos;t need to share any Nemryn login or database credential with your website. The instructions contain everything your website needs — including ready-to-use code examples.
               </p>
             </Panel>
           )}
@@ -103,6 +113,7 @@ export function ExistingFormSetup({ connection, endpoint }: { connection: Websit
           <details className="rounded-sm border border-border-subtle">
             <summary className={cn(typography.label, "cursor-pointer select-none px-3 py-2 text-text-secondary")}>Technical details (for your developer)</summary>
             <div className="flex flex-col gap-zw-sm border-t border-border-subtle p-3">
+              <OriginNote website={connection.website} />
               <p className={cn(typography.bodySmall, "text-text-secondary")}>
                 This is the exact text that the copy buttons above place on your clipboard.
               </p>

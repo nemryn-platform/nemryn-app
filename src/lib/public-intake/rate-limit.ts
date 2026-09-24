@@ -1,6 +1,6 @@
 import "server-only";
 import { createServiceRoleSupabaseClient } from "@/lib/supabase/service-role-server";
-import { hashClientIp, resolveClientIpFromHeaders } from "./rate-limit-core";
+import { hashClientIp, resolveClientIpFromHeaders, type IntakeConnectionRow, type IntakeRateLimitKeys } from "./rate-limit-core";
 
 /**
  * P1-PILOT-S4B — durable rate-limit boundary for public tenant-website
@@ -38,4 +38,40 @@ export async function checkAndRecordPublicIntakeRateLimit(integrationExternalId:
   }
 
   return data.allowed ? { allowed: true } : { allowed: false };
+}
+
+/**
+ * P1-COMM-D3R: records against explicitly chosen buckets (see websiteIntakeRateLimitKeys). Same atomic SQL function, same
+ * 8 / 120 per rolling hour; only the keys differ. Fails closed exactly like checkAndRecordPublicIntakeRateLimit.
+ */
+export async function checkAndRecordRateLimitKeys(keys: IntakeRateLimitKeys): Promise<RateLimitResult> {
+  const supabase = createServiceRoleSupabaseClient();
+  const { data, error } = await supabase.rpc("check_and_record_public_intake_rate_limit", {
+    p_integration_external_id: keys.integrationKey,
+    p_client_key: keys.clientKey,
+  });
+  if (error || !data) {
+    console.error("[public-intake] check_and_record_public_intake_rate_limit failed");
+    return { allowed: false };
+  }
+  return data.allowed ? { allowed: true } : { allowed: false };
+}
+
+/**
+ * P1-COMM-D3R: the connection facts needed to classify a website-intake submission BEFORE rate limiting. Uses the same
+ * service-role SELECT on request_intake_integrations the CORS lookup already has (no new privilege). Exact external_id
+ * match, like the intake RPC. A lookup failure classifies the submission as unverified (the stricter per-IP bucket).
+ */
+export async function lookupIntakeConnection(integrationExternalId: string): Promise<IntakeConnectionRow | null> {
+  const supabase = createServiceRoleSupabaseClient();
+  const { data, error } = await supabase
+    .from("request_intake_integrations")
+    .select("integration_type, is_active, retired_at, allowed_origins")
+    .eq("external_id", integrationExternalId)
+    .maybeSingle();
+  if (error) {
+    console.error("[public-intake] intake connection lookup failed");
+    return null;
+  }
+  return data ?? null;
 }

@@ -4,6 +4,7 @@ import { checkAndRecordPublicIntakeRateLimit, resolveClientIp } from "@/lib/publ
 import { getPublicRequestForm, submitPublicFormRequest } from "@/lib/public-forms/public-form";
 import { PUBLIC_FORM_COPY, isPublicFormKey } from "@/lib/public-forms/public-form-core";
 import { dispatchNotification } from "@/lib/notifications/dispatch";
+import { normalizeRequestFormOrigin } from "@/lib/operations/website-requests-setup-core";
 
 /**
  * P1-COMM-D2 -- the ONE public write boundary of the Nemryn-hosted / embedded request form:
@@ -38,6 +39,10 @@ function ownOrigins(request: NextRequest): Set<string> {
   } catch {
     /* ignore a malformed configured URL */
   }
+  // P1-COMM-D3: the dedicated hosted-form origin (e.g. https://request.nemryn.com) is also Nemryn's own origin -- the
+  // hosted form served there posts here. Only this exact configured origin is added; no third-party origin is admitted.
+  const requestFormOrigin = normalizeRequestFormOrigin(process.env.REQUEST_FORM_ORIGIN);
+  if (requestFormOrigin) origins.add(requestFormOrigin);
   return origins;
 }
 

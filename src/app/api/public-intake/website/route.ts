@@ -2,7 +2,8 @@ import { NextResponse, after, type NextRequest } from "next/server";
 import { validateWebsiteIntakePayload, publicIntakeErrorMessage } from "@/lib/public-intake/website-intake-core";
 import { submitWebsiteTransportationRequest } from "@/lib/public-intake/website-intake";
 import { resolveAllowedCorsOrigin } from "@/lib/public-intake/cors";
-import { checkAndRecordPublicIntakeRateLimit, resolveClientIp } from "@/lib/public-intake/rate-limit";
+import { checkAndRecordRateLimitKeys, lookupIntakeConnection, resolveClientIp } from "@/lib/public-intake/rate-limit";
+import { isVerifiedWebsiteConnection, websiteIntakeRateLimitKeys } from "@/lib/public-intake/rate-limit-core";
 import { dispatchNotification } from "@/lib/notifications/dispatch";
 
 /**
@@ -101,8 +102,20 @@ export async function POST(request: NextRequest) {
   // why HTTP 429 alone is not itself an information leak here — it is
   // this app's own established convention to use the status code
   // meaningfully while keeping the BODY itself uninformative).
+  // P1-COMM-D3R: this endpoint is server-to-server, so every legitimate submission may come from ONE outbound IP.
+  // Classify first (same rule the intake RPC applies): a verified live connection is limited by its own integration
+  // bucket; anything else keeps the per-IP abuse bucket (and cannot consume a real connection's capacity). The response
+  // below is identical either way -- no existence oracle.
   const clientIp = resolveClientIp(request.headers);
-  const rateLimitResult = await checkAndRecordPublicIntakeRateLimit(validation.value.integrationExternalId, clientIp);
+  const verified = isVerifiedWebsiteConnection(await lookupIntakeConnection(validation.value.integrationExternalId), requestOrigin);
+  const rateLimitResult = await checkAndRecordRateLimitKeys(
+    websiteIntakeRateLimitKeys({
+      verified,
+      integrationExternalId: validation.value.integrationExternalId,
+      idempotencyKey: validation.value.idempotencyKey,
+      clientIp,
+    }),
+  );
   if (!rateLimitResult.allowed) {
     return genericRejection(allowedOrigin, 429);
   }

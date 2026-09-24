@@ -1,0 +1,557 @@
+NEMRYN PLATFORM
+P1-COMM-D3 -- COMMERCIAL WEBSITE REQUESTS PACKAGING + HOSTED FORM DOMAIN FOUNDATION + INTEGRATION SETUP EXPERIENCE
+Local implementation only. NOT committed, NOT pushed, NOT deployed. No DNS or Vercel change, no request.nemryn.com
+created, no database migration, no Supabase change, Zenward-Web untouched. D4 / S5B / billing not started.
+Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+main at 6f10c09 (local; origin/main = e9cd8f1). Production has Website Requests (Nemryn form, existing form, developer
+connection, hosted form, embed, acquisition, D2A connection lifecycle), R1 request acceptance and R1A passenger
+prefill; ACL 0/29. Zenward Mobility completed the real first-customer journey; the legacy Zenward org has been purged.
+
+======================================================================
+FIRST-CUSTOMER QA FINDINGS   (Zenward journey + audit of the current production experience)
+======================================================================
+Worked well:
+  - The three setup methods are the right product shape. A normal tenant connected with no SQL, no special
+    provisioning and no Nemryn database access.
+  - New connections are OFF by default: nothing is accepted until the operator says so.
+  - Status is derived from facts (Disabled / Ready to test / Connected), never guessed.
+  - The D2A lifecycle (Delete unused / Remove used / Previous connections) is clear.
+Confusing / stuck points:
+  - Activation: the first real submission failed until the connection was turned on. The only cue was a small
+    "Turn on" button among four others plus a grey "Disabled" badge, which reads like "broken", not "next step".
+  - Origin: one sentence on the developer page. Nothing said that server code does NOT add Origin by itself or that
+    it must match exactly (https / www), and that is the most likely silent 400.
+  - The developer package explained endpoint, Integration ID, Origin and fields but had NO runnable code. The
+    developer had to translate the field list into an HTTP call themselves (the owner had to intervene).
+  - A new connection is labelled "Existing connection" (D1's label for pre-D1 connections with no method), which is
+    misleading on day one.
+  - "Test your connection" was one sentence, and nothing suggested marking the test request.
+  - No setup progress, no single "where am I" summary, and no help path for an owner without a developer.
+Developer terminology on operator surfaces: "Technical details" (Integration ID, endpoint) sat inside every card,
+harmless but noisy. Renamed "Developer details"; it stays collapsed.
+Newly discovered in D3 (see OPEN ISSUES): the public intake rate limit is 8 submissions per hour per client IP.
+For a SERVER-side integration the client IP is the customer's web server, so a busy site can hit 429.
+
+======================================================================
+CURRENT WEBSITE REQUESTS AUDIT
+======================================================================
+Pages: /operations/settings/website-requests (overview), /form (Nemryn form editor + publish panel), /existing-form,
+/developer. Organization Admin only (requireOrganizationAdminAccess). Connection status comes from
+deriveWebsiteIntegrationStatus (isActive, requestCount); form state from deriveFormState; publication from
+derivePublicationState / formConnectionStatus. The developer package is built by buildDeveloperPackage. The hosted
+link was `${getAppOrigin()}/request/<key>`; the embed loader and iframe are on the app origin. The public intake route
+returns 200 / 400 (generic) / 429 with an 8 KB body cap and strict field validation. The public form submit route has
+a same-origin check against the request's own origin and NEXT_PUBLIC_APP_URL. src/proxy.ts refreshed the Supabase
+session for every path except static assets and the public form / embed paths (excluded in the matcher).
+
+======================================================================
+COMMERCIAL IA
+======================================================================
+Website Requests now reads top-down:
+  A. Connection summary (the most advanced setup): Website · Method · Status · Last request · Setup N of 5 /
+     Complete, a "Next step" line, Manage and Test connection actions
+  B. Your website: each connection card with the activation callout, setup progress, diagnostics, test guidance,
+     lifecycle actions and collapsed Developer details; the published-form card with its own progress /
+     diagnostics / test guidance; Previous connections
+  C. How do you want to receive requests? The three method cards, plus "Which setup should I use?"
+  D. Need help installing this? Self / assisted / done-for-you and "Request setup help"
+Technical identifiers never lead: the Integration ID and endpoint appear only under Developer details and on the
+Developer page.
+
+======================================================================
+SETUP PROGRESS
+======================================================================
+Pure, derived only (website-requests-setup-core.ts); nothing persisted, no second state machine.
+  Website connection: 1 Website added · 2 Setup method chosen · 3 Connection turned on · 4 Test request received ·
+    5 Connected (= on AND a request received, so a used-but-disabled connection is never "complete").
+  Nemryn form: 1 Form configured · 2 Marked Ready · 3 Published · 4 Added to your website or shared · 5 Test request
+    received. Step 4 can't be observed, so it is marked done only when a request has arrived through the form.
+Each step carries an action phrase for the summary's "Next step" ("Turn on the connection", "Send one test request
+from your website", ...).
+
+======================================================================
+CONNECTION SUMMARY
+======================================================================
+pickPrimarySetup chooses Connected > Ready to test > Disabled across website connections and the published form.
+Method shows "Not chosen yet" for a new connection without a chosen method. Manage jumps to the card (or the form
+page); Test connection jumps to that setup's test guidance. Before anything exists: "Not started" plus a pointer
+to the Nemryn form.
+
+======================================================================
+DEVELOPER PACKAGE
+======================================================================
+buildDeveloperPackage now produces, in order: WHAT THIS DOES · CONNECTION DETAILS · REQUIRED HEADERS · REQUEST BODY ·
+OPTIONAL ACQUISITION · NODE/JAVASCRIPT EXAMPLE · NEXT.JS EXAMPLE · CURL EXAMPLE · PHP EXAMPLE · EXPECTED RESPONSE ·
+TESTING · COMMON ISSUES (connection not on, Origin mismatch, Integration ID mismatch, service not enabled, invalid
+payload / 8 KB, rate limit 429). 400 is explained as "not accepted -- Nemryn deliberately doesn't say why".
+buildDeveloperExamples (also shown as tabs with per-language copy buttons on the Developer page): every example POSTs
+from the SERVER with Content-Type application/json and an explicit Origin header, sends integrationExternalId and an
+idempotencyKey created once per submission and reused on retries, handles 200 / 400 / 429 / network failure, and
+shows the optional acquisition object.
+  Node: Node 18+ fetch, sendToNemryn(form, submissionId, acquisition).
+  Next.js: an App Router route handler (app/api/transport-request/route.ts) using NEMRYN_INTAKE_URL /
+    NEMRYN_INTEGRATION_ID / NEMRYN_APPROVED_WEBSITE.
+  cURL: a terminal/server command with -w "HTTP %{http_code}".
+  PHP: 7.4+ with curl, send_to_nemryn(array $form, string $submissionId, array $acquisition = []).
+Robustness fix found while executing them: Node's fetch reuses keep-alive sockets, and a socket the server had
+already closed produced ECONNRESET (reproduced locally). The Node and Next.js examples now retry ONCE immediately on
+a network error. That is safe because the same idempotencyKey never creates a second request. PHP's curl opens a
+fresh connection per call.
+No example or package text contains Supabase, service-role, RPC names, organization UUIDs, JWTs or API keys (unit test).
+The existing D1 "no secrets / no internal ids / no null or undefined" package test still passes unchanged.
+
+======================================================================
+SERVER-SIDE GUIDANCE
+======================================================================
+Developer page, Connect-existing-form page and the package: "Send requests from your website's server, not directly
+from the visitor's browser. This protects your connection setup and gives you control over validation and retries."
+The Integration ID is not presented as a secret; the Origin header is never described as something to hide.
+
+======================================================================
+ORIGIN GUIDANCE
+======================================================================
+"Approved website: https://www.example.com -- Nemryn accepts requests that identify this website as the source."
+Developer layer: "Your server must send the header Origin: https://www.example.com with every request. Server code
+does not add it automatically, and it must match exactly (including https:// and www). It identifies your website; it
+is not a password." A copyable "Required header" row sits on the Developer page.
+
+======================================================================
+ACTIVATION UX
+======================================================================
+Any connection that exists but is OFF shows a prominent warning callout, "Next step: turn on this connection -- Your
+website cannot send requests until this connection is turned on.", with the Turn on button (the existing
+ActivateButton / setWebsiteIntegrationActiveAction, which revalidates the whole Website Requests subtree). It appears on
+the overview card, the Developer page and the Connect-existing-form page. The summary says "N of 5 steps" / "Next
+step" and never "Complete" while the connection is off. Turn off / Change website / Delete / Remove are unchanged.
+
+======================================================================
+TEST CONNECTION
+======================================================================
+Instructional only (no fabricated submissions, no is_test field): make sure it's on -> submit one request with TEST in
+the requester name -> it appears in the Request Hub as Pending (decline it afterwards) -> status becomes Connected. It
+explains what success means and, once connected, that re-testing after website changes is fine. The same guidance
+exists for the Nemryn form. No safe operator preview mode was added: any submission creates a real Pending Request, and
+a preview flag would introduce test-data semantics into the core model (the brief says avoid).
+
+======================================================================
+BUILDER GUIDANCE
+======================================================================
+"Which setup should I use?" (WordPress, Wix, Squarespace, Webflow, Custom website, Developer or agency, Not sure). For
+each: the recommended method, where the code goes or who sets it up, and what to test afterwards.
+  WordPress -> Nemryn form, Custom HTML block (iframe / hosted link if scripts are stripped); Wix -> Embed Code ->
+  Embed HTML; Squarespace -> Code Block; Webflow -> Embed element; Custom website -> Connect my existing form (server
+  code); Developer / agency -> Developer connection; Not sure -> Nemryn form (share the link or send the embed code).
+No plugin, app or one-click connector is claimed anywhere (unit test). Existing per-builder embed-placement guidance
+(D2) is unchanged.
+
+======================================================================
+DONE-FOR-YOU SETUP
+======================================================================
+The smallest useful option: a mailto handoff. "Need help installing this? -- Nemryn can help connect your website.
+Setting it up yourself is always included." plus "Request setup help". The mailto carries SETUP context only:
+organization, website, setup method, who manages the website. No Integration ID, form key, UUID, passenger data or
+secret (unit test + E2E). The address is a deployment setting, SETUP_HELP_EMAIL. When it is unset the panel shows
+"To request setup help, contact your Nemryn representative." No table, no CRM, no stored record: a contact workflow
+is enough at this volume, so no database justification was needed.
+
+======================================================================
+COMMERCIAL PACKAGING
+======================================================================
+Three positioning tiles: Set it up yourself (everything included) · Assisted setup · Done-for-you setup. No prices,
+fees, upgrades or billing (unit test forbids $ / £ / € / price / fee / upgrade / paid). Basic connectivity is never
+gated: every setup path works without contacting anyone.
+
+======================================================================
+HOSTED FORM DOMAIN
+======================================================================
+Setting: REQUEST_FORM_ORIGIN (server-only, e.g. https://request.nemryn.com), validated by
+normalizeRequestFormOrigin (http/https origin only, no path, query or credentials). Same Next.js app, same Vercel
+project; no new application. With it unset, everything behaves exactly as before (verified).
+
+======================================================================
+DOMAIN ROUTING
+======================================================================
+src/proxy.ts: when the Host equals the REQUEST_FORM_ORIGIN host (exact, case / port insensitive; suffix tricks such as
+request.nemryn.com.evil.test are rejected), a strict allowlist applies:
+  /<form_key>                                -> rewritten to the existing /request/<form_key> page (same
+                                               publication snapshot as app.nemryn.com/request/<form_key>)
+  /api/public-forms/<form_key>[/submit]      -> passthrough (the form's own config / submit calls)
+  /_next/static, /_next/image, favicon, /brand/<name>.svg|png -> passthrough
+  everything else                            -> neutral 404 "Not found" (no-store, noindex, X-Frame-Options DENY)
+The old app URL app.nemryn.com/request/<key> keeps working (no redirect, which also means nothing that could break
+iframes). The embed loader and embed page stay on the app origin, unchanged.
+The proxy matcher now includes the public paths so the host check can see them. On the app host, those paths skip the
+session refresh exactly as the old matcher exclusions did (same list, moved into NO_SESSION_PATH).
+Submit same-origin check: /api/public-forms/<key>/submit only accepted its own request origin and NEXT_PUBLIC_APP_URL,
+so a submission from request.<host> was rejected (found by the E2E). The configured REQUEST_FORM_ORIGIN, and only that
+exact origin, is now also treated as Nemryn's own. A foreign Origin is still rejected (400, verified).
+
+======================================================================
+DOMAIN SECURITY
+======================================================================
+Header rules in next.config.ts match the INCOMING path, so a rewritten /<key> would not inherit the /request/* headers.
+The proxy therefore sets them explicitly on the rewrite: CSP frame-ancestors 'none', X-Frame-Options DENY, X-Robots-Tag
+noindex/nofollow, Referrer-Policy strict-origin-when-cross-origin, Cache-Control no-store (verified by E2E).
+No Supabase session is created or refreshed on the request host, and no Set-Cookie is sent (verified). Auth cookies are
+host-scoped to the app host. Every dashboard, login, driver, platform, embed and intake-API path on that host is 404,
+and so is /request/<key> (the canonical form there is /<key>).
+CORS: the hosted page calls same-origin relative /api/public-forms/... URLs, so no CORS change was needed. The website
+intake API's CORS is unchanged.
+
+======================================================================
+HOSTED LINK UX
+======================================================================
+The publish panel's "Open form" / "Copy link" now use preferredHostedFormUrl: <REQUEST_FORM_ORIGIN>/<key> when
+configured, else <app origin>/request/<key>. The embed code and iframe fallback are unchanged. QR code: not added.
+It's optional in the brief and not needed for a useful first release.
+
+======================================================================
+ACQUISITION
+======================================================================
+Schema and capture unchanged. The hosted form records window.location.pathname, so under the new host landingPath and
+submissionPath are "/<key>" (pathname only, never the full URL). E2E: a submission through request.localhost stored
+utm_source / utm_campaign from the query and landing_path = submission_path = "/<key>". formVersion unchanged.
+
+======================================================================
+DIAGNOSTICS
+======================================================================
+Derived only; never a live probe that could create a Request. Connection: Connection is on / Approved website set /
+Request received (with last request). Form: Form ready / Public form available / Request received. Plain language;
+no internal errors or database state.
+
+======================================================================
+EXISTING CONNECTION LIFECYCLE
+======================================================================
+Unchanged and verified: unused -> "Delete connection"; used -> "Remove connection"; disabled -> "Turn on" (now inside
+the activation callout); retired -> Previous connections. Actions, dialogs and RPCs are untouched.
+
+======================================================================
+GENERATED FORM LIFECYCLE
+======================================================================
+Unchanged: Draft / Ready / Publish / Publish update / Publish again / Disable public form. Publication status is kept
+separate from website-connection status. E2E: save Ready -> publish -> the hosted link uses the configured origin.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+No change. All Website Requests pages still use requireOrganizationAdminAccess. Every mutation goes through the
+existing server actions and RPCs. No new server action, RPC, table or grant.
+
+======================================================================
+DATABASE IMPACT
+======================================================================
+NONE. No migration (latest is still 20260924091000), no RPC, no table, no grant. Only fictional local data was used.
+
+======================================================================
+BROWSER E2E
+======================================================================
+.tmp-qa/d3-setup-e2e.mjs (local production build; REQUEST_FORM_ORIGIN=http://request.localhost:3100,
+SETUP_HELP_EMAIL=setup@nemryn.example; NEXT_PUBLIC_APP_URL=https://d3-e2e.example.test, because production mode refuses
+a loopback app URL, the same approach as D2; fictional Org B, reset locally first): 55/55 PASS.
+  A fresh tenant: summary "Not started", three methods, no technical ids up front · builder chooser (WordPress ->
+  Custom HTML / Nemryn form, Custom website -> existing form) · setup help mailto (org context, no ids, no price) ·
+  connect website -> B activation callout + exact copy, setup not complete, diagnostics, unused -> Delete ·
+  Developer page: callout, server-side warning, Origin guidance, 4 example tabs each with Origin / Integration ID /
+  idempotencyKey and no credential, common issues, no internal names · "Use this method" + Turn on from the callout ->
+  callout gone, DB active / developer · real intake POST -> summary Connected + Complete; used -> Remove ·
+  Nemryn form save Ready + publish -> preferred link on request.localhost; embed on the app origin · K old
+  app /request/<key> 200 · L request host /<key> 200 with company + form · security headers, no Set-Cookie · M/N 13
+  paths on the request host -> neutral 404 (/, /sign-in, /operations, website-requests settings, /driver, /platform,
+  /request/<key>, /embed/..., /embed/request-form.js, /api/public-intake/website, /api/ping, bad key, extra
+  segment) · public form API reachable there · O real browser submission through the request host -> Request pending ·
+  P acquisition = pathnames only · Q embed loader + frameable embed page unchanged on the app host · 768 px no
+  horizontal overflow.
+Settings unset (production default until activation): the copied link is the existing app /request/<key> link; the
+help panel shows without a mail link; the request host is unrestricted (it doesn't exist yet).
+Example execution (.tmp-qa/d3-examples-exec.mjs, generated from the real builder, run against the local intake API):
+15/15 PASS, 3 consecutive runs after the retry fix. Node: node --check, accepted, one Request, acquisition stored,
+same-key retry -> still one Request, connection OFF -> {ok:false, retryLater:false}. Next.js: strict tsc type-check,
+handler 200, one Request. cURL: bash -n, HTTP 200, one Request. PHP (php:8.3-cli in Docker): php -l, send_to_nemryn
+ok, one Request.
+
+======================================================================
+APPLICATION TESTS
+======================================================================
+tsc PASS. lint PASS (0 errors; 90 warnings, all in untracked .tmp-qa/, 0 in src). unit 525/525 (513 + 12 new in
+website-requests-setup-core.test.mjs; the existing website-requests-core tests all still pass). build PASS.
+No SQL / security suite run: no database, RPC, grant or authorization change.
+
+======================================================================
+FILES CREATED
+======================================================================
+src/lib/operations/website-requests-setup-core.ts (+ .test.mjs)
+src/components/operations/settings/WebsiteRequestsSetup.tsx
+docs/reports/p1-comm-d3-commercial-website-requests-packaging.txt
+.tmp-qa/d3-setup-e2e.mjs, .tmp-qa/d3-examples-exec.mjs (untracked QA harnesses)
+
+======================================================================
+FILES MODIFIED
+======================================================================
+src/lib/operations/website-requests-core.ts               buildDeveloperExamples + restructured buildDeveloperPackage
+src/components/operations/settings/WebsiteRequestsOverview.tsx  summary, progress, callout, diagnostics, test guide,
+                                                           builder chooser, setup help, "Developer details"
+src/components/operations/settings/DeveloperSetup.tsx     callout, server-side / Origin guidance, code examples, common issues
+src/components/operations/settings/ExistingFormSetup.tsx  callout, server-side / Origin notes
+src/components/operations/settings/FormPublishPanel.tsx   preferred hosted link
+src/components/operations/settings/NemrynFormEditor.tsx   passes requestFormOrigin
+src/app/operations/settings/website-requests/page.tsx     setup-help mailto
+src/app/operations/settings/website-requests/form/page.tsx  REQUEST_FORM_ORIGIN
+src/app/api/public-forms/[publicKey]/submit/route.ts      configured form origin added to own origins
+src/proxy.ts                                              request-host allowlist + headers; same session-skip list
+.env.example                                              REQUEST_FORM_ORIGIN, SETUP_HELP_EMAIL (documented, empty)
+
+======================================================================
+OPEN ISSUES
+======================================================================
+1. OWNER DECISION -- SETUP_HELP_EMAIL: which address receives "Request setup help" emails. Nothing in the repo
+   defines one. The panel works without it.
+2. RATE LIMIT FOR SERVER-SIDE INTEGRATIONS (commercial risk, not changed in D3): 8 submissions per hour per client
+   IP (120 per integration). A server-side website integration presents its own server IP, so a busy customer site
+   can exceed 8/hour and receive 429s. Needs a deliberate security decision (e.g. per-integration limits for server
+   connections), which is outside D3's application-only scope.
+3. Setup step 2 ("Setup method chosen") still needs a visit to a method page ("Use this method" / "Save my choice"):
+   the Connect dialog doesn't ask for it (unchanged D1 flow). The summary names it as the next step.
+4. No QR code for the hosted link (optional; not needed now).
+5. The existing card field "Connected through: Existing connection" (D1 label) still appears for a connection
+   without a method. The summary says "Not chosen yet"; relabelling the card would also change pre-D1 connections,
+   so it was left alone.
+
+======================================================================
+PRODUCTION DOMAIN STEPS   (for the D3 release, after owner review -- not done now)
+======================================================================
+1. Deploy D3 with REQUEST_FORM_ORIGIN still unset (no behavior change; the request host doesn't exist yet).
+2. Vercel -> the EXISTING nemryn-app project -> Settings -> Domains -> add request.nemryn.com. Assign it to Production.
+   No redirect: it serves the same deployment.
+3. DNS (nemryn.com provider): add the record Vercel shows for request.nemryn.com (normally a CNAME
+   request -> cname.vercel-dns.com). Wait for Vercel to verify it and issue TLS.
+4. Check before switching links: https://request.nemryn.com/sign-in shows the normal app (no restriction yet).
+5. Vercel env (Production): REQUEST_FORM_ORIGIN=https://request.nemryn.com; optionally SETUP_HELP_EMAIL=<decision>.
+   Redeploy.
+6. Verify: https://request.nemryn.com/<key> -> 200 with the form, frame-ancestors 'none' / X-Frame-Options DENY /
+   noindex, no Set-Cookie; /, /sign-in, /operations -> 404 "Not found"; one test submission through it -> Pending;
+   https://app.nemryn.com/request/<key> still 200; the publish panel's Copy link shows request.nemryn.com; embed
+   unchanged; scripts/verify-db-privileges.sh production still 0/29 (untouched).
+No Supabase Auth redirect URL change is needed: the request host never runs auth.
+
+WEBSITE REQUESTS COMMERCIAL UX:   PASS
+SETUP PROGRESS:                   PASS
+ACTIVATION CLARITY:               PASS
+DEVELOPER PACKAGE:                PASS
+NODE EXAMPLE:                     PASS
+NEXTJS EXAMPLE:                   PASS
+CURL EXAMPLE:                     PASS
+PHP EXAMPLE:                      PASS
+PRIVILEGED CREDENTIAL EXPOSED:    NO
+BUILDER GUIDANCE:                 PASS
+SELF SETUP:                       PASS
+SETUP HELP:                       PASS (address = owner decision; works without it)
+BASIC CONNECTIVITY PAYWALLED:     NO
+REQUEST DOMAIN FOUNDATION:        PASS
+OLD HOSTED URL:                   PASS
+NEW HOSTED URL LOCAL:             PASS
+DASHBOARD ON REQUEST DOMAIN:      BLOCKED
+UNKNOWN REQUEST DOMAIN ROUTE:     BLOCKED
+HOSTED FORM:                      PASS
+EMBED:                            PASS
+ACQUISITION:                      PASS
+CONNECTION LIFECYCLE:             PASS
+DATABASE MIGRATION:               NONE
+TSC:                              PASS
+LINT:                             PASS
+UNIT:                             525/525
+BUILD:                            PASS
+READY FOR D3 PRODUCTION RELEASE:  YES
+BLOCKERS:                         NONE (SETUP_HELP_EMAIL address is an owner decision, not a blocker)
+
+NEXT IF PASS:
+Owner review
+-> D3 production release
+-> request.nemryn.com Vercel/DNS activation
+
+DO NOT BEGIN PRODUCTION RELEASE AUTOMATICALLY.
+STOP.
+
+
+######################################################################
+P1-COMM-D3R -- RELEASE HARDENING
+######################################################################
+Local only. NOT committed, NOT pushed, NOT deployed; no Vercel env / domain / DNS change; no production Request. D3's
+product direction is unchanged. This section SUPERSEDES the D3 OPEN ISSUE 2 (rate limit) and the D3 "PRODUCTION DOMAIN
+STEPS", which must not be used.
+
+======================================================================
+RATE LIMIT CURRENT MODEL   (audited fresh from code)
+======================================================================
+/api/public-intake/website, before D3R:
+  1. body cap (8 KB) -> JSON parse -> validateWebsiteIntakePayload (closed field set). Invalid -> generic 400 and NO
+     rate-limit consumption.
+  2. check_and_record_public_intake_rate_limit(p_integration_external_id = the SUPPLIED id, p_client_key = sha256(salt:IP))
+     (20260919120000). Atomic under two advisory locks; within a rolling hour it counts rows by the lowercased
+     integration key (limit 120) and by client_key (limit 8). The client bucket is GLOBAL across all integrations:
+     two customers behind one outbound IP share one 8/hour bucket. Every attempt that passes is recorded, including
+     unknown ids, wrong Origins, inactive connections and idempotent replays.
+  3. submit_public_transportation_request (service_role RPC) resolves the integration (exact external_id, website
+     type, is_active), org active, Origin exactly in allowed_origins (when set), retired -> rejected in
+     _create_public_request; idempotent ON CONFLICT on (integration, idempotencyKey).
+  Integration resolution / Origin / active checks therefore happened only AFTER the limiter; CORS resolution
+  (resolveAllowedCorsOrigin) is a separate service-role read used only for response headers.
+/api/public-forms/<key>/submit (hosted + embed, one route): its own same-origin check, then
+check_and_record_public_intake_rate_limit(p_integration_external_id = publicKey, p_client_key = sha256(salt:IP)).
+A separate browser-facing path; it shares the SQL function and the per-IP client key namespace.
+
+======================================================================
+SERVER-TO-SERVER THREAT MODEL
+======================================================================
+Legitimate website intake comes from the customer's SERVER, so every submission can share one outbound IP (Vercel,
+Cloudflare, shared hosting, an agency backend). A per-IP limit meant for browsers then caps a real customer at 8
+requests an hour, even though the integration has capacity left. Meanwhile the real abuse surface is unauthenticated
+traffic with unknown ids, wrong Origins or disabled connections. Different threats need different buckets.
+
+======================================================================
+VALID INTEGRATION LIMITING
+======================================================================
+Before limiting, the route classifies the submission with the SAME rule the RPC applies
+(isVerifiedWebsiteConnection): exact external_id found, integration_type website, is_active, not retired, and the
+Origin header exactly one of allowed_origins (or no allow-list). It uses lookupIntakeConnection, the existing
+service-role SELECT on request_intake_integrations that the CORS lookup already has (no new privilege). Organization
+suspension stays enforced by the RPC.
+VERIFIED -> websiteIntakeRateLimitKeys: integration bucket = the integration id (120 per rolling hour -- the commercial
+boundary, unchanged), client bucket = sha256(salt:connection:<id>:<idempotencyKey>). The low per-client cap then
+applies per SUBMISSION (bounding replays of one submission), never per IP. The same SQL function, ledger table and
+atomic locking are used; no migration.
+
+======================================================================
+INVALID TRAFFIC LIMITING
+======================================================================
+NOT verified (unknown id, inactive, retired, form binding, wrong / missing Origin) -> client bucket = sha256(salt:IP)
+(8 per rolling hour, as before), integration bucket = "unverified:<id>". Invalid traffic stays IP-limited, and it can
+no longer consume a real connection's 120 by naming its Integration ID (previously possible from 15 IPs). The response
+is byte-identical for every rejection (no existence oracle): the route still returns the one generic 400 / 429. The
+classification lookup runs for every well-formed submission, so its presence doesn't distinguish outcomes.
+
+======================================================================
+SHARED IP BEHAVIOR
+======================================================================
+Verified connections never use the IP bucket, so integrations A and B behind the same IP each have their own 120/hour.
+Proven live: A sent 9, then filled to 120 and got 429 on the 121st, while B from the same IP was accepted before and
+after. Garbage filling that IP's abuse bucket did not block A's valid traffic.
+
+======================================================================
+IDEMPOTENCY
+======================================================================
+The DB invariant is untouched (ON CONFLICT on integration + idempotencyKey). A replay of an existing key returns 200 and
+creates nothing. Replays do consume capacity (one ledger row each, as before) and are bounded per submission by the
+per-client cap: 8 replays of one key per hour. The Node / Next.js examples retry once on a network error with the
+same key.
+
+======================================================================
+HOSTED FORM REGRESSION
+======================================================================
+/api/public-forms/<key>/submit is unchanged: same same-origin check (plus the D3 request-form origin), same
+(publicKey, IP) buckets, 8 per IP per rolling hour. Proven live: 8 x 200 then 429 from one IP. Embed uses the same
+route and page (unchanged; D3 E2E embed checks pass).
+
+======================================================================
+DOMAIN CUTOVER CORRECTION
+======================================================================
+The D3 procedure attached request.nemryn.com while REQUEST_FORM_ORIGIN was unset, which would briefly expose the full
+app (/sign-in, /operations, /driver, /platform) on that host. Withdrawn. With the setting present, the host allowlist
+is enforced from the very first request that reaches that hostname, so the setting must be live BEFORE the domain
+exists.
+
+======================================================================
+ZERO-EXPOSURE PLAN   (for the D3 production release -- not performed now)
+======================================================================
+A. In the EXISTING nemryn-app Vercel project, set Production env REQUEST_FORM_ORIGIN=https://request.nemryn.com (and,
+   when decided, SETUP_HELP_EMAIL). Deploy D3. The domain doesn't exist yet; this is inert for app.nemryn.com because
+   host matching is exact.
+B. Verify app.nemryn.com: sign-in, Operations, Website Requests (copy link now shows request.nemryn.com/<key>; that
+   link won't resolve until step E), the existing https://app.nemryn.com/request/<key> link, embed loader / page,
+   intake API. The ACL contract stays 0/29 (no DB change).
+C. Vercel -> nemryn-app -> Domains -> add request.nemryn.com (Production, same deployment, no redirect).
+D. DNS: add exactly the record Vercel shows (normally CNAME request -> cname.vercel-dns.com).
+E. Wait for Vercel verification + TLS.
+F. First external request-domain smoke (the allowlist is already enforced):
+     https://request.nemryn.com/<formKey>  -> 200 hosted form (frame-ancestors 'none', X-Frame-Options DENY, noindex,
+                                             no Set-Cookie)
+     /  /sign-in  /operations  /driver  /platform  /embed/request-form.js  /api/public-intake/website  unknown paths
+                                           -> neutral 404 "Not found"
+     one synthetic-tenant submission through https://request.nemryn.com/<formKey> -> Pending, acquisition pathnames
+   There is no moment when the dashboard or login is reachable on request.nemryn.com.
+Rollback: remove the domain in Vercel (the app host is unaffected), or unset REQUEST_FORM_ORIGIN (copied links fall
+back to app.nemryn.com/request/<key>, which never stopped working).
+Note between B and E: operators could copy a request.nemryn.com link that doesn't resolve yet. Keep that window short.
+Publishing and the old links are unaffected.
+
+======================================================================
+TESTS (D3R)
+======================================================================
+Live rate-limit matrix (.tmp-qa/d3r-rate-limit.mjs; local production build; fictional orgs; X-Forwarded-For
+simulating one outbound server IP): 16/16 PASS.
+  A 9 distinct valid from one IP -> all 200, 9 Requests · C B accepted from the same IP · H same key retried -> 200,
+  still one Request · D unknown id from the same IP -> 400 x8 then 429 · D the valid connection on that IP still
+  accepted afterwards · D wrong-Origin garbage naming A's REAL id from 5 IPs -> 400 and charged to "unverified:<A>",
+  A's bucket unchanged (12 -> 12) · E inactive -> 400, nothing created · F Origin mismatch -> 400 · G malformed JSON /
+  missing fields -> 400 · K unknown / inactive / wrong Origin / malformed -> byte-identical generic body · B every
+  submission up to 120 accepted (real submissions, no seeding), the 121st -> 429 · C B still accepted after A hit its
+  limit · I hosted form: 8 x 200 then 429 per IP (unchanged).
+Host routing regression (local, explicit Host headers): app host / sign-in 200; app host /request/<key> 200; request
+host /<key> 200, /sign-in and /operations 404; upper-case host 404 (case-insensitive); :443 port -> same routing;
+suffix look-alike request.localhost.evil.example and prefix look-alike evil-request.localhost -> normal app (NOT the
+request host).
+D3 browser E2E rerun: 55/55. Developer examples execution: 15/15.
+Unit: rate-limit-core +3 (verified-connection rule incl. www / scheme / missing Origin / retired / form binding; verified
+buckets per submission and never the IP; unverified -> IP bucket + "unverified:" namespace).
+tsc PASS. lint PASS (0 errors, 0 warnings in src). unit 528/528. build PASS.
+No SQL suite re-run: the SQL function, table, RLS and grants are unchanged (no database change).
+
+======================================================================
+FILES MODIFIED (D3R)
+======================================================================
+src/lib/public-intake/rate-limit-core.ts (+ .test.mjs)  isVerifiedWebsiteConnection, websiteIntakeRateLimitKeys
+src/lib/public-intake/rate-limit.ts                     checkAndRecordRateLimitKeys, lookupIntakeConnection
+src/app/api/public-intake/website/route.ts              classify -> bucket selection (response unchanged)
+src/lib/operations/website-requests-core.ts, src/components/operations/settings/DeveloperSetup.tsx
+                                                        developer copy: 429 = over 120 requests per rolling hour
+.tmp-qa/d3r-rate-limit.mjs (untracked harness)
+Unchanged: the SQL function / ledger table, RLS, org authorization, the Request / Passenger / Trip workflows, the D2A
+lifecycle, the hosted form route's limiter.
+
+======================================================================
+OPEN ISSUES (after D3R)
+======================================================================
+1. SETUP_HELP_EMAIL: owner decision, not a blocker (the graceful fallback is in place).
+2. 120 requests per rolling hour per connection is the commercial ceiling (unchanged value). Revisit if a customer
+   genuinely needs more; there is no configurable limit or UI by design.
+3. Replays of one submission share an 8/hour per-submission bucket. Normal retry patterns are far below this.
+4. The rate-limit ledger still grows without cleanup (a pre-existing, documented S4B gap). Unchanged here.
+5. D3 open issues 3-5 (method step, QR code, the card's "Existing connection" label) are unchanged.
+
+VALID WEBSITE REQUESTS ABOVE 8/HOUR:         PASS
+INTEGRATION RATE LIMIT:                      120 requests per connection per rolling hour (verified connections);
+                                             unverified traffic: 8 per client IP per rolling hour
+VALID CONNECTION LIMITED BY LOW IP BUCKET:   NO
+TWO INTEGRATIONS SAME IP:                    PASS
+INVALID TRAFFIC IP PROTECTION:               PASS
+IDEMPOTENT REPLAY:                           PASS
+HOSTED FORM RATE LIMIT:                      PRESERVED
+EMBED:                                       PASS
+GENERIC PUBLIC ERRORS:                       PASS
+REQUEST DOMAIN ZERO-EXPOSURE PLAN:           PASS
+TEMPORARY DASHBOARD EXPOSURE REQUIRED:       NO
+D3 BROWSER E2E:                              55/55
+DEVELOPER EXAMPLES:                          PASS
+TSC:                                         PASS
+LINT:                                        PASS
+UNIT:                                        528/528
+BUILD:                                       PASS
+DATABASE MIGRATION:                          NONE
+READY FOR D3 PRODUCTION RELEASE:             YES
+BLOCKERS:                                    NONE (SETUP_HELP_EMAIL remains an owner decision, not a blocker)
+
+DO NOT DEPLOY.
+STOP.

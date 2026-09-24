@@ -1,16 +1,29 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { CopyValue } from "./CopyValue";
 import { ConnectWebsiteFirst, UseMethodForm } from "./ConnectionSetupControls";
 import { SoftBreak, ValueRow, type WebsiteRequestsConnectionView } from "./WebsiteConnectionControls";
+import { CodeExamples, OriginNote, ServerSideNote, TestConnectionGuide, TurnOnCallout } from "./WebsiteRequestsSetup";
 import { Panel } from "@/components/ui/Panel";
-import { buildAcquisitionExample, buildSetupEnvExample } from "@/lib/operations/website-integration-core";
-import { buildDeveloperPackage } from "@/lib/operations/website-requests-core";
+import { buildAcquisitionExample } from "@/lib/operations/website-integration-core";
+import { buildDeveloperExamples, buildDeveloperPackage } from "@/lib/operations/website-requests-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
+const COMMON_ISSUES: { title: string; fix: string }[] = [
+  { title: "Connection not turned on", fix: "Turn the connection on in Website Requests. Until then every request is refused." },
+  { title: "Origin mismatch", fix: "The Origin header must equal the approved website exactly — same https://, same www, no trailing path." },
+  { title: "Integration ID mismatch", fix: "Copy the Integration ID again from this page. A removed connection's ID stops working." },
+  { title: "Service not enabled", fix: "serviceType must be one of the services you enabled in Settings → Services & Intake (or leave it out)." },
+  { title: "Invalid payload", fix: "A required field is missing, a value is outside its allowed list, an unknown field was sent, or the body is over 8 KB." },
+  { title: "Rate limit reached (429)", fix: "A connection accepts up to 120 requests per rolling hour. Wait, then retry with the same idempotencyKey." },
+];
+
 /** Developer connection: the technical surface, deliberately its own page (never at the top of Website Requests). */
 export function DeveloperSetup({ connection, endpoint }: { connection: WebsiteRequestsConnectionView | null; endpoint: string }) {
+  const [notice, setNotice] = useState<string | null>(null);
+  const onDone = useCallback((message: string) => setNotice(message || null), []);
   if (!connection) {
     return (
       <div className="flex max-w-3xl flex-col gap-zw-lg">
@@ -19,20 +32,32 @@ export function DeveloperSetup({ connection, endpoint }: { connection: WebsiteRe
     );
   }
   const pkg = buildDeveloperPackage({ endpoint, integrationId: connection.integrationId, website: connection.website });
-  const env = buildSetupEnvExample({ endpoint, integrationId: connection.integrationId });
+  const examples = buildDeveloperExamples({ endpoint, integrationId: connection.integrationId, website: connection.website });
   const acquisition = buildAcquisitionExample();
   return (
     <div className="flex max-w-3xl flex-col gap-zw-lg">
       <Panel className="flex flex-col gap-zw-sm">
         <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Developer connection</h2>
         <p className={cn(typography.body, "text-text-secondary")}>
-          Connect your website directly using Nemryn&apos;s website intake API. Your website&apos;s server sends each completed request to Nemryn; it appears in your Request Hub.
+          Connect your website directly using Nemryn&apos;s website intake API. Your website&apos;s server sends each completed request to Nemryn; it appears in your Request Hub as Pending.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <CopyValue value={pkg} label="setup instructions" buttonLabel="Copy setup instructions" size="md" />
           <UseMethodForm handle={connection.handle} method="developer" manager={connection.websiteManager} label="Use this method" />
         </div>
+        <p className={cn(typography.metadata, "text-text-muted")}>
+          The copied instructions are a complete package for your developer: connection details, headers, fields, examples in four languages, testing and common issues.
+        </p>
       </Panel>
+
+      <TurnOnCallout connection={connection} onDone={onDone} />
+      {notice && (
+        <p role="status" className={cn(typography.bodySmall, "rounded-sm bg-surface-secondary px-3 py-2 text-text-primary")}>
+          {notice}
+        </p>
+      )}
+
+      <ServerSideNote />
 
       <Panel className="flex flex-col gap-zw-md">
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Connection details</h3>
@@ -43,20 +68,20 @@ export function DeveloperSetup({ connection, endpoint }: { connection: WebsiteRe
           <ValueRow label="Integration ID" copy={{ value: connection.integrationId }}>
             <span className="font-mono">{connection.integrationId}</span>
           </ValueRow>
-          <ValueRow label="Approved website">{connection.website ? <SoftBreak text={connection.website} /> : "Not set"}</ValueRow>
+          <ValueRow label="Required header" copy={connection.website ? { value: `Origin: ${connection.website}` } : undefined}>
+            <span className="font-mono">Origin: {connection.website ?? "<your approved website>"}</span>
+          </ValueRow>
         </dl>
-        <p className={cn(typography.bodySmall, "text-text-secondary")}>
-          Each request must include the header <code className="font-mono text-text-primary">Origin: {connection.website ?? "<your approved website>"}</code>. Nemryn only accepts requests that name the approved website; it restricts where requests may come from and is not a password. Never share a Nemryn login, database credential or service key.
-        </p>
+        <OriginNote website={connection.website} />
+        <p className={cn(typography.metadata, "text-text-muted")}>Never share a Nemryn login, database credential or service key. Your website doesn&apos;t need one.</p>
       </Panel>
 
       <Panel className="flex flex-col gap-zw-md">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Example server configuration</h3>
-          <CopyValue value={env} label="server configuration" />
-        </div>
-        <pre className={cn(typography.metadata, "overflow-x-auto rounded-sm bg-surface-secondary p-3 font-mono text-text-primary")}>{env}</pre>
-        <p className={cn(typography.metadata, "text-text-muted")}>These variable names are examples for a server implementation — use whatever your website&apos;s server uses to hold settings.</p>
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Code examples</h3>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>
+          Each example sends one request from your server with the Origin header, the Integration ID and an idempotency key (create it once per submission and reuse it if you retry), and handles the responses.
+        </p>
+        <CodeExamples examples={examples} />
       </Panel>
 
       <Panel className="flex flex-col gap-zw-md">
@@ -73,11 +98,23 @@ export function DeveloperSetup({ connection, endpoint }: { connection: WebsiteRe
         </ul>
       </Panel>
 
-      <Panel className="flex flex-col gap-zw-sm">
+      <Panel className="flex flex-col gap-zw-md">
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Test your connection</h3>
+        <TestConnectionGuide kind="connection" connected={connection.status === "CONNECTED"} />
         <p className={cn(typography.bodySmall, "text-text-secondary")}>
-          After activating this connection, submit one test transportation request through your website. When Nemryn receives it, the connection will show Connected.
+          Nemryn answers <code className="font-mono">200 {"{"}&quot;ok&quot;:true{"}"}</code> when a request is accepted. A <code className="font-mono">400</code> means it was not accepted — Nemryn deliberately doesn&apos;t say why, so check the list below.
         </p>
+      </Panel>
+
+      <Panel className="flex flex-col gap-zw-md" data-testid="common-issues">
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Common issues</h3>
+        <ul className="flex flex-col gap-2">
+          {COMMON_ISSUES.map((issue) => (
+            <li key={issue.title} className={cn(typography.bodySmall, "text-text-secondary")}>
+              <span className="font-medium text-text-primary">{issue.title}.</span> {issue.fix}
+            </li>
+          ))}
+        </ul>
       </Panel>
 
       <details className="rounded-sm border border-border-subtle">

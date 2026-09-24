@@ -78,3 +78,40 @@ test("resolveClientIpFromHeaders — empty x-forwarded-for value falls through t
   const ip = resolveClientIpFromHeaders(headersFrom({ "x-forwarded-for": "", "x-real-ip": "198.51.100.7" }));
   assert.equal(ip, "198.51.100.7");
 });
+
+// ---------------------------------------------------------------------------
+// P1-COMM-D3R -- verified-connection classification + bucket selection
+// ---------------------------------------------------------------------------
+const { isVerifiedWebsiteConnection, websiteIntakeRateLimitKeys } = await import("./rate-limit-core.ts");
+const live = { integration_type: "website", is_active: true, retired_at: null, allowed_origins: ["https://www.acme.example"] };
+
+test("verified = exact live website connection + exact Origin (same rule as the intake RPC)", () => {
+  assert.equal(isVerifiedWebsiteConnection(live, "https://www.acme.example"), true);
+  assert.equal(isVerifiedWebsiteConnection(null, "https://www.acme.example"), false, "unknown id");
+  assert.equal(isVerifiedWebsiteConnection({ ...live, is_active: false }, "https://www.acme.example"), false, "turned off");
+  assert.equal(isVerifiedWebsiteConnection({ ...live, retired_at: "2026-09-24T00:00:00Z" }, "https://www.acme.example"), false, "retired");
+  assert.equal(isVerifiedWebsiteConnection({ ...live, integration_type: "nemryn_form" }, "https://www.acme.example"), false, "form binding");
+  assert.equal(isVerifiedWebsiteConnection(live, "https://acme.example"), false, "www mismatch");
+  assert.equal(isVerifiedWebsiteConnection(live, "http://www.acme.example"), false, "scheme mismatch");
+  assert.equal(isVerifiedWebsiteConnection(live, null), false, "missing Origin");
+  assert.equal(isVerifiedWebsiteConnection({ ...live, allowed_origins: null }, null), true, "no allow-list: RPC does not check Origin either");
+});
+
+test("verified traffic: integration bucket + per-submission client key (never the IP)", () => {
+  const a1 = websiteIntakeRateLimitKeys({ verified: true, integrationExternalId: "web_A", idempotencyKey: "k1", clientIp: "203.0.113.9" });
+  const a2 = websiteIntakeRateLimitKeys({ verified: true, integrationExternalId: "web_A", idempotencyKey: "k2", clientIp: "203.0.113.9" });
+  const a1again = websiteIntakeRateLimitKeys({ verified: true, integrationExternalId: "web_A", idempotencyKey: "k1", clientIp: "198.51.100.1" });
+  const b1 = websiteIntakeRateLimitKeys({ verified: true, integrationExternalId: "web_B", idempotencyKey: "k1", clientIp: "203.0.113.9" });
+  assert.equal(a1.integrationKey, "web_A");
+  assert.notEqual(a1.clientKey, a2.clientKey, "distinct submissions from one IP never share a client bucket");
+  assert.equal(a1.clientKey, a1again.clientKey, "replays of one submission share a bucket regardless of IP");
+  assert.notEqual(a1.clientKey, b1.clientKey, "same key under another integration is a different bucket");
+  assert.notEqual(a1.clientKey, hashClientIp("203.0.113.9"), "never the IP bucket");
+  assert.match(a1.clientKey, /^[0-9a-f]{64}$/);
+});
+
+test("unverified traffic: per-IP abuse bucket + a separate 'unverified:' integration bucket", () => {
+  const u = websiteIntakeRateLimitKeys({ verified: false, integrationExternalId: "web_A", idempotencyKey: "k1", clientIp: "203.0.113.9" });
+  assert.equal(u.clientKey, hashClientIp("203.0.113.9"));
+  assert.equal(u.integrationKey, "unverified:web_A", "garbage naming a real id cannot consume that connection's capacity");
+});

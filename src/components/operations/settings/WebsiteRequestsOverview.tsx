@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, GlobeHemisphereWest, Plus } from "@phosphor-icons/react/dist/ssr";
 import {
-  ActivateButton,
   ConnectDialog,
   DeleteConnectionDialog,
   DisableDialog,
@@ -30,6 +29,15 @@ import {
   formConnectionStatus,
   type FormState,
 } from "@/lib/operations/website-requests-core";
+import {
+  connectionDiagnostics,
+  connectionSetupProgress,
+  formDiagnostics,
+  formSetupProgress,
+  pickPrimarySetup,
+  type SummaryCandidate,
+} from "@/lib/operations/website-requests-setup-core";
+import { BuilderChooser, DiagnosticsList, SetupHelpPanel, SetupProgressList, TestConnectionGuide, TurnOnCallout } from "./WebsiteRequestsSetup";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -43,6 +51,56 @@ export interface WebsiteRequestsOverviewProps {
   publication: { status: "published" | "disabled"; versionLabel: string; requestCount: number; lastRequestReceived: string | null } | null;
   /** P1-COMM-D2A: retired connections (history only -- a deleted, never-used connection no longer exists anywhere). */
   previousConnections: PreviousConnectionView[];
+  /** P1-COMM-D3: "Request setup help" mailto (setup context only), or null when no support address is configured. */
+  setupHelpMailto: string | null;
+}
+
+/**
+ * P1-COMM-D3 connection summary: the most advanced setup, in plain words. Technical identifiers stay behind the
+ * card's "Developer details" disclosure.
+ */
+function SetupSummary({ primary }: { primary: SummaryCandidate | null }) {
+  if (!primary) {
+    return (
+      <Panel className="flex flex-col gap-1" data-testid="setup-summary">
+        <span className={cn(typography.metadata, "text-text-muted")}>Setup</span>
+        <span className={cn(typography.subsectionHeading, "text-text-primary")}>Not started</span>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>Choose how you want to receive requests below — most teams start with a Nemryn form.</p>
+      </Panel>
+    );
+  }
+  const manageHref = primary.kind === "form" ? "/operations/settings/website-requests/form" : `#wr-conn-${primary.ref}`;
+  return (
+    <Panel className="flex flex-col gap-zw-md" data-testid="setup-summary">
+      <dl className="grid grid-cols-2 gap-zw-md md:grid-cols-5">
+        <ValueRow label="Website">{primary.website ? <SoftBreak text={primary.website} /> : primary.kind === "form" ? "Nemryn form" : "Not set"}</ValueRow>
+        <ValueRow label="Method">
+          {primary.kind === "connection" && !primary.progress.steps.find((st) => st.key === "method")?.done ? "Not chosen yet" : primary.methodLabel}
+        </ValueRow>
+        <ValueRow label="Status">
+          <StatusBadge label={WEBSITE_REQUESTS_STATUS_LABEL[primary.status]} category={STATUS_CATEGORY[primary.status]} />
+        </ValueRow>
+        <ValueRow label="Last request">{primary.lastRequestReceived ?? "None yet"}</ValueRow>
+        <ValueRow label="Setup">
+          {primary.progress.complete ? "Complete" : `${primary.progress.doneCount} of ${primary.progress.steps.length} steps`}
+        </ValueRow>
+      </dl>
+      {!primary.progress.complete && primary.progress.next && (
+        <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="summary-next-step">
+          <span className="font-medium text-text-primary">Next step: </span>
+          {primary.progress.next.action}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-3">
+        <Link href={manageHref} className={cn(typography.label, "text-text-link")}>
+          Manage
+        </Link>
+        <Link href={primary.kind === "form" ? "#wr-test-form" : `#wr-test-${primary.ref}`} className={cn(typography.label, "text-text-link")}>
+          Test connection
+        </Link>
+      </div>
+    </Panel>
+  );
 }
 
 function PreviousConnectionsSection({ connections }: { connections: PreviousConnectionView[] }) {
@@ -66,8 +124,9 @@ function PreviousConnectionsSection({ connections }: { connections: PreviousConn
   );
 }
 
-function FormPublicationCard({ publication }: { publication: NonNullable<WebsiteRequestsOverviewProps["publication"]> }) {
+function FormPublicationCard({ publication, formState }: { publication: NonNullable<WebsiteRequestsOverviewProps["publication"]>; formState: FormState }) {
   const connection = formConnectionStatus(publication);
+  const facts = { formState, publication };
   return (
     <Panel className="flex flex-col gap-zw-sm" data-testid="form-publication-card">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -84,6 +143,13 @@ function FormPublicationCard({ publication }: { publication: NonNullable<Website
         Requests received: {publication.requestCount}
         {publication.lastRequestReceived ? ` · last ${publication.lastRequestReceived}` : ""}
       </p>
+      <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+        <SetupProgressList progress={formSetupProgress(facts)} />
+        <DiagnosticsList items={formDiagnostics({ ...facts, lastRequestReceived: publication.lastRequestReceived })} />
+      </div>
+      <div id="wr-test-form">
+        <TestConnectionGuide kind="form" connected={connection === "CONNECTED"} />
+      </div>
       <Link href="/operations/settings/website-requests/form" className={cn(typography.label, "inline-flex items-center gap-1 text-text-link")}>
         Manage your form, link and embed code
         <ArrowRight className="size-3.5" aria-hidden />
@@ -131,7 +197,7 @@ function ConnectionCard({
   const isUnused = connection.requestCount === 0;
 
   return (
-    <Panel className="flex flex-col gap-zw-md" aria-label={`Website connection ${connection.website ?? ""}`}>
+    <Panel className="flex flex-col gap-zw-md" aria-label={`Website connection ${connection.website ?? ""}`} id={`wr-conn-${connection.handle}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={cn(typography.label, "text-text-muted")}>Website</p>
@@ -141,6 +207,8 @@ function ConnectionCard({
       </div>
 
       <p className={cn(typography.bodySmall, "text-text-secondary")}>{connection.statusExplanation}</p>
+
+      <TurnOnCallout connection={connection} onDone={onDone} />
 
       {notice && (
         <p role="status" className={cn(typography.bodySmall, "rounded-sm bg-surface-secondary px-3 py-2 text-text-primary")}>
@@ -164,20 +232,20 @@ function ConnectionCard({
         )}
       </dl>
 
-      <div className="flex flex-col gap-1.5 rounded-sm bg-surface-secondary px-3 py-2">
-        <p className={cn(typography.label, "text-text-primary")}>Test your connection</p>
-        <p className={cn(typography.bodySmall, "text-text-secondary")}>
-          After turning this on, submit one test transportation request through your website. When Nemryn receives it, the connection will show Connected.
-        </p>
+      <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+        <SetupProgressList progress={connectionSetupProgress(connection)} />
+        <DiagnosticsList items={connectionDiagnostics(connection)} />
+      </div>
+
+      <div id={`wr-test-${connection.handle}`}>
+        <TestConnectionGuide kind="connection" connected={connection.status === "CONNECTED"} />
       </div>
 
       <div className="flex flex-wrap items-start gap-2">
-        {connection.isActive ? (
+        {connection.isActive && (
           <Button type="button" size="sm" variant="outline" onClick={() => { setNotice(null); setDisableOpen(true); }}>
             Turn off
           </Button>
-        ) : (
-          <ActivateButton integration={connection} onDone={onDone} />
         )}
         <Button type="button" size="sm" variant="outline" onClick={() => { setNotice(null); setEditOpen(true); }}>
           Change website
@@ -194,7 +262,7 @@ function ConnectionCard({
       </div>
 
       <details className="group rounded-sm border border-border-subtle">
-        <summary className={cn(typography.label, "cursor-pointer select-none px-3 py-2 text-text-secondary")}>Technical details</summary>
+        <summary className={cn(typography.label, "cursor-pointer select-none px-3 py-2 text-text-secondary")}>Developer details</summary>
         <div className="flex flex-col gap-zw-md border-t border-border-subtle p-3">
           <p className={cn(typography.bodySmall, "text-text-secondary")}>
             Only needed by whoever sets up your website. The{" "}
@@ -224,7 +292,7 @@ function ConnectionCard({
   );
 }
 
-export function WebsiteRequestsOverview({ connections, endpoint, formState, formVersionLabel, servicesSummary, publication, previousConnections }: WebsiteRequestsOverviewProps) {
+export function WebsiteRequestsOverview({ connections, endpoint, formState, formVersionLabel, servicesSummary, publication, previousConnections, setupHelpMailto }: WebsiteRequestsOverviewProps) {
   const [connectOpen, setConnectOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
@@ -236,8 +304,30 @@ export function WebsiteRequestsOverview({ connections, endpoint, formState, form
     return () => clearTimeout(timer);
   }, [notice]);
 
+  const candidates: SummaryCandidate[] = connections.map((c) => ({
+    kind: "connection",
+    ref: c.handle,
+    website: c.website,
+    methodLabel: c.methodLabel,
+    status: c.status,
+    lastRequestReceived: c.lastRequestReceived,
+    progress: connectionSetupProgress(c),
+  }));
+  if (publication) {
+    candidates.push({
+      kind: "form",
+      ref: "form",
+      website: null,
+      methodLabel: "Nemryn form",
+      status: formConnectionStatus(publication),
+      lastRequestReceived: publication.lastRequestReceived,
+      progress: formSetupProgress({ formState, publication }),
+    });
+  }
+
   return (
     <div className="flex max-w-3xl flex-col gap-zw-lg">
+      <SetupSummary primary={pickPrimarySetup(candidates)} />
       <FlowStrip />
 
       {notice && (
@@ -257,7 +347,7 @@ export function WebsiteRequestsOverview({ connections, endpoint, formState, form
             </Button>
           )}
         </div>
-        {publication && <FormPublicationCard publication={publication} />}
+        {publication && <FormPublicationCard publication={publication} formState={formState} />}
         {connections.length === 0 && publication ? null : connections.length === 0 ? (
           <Panel className="flex flex-col items-start gap-zw-md">
             <div className="flex items-start gap-3">
@@ -321,7 +411,10 @@ export function WebsiteRequestsOverview({ connections, endpoint, formState, form
             </li>
           ))}
         </ul>
+        <BuilderChooser />
       </section>
+
+      <SetupHelpPanel mailto={setupHelpMailto} />
 
       <ConnectDialog open={connectOpen} onClose={closeConnect} onDone={onConnected} />
     </div>

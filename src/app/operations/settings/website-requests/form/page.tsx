@@ -7,6 +7,7 @@ import { getServiceOfferings } from "@/lib/operations/organization-services";
 import { loadWebsiteRequestsContext } from "@/lib/operations/website-requests-data";
 import { DEFAULT_FORM_CONFIG } from "@/lib/operations/website-requests-core";
 import { formatIntegrationTimestamp } from "@/lib/operations/website-integration-core";
+import { normalizeRequestFormOrigin } from "@/lib/operations/website-requests-setup-core";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { NemrynFormEditor } from "@/components/operations/settings/NemrynFormEditor";
 
@@ -39,6 +40,7 @@ export default async function NemrynFormPage({ searchParams }: { searchParams: P
         connectionHandle={ctx.selected?.handle ?? null}
         websiteManager={ctx.selected?.websiteManager ?? null}
         origin={origin}
+        requestFormOrigin={normalizeRequestFormOrigin(process.env.REQUEST_FORM_ORIGIN)}
         publication={
           publication
             ? {

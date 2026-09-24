@@ -9,10 +9,12 @@ import { getWebsiteRequestFormPublication } from "@/lib/operations/website-reque
 import {
   WEBSITE_REQUESTS_STATUS_EXPLANATION,
   WEBSITE_REQUESTS_STATUS_LABEL,
+  WEBSITE_MANAGER_OPTIONS,
   connectionMethodLabel,
   deriveFormState,
   formVersionLabel,
 } from "@/lib/operations/website-requests-core";
+import { buildSetupHelpMailto } from "@/lib/operations/website-requests-setup-core";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { WebsiteRequestsOverview } from "@/components/operations/settings/WebsiteRequestsOverview";
 import type { WebsiteRequestsConnectionView } from "@/components/operations/settings/WebsiteConnectionControls";
@@ -59,6 +61,17 @@ export default async function WebsiteRequestsPage() {
     };
   });
 
+  // P1-COMM-D3 setup-help handoff: setup context only (never ids, never passenger data). SETUP_HELP_EMAIL is a deployment
+  // setting; without it the help panel explains the options without a mail link.
+  const primaryConnection = connections.find((c) => c.status === "CONNECTED") ?? connections[0] ?? null;
+  const setupHelpMailto = buildSetupHelpMailto({
+    email: process.env.SETUP_HELP_EMAIL,
+    organizationName: organization.organizationName,
+    website: primaryConnection?.website ?? null,
+    methodLabel: primaryConnection ? primaryConnection.methodLabel : publication ? "Nemryn form" : null,
+    managerLabel: WEBSITE_MANAGER_OPTIONS.find((o) => o.value === primaryConnection?.websiteManager)?.label ?? null,
+  });
+
   return (
     <div className="flex flex-col gap-zw-lg">
       <PageHeader
@@ -88,6 +101,7 @@ export default async function WebsiteRequestsPage() {
           retiredAt: formatIntegrationDate(connection.retiredAt, tz),
           requestCount: connection.requestCount,
         }))}
+        setupHelpMailto={setupHelpMailto}
       />
     </div>
   );
