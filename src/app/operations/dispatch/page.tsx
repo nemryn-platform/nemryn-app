@@ -2,6 +2,7 @@ import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getDispatchBoardData } from "@/lib/operations/dispatch-board";
+import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DispatchBoardClient } from "@/components/operations/dispatch/DispatchBoardClient";
@@ -22,8 +23,12 @@ export default async function DispatchBoardPage() {
   const organization = await requireOperationsAccess(pathname);
 
   let data: Awaited<ReturnType<typeof getDispatchBoardData>>;
+  let operatorDriverId: string | null;
   try {
-    data = await getDispatchBoardData(organization.organizationId, organization.organizationTimezone);
+    [data, operatorDriverId] = await Promise.all([
+      getDispatchBoardData(organization.organizationId, organization.organizationTimezone),
+      getOperatorLinkedDriverId(organization.organizationId),
+    ]);
   } catch {
     return (
       <EmptyState
@@ -49,7 +54,12 @@ export default async function DispatchBoardPage() {
         ]}
       />
 
-      <DispatchBoardClient data={data} timezone={organization.organizationTimezone} />
+      <DispatchBoardClient
+        data={data}
+        timezone={organization.organizationTimezone}
+        operatorDriverId={operatorDriverId}
+        canManageDriverSetup={organization.role === "organization_admin"}
+      />
     </div>
   );
 }

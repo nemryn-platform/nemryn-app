@@ -12,6 +12,8 @@ import { TripInfoStrip } from "@/components/operations/trip-detail/TripInfoStrip
 import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePanel";
 import { PassengerInfoPanel } from "@/components/operations/trip-detail/PassengerInfoPanel";
 import { CurrentStatusPanel } from "@/components/operations/trip-detail/CurrentStatusPanel";
+import { TripAssignmentButton } from "@/components/operations/trip-detail/TripAssignmentButton";
+import { getAssignmentOptions, getOperatorLinkedDriverId, type AssignmentOptions } from "@/lib/operations/assignment-context";
 import { TripReadinessPanel } from "@/components/operations/trip-detail/TripReadinessPanel";
 import { TripExceptionsPanel } from "@/components/operations/trip-detail/TripExceptionsPanel";
 import { TripNotesPanel } from "@/components/operations/trip-detail/TripNotesPanel";
@@ -28,6 +30,9 @@ import { cn } from "@/lib/cn";
  * Activity Timeline panel — the reference's own actual composition does
  * not show one).
  */
+/** The Trip states assign_trip / reassign_trip accept (20260831100200_controlled_trip_mutations.sql) -- a UI gate only. */
+const ASSIGNABLE_STATES = new Set(["scheduled", "en_route_to_pickup", "arrived_at_pickup"]);
+
 export default async function TripDetailPage({ params }: { params: Promise<{ tripId: string }> }) {
   const { tripId } = await params;
   const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
@@ -79,6 +84,23 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
       readiness = await getTripReadiness(trip.id, organization.organizationId);
     } catch {
       readinessUnavailable = true;
+    }
+  }
+
+  // P1-OPS-PROG1: the in-place Assign/Reassign dialog is offered only in the
+  // states assign_trip / reassign_trip accept (the RPCs still decide). An
+  // option-load failure falls back to the previous Dispatch link rather
+  // than taking down the page.
+  let assignmentOptions: AssignmentOptions | null = null;
+  let operatorDriverId: string | null = null;
+  if (ASSIGNABLE_STATES.has(trip.state)) {
+    try {
+      [assignmentOptions, operatorDriverId] = await Promise.all([
+        getAssignmentOptions(organization.organizationId),
+        getOperatorLinkedDriverId(organization.organizationId),
+      ]);
+    } catch {
+      assignmentOptions = null;
     }
   }
 
@@ -180,6 +202,27 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
             timezone={timezone}
             eligibleForAssignmentAction={!trip.isTerminal}
             hasActiveAssignment={trip.activeAssignmentId !== null}
+            assignmentControl={
+              assignmentOptions ? (
+                <TripAssignmentButton
+                  trip={{
+                    id: trip.id,
+                    passengerName: trip.passengerName,
+                    pickupDescription: trip.pickupDescription,
+                    destinationDescription: trip.destinationDescription,
+                    activeAssignmentId: trip.activeAssignmentId,
+                    driverId: trip.driverId,
+                    driverName: trip.driverName,
+                    vehicleId: trip.vehicleId,
+                    vehicleLabel: trip.vehicleLabel,
+                  }}
+                  driverOptions={assignmentOptions.driverOptions}
+                  vehicleOptions={assignmentOptions.vehicleOptions}
+                  operatorDriverId={operatorDriverId}
+                  canManageDriverSetup={organization.role === "organization_admin"}
+                />
+              ) : undefined
+            }
           />
           <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
           <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />

@@ -1,0 +1,335 @@
+NEMRYN PLATFORM
+P1-OPS-PROG1 -- PROGRESSIVE ASSIGNMENT
+Local implementation only. NOT committed, NOT pushed, NOT deployed. No Supabase change, no migration, no RPC change, no
+RLS change, no Vercel / DNS change, no production data touched. PROG2–PROG5, D4, S5B, billing, route optimization,
+driver availability, trip duration, vehicle capability and drag-and-drop were NOT started.
+Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+main at b3ac058, migration head 20260924091000, privilege contract 0/29 (untouched by this phase).
+Source of truth: docs/reports/p1-ops-prog-progressive-operations-model.txt (approved), section NEXT IMPLEMENTATION
+SLICE.
+
+======================================================================
+CURRENT ASSIGNMENT AUDIT   (fresh read of the code, not the report)
+======================================================================
+Confirmed as the PROG report described:
+  - AssignmentDialog: Driver select required ("Choose a driver"), Vehicle optional ("No vehicle"), optional reassign
+    reason. It had NO prefill; its own comment said "No driver/vehicle is pre-selected".
+  - assignmentAction (src/app/operations/dispatch/actions.ts) calls assign_trip / reassign_trip from a fixed
+    two-value allowlist.
+      - It re-derives authorization with requireOperationsAccess on every call.
+      - It forwards p_expected_assignment_id.
+      - It maps errors (ZW005 etc.) through mapDispatchError.
+  - assign_trip / reassign_trip (20260831100200) enforce:
+      - same organization
+      - active Driver
+      - active Vehicle when one is given
+      - Trip state scheduled / en_route_to_pickup / arrived_at_pickup
+      - one active assignment per Trip (unique partial index + ZW005)
+      - the expected assignment on reassign
+    They also record assigned_by and ended_at / end_reason history.
+  - Loaders: getDispatchBoardData offers `status='active'` drivers and vehicles in the same organization, ordered by
+    name / label, using the session client (RLS) with an explicit org filter.
+  - Linked driver: current_driver_id(p_org_id) returns the caller's active linked Driver when they have any active
+    membership (the owner-as-driver path). The operations layout already calls it for the "Drive" nav item.
+  - Timezone: organizationDayBoundsUtc(instant, tz) returns the [start, end) UTC window of the org-local calendar day
+    containing the instant, and is DST-safe.
+Correction to the PROG report (found in this audit):
+  - The PROG report said assignment was "also reachable from Trip Detail (CurrentStatusPanel)". It was not. Trip
+    Detail's "Assign Driver" / "Manage Assignment" was only a LINK to /operations/dispatch.
+  - The Dispatch board is scoped to TODAY (organizationDayBoundsUtc(now)). A Trip scheduled tomorrow or later
+    therefore could not be assigned from any screen until its own day arrived. Tomorrow readiness said "Driver
+    needed" and linked to Trip Detail, which linked to a board that did not list the trip.
+  - The brief requires driver-day context for tomorrow and later targets (sections 6 and 20). PROG1 therefore mounts
+    the SAME AssignmentDialog and the SAME assignmentAction on Trip Detail for Trips in an assignable state.
+  - This adds no second mutation path and changes no RPC or authorization. It is not the PROG2 "inline assign from
+    the Tomorrow page". Tomorrow still links to Trip Detail exactly as before.
+
+======================================================================
+PROGRESSIVE DEFAULT RULES   (src/lib/operations/assignment-defaults-core.ts, pure, no I/O)
+======================================================================
+  deriveAssignmentDefaults({ mode, currentDriverId, currentVehicleId, driverOptions, vehicleOptions })
+  orderDriversForOperator(options, operatorDriverId)
+  deriveDriverDayFacts({ targetTripId, dayStartUtc, dayEndUtc, trips })
+  deriveVehicleGuidance(vehicleOptionCount, selectedVehicleId)
+Rules:
+  - AUTO-PREFILL only. A default is an initial form value. It is derived once when the dialog mounts and is never
+    re-applied over the operator's choice, even if a live refresh changes the option lists.
+  - Nothing is written until the operator clicks "Assign Driver" / "Confirm Reassignment". Both selects stay visible,
+    enabled and changeable.
+  - Every prefilled value is explained in help text ("Prefilled: the only active driver. You can change it before
+    assigning.").
+  - A prefilled vehicle can be removed with "Clear vehicle". The "No vehicle" placeholder option is disabled by the
+    shared Select component.
+  - assign_trip / reassign_trip remain the only validators. The UI filtering and defaults are conveniences only.
+
+======================================================================
+ONE DRIVER BEHAVIOR
+======================================================================
+Exactly one eligible (active, same-org) Driver + Assign mode: that Driver is preselected. Zero or 2+ drivers: nothing
+is preselected.
+
+======================================================================
+ONE VEHICLE BEHAVIOR
+======================================================================
+Exactly one eligible Vehicle + Assign mode: that Vehicle is preselected. This fixes the one-vehicle failure mode where
+the operator forgot the only vehicle and Tomorrow later showed NEEDS_VEHICLE. With 2+ vehicles nothing is guessed:
+there is no last-used or preferred vehicle, and no recurring preference. vehicle_id stays nullable. Nothing changed at
+the database level.
+
+======================================================================
+OWNER-AS-DRIVER ORDERING
+======================================================================
+If the operator has an active linked Driver (current_driver_id) that is an eligible option:
+  - that Driver is listed FIRST, labelled "<Display Name> (you)"
+  - everyone else keeps alphabetical order
+  - it is never preselected when there are multiple drivers
+  - "(you)" is presentation only: drivers.display_name is never mutated (verified in the DB)
+When the linked Driver is the ONLY active driver, the one-driver prefill applies ("<name> (you)" preselected).
+Membership, Driver and AuthUser stay separate.
+
+======================================================================
+REASSIGNMENT DEFAULT PRIORITY
+======================================================================
+  1. Reassign: the EXISTING active assignment's Driver and Vehicle, each only while still an eligible option.
+  2. Assign: unique-eligible Driver / Vehicle defaults.
+Uniqueness defaults are NEVER applied in reassign mode:
+  - An existing "no vehicle" stays empty even when exactly one vehicle is active (verified).
+  - A current Driver or Vehicle that became inactive is NOT swapped for a different resource. The field is left
+    empty for the operator (verified).
+  - The existing vehicle is preserved even when several vehicles are active (verified).
+The following are unchanged and verified:
+  - p_expected_assignment_id (a hidden field, as before)
+  - ZW005 / stale-reassign rejection
+  - the optional reason, stored as end_reason on the ended assignment
+  - assignment history (old assignment ended, new one active)
+  - assigned_by attribution
+
+======================================================================
+DRIVER-DAY READ MODEL
+======================================================================
+The model is src/lib/operations/assignment-context.ts (server-only). It is exposed through driverDayContextAction in
+src/app/operations/dispatch/actions.ts, a READ that writes nothing.
+  - Authorization is re-derived with requireOperationsAccess on every call.
+  - The organization id and timezone come from the server-resolved context, never from the browser.
+  - The trip and driver ids are validated as UUIDs.
+  - It uses the session Supabase client (RLS applies) plus an explicit organization_id filter. No service role and
+    no privileged client query.
+Queries (bounded):
+  a) The target Trip's scheduled_pickup_at, looked up by id + org.
+  b) The Driver's other Trips on the target Trip's ORG-LOCAL CALENDAR DAY:
+       - organizationDayBoundsUtc(target scheduled_pickup_at, org tz), so this is not "today" and is correct for
+         today, tomorrow or any later date, and DST-safe
+       - inner-joined to an ACTIVE trip_assignment (ended_at is null) for that Driver
+       - state in scheduled + in-progress states, so completed / cancelled / no_show are excluded
+       - the target Trip excluded; limit 50
+  c) The Driver's in-progress Trips on any date (state en_route_to_pickup .. arrived_at_destination), target
+     excluded, limit 5. This answers "currently on a trip".
+  b) and c) run in parallel. deriveDriverDayFacts then re-applies every rule (window, terminal exclusion, target
+  exclusion, dedup, sort) so the logic is unit-tested without a database.
+Output per trip: pickup time (org tz), pickup → destination. No passenger name and no other PHI. The data stays inside
+the tenant through RLS and the org filter.
+An unscheduled target Trip has no day list ("This trip has no scheduled pickup, so there is no day to show"). The
+current-trip fact is still reported.
+
+======================================================================
+DRIVER-DAY UX
+======================================================================
+A restrained panel under the Driver select, shown only once a Driver is selected:
+  ALSO SCHEDULED FRIDAY, SEPTEMBER 25 · 2 OTHER TRIPS
+  8:30 AM   Home → Metro Dialysis
+  2:00 PM   Clinic → Home
+  - Empty state: "No other trips for <name> on <date>."
+  - Load failure: "Couldn't load <name>'s other trips. You can still assign." The panel is non-blocking.
+  - It is a list, not a timeline or board. It has a max height with its own scroll.
+Wording: the dialog never says conflict, overlap, double-booked, unavailable, "not enough time", "available at" or
+"free by". The E2E asserts this with a regex across the whole dialog in every scenario.
+
+======================================================================
+CURRENT TRIP FACT
+======================================================================
+If the selected Driver holds an active assignment on a Trip in an in-progress state, the dialog shows "Currently on a
+trip · <existing status label>" (e.g. "Passenger Onboard"). There is no estimate of when they will be free, no
+"available at", and no conflict wording.
+
+======================================================================
+NO-VEHICLE GUIDANCE
+======================================================================
+  - If active vehicles exist and none is selected: "No vehicle selected. Tomorrow readiness will show this trip as
+    needing a vehicle."
+  - If there are no active vehicles:
+      - admin: "No active vehicles yet. Add one in Fleet so trips can be assigned a vehicle."
+      - dispatcher: "No active vehicles yet. An organization admin can add one in Fleet."
+Assignment is never blocked by either note (vehicle_id stays optional).
+
+======================================================================
+ZERO-DRIVER EMPTY STATE
+======================================================================
+The Dispatch "No active drivers" empty state (center grid) now carries role-appropriate next steps
+(NoActiveDriversActions):
+  - Organization Admin: "Add a driver" (/operations/drivers, the existing Invite Driver flow). Also "I also drive"
+    (/operations/settings/my-access, the existing link_self_as_driver flow), shown only when the admin has no active
+    linked Driver. No new Driver-link implementation was written.
+  - Dispatcher: no setup links, because both pages are admin-guarded server-side. The dispatcher sees the factual
+    note "An organization admin can add drivers."
+The same guidance appears inside the dialog if it is opened with zero active drivers. The submit button is disabled
+there because there is nothing to choose.
+Hiding a link is presentation only. Authorization is unchanged.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+No change:
+  - requireOperationsAccess guards both the mutation and the new read.
+  - Organization Admin and Dispatcher keep their existing assignment capability (verified for both).
+  - A Driver membership is redirected to /driver from Dispatch and from Trip Detail (verified).
+  - A Platform Admin without a tenant membership has no Operations context, so still no mutation.
+No RLS change, no new RPC, no new table, no migration, no new privilege. The privilege contract is untouched.
+current_driver_id is used only as a presentation input (ordering, "(you)", empty-state links).
+
+======================================================================
+PERFORMANCE
+======================================================================
+  - The Dispatch render adds ONE cheap RPC: current_driver_id, cached per request with React cache() and run in
+    parallel with the existing board load.
+  - Driver-day context is NOT pre-fetched per driver. It loads on demand for the one selected Driver, including the
+    prefilled one: one target lookup plus two bounded queries (limit 50 / 5). This avoids an N+1 over the board and
+    avoids shipping every trip to the client.
+  - Stale responses are ignored when the operator switches drivers.
+  - Trip Detail loads driver and vehicle options (two small queries) plus current_driver_id only when the Trip is in
+    an assignable state. If loading fails it falls back to the previous Dispatch link.
+Also fixed: the dialog's result effect no longer re-runs on every re-render. The inline onClose is held in a ref, so
+router.refresh() runs once per action result.
+
+======================================================================
+BROWSER E2E   (.tmp-qa/p1-ops-prog1-assignment-e2e.mjs; local Supabase + next start; fictional Org A; 0 failures)
+======================================================================
+Setup and cleanup: fixture drivers (Solo / Victor linked to org-a-admin / James / Sarah), two vehicles, one passenger
+and fixture trips. Org A's original driver and vehicle statuses were restored and the fixtures removed (verified).
+  1 driver / 1 vehicle (Dispatch board):
+    - Driver and Vehicle are prefilled and the selects stay enabled.
+    - The prefill is explained and writes no assignment.
+    - Cancel leaves the trip unassigned. Reopening shows the same prefills.
+    - Assign creates exactly one TripAssignment (Solo + Van 1, assigned_by = admin).
+  Owner-as-driver + multiple drivers (Trip Detail, TOMORROW trip):
+    - Order is "Victor Example (you) | James Example | Sarah Example".
+    - Nothing is auto-selected. display_name is unchanged.
+  Tomorrow driver-day facts:
+    - The target is tomorrow 11:00 AM. James has tomorrow 8:30 AM and 2:00 PM, plus today 4:00 PM, a completed
+      tomorrow 7:00 AM trip and a cancelled tomorrow 5:00 PM trip.
+    - Only 8:30 AM and 2:00 PM are shown, under "Also scheduled Friday, September 25 · 2 other trips". Today,
+      completed, cancelled and the target itself are excluded.
+    - No passenger name is shown and no conflict wording appears. Selecting a driver writes nothing.
+  Currently active trip:
+    - Sarah (passenger_onboard today) shows "Currently on a trip · Passenger Onboard". Her today trip is not listed
+      for tomorrow.
+    - A driver with nothing in progress shows no such note.
+  Multiple vehicles:
+    - Two active vehicles: no vehicle preselected, and the no-vehicle note is shown. It disappears once a vehicle is
+      chosen.
+    - One active vehicle: the vehicle is preselected while the driver is not.
+  Reassignment preservation:
+    - The current driver (James) and vehicle (Van 2 of 2) are kept.
+    - Reassigning to Sarah with a reason ends the old assignment with end_reason and creates one new active
+      assignment (Van 2, assigned_by attributed).
+    - An existing "no vehicle" is not overwritten by the only vehicle.
+    - An inactive current driver is not swapped.
+    - A stale reassign, after a concurrent change, is rejected by the backend with an alert and no write.
+  Zero-driver:
+    - Admin sees "Add a driver" (/operations/drivers) and "I also drive" (/operations/settings/my-access), and the
+      link lands on My Access.
+    - Dispatcher sees no admin actions and gets "An organization admin can add drivers." The dispatcher's own
+      assignment dialog and prefills still work.
+    - A Driver membership is redirected to /driver.
+  Responsive: the dialog shows no horizontal overflow at 1440px and at 768px, for both the page and the dialog.
+Note: the E2E ran against a build made before one help-text wording change ("use Clear vehicle to leave it empty").
+tsc, lint, unit tests and the final `npm run build` all ran after that change.
+
+======================================================================
+APPLICATION TESTS
+======================================================================
+npx tsc --noEmit ... PASS
+npm run lint ....... PASS (0 errors. The 91 warnings are all in untracked .tmp-qa scripts; none are in app code.)
+npm test ........... 544/544 (includes 16 new tests in assignment-defaults-core.test.mjs)
+npm run build ...... PASS
+Existing assignment mutation tests are unchanged, and no SQL test was touched. A full SQL regression was not run
+because no backend or security change was made.
+
+======================================================================
+FILES CREATED
+======================================================================
+src/lib/operations/assignment-defaults-core.ts
+src/lib/operations/assignment-defaults-core.test.mjs
+src/lib/operations/assignment-context.ts
+src/components/operations/dispatch/NoActiveDriversActions.tsx
+src/components/operations/trip-detail/TripAssignmentButton.tsx
+docs/reports/p1-ops-prog1-progressive-assignment.txt
+(.tmp-qa/p1-ops-prog1-assignment-e2e.mjs -- local QA only, untracked, not for commit)
+
+======================================================================
+FILES MODIFIED
+======================================================================
+src/components/operations/dispatch/AssignmentDialog.tsx
+  - controlled selects with progressive defaults, "(you)" ordering, driver-day panel, current-trip fact, vehicle
+    notes, Clear vehicle, zero-driver guidance, and a stable result effect
+src/components/operations/dispatch/DispatchBoardClient.tsx
+  - passes operatorDriverId / canManageDriverSetup and the empty-state actions
+src/components/operations/dispatch/AssignmentGrid.tsx
+  - optional emptyAction slot on "No active drivers"
+src/app/operations/dispatch/page.tsx
+  - loads current_driver_id in parallel and passes the role flag
+src/app/operations/dispatch/actions.ts
+  - adds the read-only driverDayContextAction, and revalidates /operations/trips/<id> after a successful assignment.
+    The mutation logic is unchanged.
+src/app/operations/trips/[tripId]/page.tsx
+  - loads options for assignable states and mounts TripAssignmentButton
+src/components/operations/trip-detail/CurrentStatusPanel.tsx
+  - optional assignmentControl slot, with a fallback to the previous Dispatch link
+
+======================================================================
+OPEN ISSUES
+======================================================================
+  1. Scope note for owner review: Trip Detail now opens the assignment dialog in place (see the audit correction).
+     Without it, tomorrow and later trips remain unassignable in the UI and sections 6 and 20 cannot be satisfied.
+     If the owner prefers Dispatch-only assignment, this is a clean revert of TripAssignmentButton plus the Trip
+     Detail wiring, and the dialog changes stand alone.
+  2. The Dispatch board remains today-only. A Tomorrow scope and inline assign from the Tomorrow page are PROG2.
+  3. The PROG model report's audit line about Trip Detail assignment is inaccurate (see above). It is left unedited
+     as the approved source; this report records the correction.
+  4. If a live board refresh deactivates the selected driver while the dialog is open, the backend rejects the
+     submit as before. The UI does not re-derive defaults mid-dialog, by design.
+  5. .tmp-qa scripts and logs are untracked local QA and must not be committed.
+
+ONE DRIVER PREFILL: PASS
+ONE VEHICLE PREFILL: PASS
+PREFILL WRITES ASSIGNMENT: NO
+OPERATOR CONFIRMATION REQUIRED: YES
+OWNER DRIVER FIRST: PASS
+OWNER DRIVER AUTOSELECT WITH MULTIPLE: NO
+DRIVER DAY TARGET DATE: ORG-LOCAL TRIP DATE
+OTHER TRIPS SHOWN: PASS
+TERMINAL TRIPS EXCLUDED: PASS
+TARGET TRIP EXCLUDED: PASS
+CONFLICT CLAIMS: NONE
+CURRENTLY ON TRIP: PASS
+NO VEHICLE NOTE: PASS
+REASSIGN PRESERVES EXISTING: PASS
+ZERO DRIVER ADMIN ACTIONS: PASS
+DRIVER ASSIGNMENT PERMISSIONS CHANGED: NO
+DATABASE MIGRATION: NONE
+RPC CHANGE: NONE
+RLS CHANGE: NONE
+TSC: PASS
+LINT: PASS
+UNIT: 544/544
+BUILD: PASS
+READY FOR PRODUCTION RELEASE: YES
+BLOCKERS: NONE (owner review of the Trip Detail entry point, OPEN ISSUE 1, is requested before release)
+NEXT IF PASS:
+Owner review
+→ PROG1 production release
+DO NOT BEGIN PROG2 AUTOMATICALLY.
+STOP.

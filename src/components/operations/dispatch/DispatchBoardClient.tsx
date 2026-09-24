@@ -5,11 +5,15 @@ import { NeedsAssignmentQueue } from "./NeedsAssignmentQueue";
 import { AssignmentGrid } from "./AssignmentGrid";
 import { DriverCapacityPanel } from "./DriverCapacityPanel";
 import { AssignmentDialog } from "./AssignmentDialog";
+import { NoActiveDriversActions } from "./NoActiveDriversActions";
 import type { DispatchBoardData, DispatchTrip } from "@/lib/operations/dispatch-board";
 
 export interface DispatchBoardClientProps {
   data: DispatchBoardData;
   timezone: string;
+  /** P1-OPS-PROG1 presentation inputs (ordering, "(you)", empty-state links) -- never authorization. */
+  operatorDriverId: string | null;
+  canManageDriverSetup: boolean;
 }
 
 interface ActiveDialogState {
@@ -26,7 +30,7 @@ interface ActiveDialogState {
  * fresh `useActionState` per dialog — no stale success/error state can
  * leak from a previous assignment into the next one.
  */
-export function DispatchBoardClient({ data, timezone }: DispatchBoardClientProps) {
+export function DispatchBoardClient({ data, timezone, operatorDriverId, canManageDriverSetup }: DispatchBoardClientProps) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialogState | null>(null);
 
   return (
@@ -41,6 +45,9 @@ export function DispatchBoardClient({ data, timezone }: DispatchBoardClientProps
           driverRows={data.driverRows}
           timezone={timezone}
           onReassign={(trip) => setActiveDialog({ trip, mode: "reassign" })}
+          emptyAction={
+            <NoActiveDriversActions canManageDriverSetup={canManageDriverSetup} hasLinkedDriver={operatorDriverId !== null} />
+          }
         />
         <DriverCapacityPanel driverRows={data.driverRows} />
       </div>
@@ -52,6 +59,8 @@ export function DispatchBoardClient({ data, timezone }: DispatchBoardClientProps
           mode={activeDialog.mode}
           driverOptions={data.driverOptions}
           vehicleOptions={data.vehicleOptions}
+          operatorDriverId={operatorDriverId}
+          canManageDriverSetup={canManageDriverSetup}
           onClose={() => setActiveDialog(null)}
         />
       )}

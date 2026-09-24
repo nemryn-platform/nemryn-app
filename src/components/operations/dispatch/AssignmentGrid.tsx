@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { MapPin } from "@phosphor-icons/react/dist/ssr";
 import { Panel } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -28,6 +29,8 @@ export interface AssignmentGridProps {
   driverRows: DispatchDriverRow[];
   timezone: string;
   onReassign: (trip: DispatchTrip) => void;
+  /** P1-OPS-PROG1: role-appropriate next steps shown with the "No active drivers" empty state. */
+  emptyAction?: ReactNode;
 }
 
 /** Bare active-state labels read as "in progress" (teal); "Assigned"/"Scheduled" read as pending — matches the same category distinction TripStatus/operationsTripStatusLabel already makes, applied to plain text here rather than a full badge, to keep the dense grid scannable. */
@@ -54,7 +57,7 @@ const ROW_LABEL_WIDTH_PX = 168;
  * confirms it, and drag-and-drop introduces real accessibility/mutation-
  * ambiguity risk a deliberate click → dialog → confirm flow avoids.
  */
-export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentGridProps) {
+export function AssignmentGrid({ driverRows, timezone, onReassign, emptyAction }: AssignmentGridProps) {
   const hourLabels = gridHourLabels();
 
   return (
@@ -69,7 +72,7 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
       <Panel className="overflow-x-auto p-0">
         {driverRows.length === 0 ? (
           <div className="p-zw-lg">
-            <EmptyState title="No active drivers" description="Add an active driver to see assignments here." />
+            <EmptyState title="No active drivers" description="Add an active driver to see assignments here." action={emptyAction} />
           </div>
         ) : (
           <div style={{ width: ROW_LABEL_WIDTH_PX + GRID_TOTAL_WIDTH_PX }}>

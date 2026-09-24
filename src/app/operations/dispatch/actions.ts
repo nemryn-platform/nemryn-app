@@ -5,6 +5,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapDispatchError, type DispatchErrorCode } from "@/lib/operations/dispatch-errors";
+import { getDriverDayContext, type DriverDayContext } from "@/lib/operations/assignment-context";
 
 export interface AssignmentActionState {
   status: "idle" | "success" | "error";
@@ -91,6 +92,26 @@ export async function assignmentAction(
 
   revalidatePath("/operations/dispatch");
   revalidatePath("/operations");
+  revalidatePath(`/operations/trips/${tripId}`);
 
   return { status: "success", changed: data?.changed ?? false };
+}
+
+/**
+ * P1-OPS-PROG1 driver-day context -- a READ only, for the one Driver the
+ * operator selected in the Assign/Reassign dialog. Authorization is
+ * re-derived here exactly as for the mutation above; the organization and
+ * its timezone come from the server-resolved context, never the browser,
+ * and the read itself is a session-client (RLS) query filtered to that
+ * organization. Writes nothing.
+ */
+export async function driverDayContextAction(tripId: unknown, driverId: unknown): Promise<DriverDayContext> {
+  if (typeof tripId !== "string" || typeof driverId !== "string") return { status: "unavailable" };
+  const pathname = await getCurrentPathname("/operations/dispatch");
+  const organization = await requireOperationsAccess(pathname);
+  try {
+    return await getDriverDayContext(organization.organizationId, organization.organizationTimezone, tripId, driverId);
+  } catch {
+    return { status: "unavailable" };
+  }
 }
