@@ -1,0 +1,437 @@
+NEMRYN PLATFORM
+P1-OPS-PROG2 -- READINESS TO ACTION
+Local implementation only. NOT committed, NOT pushed, NOT deployed. No Supabase change, no migration, no RPC change,
+no RLS change, no privilege change, no Vercel / DNS change, no production data touched. PROG3–PROG5, D4, S5B,
+billing, route optimization, availability, duration, vehicle capability and drag-and-drop were NOT started.
+Returned for owner review.
+
+======================================================================
+OWNER DECISIONS   (recorded at release approval)
+======================================================================
+  - The mutually-exclusive NEEDS_DRIVER / NEEDS_VEHICLE readiness model is RETAINED.
+      - An unassigned trip shows "Driver needed".
+      - An active assignment without a vehicle shows "Vehicle needed".
+      - trip-readiness-core is unchanged. An unassigned trip never shows both reasons.
+  - Operator terminology is standardized to Trip / Trips. The PROG2 Overview Tomorrow line was changed from
+    "ride / rides" to "trip / trips" (copy only, no behaviour change):
+      - "Nothing scheduled for tomorrow"
+      - "1 trip · All ready" / "4 trips · All ready"
+      - "1 trip · 1 needs preparation" / "4 trips · 2 need preparation"
+
+======================================================================
+STARTING STATE
+======================================================================
+main = origin/main = 4b5b5e7. PROG1 is released (8df57ef) and closed. Migration head is 20260924091000, and the
+production ACL is 0/29.
+Source of truth: docs/reports/p1-ops-prog-progressive-operations-model.txt (PROG2 = Readiness to Action).
+
+======================================================================
+CURRENT READINESS AUDIT   (fresh read of the code; mismatches listed first)
+======================================================================
+Mismatches with the brief or model, recorded before implementation:
+  M1. NEEDS_DRIVER and NEEDS_VEHICLE are MUTUALLY EXCLUSIVE by design (trip-readiness-core.ts: "NEEDS_VEHICLE must
+      NEVER fire merely because there is no assignment at all").
+        - An unassigned trip shows only "Driver needed".
+        - "Vehicle needed" appears only when a trip has an active assignment with no vehicle.
+      The brief's examples ("Driver needed + Vehicle needed") cannot occur. PROG2 keeps the existing readiness rule
+      unchanged and tests the real behaviour.
+  M2. New Trip already navigates to the created Trip's detail page on success. There was no success message at all,
+      so the three PROG2 outcomes are shown there (see PARTIAL SUCCESS).
+  M3. The Overview already had a "Tomorrow readiness" block (S4E), but its wording was sentence-style. PROG2 replaces
+      the copy; it does not add a new block.
+  M4. create_trip is deliberately non-idempotent (ZD-102). Double-submit protection is client-side only: a
+      submittedRef guard plus the disabled submit button. See NEW TRIP ASSIGN NOW.
+Confirmed:
+  - New Trip: createTripAction calls the create_trip RPC only.
+      - Authorization is re-derived each call (requireOperationsAccess).
+      - Org-local date/time is converted to UTC server-side.
+      - A Request-linked passenger is re-derived server-side.
+  - PROG1 AssignmentDialog + assignmentAction:
+      - Trip Detail entry point.
+      - Defaults via deriveAssignmentDefaults.
+      - Driver-day context via driverDayContextAction.
+  - Tomorrow:
+      - getTomorrowReadiness returns scheduled trips in tomorrow's org-local window.
+      - It embeds the active assignment and counts open exceptions.
+      - deriveTripReadiness produces the reasons; aggregateTomorrowReadiness produces the counts.
+      - The page listed reasons with a "View trip" link only.
+  - Operations Brief: the Tomorrow summary comes from the same aggregate (tomorrowReadiness), with null = unavailable.
+
+======================================================================
+NEW TRIP ASSIGN NOW
+======================================================================
+A new "Assignment" section in the New Trip right column, replacing the old "assign after creating" notice:
+  [ ] Assign now
+When ticked, it renders AssignmentFields: the SAME controls PROG1's dialog uses, extracted into one shared component
+(src/components/operations/dispatch/AssignmentFields.tsx). So:
+  - Driver/Vehicle prefill applies only when exactly one active option exists, with the same help text.
+  - The linked operator's own driver is listed first as "<name> (you)" and is never auto-selected.
+  - Driver-day context is shown for the chosen pickup date. It reuses driverDayContextAction with a new
+    { kind: "date" } target, and says "Choose a pickup date…" until one is entered.
+  - The no-vehicle note, Clear vehicle and zero-driver guidance are the same as PROG1.
+  - Nothing is written until Create Trip is clicked.
+  - With Assign now ticked but no driver chosen, the action rejects BEFORE create_trip ("Choose a driver for Assign
+    now, or turn Assign now off…"), so nothing is created.
+Double-submit: the existing guards are kept (submittedRef + disabled button). After ANY success, including a partial
+one, the form navigates away and submittedRef stays set, so it can never submit a second Trip. A rapid triple submit
+(two clicks plus requestSubmit) produced exactly one Trip and one assignment (E2E).
+Limitation (unchanged, documented): create_trip has no idempotency key. A browser- or network-level replay of the POST
+outside the page's own guard is not deduplicated server-side. PROG2 did not invent one silently.
+
+======================================================================
+ASSIGN NOW DEFAULT DECISION
+======================================================================
+FINAL: Assign now is OFF by default for everyone, including a 1-driver / 1-vehicle operator. The operator opts in with
+one click, and the fields inside are then prefilled.
+Why:
+  - Default-ON would turn "Create Trip" into "create AND assign" without the operator having looked at the
+    assignment.
+  - That is exactly the hidden-assignment behaviour the invariants forbid.
+  - With the fields visibly prefilled, opting in costs a single click.
+  - Default-ON can be revisited once pilot operators ask for it.
+
+======================================================================
+CREATE THEN ASSIGN MODEL
+======================================================================
+The existing two calls are used; there is NO combined RPC, and create_trip is unchanged:
+  1. create_trip, exactly as before.
+  2. Only when Assign now is on: assign_trip for the new trip id, through callAssignmentRpc.
+callAssignmentRpc (src/lib/operations/assignment-mutation.ts) is new, but it is the extracted body of PROG1's
+assignmentAction, so both the dialog and New Trip still go through ONE assignment call path. The flow is
+intentionally NON-ATOMIC:
+  - The created Trip is never rolled back or re-created.
+  - The assignment is attempted exactly once, with no automatic retry.
+  - assign_trip re-validates everything (organization, active driver and vehicle, assignable state, one active
+    assignment).
+
+======================================================================
+PARTIAL SUCCESS
+======================================================================
+The three outcomes are kept distinct (state.assignment = not_requested | assigned | failed):
+  A. Assign now off: the existing behaviour. Navigates to Trip Detail with no notice.
+  B. Assign now on, assignment OK: Trip Detail shows "Trip created and assigned."
+  C. Assign now on, assignment failed: Trip Detail shows an alert with:
+       "Trip created, but the assignment could not be completed."
+       + the mapped reason (e.g. "That driver or vehicle is no longer available. Choose another.")
+       + "The trip is saved without a driver — you can assign it from Current Status on this page."
+The outcome travels in a display-only query parameter (?created=assigned | assignment_failed, &reason=<allowlisted
+dispatch error code>). It changes only copy. The page's own data (Current Status, readiness) is the authority on what
+happened. The partial-failure E2E confirmed:
+  - exactly one Trip was created
+  - 0 active assignments existed afterwards
+  - the operator landed on that Trip
+  - assigning there succeeded
+  - no second Trip was created
+
+======================================================================
+TOMORROW INLINE ASSIGN
+======================================================================
+The /operations/tomorrow "Needs preparation" rows now carry a compact button next to "View trip". It is a button that
+opens a dialog; there are no inline selects (0 <select> elements on the page, verified).
+  - "Assign": the trip is unassigned (NEEDS_DRIVER). Opens the PROG1 AssignmentDialog in assign mode.
+  - "Add vehicle": the trip is assigned without a vehicle (NEEDS_VEHICLE). Opens the SAME dialog in reassign mode:
+    the current driver is kept, the vehicle is chosen, and reassign_trip records the history.
+Eligibility is decided by deriveTomorrowAssignAction (pure). BOTH conditions must hold:
+  - an assignment-related reason
+  - a trip state that assign_trip / reassign_trip accept
+The readiness reason alone is not enough, and the backend stays authoritative at submit time.
+The option lists, operator driver id and recurring hints are loaded only when at least one row qualifies. If loading
+fails, the rows keep "View trip" only.
+Refresh: the dialog calls router.refresh() on success, and assignmentAction also revalidates /operations/tomorrow.
+Readiness is then RE-DERIVED from facts, never set to Ready.
+getTomorrowReadiness now also returns `assignmentTargets`: the per-trip fields the dialog needs (descriptions,
+recurring_arrangement_id, active assignment driver/vehicle ids and labels). This is additive; the pure readiness core
+is untouched.
+
+======================================================================
+MULTI-REASON READINESS
+======================================================================
+Assignment only resolves assignment reasons. E2E, using a trip with an open exception:
+  - Before: "Driver needed" + "Open issue", with Assign offered.
+  - After assigning: still under Needs preparation, showing ONLY "Open issue". It is not Ready, and the Assign
+    button is gone.
+Other reasons (DRIVER_INACTIVE, VEHICLE_INACTIVE, PASSENGER_INACTIVE, OPEN_EXCEPTION) get no inline action. They stay
+with "View trip".
+
+======================================================================
+RECURRING RELATION AUDIT
+======================================================================
+The strongest explicit relation:
+  - trips.recurring_arrangement_id: nullable, with a composite FK (recurring_arrangement_id, organization_id) to
+    recurring_arrangements, and indexed.
+  - It is set by the occurrence-creation RPC (20260918090000).
+The completing assignment:
+  - driver_complete_trip closes the active assignment with end_reason = 'trip_completed' (20260831100200).
+  - That exact row is "the assignment that completed the occurrence".
+  - An assignment still open on a completed trip is also accepted as a fallback.
+No passenger, address or pickup-time-text matching is used anywhere.
+
+======================================================================
+RECURRING HISTORICAL PREFILL
+======================================================================
+Read model: getRecurringAssignmentHints(org, targets) in assignment-context.ts.
+  - It makes ONE bounded query for any number of target trips:
+      - completed trips of the targets' arrangements (explicit linkage)
+      - organization-filtered, session client (RLS)
+      - within 90 days before the latest target, limit 500
+      - with their assignment rows embedded
+  - selectRecurringAssignmentHint (pure) then picks, per target, the NEAREST EARLIER completed occurrence of the SAME
+    arrangement that has a completing assignment.
+  - Only { driverId, vehicleId } reaches the client, and only for assign mode.
+Surfaces:
+  - Trip Detail: getRecurringAssignmentHintForTrip, used only when the trip is unassigned.
+  - Tomorrow inline Assign.
+  - The Dispatch Needs Assignment queue: one batched call for all unassigned trips, since it is the same dialog.
+  - New Trip trips are never recurring, so no hint applies there.
+Help text: "Prefilled from the most recent completed occurrence. You can change it before assigning." Nothing says
+"preferred", "usual" or "required".
+Bound: an occurrence completed more than 90 days before the target does not prefill. The window keeps the batched
+read bounded (open issue 2).
+
+======================================================================
+PREFILL PRIORITY
+======================================================================
+REASSIGN:
+  1. The existing active assignment's driver and vehicle, while each is still eligible.
+  2. Nothing else overrides them: recurring history and uniqueness are both ignored.
+ASSIGN, deciding driver and vehicle independently:
+  1. The recurring-history value, if still an active option in this organization.
+  2. Otherwise, the only eligible option (the PROG1 uniqueness rule).
+  3. Otherwise, no default.
+Rules:
+  - A historical "no vehicle" contributes no vehicle. The field falls through to rule 2 and is never invented from
+    history.
+  - An inactive historical driver or vehicle is ignored and never substituted by "something similar". Only the
+    ordinary uniqueness rule can then apply.
+  - Defaults are derived once when the dialog or section mounts and never re-applied over operator edits.
+  - "(you)" ordering remains presentation only.
+
+======================================================================
+RECURRING EDGE CASES   (unit tests + E2E)
+======================================================================
+  - No prior occurrence: no hint (unit).
+  - Non-recurring target: no hint (unit).
+  - Prior occurrence unassigned, cancelled, no-show or scheduled: never counts (unit + E2E, whose history includes
+    no-show and cancelled occurrences assigned to Driver B, and an unassigned one).
+  - Completed occurrence whose driver is now inactive: driver ignored; multiple others give no prefill; exactly one
+    other gives the uniqueness prefill (unit + E2E).
+  - Completed occurrence whose vehicle is now inactive: the same rules apply to the vehicle (unit + E2E).
+  - Completed occurrence with driver and vehicle both still active: both prefilled from history (E2E: Driver A + Van
+    A).
+  - Multiple prior occurrences: the newest EARLIER completed one wins. Older (Driver C, 14 days) and later occurrences
+    and other arrangements are ignored (unit + E2E).
+  - A completed occurrence with no vehicle: no vehicle is invented (unit).
+  - Reassign mode ignores history (unit).
+Nothing in any of these paths auto-assigns (E2E: 0 assignments until confirm).
+
+======================================================================
+OVERVIEW TOMORROW SUMMARY
+======================================================================
+The block is now titled "Tomorrow", with one line from deriveTomorrowSummaryLine (pure) and a "Review tomorrow" link
+to /operations/tomorrow:
+  - "Nothing scheduled for tomorrow"
+  - "4 trips · All ready"
+  - "4 trips · 2 need preparation" (singular: "1 trip · 1 needs preparation")
+  - "Tomorrow unavailable" when the aggregate could not load (never shown as zero)
+The counts come straight from the derived aggregate. There are no percentages, no new cards and no stored status.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+Unchanged:
+  - Every mutation and read path re-derives requireOperationsAccess.
+  - Organization Admin and Dispatcher keep their existing create/assign rights.
+  - A Driver membership is redirected to /driver from /operations/trips/new and /operations/tomorrow (E2E), as it
+    already was from Dispatch and Trip Detail.
+  - A Platform Admin without a membership has no Operations context.
+  - The assignment RPCs remain the only validators.
+No RLS change, no new RPC, no new privilege, no migration.
+
+======================================================================
+PERFORMANCE
+======================================================================
+  - Tomorrow: the readiness query gains a few columns in the same round trip. Assignment options, operator driver id
+    and recurring hints (ONE batched query) load only when at least one row qualifies.
+  - Dispatch: +1 batched recurring-hint query for the unassigned queue, skipped when none are recurring.
+  - Trip Detail: +1 small lookup plus the history query, only for an unassigned, assignable trip.
+  - New Trip: +2 small option queries and the cached current_driver_id call.
+  - Driver-day context is still fetched on demand for the selected driver only.
+  - There is no per-row / N+1 querying anywhere.
+
+======================================================================
+PRIVACY
+======================================================================
+  - Recurring history sends only driver and vehicle ids to the client. No historical trip, passenger or address data
+    is sent.
+  - Driver-day context is unchanged from PROG1: times and routes, no passenger names.
+  - The New Trip outcome parameter carries only a fixed notice value and an allowlisted error code.
+
+======================================================================
+PROG1 REGRESSION
+======================================================================
+.tmp-qa/p1-ops-prog1-assignment-e2e.mjs was rerun against the PROG2 build: 46/46 PASS, 0 failures. Covered:
+  - single driver/vehicle prefill
+  - owner "(you)" ordering
+  - driver-day facts
+  - multiple-vehicle no-guess
+  - reassignment preservation
+  - stale reassign rejection
+  - Trip Detail assignment
+  - zero-driver admin/dispatcher behaviour
+  - 1440px and 768px
+The dialog now composes AssignmentFields. PROG1 behaviour is unchanged, and PROG2 extends it rather than forking it.
+
+======================================================================
+BROWSER E2E   (.tmp-qa/p1-ops-prog2-readiness-e2e.mjs; local Supabase + next start; fictional Org A; 56/56 PASS)
+======================================================================
+Fixtures carried a "PROG2" prefix. Cleanup was verified afterwards:
+  - all fixtures were removed
+  - Org A's driver and vehicle statuses were restored
+  - Org A's own seed trip for tomorrow, moved +60 days for the count checks, was moved back
+Results:
+  - One-person Assign now (1 driver / 1 vehicle):
+      - Assign now was OFF by default. Ticking it prefilled the driver and vehicle, with the prefill explained.
+      - Nothing was written before Create Trip.
+      - Exactly one Trip was created and assigned (Solo + Van A), with the "Trip created and assigned." notice.
+      - Tomorrow showed the trip Ready. No Dispatch visit was needed.
+  - Assign now off: the trip was created unassigned, with no notice.
+  - Multi-resource Assign now (3 drivers incl. an owner-linked one, 2 vehicles):
+      - No driver or vehicle was guessed, and the owner was listed first as "(you)".
+      - Driver-day context was shown for the chosen pickup date, with no conflict wording.
+  - Rapid double submit: exactly one Trip and one assignment.
+  - Partial failure (driver deactivated between page load and submit):
+      - exactly one Trip, 0 active assignments
+      - the explicit partial-success copy was shown and the operator landed on that Trip
+      - assigning there succeeded, and there was still one Trip
+  - Tomorrow inline Assign:
+      - Before: "Driver needed" with an Assign button.
+      - The dialog opened with both fields prefilled, and nothing was written on open.
+      - Confirming created the TripAssignment, and the row refreshed to Ready.
+  - Multi-reason: "Driver needed" + "Open issue" became ONLY "Open issue" after assignment. The row stayed in Needs
+    preparation and the Assign button disappeared.
+  - Add vehicle: a trip assigned without a vehicle offered "Add vehicle". The driver was kept and the vehicle was not
+    auto-filled. After confirming, the row was Ready and the history was kept.
+  - Recurring prefill:
+      - Driver A + Van A were prefilled from the most recent completed occurrence (7 days ago). The older completed,
+        no-show, cancelled and unassigned occurrences were ignored.
+      - The helper text was shown and nothing was written.
+      - Cancel left the occurrence unassigned. Trip Detail showed the same prefill, and confirming assigned it.
+  - Recurring fallback:
+      - Historical Driver A and Van A inactive, with 2+ others active: no prefill and no recurring helper.
+      - Exactly one other active each: the PROG1 uniqueness prefill (Driver C / Van C).
+      - No auto-assignment.
+  - Overview:
+      - "Nothing scheduled for tomorrow", "4 trips · All ready" and "4 trips · 2 need preparation".
+      - Review tomorrow links to /operations/tomorrow.
+      - No percentage.
+  - Responsive: Tomorrow with the dialog open, and New Trip with Assign now open, showed no horizontal overflow at
+    1440px and 768px.
+  - A Driver membership was redirected from New Trip and Tomorrow.
+
+======================================================================
+APPLICATION TESTS
+======================================================================
+npx tsc --noEmit ... PASS
+npm run lint ....... PASS (0 errors. The 91 warnings are all in untracked .tmp-qa scripts; none are in app code.)
+npm test ........... 559/559 (15 new: 8 in assignment-defaults-core.test.mjs, 7 in readiness-actions-core.test.mjs)
+npm run build ...... PASS
+No SQL regression was run, because there was no database, RPC, RLS or security change.
+
+======================================================================
+FILES CREATED
+======================================================================
+src/components/operations/dispatch/AssignmentFields.tsx
+  - shared PROG1 assignment controls, used by the dialog and New Trip
+src/lib/operations/assignment-mutation.ts
+  - the single assign_trip / reassign_trip call path, extracted
+src/lib/operations/readiness-actions-core.ts
+  - Tomorrow action eligibility, Overview line, New Trip notice (pure)
+src/lib/operations/readiness-actions-core.test.mjs
+docs/reports/p1-ops-prog2-readiness-to-action.txt
+(.tmp-qa/p1-ops-prog2-readiness-e2e.mjs -- local QA only, untracked, not for commit)
+
+======================================================================
+FILES MODIFIED
+======================================================================
+src/lib/operations/assignment-defaults-core.ts
+  - recurring hint priority; selectRecurringAssignmentHint
+src/lib/operations/assignment-defaults-core.test.mjs
+  - recurring and priority tests
+src/lib/operations/assignment-context.ts
+  - date-target driver-day context, getRecurringAssignmentHints, getRecurringAssignmentHintForTrip
+src/lib/operations/tomorrow-readiness.ts
+  - additive assignmentTargets and columns
+src/lib/operations/dispatch-board.ts
+  - additive recurringArrangementId
+src/lib/operations/new-trip-errors.ts
+  - ASSIGN_DRIVER_REQUIRED
+src/app/operations/dispatch/actions.ts
+  - uses callAssignmentRpc; target-aware driverDayContextAction; revalidates /operations/tomorrow
+src/app/operations/dispatch/page.tsx
+  - batched recurring hints for the queue
+src/app/operations/tomorrow/page.tsx
+  - inline Assign / Add vehicle
+src/app/operations/trips/[tripId]/page.tsx
+  - recurring hint; New Trip outcome notices
+src/app/operations/trips/new/actions.ts
+  - Assign now: create then assign, with partial-success state
+src/app/operations/trips/new/page.tsx
+  - assignment options and operator driver id
+src/components/operations/new-trip/NewTripForm.tsx
+  - Assignment section (off by default); outcome-aware navigation
+src/components/operations/dispatch/AssignmentDialog.tsx
+  - composes AssignmentFields; recurringHint prop
+src/components/operations/dispatch/DispatchBoardClient.tsx
+  - passes recurring hints (assign mode)
+src/components/operations/trip-detail/TripAssignmentButton.tsx
+  - label / fullWidth / recurringHint props (shared with Tomorrow)
+src/components/operations/OperationsBrief.tsx
+  - Tomorrow block copy
+
+======================================================================
+OPEN ISSUES
+======================================================================
+  1. The brief's "Driver needed + Vehicle needed" examples conflict with the existing mutually-exclusive readiness
+     rule (M1). PROG2 kept the rule. If the owner wants both reasons shown on an unassigned trip, that is a separate
+     readiness-model decision.
+  2. Recurring history is bounded to 90 days before the target. An arrangement whose last completed occurrence is
+     older gets no recurring prefill, only the PROG1 uniqueness fallback.
+  3. create_trip has no server-side idempotency (M4). The client guard prevents in-page duplicates, but a replayed
+     POST outside the page is not deduplicated. Unchanged from before PROG2.
+  4. Inline Tomorrow actions cover NEEDS_DRIVER / NEEDS_VEHICLE only. Inactive-driver / inactive-vehicle rows still
+     go through "View trip" → Manage Assignment.
+  5. RESOLVED by owner decision: the Overview line now uses "trip / trips" (see OWNER DECISIONS).
+  6. .tmp-qa scripts and logs are untracked local QA and must not be committed.
+
+ASSIGN NOW: PASS
+ASSIGN NOW AUTO-WRITES: NO
+OPERATOR CONFIRMATION: REQUIRED
+CREATE TRIP: PASS
+ASSIGNMENT AFTER CREATE: PASS
+PARTIAL ASSIGNMENT FAILURE: SAFE
+DUPLICATE TRIP ON PARTIAL FAILURE: NO
+TOMORROW INLINE ASSIGN: PASS
+TOMORROW READINESS REFRESH: PASS
+MULTI-REASON READINESS PRESERVED: PASS
+RECURRING PREFILL: PASS
+RECURRING PREFILL AUTO-ASSIGNS: NO
+RECENT COMPLETED OCCURRENCE: PASS
+INACTIVE HISTORICAL DRIVER: IGNORED
+INACTIVE HISTORICAL VEHICLE: IGNORED
+PROG1 UNIQUE FALLBACK: PASS
+OVERVIEW TOMORROW: PASS
+DRIVER PERMISSIONS CHANGED: NO
+DATABASE MIGRATION: NONE
+RPC CHANGE: NONE
+RLS CHANGE: NONE
+TSC: PASS
+LINT: PASS
+UNIT: 559/559
+BUILD: PASS
+READY FOR PRODUCTION RELEASE: YES
+BLOCKERS: NONE (OPEN ISSUES 1 and 5 resolved by owner decision; see OWNER DECISIONS)
+NEXT IF PASS:
+Owner review
+→ PROG2 production release
+DO NOT BEGIN PROG3 AUTOMATICALLY.
+STOP.

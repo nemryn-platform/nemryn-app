@@ -10,6 +10,15 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { SummaryStrip, type SummaryItem } from "@/components/ui/SummaryStrip";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { LinkButton } from "@/components/ui/LinkButton";
+import { TripAssignmentButton } from "@/components/operations/trip-detail/TripAssignmentButton";
+import {
+  getAssignmentOptions,
+  getOperatorLinkedDriverId,
+  getRecurringAssignmentHints,
+  type AssignmentOptions,
+} from "@/lib/operations/assignment-context";
+import type { RecurringAssignmentHint } from "@/lib/operations/assignment-defaults-core";
+import { deriveTomorrowAssignAction, type TomorrowAssignAction } from "@/lib/operations/readiness-actions-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -79,6 +88,44 @@ export default async function TomorrowReadinessPage() {
   const needsPreparation = items.filter((item) => item.readiness.state === "NEEDS_PREPARATION");
   const ready = items.filter((item) => item.readiness.state === "READY");
 
+  // P1-OPS-PROG2 inline readiness fix: an Assign / Add vehicle action only
+  // for rows whose reasons are assignment-related AND whose Trip is in a
+  // state the assignment RPCs accept. It opens the SAME PROG1 dialog +
+  // Server Action; after success the dialog refreshes this page, so
+  // readiness is re-derived (never forced to Ready).
+  const assignActions = new Map<string, TomorrowAssignAction>();
+  for (const item of needsPreparation) {
+    const target = data.assignmentTargets[item.tripId];
+    if (!target) continue;
+    const action = deriveTomorrowAssignAction({
+      state: target.state,
+      hasActiveAssignment: target.activeAssignmentId !== null,
+      reasons: item.readiness.reasons,
+    });
+    if (action) assignActions.set(item.tripId, action);
+  }
+  let assignmentOptions: AssignmentOptions | null = null;
+  let operatorDriverId: string | null = null;
+  let recurringHints: Record<string, RecurringAssignmentHint> = {};
+  if (assignActions.size > 0) {
+    try {
+      const assignTargets = [...assignActions.entries()]
+        .filter(([, action]) => action.mode === "assign")
+        .map(([tripId]) => data.assignmentTargets[tripId]);
+      [assignmentOptions, operatorDriverId, recurringHints] = await Promise.all([
+        getAssignmentOptions(organization.organizationId),
+        getOperatorLinkedDriverId(organization.organizationId),
+        getRecurringAssignmentHints(
+          organization.organizationId,
+          assignTargets.map((t) => ({ tripId: t.id, recurringArrangementId: t.recurringArrangementId, scheduledPickupAt: t.scheduledPickupAt })),
+        ),
+      ]);
+    } catch {
+      // Options unavailable -> rows keep their "View trip" link only.
+      assignmentOptions = null;
+    }
+  }
+
   const summaryItems: SummaryItem[] = [
     { label: totalScheduledTrips === 1 ? "scheduled trip" : "scheduled trips", value: totalScheduledTrips },
     { label: "ready", value: readyCount, dot: true },
@@ -135,9 +182,23 @@ export default async function TomorrowReadinessPage() {
                           ))}
                         </div>
                       </div>
-                      <LinkButton href={`/operations/trips/${item.tripId}`} variant="outline" size="sm" className="shrink-0">
-                        View trip
-                      </LinkButton>
+                      <div className="flex shrink-0 gap-2">
+                        {assignmentOptions && assignActions.has(item.tripId) && (
+                          <TripAssignmentButton
+                            trip={data.assignmentTargets[item.tripId]}
+                            driverOptions={assignmentOptions.driverOptions}
+                            vehicleOptions={assignmentOptions.vehicleOptions}
+                            operatorDriverId={operatorDriverId}
+                            canManageDriverSetup={organization.role === "organization_admin"}
+                            recurringHint={recurringHints[item.tripId] ?? null}
+                            label={assignActions.get(item.tripId)?.label}
+                            fullWidth={false}
+                          />
+                        )}
+                        <LinkButton href={`/operations/trips/${item.tripId}`} variant="outline" size="sm" className="shrink-0">
+                          View trip
+                        </LinkButton>
+                      </div>
                     </li>
                   ))}
                 </ul>

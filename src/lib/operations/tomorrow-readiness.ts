@@ -22,6 +22,27 @@ export interface TomorrowReadinessData extends TomorrowReadinessAggregate {
   timezone: string;
   tomorrowStartUtc: string;
   tomorrowEndUtc: string;
+  /**
+   * P1-OPS-PROG2: per-Trip facts the inline Assign action needs to open the
+   * SAME PROG1 AssignmentDialog (keyed by trip id). Additive -- readiness
+   * itself is still derived only by `deriveTripReadiness`.
+   */
+  assignmentTargets: Record<string, TomorrowAssignmentTarget>;
+}
+
+export interface TomorrowAssignmentTarget {
+  id: string;
+  state: string;
+  scheduledPickupAt: string;
+  passengerName: string;
+  pickupDescription: string;
+  destinationDescription: string;
+  recurringArrangementId: string | null;
+  activeAssignmentId: string | null;
+  driverId: string | null;
+  driverName: string | null;
+  vehicleId: string | null;
+  vehicleLabel: string | null;
 }
 
 /**
@@ -53,14 +74,17 @@ export interface TomorrowReadinessData extends TomorrowReadinessAggregate {
  */
 
 const TOMORROW_CANDIDATE_COLUMNS =
-  "id, state, scheduled_pickup_at, " +
+  "id, state, scheduled_pickup_at, pickup_description, destination_description, recurring_arrangement_id, " +
   "passengers!trips_passenger_id_organization_id_fkey(display_name, status), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, vehicle_id, " +
-  "drivers!trip_assignments_driver_id_organization_id_fkey(status), " +
-  "vehicles!trip_assignments_vehicle_id_organization_id_fkey(status))";
+  "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name, status), " +
+  "vehicles!trip_assignments_vehicle_id_organization_id_fkey(id, label, status))";
 
 interface StatusEmbed {
   status: string;
+  id?: string;
+  display_name?: string;
+  label?: string;
 }
 type StatusRelation = StatusEmbed | StatusEmbed[] | null;
 
@@ -82,6 +106,9 @@ interface TripRow {
   id: string;
   state: string;
   scheduled_pickup_at: string | null;
+  pickup_description: string;
+  destination_description: string;
+  recurring_arrangement_id: string | null;
   passengers: PassengerRelation;
   trip_assignments: AssignmentEmbed[] | null;
 }
@@ -209,6 +236,7 @@ export async function getTomorrowReadiness(
     openExceptionCountByTrip.set(row.trip_id, (openExceptionCountByTrip.get(row.trip_id) ?? 0) + 1);
   }
 
+  const assignmentTargets: Record<string, TomorrowAssignmentTarget> = {};
   const candidates: TomorrowReadinessCandidate[] = (tripRows ?? []).map((row) => {
     // The embedded relation is already filtered to `ended_at IS NULL`
     // (see the query above) and the schema's own partial unique index
@@ -239,6 +267,21 @@ export async function getTomorrowReadiness(
       openExceptionCount: openExceptionCountByTrip.get(row.id) ?? 0,
     };
 
+    assignmentTargets[row.id] = {
+      id: row.id,
+      state: row.state,
+      scheduledPickupAt: row.scheduled_pickup_at as string,
+      passengerName: passenger?.display_name ?? "Unknown Passenger",
+      pickupDescription: row.pickup_description,
+      destinationDescription: row.destination_description,
+      recurringArrangementId: row.recurring_arrangement_id,
+      activeAssignmentId: activeAssignment?.id ?? null,
+      driverId: activeAssignment ? (driver?.id ?? null) : null,
+      driverName: activeAssignment ? (driver?.display_name ?? null) : null,
+      vehicleId: activeAssignment?.vehicle_id ?? null,
+      vehicleLabel: activeAssignment?.vehicle_id ? (vehicle?.label ?? null) : null,
+    };
+
     return {
       tripId: row.id,
       // Non-null by construction: the SQL range filter above already
@@ -254,5 +297,6 @@ export async function getTomorrowReadiness(
     timezone,
     tomorrowStartUtc: startIso,
     tomorrowEndUtc: endIso,
+    assignmentTargets,
   };
 }

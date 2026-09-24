@@ -21,6 +21,17 @@ export interface AssignmentOption {
 
 export type AssignmentMode = "assign" | "reassign";
 
+/**
+ * P1-OPS-PROG2: the Driver/Vehicle of the most recent COMPLETED occurrence
+ * of the same recurring arrangement (see `selectRecurringAssignmentHint`).
+ * Historical convenience only -- never a stored preference.
+ */
+export interface RecurringAssignmentHint {
+  driverId: string;
+  /** Null when that occurrence was completed with no vehicle -- never invented. */
+  vehicleId: string | null;
+}
+
 export interface AssignmentDefaultsInput {
   mode: AssignmentMode;
   /** The Trip's CURRENT active assignment values (null when unassigned / no vehicle). */
@@ -29,9 +40,11 @@ export interface AssignmentDefaultsInput {
   /** Eligible options exactly as offered to the operator (`status='active'`, same organization). */
   driverOptions: AssignmentOption[];
   vehicleOptions: AssignmentOption[];
+  /** P1-OPS-PROG2: recurring-history hint for a Trip generated from a recurring arrangement, or null/absent. */
+  recurringHint?: RecurringAssignmentHint | null;
 }
 
-export type AssignmentDefaultSource = "existing" | "only_option" | "none";
+export type AssignmentDefaultSource = "existing" | "recurring_history" | "only_option" | "none";
 
 export interface AssignmentDefaults {
   driverId: string | null;
@@ -55,8 +68,14 @@ function has(options: AssignmentOption[], id: string | null): id is string {
  *      became inactive is never silently swapped for a different one (the
  *      field is left empty for the operator to choose). An existing
  *      assignment with no vehicle stays "No vehicle".
- *   2. ASSIGN: a Driver / Vehicle is prefilled only when it is the ONLY
- *      eligible option. Two or more options -> nothing is guessed.
+ *   2. ASSIGN, each field independently (P1-OPS-PROG2):
+ *        a. the recurring-history hint's value, only while it is still an
+ *           eligible option (an inactive historical Driver/Vehicle is
+ *           ignored, never substituted by "something similar");
+ *        b. otherwise the ONLY eligible option (PROG1 uniqueness rule);
+ *        c. otherwise nothing is guessed.
+ *      A hint with no vehicle contributes no vehicle -- the field falls
+ *      through to the uniqueness rule, it is never invented from history.
  */
 export function deriveAssignmentDefaults(input: AssignmentDefaultsInput): AssignmentDefaults {
   if (input.mode === "reassign") {
@@ -70,14 +89,55 @@ export function deriveAssignmentDefaults(input: AssignmentDefaultsInput): Assign
     };
   }
 
-  const onlyDriver = input.driverOptions.length === 1 ? input.driverOptions[0].id : null;
-  const onlyVehicle = input.vehicleOptions.length === 1 ? input.vehicleOptions[0].id : null;
-  return {
-    driverId: onlyDriver,
-    driverSource: onlyDriver ? "only_option" : "none",
-    vehicleId: onlyVehicle,
-    vehicleSource: onlyVehicle ? "only_option" : "none",
+  const hint = input.recurringHint ?? null;
+  const pick = (options: AssignmentOption[], hinted: string | null): { id: string | null; source: AssignmentDefaultSource } => {
+    if (has(options, hinted)) return { id: hinted, source: "recurring_history" };
+    if (options.length === 1) return { id: options[0].id, source: "only_option" };
+    return { id: null, source: "none" };
   };
+  const driver = pick(input.driverOptions, hint?.driverId ?? null);
+  const vehicle = pick(input.vehicleOptions, hint?.vehicleId ?? null);
+  return { driverId: driver.id, driverSource: driver.source, vehicleId: vehicle.id, vehicleSource: vehicle.source };
+}
+
+/** One completed occurrence of a recurring arrangement, with the assignment that completed it. */
+export interface RecurringHistoryRow {
+  tripId: string;
+  recurringArrangementId: string;
+  state: string;
+  scheduledPickupAt: string | null;
+  /** The assignment in place when the Trip completed (`end_reason='trip_completed'`, or still open), or null. */
+  completedBy: { driverId: string; vehicleId: string | null } | null;
+}
+
+/**
+ * The most recent COMPLETED occurrence of the SAME recurring arrangement
+ * scheduled strictly before the target Trip, that has a usable completing
+ * assignment. Explicit relational linkage only (`trips.recurring_arrangement_id`);
+ * never passenger/address/time-text matching. Unassigned, cancelled and
+ * no-show occurrences never count. Eligibility (still active) is applied
+ * later by `deriveAssignmentDefaults` against the live option lists.
+ */
+export function selectRecurringAssignmentHint(
+  target: { tripId: string; recurringArrangementId: string | null; scheduledPickupAt: string | null },
+  history: RecurringHistoryRow[],
+): RecurringAssignmentHint | null {
+  if (!target.recurringArrangementId || !target.scheduledPickupAt) return null;
+  const targetAt = Date.parse(target.scheduledPickupAt);
+  if (Number.isNaN(targetAt)) return null;
+  let best: RecurringHistoryRow | null = null;
+  let bestAt = -Infinity;
+  for (const row of history) {
+    if (row.recurringArrangementId !== target.recurringArrangementId || row.tripId === target.tripId) continue;
+    if (row.state !== "completed" || row.completedBy === null || row.scheduledPickupAt === null) continue;
+    const at = Date.parse(row.scheduledPickupAt);
+    if (Number.isNaN(at) || at >= targetAt) continue;
+    if (at > bestAt || (at === bestAt && best !== null && row.tripId > best.tripId)) {
+      best = row;
+      bestAt = at;
+    }
+  }
+  return best?.completedBy ? { driverId: best.completedBy.driverId, vehicleId: best.completedBy.vehicleId } : null;
 }
 
 export interface DriverOptionInput {

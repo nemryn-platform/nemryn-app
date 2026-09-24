@@ -19,7 +19,13 @@
  * nonexistent/ambiguous, work item §23) caught before the RPC is ever
  * called, never returned by create_trip itself.
  */
-export type NewTripErrorCode = "UNAUTHORIZED" | "ACCESS_UNAVAILABLE" | "INVALID_INPUT" | "SCHEDULE_UNRESOLVABLE" | "UNKNOWN";
+export type NewTripErrorCode =
+  | "UNAUTHORIZED"
+  | "ACCESS_UNAVAILABLE"
+  | "INVALID_INPUT"
+  | "SCHEDULE_UNRESOLVABLE"
+  | "ASSIGN_DRIVER_REQUIRED"
+  | "UNKNOWN";
 
 const NEW_TRIP_ERROR_MESSAGE: Record<NewTripErrorCode, string> = {
   UNAUTHORIZED: "Your session is no longer valid. Sign in again.",
@@ -28,6 +34,8 @@ const NEW_TRIP_ERROR_MESSAGE: Record<NewTripErrorCode, string> = {
     "Could not create this trip. Check the passenger, pickup, destination, schedule, and any linked request, then try again.",
   SCHEDULE_UNRESOLVABLE:
     "That date and time couldn't be resolved in the organization's timezone (it may fall in a daylight-saving change). Choose a different time.",
+  // P1-OPS-PROG2: caught BEFORE create_trip runs, so nothing is created.
+  ASSIGN_DRIVER_REQUIRED: "Choose a driver for Assign now, or turn Assign now off to create the trip unassigned.",
   UNKNOWN: "Something went wrong. Try again.",
 };
 

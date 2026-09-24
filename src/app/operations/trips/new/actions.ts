@@ -6,11 +6,17 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationLocalToUtc } from "@/lib/operations/local-time";
 import { mapNewTripError, type NewTripErrorCode } from "@/lib/operations/new-trip-errors";
+import { callAssignmentRpc } from "@/lib/operations/assignment-mutation";
+import type { DispatchErrorCode } from "@/lib/operations/dispatch-errors";
+import type { CreateTripAssignmentOutcome } from "@/lib/operations/readiness-actions-core";
 
 export interface CreateTripActionState {
   status: "idle" | "success" | "error";
   errorCode?: NewTripErrorCode;
   tripId?: string;
+  /** P1-OPS-PROG2 "Assign now": whether an assignment was requested and how it ended. Only meaningful on success. */
+  assignment?: CreateTripAssignmentOutcome;
+  assignmentErrorCode?: DispatchErrorCode;
 }
 
 function stringField(formData: FormData, name: string): string | null {
@@ -52,6 +58,11 @@ export async function createTripAction(
   const instructions = stringField(formData, "instructions");
   const assistanceNotes = stringField(formData, "assistanceNotes");
   const requestId = stringField(formData, "requestId");
+  // P1-OPS-PROG2 "Assign now" -- opt-in; the Driver/Vehicle fields exist
+  // in the form only while the operator has it switched on.
+  const assignNow = formData.get("assignNow") === "on";
+  const assignDriverId = stringField(formData, "driverId");
+  const assignVehicleId = stringField(formData, "vehicleId");
 
   // Obvious client-catchable validation (work item §36) — improves
   // usability, never a substitute for the RPC's own authority below.
@@ -74,6 +85,11 @@ export async function createTripAction(
   // resolved to an instant.
   if ((appointmentDate && !appointmentTime) || (appointmentTime && !appointmentDate)) {
     return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+  // Checked before anything is created: "Assign now" with no Driver must
+  // never silently become an unassigned Trip.
+  if (assignNow && !assignDriverId) {
+    return { status: "error", errorCode: "ASSIGN_DRIVER_REQUIRED" };
   }
 
   const pathname = await getCurrentPathname("/operations/trips/new");
@@ -180,7 +196,29 @@ export async function createTripAction(
     revalidatePath(`/operations/requests/${requestId}`);
   }
 
-  return { status: "success", tripId: data?.trip_id ?? undefined };
+  revalidatePath("/operations/tomorrow");
+
+  const tripId = data?.trip_id ?? undefined;
+  if (!assignNow || !tripId || !assignDriverId) {
+    return { status: "success", tripId, assignment: "not_requested" };
+  }
+
+  // P1-OPS-PROG2 CREATE THEN ASSIGN -- deliberately two existing calls, not
+  // a combined RPC and not atomic. The Trip above is already created and is
+  // never rolled back or re-created here; the assignment goes through the
+  // SAME single assign_trip path the dialog uses, exactly once (no retry).
+  // A failure is reported as a partial success so the operator is sent to
+  // the created Trip, where assignment can be completed.
+  const assignment = await callAssignmentRpc(supabase, {
+    mode: "assign",
+    tripId,
+    driverId: assignDriverId,
+    vehicleId: assignVehicleId ?? undefined,
+  });
+  if (!assignment.ok) {
+    return { status: "success", tripId, assignment: "failed", assignmentErrorCode: assignment.errorCode };
+  }
+  return { status: "success", tripId, assignment: "assigned" };
 }
 
 export interface AddPassengerActionState {

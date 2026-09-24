@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { AssignmentDialog, type AssignmentDialogTrip } from "@/components/operations/dispatch/AssignmentDialog";
 import type { DispatchDriverOption, DispatchVehicleOption } from "@/lib/operations/dispatch-board";
+import type { RecurringAssignmentHint } from "@/lib/operations/assignment-defaults-core";
 
 export interface TripAssignmentButtonProps {
   trip: AssignmentDialogTrip;
@@ -11,13 +12,19 @@ export interface TripAssignmentButtonProps {
   vehicleOptions: DispatchVehicleOption[];
   operatorDriverId: string | null;
   canManageDriverSetup: boolean;
+  /** P1-OPS-PROG2: recurring-history prefill hint, used only when assigning. */
+  recurringHint?: RecurringAssignmentHint | null;
+  /** Button label override (Tomorrow's compact "Assign" / "Add vehicle"). */
+  label?: string;
+  fullWidth?: boolean;
 }
 
 /**
- * P1-OPS-PROG1: Trip Detail opens the SAME Assign/Reassign dialog and the
- * SAME Server Action as the Dispatch board (no second mutation path), so a
- * Trip scheduled for tomorrow or later -- which the today-only Dispatch
- * board never lists -- can be assigned with its own day's driver context.
+ * Opens the SAME Assign/Reassign dialog and Server Action as the Dispatch
+ * board (no second mutation path). P1-OPS-PROG1: Trip Detail, so a Trip
+ * scheduled tomorrow or later can be assigned. P1-OPS-PROG2: Tomorrow's
+ * inline readiness fix. Mode follows the Trip's own facts: no active
+ * assignment -> assign, otherwise reassign (current values preserved).
  */
 export function TripAssignmentButton({
   trip,
@@ -25,13 +32,23 @@ export function TripAssignmentButton({
   vehicleOptions,
   operatorDriverId,
   canManageDriverSetup,
+  recurringHint = null,
+  label,
+  fullWidth = true,
 }: TripAssignmentButtonProps) {
   const [open, setOpen] = useState(false);
   const mode = trip.activeAssignmentId ? "reassign" : "assign";
   return (
     <>
-      <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => setOpen(true)}>
-        {mode === "reassign" ? "Manage Assignment" : "Assign Driver"}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className={fullWidth ? "w-full" : "shrink-0"}
+        onClick={() => setOpen(true)}
+        data-assign-trip-id={trip.id}
+      >
+        {label ?? (mode === "reassign" ? "Manage Assignment" : "Assign Driver")}
       </Button>
       {open && (
         <AssignmentDialog
@@ -41,6 +58,7 @@ export function TripAssignmentButton({
           vehicleOptions={vehicleOptions}
           operatorDriverId={operatorDriverId}
           canManageDriverSetup={canManageDriverSetup}
+          recurringHint={mode === "assign" ? recurringHint : null}
           onClose={() => setOpen(false)}
         />
       )}

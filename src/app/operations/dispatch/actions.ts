@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { mapDispatchError, type DispatchErrorCode } from "@/lib/operations/dispatch-errors";
-import { getDriverDayContext, type DriverDayContext } from "@/lib/operations/assignment-context";
+import type { DispatchErrorCode } from "@/lib/operations/dispatch-errors";
+import { callAssignmentRpc } from "@/lib/operations/assignment-mutation";
+import { getDriverDayContext, type DriverDayContext, type DriverDayTarget } from "@/lib/operations/assignment-context";
 
 export interface AssignmentActionState {
   status: "idle" | "success" | "error";
@@ -71,47 +72,53 @@ export async function assignmentAction(
 
   const supabase = await createServerSupabaseClient();
 
-  const { data, error } =
-    mode === "assign"
-      ? await supabase.rpc("assign_trip", {
-          p_trip_id: tripId,
-          p_driver_id: driverId,
-          p_vehicle_id: vehicleId,
-        })
-      : await supabase.rpc("reassign_trip", {
-          p_trip_id: tripId,
-          p_driver_id: driverId,
-          p_vehicle_id: vehicleId,
-          p_reason: reason,
-          p_expected_assignment_id: expectedAssignmentId,
-        });
+  // P1-OPS-PROG2: the same single RPC call path New Trip "Assign now" uses.
+  const result = await callAssignmentRpc(supabase, {
+    mode: mode === "assign" ? "assign" : "reassign",
+    tripId,
+    driverId,
+    vehicleId,
+    reason,
+    expectedAssignmentId,
+  });
 
-  if (error) {
-    return { status: "error", errorCode: mapDispatchError(error.code) };
+  if (!result.ok) {
+    return { status: "error", errorCode: result.errorCode };
   }
 
   revalidatePath("/operations/dispatch");
   revalidatePath("/operations");
+  revalidatePath("/operations/tomorrow");
   revalidatePath(`/operations/trips/${tripId}`);
 
-  return { status: "success", changed: data?.changed ?? false };
+  return { status: "success", changed: result.changed };
 }
 
 /**
  * P1-OPS-PROG1 driver-day context -- a READ only, for the one Driver the
- * operator selected in the Assign/Reassign dialog. Authorization is
- * re-derived here exactly as for the mutation above; the organization and
- * its timezone come from the server-resolved context, never the browser,
- * and the read itself is a session-client (RLS) query filtered to that
- * organization. Writes nothing.
+ * operator selected in the Assign/Reassign dialog (or New Trip's "Assign
+ * now"). Authorization is re-derived here exactly as for the mutation
+ * above; the organization and its timezone come from the server-resolved
+ * context, never the browser, and the read itself is a session-client
+ * (RLS) query filtered to that organization. Writes nothing.
+ *
+ * `target` is either an existing Trip (its own org-local day, itself
+ * excluded) or, for New Trip (P1-OPS-PROG2), the chosen org-local pickup
+ * date as YYYY-MM-DD.
  */
-export async function driverDayContextAction(tripId: unknown, driverId: unknown): Promise<DriverDayContext> {
-  if (typeof tripId !== "string" || typeof driverId !== "string") return { status: "unavailable" };
+export async function driverDayContextAction(target: unknown, driverId: unknown): Promise<DriverDayContext> {
+  if (typeof driverId !== "string" || !isDriverDayTarget(target)) return { status: "unavailable" };
   const pathname = await getCurrentPathname("/operations/dispatch");
   const organization = await requireOperationsAccess(pathname);
   try {
-    return await getDriverDayContext(organization.organizationId, organization.organizationTimezone, tripId, driverId);
+    return await getDriverDayContext(organization.organizationId, organization.organizationTimezone, target, driverId);
   } catch {
     return { status: "unavailable" };
   }
+}
+
+function isDriverDayTarget(value: unknown): value is DriverDayTarget {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (v.kind === "trip" && typeof v.tripId === "string") || (v.kind === "date" && typeof v.dateKey === "string");
 }

@@ -24,7 +24,7 @@ import { getLatestLocationsByTrip, type DispatchTripLocation } from "./live-loca
  */
 
 const TRIP_COLUMNS =
-  "id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, " +
+  "id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, recurring_arrangement_id, " +
   "passengers!trips_passenger_id_organization_id_fkey(display_name), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name), " +
@@ -74,6 +74,7 @@ interface TripRow {
   appointment_at: string | null;
   pickup_description: string;
   destination_description: string;
+  recurring_arrangement_id: string | null;
   passengers: NameRelation;
   trip_assignments: TripAssignmentEmbed[] | null;
 }
@@ -102,6 +103,8 @@ export interface DispatchTrip {
   vehicleLabel: string | null;
   /** P1-E3-S7A — the Driver's latest known position, ONLY when it belongs to the CURRENT active assignment (never a stale former Driver's last-known position after reassignment, work item §51). Null whenever no location has been recorded yet, or the only recorded location belongs to a superseded assignment. */
   driverLocation: DispatchTripLocation | null;
+  /** P1-OPS-PROG2 — the recurring arrangement this Trip was generated from, if any (recurring-history prefill lookup only). */
+  recurringArrangementId: string | null;
   /** P1-E3-S8 — a real open TripException exists for this Trip. Restrained use only (work item §31): a small indicator on the grid block, never a second full location-style panel. */
   hasOpenException: boolean;
 }
@@ -141,6 +144,7 @@ function mapTripRow(
     vehicleId: vehicle?.id ?? null,
     vehicleLabel: vehicle?.label ?? null,
     driverLocation,
+    recurringArrangementId: row.recurring_arrangement_id,
     hasOpenException: openExceptionTripIds.has(row.id),
   };
 }

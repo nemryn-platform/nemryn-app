@@ -13,7 +13,15 @@ import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePan
 import { PassengerInfoPanel } from "@/components/operations/trip-detail/PassengerInfoPanel";
 import { CurrentStatusPanel } from "@/components/operations/trip-detail/CurrentStatusPanel";
 import { TripAssignmentButton } from "@/components/operations/trip-detail/TripAssignmentButton";
-import { getAssignmentOptions, getOperatorLinkedDriverId, type AssignmentOptions } from "@/lib/operations/assignment-context";
+import {
+  getAssignmentOptions,
+  getOperatorLinkedDriverId,
+  getRecurringAssignmentHintForTrip,
+  type AssignmentOptions,
+} from "@/lib/operations/assignment-context";
+import type { RecurringAssignmentHint } from "@/lib/operations/assignment-defaults-core";
+import { ASSIGNABLE_TRIP_STATES } from "@/lib/operations/readiness-actions-core";
+import { dispatchErrorMessage, type DispatchErrorCode } from "@/lib/operations/dispatch-errors";
 import { TripReadinessPanel } from "@/components/operations/trip-detail/TripReadinessPanel";
 import { TripExceptionsPanel } from "@/components/operations/trip-detail/TripExceptionsPanel";
 import { TripNotesPanel } from "@/components/operations/trip-detail/TripNotesPanel";
@@ -30,11 +38,30 @@ import { cn } from "@/lib/cn";
  * Activity Timeline panel — the reference's own actual composition does
  * not show one).
  */
-/** The Trip states assign_trip / reassign_trip accept (20260831100200_controlled_trip_mutations.sql) -- a UI gate only. */
-const ASSIGNABLE_STATES = new Set(["scheduled", "en_route_to_pickup", "arrived_at_pickup"]);
+const DISPATCH_ERROR_CODES: ReadonlySet<string> = new Set([
+  "UNAUTHORIZED",
+  "NOT_FOUND",
+  "ILLEGAL_STATE",
+  "ASSIGNMENT_CONFLICT",
+  "INVALID_DRIVER_OR_VEHICLE",
+  "UNKNOWN",
+]);
 
-export default async function TripDetailPage({ params }: { params: Promise<{ tripId: string }> }) {
+export default async function TripDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ tripId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { tripId } = await params;
+  // P1-OPS-PROG2: New Trip "Assign now" outcome notice. Display-only copy
+  // chosen from a fixed allowlist -- the page's own data (assignment panel,
+  // readiness) remains the authority on what actually happened.
+  const query = await searchParams;
+  const createdNotice = query.created === "assigned" || query.created === "assignment_failed" ? query.created : null;
+  const createdErrorCode: DispatchErrorCode =
+    typeof query.reason === "string" && DISPATCH_ERROR_CODES.has(query.reason) ? (query.reason as DispatchErrorCode) : "UNKNOWN";
   const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
   const organization = await requireOperationsAccess(pathname);
   const timezone = organization.organizationTimezone;
@@ -93,11 +120,14 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
   // than taking down the page.
   let assignmentOptions: AssignmentOptions | null = null;
   let operatorDriverId: string | null = null;
-  if (ASSIGNABLE_STATES.has(trip.state)) {
+  let recurringHint: RecurringAssignmentHint | null = null;
+  if (ASSIGNABLE_TRIP_STATES.has(trip.state)) {
     try {
-      [assignmentOptions, operatorDriverId] = await Promise.all([
+      [assignmentOptions, operatorDriverId, recurringHint] = await Promise.all([
         getAssignmentOptions(organization.organizationId),
         getOperatorLinkedDriverId(organization.organizationId),
+        // P1-OPS-PROG2: only an unassigned Trip can use a recurring-history prefill.
+        trip.activeAssignmentId ? Promise.resolve(null) : getRecurringAssignmentHintForTrip(organization.organizationId, trip.id),
       ]);
     } catch {
       assignmentOptions = null;
@@ -115,6 +145,20 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
         </span>
         <span className="text-text-secondary">{trip.passengerName}</span>
       </nav>
+
+      {createdNotice === "assigned" && (
+        <p role="status" data-testid="created-notice" className={cn(typography.bodySmall, "rounded-md border border-success-border bg-success-bg px-zw-lg py-zw-md text-text-primary")}>
+          Trip created and assigned.
+        </p>
+      )}
+      {createdNotice === "assignment_failed" && (
+        <div role="alert" data-testid="created-notice" className="rounded-md border border-warning-border bg-warning-bg px-zw-lg py-zw-md">
+          <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Trip created, but the assignment could not be completed.</p>
+          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
+            {dispatchErrorMessage(createdErrorCode)} The trip is saved{trip.activeAssignmentId ? "." : " without a driver"} — you can assign it from Current Status on this page.
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-start justify-between gap-zw-md">
         <div>
@@ -220,6 +264,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
                   vehicleOptions={assignmentOptions.vehicleOptions}
                   operatorDriverId={operatorDriverId}
                   canManageDriverSetup={organization.role === "organization_admin"}
+                  recurringHint={recurringHint}
                 />
               ) : undefined
             }

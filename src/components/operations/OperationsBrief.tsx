@@ -4,6 +4,7 @@ import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LinkButton } from "@/components/ui/LinkButton";
+import { deriveTomorrowSummaryLine } from "@/lib/operations/readiness-actions-core";
 import { formatOperationsTime, formatOperationsLongDate, formatServiceDateLabel, assuranceStatusCategory } from "@/lib/operations/presentation";
 import type { OperationsBriefData } from "@/lib/operations/operations-brief-core";
 import type { TodaysOperationsTrip, TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
@@ -422,62 +423,17 @@ function RequestsAwaitingReviewBlock({
  * value.
  */
 function TomorrowReadinessBlock({ summary }: { summary: OperationsBriefData["tomorrowReadiness"] }) {
-  if (summary === null) {
-    return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Tomorrow readiness unavailable</p>
-        </div>
-        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
-          View tomorrow
-        </LinkButton>
-      </Panel>
-    );
-  }
-
-  const { totalScheduledTrips, needsPreparationCount } = summary;
-
-  if (totalScheduledTrips === 0) {
-    return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>No trips scheduled for tomorrow</p>
-        </div>
-        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
-          View tomorrow
-        </LinkButton>
-      </Panel>
-    );
-  }
-
-  if (needsPreparationCount === 0) {
-    return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-            Tomorrow is ready — all {totalScheduledTrips} scheduled {totalScheduledTrips === 1 ? "trip is" : "trips are"} prepared
-            based on the information currently available.
-          </p>
-        </div>
-        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
-          View tomorrow
-        </LinkButton>
-      </Panel>
-    );
-  }
-
+  // P1-OPS-PROG2: one fact-derived line a one-person operator can act on
+  // without opening Tomorrow ("4 trips · All ready" / "4 trips · 2 need
+  // preparation" / "Nothing scheduled for tomorrow") -- counts straight
+  // from the derived aggregate, no percentage, no stored status.
+  const line = deriveTomorrowSummaryLine(summary);
   return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3">
+    <Panel className="flex flex-wrap items-center justify-between gap-3" data-testid="brief-tomorrow">
       <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow readiness</h3>
-        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-          {needsPreparationCount} {needsPreparationCount === 1 ? "trip needs" : "trips need"} preparation
-        </p>
-        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-          {totalScheduledTrips} scheduled for tomorrow
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow</h3>
+        <p className={cn(typography.bodySmall, "mt-1", summary === null ? "text-text-muted" : "text-text-secondary")} data-testid="brief-tomorrow-line">
+          {line}
         </p>
       </div>
       <LinkButton href="/operations/tomorrow" variant="outline" size="sm">

@@ -7,6 +7,7 @@ import { DriverCapacityPanel } from "./DriverCapacityPanel";
 import { AssignmentDialog } from "./AssignmentDialog";
 import { NoActiveDriversActions } from "./NoActiveDriversActions";
 import type { DispatchBoardData, DispatchTrip } from "@/lib/operations/dispatch-board";
+import type { RecurringAssignmentHint } from "@/lib/operations/assignment-defaults-core";
 
 export interface DispatchBoardClientProps {
   data: DispatchBoardData;
@@ -14,6 +15,8 @@ export interface DispatchBoardClientProps {
   /** P1-OPS-PROG1 presentation inputs (ordering, "(you)", empty-state links) -- never authorization. */
   operatorDriverId: string | null;
   canManageDriverSetup: boolean;
+  /** P1-OPS-PROG2: recurring-history prefill hints keyed by trip id (assign mode only). */
+  recurringHints?: Record<string, RecurringAssignmentHint>;
 }
 
 interface ActiveDialogState {
@@ -30,7 +33,7 @@ interface ActiveDialogState {
  * fresh `useActionState` per dialog — no stale success/error state can
  * leak from a previous assignment into the next one.
  */
-export function DispatchBoardClient({ data, timezone, operatorDriverId, canManageDriverSetup }: DispatchBoardClientProps) {
+export function DispatchBoardClient({ data, timezone, operatorDriverId, canManageDriverSetup, recurringHints = {} }: DispatchBoardClientProps) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialogState | null>(null);
 
   return (
@@ -61,6 +64,7 @@ export function DispatchBoardClient({ data, timezone, operatorDriverId, canManag
           vehicleOptions={data.vehicleOptions}
           operatorDriverId={operatorDriverId}
           canManageDriverSetup={canManageDriverSetup}
+          recurringHint={activeDialog.mode === "assign" ? (recurringHints[activeDialog.trip.id] ?? null) : null}
           onClose={() => setActiveDialog(null)}
         />
       )}

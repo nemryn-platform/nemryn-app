@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User, Calendar, MapPin, Flag, NotePencil, ClipboardText, Plus, DownloadSimple, X } from "@phosphor-icons/react/dist/ssr";
+import { User, Calendar, MapPin, Flag, NotePencil, ClipboardText, Plus, DownloadSimple, X, SteeringWheel } from "@phosphor-icons/react/dist/ssr";
 import { Select } from "@/components/ui/Select";
 import { Combobox } from "@/components/ui/Combobox";
 import { Avatar } from "@/components/ui/Avatar";
@@ -25,6 +25,10 @@ import {
   type NewTripPassengerOption,
   type NewTripRequestOption,
 } from "@/lib/operations/new-trip-options";
+import { AssignmentFields } from "@/components/operations/dispatch/AssignmentFields";
+import type { AssignmentOptions } from "@/lib/operations/assignment-context";
+import { deriveAssignmentDefaults } from "@/lib/operations/assignment-defaults-core";
+import { createTripNoticeParam } from "@/lib/operations/readiness-actions-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -39,6 +43,10 @@ export interface NewTripFormProps {
   preselectedRequestId: string | null;
   /** P1-E1-S2F-B1 §13 — true when `?requestId=` was supplied but did not resolve to an eligible Request in this organization (malformed, nonexistent, foreign-org, or currently ineligible — never distinguished). */
   requestUnavailable: boolean;
+  /** P1-OPS-PROG2 "Assign now" options (active drivers/vehicles), or null when they could not be loaded. */
+  assignmentOptions: AssignmentOptions | null;
+  operatorDriverId: string | null;
+  canManageDriverSetup: boolean;
 }
 
 /**
@@ -70,6 +78,9 @@ export function NewTripForm({
   organizationTimezone,
   preselectedRequestId,
   requestUnavailable,
+  assignmentOptions,
+  operatorDriverId,
+  canManageDriverSetup,
 }: NewTripFormProps) {
   const [state, formAction, pending] = useActionState(createTripAction, INITIAL_STATE);
   const router = useRouter();
@@ -113,6 +124,11 @@ export function NewTripForm({
   const [instructions, setInstructions] = useState("");
   const [assistanceNotes, setAssistanceNotes] = useState(() => preselectedRequest?.assistanceNotes ?? "");
 
+  // P1-OPS-PROG2: "Assign now" is OFF by default -- the operator opts in.
+  // Inside it, Driver/Vehicle follow the PROG1 prefill rules (only-option
+  // prefill, "(you)" ordering). Nothing is assigned until Create Trip.
+  const [assignNow, setAssignNow] = useState(false);
+
   const [requestId, setRequestId] = useState(preselectedRequestId ?? "");
   const selectedRequest = requests.find((r) => r.id === requestId) ?? null;
   // The ONE value ever actually submitted for passengerId — always
@@ -136,8 +152,16 @@ export function NewTripForm({
   useEffect(() => {
     if (state.status === "success" && state.tripId) {
       // Authoritative navigation to the real created Trip (work item §40)
-      // — never a fake success page.
-      router.push(`/operations/trips/${state.tripId}`);
+      // — never a fake success page. P1-OPS-PROG2: the "Assign now"
+      // outcome travels as a display-only notice; a failed assignment is a
+      // PARTIAL success -- the Trip exists, and Trip Detail is where the
+      // assignment can be completed. submittedRef stays set, so this form
+      // can never submit (and create) a second Trip.
+      const notice = createTripNoticeParam(state.assignment ?? "not_requested");
+      const query = notice
+        ? `?created=${notice}${state.assignment === "failed" ? `&reason=${state.assignmentErrorCode ?? "UNKNOWN"}` : ""}`
+        : "";
+      router.push(`/operations/trips/${state.tripId}${query}`);
     }
     if (state.status === "error") {
       submittedRef.current = false;
@@ -404,11 +428,53 @@ export function NewTripForm({
             </Button>
           </FormSection>
 
-          <AttentionState
-            level="info"
-            title="Assign a driver after creating this trip"
-            description="Trip creation and driver assignment are separate steps — assign a driver and vehicle from Dispatch once this trip is created."
-          />
+          {assignmentOptions ? (
+            <FormSection icon={<SteeringWheel className="size-5" aria-hidden />} title="Assignment">
+              <label className={cn(typography.bodySmall, "flex items-center gap-2 font-medium text-text-primary")}>
+                <input
+                  type="checkbox"
+                  name="assignNow"
+                  checked={assignNow}
+                  onChange={(e) => setAssignNow(e.target.checked)}
+                  disabled={pending}
+                  data-testid="assign-now"
+                />
+                Assign now
+              </label>
+              {assignNow ? (
+                <>
+                  <p className={cn(typography.metadata, "text-text-muted")}>
+                    The trip is created first, then assigned to the driver and vehicle below when you click Create Trip.
+                  </p>
+                  <AssignmentFields
+                    driverOptions={assignmentOptions.driverOptions}
+                    vehicleOptions={assignmentOptions.vehicleOptions}
+                    operatorDriverId={operatorDriverId}
+                    canManageDriverSetup={canManageDriverSetup}
+                    defaults={deriveAssignmentDefaults({
+                      mode: "assign",
+                      currentDriverId: null,
+                      currentVehicleId: null,
+                      driverOptions: assignmentOptions.driverOptions,
+                      vehicleOptions: assignmentOptions.vehicleOptions,
+                    })}
+                    dayTarget={pickupDate ? { kind: "date", dateKey: pickupDate } : null}
+                    disabled={pending}
+                  />
+                </>
+              ) : (
+                <p className={cn(typography.metadata, "text-text-muted")}>
+                  Optional. Leave off to create the trip unassigned and assign it later from Trip Detail, Tomorrow or Dispatch.
+                </p>
+              )}
+            </FormSection>
+          ) : (
+            <AttentionState
+              level="info"
+              title="Assign a driver after creating this trip"
+              description="Trip creation and driver assignment are separate steps — assign a driver and vehicle from Trip Detail or Dispatch once this trip is created."
+            />
+          )}
         </div>
       </form>
 

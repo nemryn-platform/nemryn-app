@@ -2,6 +2,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getNewTripFormData } from "@/lib/operations/new-trip";
 import { NewTripForm } from "@/components/operations/new-trip/NewTripForm";
+import { getAssignmentOptions, getOperatorLinkedDriverId, type AssignmentOptions } from "@/lib/operations/assignment-context";
 
 /**
  * Internal New Trip (P1-E3-S7) —
@@ -30,7 +31,14 @@ export default async function NewTripPage({
   const pathname = await getCurrentPathname("/operations/trips/new");
   const organization = await requireOperationsAccess(pathname);
 
-  const { passengers, facilities, requests } = await getNewTripFormData(organization.organizationId);
+  // P1-OPS-PROG2 "Assign now": the same eligible option lists the Dispatch
+  // board and Trip Detail offer. If they cannot be loaded, the form still
+  // creates trips; Assign now is simply not offered.
+  const [{ passengers, facilities, requests }, assignmentOptions, operatorDriverId] = await Promise.all([
+    getNewTripFormData(organization.organizationId),
+    getAssignmentOptions(organization.organizationId).catch((): AssignmentOptions | null => null),
+    getOperatorLinkedDriverId(organization.organizationId),
+  ]);
 
   const params = await searchParams;
   const requestedId = typeof params.requestId === "string" ? params.requestId : null;
@@ -48,6 +56,9 @@ export default async function NewTripPage({
       organizationTimezone={organization.organizationTimezone}
       preselectedRequestId={preselectedRequest?.id ?? null}
       requestUnavailable={requestUnavailable}
+      assignmentOptions={assignmentOptions}
+      operatorDriverId={operatorDriverId}
+      canManageDriverSetup={organization.role === "organization_admin"}
     />
   );
 }

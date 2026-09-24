@@ -2,7 +2,7 @@ import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getDispatchBoardData } from "@/lib/operations/dispatch-board";
-import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
+import { getOperatorLinkedDriverId, getRecurringAssignmentHints } from "@/lib/operations/assignment-context";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DispatchBoardClient } from "@/components/operations/dispatch/DispatchBoardClient";
@@ -39,6 +39,18 @@ export default async function DispatchBoardPage() {
     );
   }
 
+  // P1-OPS-PROG2: recurring-history prefill hints for the Needs Assignment
+  // queue -- one bounded query for all of them (never per trip); a failed
+  // read just means no recurring prefill.
+  const recurringHints = await getRecurringAssignmentHints(
+    organization.organizationId,
+    data.unassignedTrips.map((trip) => ({
+      tripId: trip.id,
+      recurringArrangementId: trip.recurringArrangementId,
+      scheduledPickupAt: trip.scheduledPickupAt,
+    })),
+  ).catch(() => ({}));
+
   return (
     <div className="flex flex-col gap-zw-lg">
       <DispatchLiveRefresh />
@@ -58,6 +70,7 @@ export default async function DispatchBoardPage() {
         data={data}
         timezone={organization.organizationTimezone}
         operatorDriverId={operatorDriverId}
+        recurringHints={recurringHints}
         canManageDriverSetup={organization.role === "organization_admin"}
       />
     </div>
