@@ -30,7 +30,7 @@ insert into public.transportation_requests (
 ) values (
   '92200000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1',
   'Fictional Atomicity Cancel Requester', 'self', '555-0190',
-  'Fictional atomicity cancel pickup', 'Fictional atomicity cancel destination', 'no', 'phone', 'pending'
+  'Fictional atomicity cancel pickup', 'Fictional atomicity cancel destination', 'no', 'phone', 'accepted'
 );
 
 -- ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ reset role;
 
 -- =============================================================================
 -- ATOMIC-2: cancel_transportation_request — forced failure must leave the
--- Request's state unchanged (still 'pending', not 'cancelled').
+-- Request's state unchanged (still 'accepted', not 'cancelled'). P1-OPS-R1: cancel is accepted -> cancelled.
 -- =============================================================================
 do $$
 declare v_state_before text; v_state_after text;
@@ -127,13 +127,13 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92200000-0000-0000-0000-0000000000a1');
+    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92200000-0000-0000-0000-0000000000a1', 'requester_cancelled');
     raise notice 'TEST ATOMIC-2 (cancel_transportation_request forced failure): FAIL (expected forced failure to propagate, call succeeded)';
   exception when sqlstate 'ZW999' then
     reset role;
     select state into v_state_after from public.transportation_requests where id = '92200000-0000-0000-0000-0000000000a1';
-    if v_state_after = v_state_before and v_state_after = 'pending' then
-      raise notice 'TEST ATOMIC-2 (cancel_transportation_request forced failure): PASS (state rolled back to pending, no partial write)';
+    if v_state_after = v_state_before and v_state_after = 'accepted' then
+      raise notice 'TEST ATOMIC-2 (cancel_transportation_request forced failure): PASS (state rolled back to accepted, no partial write)';
     else
       raise notice 'TEST ATOMIC-2 (cancel_transportation_request forced failure): FAIL (state_before=%, state_after=%)', v_state_before, v_state_after;
     end if;

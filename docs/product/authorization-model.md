@@ -182,8 +182,8 @@ Many Zenward operations are deliberately **not** generic UPDATE grants. The list
 
 | Action | Allowed actors | Notes |
 |---|---|---|
-| `review_transportation_request` | Dispatcher, Org Admin | Accept or decline |
-| `create_trip_from_request` | Dispatcher, Org Admin | Triggers Request `pending → accepted` |
+| `review_transportation_request` | Dispatcher, Org Admin | Accept (`pending → accepted`) or decline (`pending → declined`, reason required); cancel an accepted Request with no Trips (`accepted → cancelled`, reason required) — P1-OPS-R1 |
+| `create_trip_from_request` | Dispatcher, Org Admin | Request must already be `accepted` with an active linked Passenger; never changes Request state (P1-OPS-R1) |
 | `create_internal_trip` | Dispatcher, Org Admin | No TransportationRequest behind it |
 | `edit_trip_planning_details` | Dispatcher, Org Admin | Only while Trip is non-terminal |
 | `cancel_trip` | Dispatcher, Org Admin | Driver may request via TripException, never executes |

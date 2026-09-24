@@ -1,5 +1,6 @@
 /**
- * Pure, framework-free Request readiness derivation (P1-E1-S2D).
+ * Pure, framework-free Request readiness + action derivation (P1-E1-S2D,
+ * reworked by P1-OPS-R1).
  *
  * Deliberately has NO runtime import of any kind (mirrors
  * operations-brief-core.ts's established "pure core" split — a pure
@@ -7,52 +8,88 @@
  * unit-tested directly with Node's test runner, loaded as a bare `.ts`
  * file, with no bundler and no database).
  *
- * Readiness answers exactly one question: "what prevents this Request
- * from becoming a Trip right now?" — derived ONLY from fields the real
- * `create_trip`/lifecycle RPCs actually require or reject on
- * (docs/reports/p1-e1-s2a-request-hub-product-workflow-audit.txt §10),
- * never a numeric score, never a weighted/AI-style signal. This module
- * computes the STATE only — presentation labels/colors live in
- * presentation.ts, kept deliberately separate (P1-E1-S2D §12's own
- * instruction: "keep the underlying state separate from presentation
- * labels").
+ * P1-OPS-R1 separates two concepts that were previously merged:
+ *   - DECISION (stored `state`): pending → accepted | declined;
+ *     accepted → cancelled. Set only by the explicit accept/decline/
+ *     cancel RPCs — never by Passenger linking or Trip creation.
+ *   - READINESS (derived here): what still prevents an ACCEPTED Request
+ *     from becoming a Trip. The only operational requirement is the one
+ *     `create_trip` itself enforces — an active linked Passenger. No new
+ *     readiness requirement is invented.
+ * This module computes STATE only — presentation labels/colors live in
+ * presentation.ts.
  */
 
-export type RequestReadiness = "ready" | "needs_passenger" | "not_convertible" | "accepted";
+export type RequestReadiness =
+  /** Pending, Passenger already resolved — only the business decision is outstanding. */
+  | "awaiting_decision"
+  /** No active linked Passenger (pending or accepted-without-Trips). */
+  | "needs_passenger"
+  /** Accepted + active linked Passenger + no Trip yet — Create Trip is available. */
+  | "ready"
+  /** Accepted and at least one Trip already exists. */
+  | "trip_created"
+  /** Declined / cancelled — terminal. */
+  | "not_convertible";
 
 export interface RequestReadinessInput {
   /** transportation_requests.state — one of 'pending' | 'accepted' | 'declined' | 'cancelled'. */
   state: string;
   /** transportation_requests.passenger_id — null if no Passenger is linked. */
   passengerId: string | null;
-  /** The linked Passenger's own `status === 'active'` — never inferred from passengerId alone (P1-E1-S2D §13: a linked-but-inactive Passenger is NOT ready). Meaningless/ignored when passengerId is null. */
+  /** The linked Passenger's own `status === 'active'` — never inferred from passengerId alone (a linked-but-inactive Passenger is NOT ready). Ignored when passengerId is null. */
   passengerActive: boolean;
+  /** Whether at least one Trip exists for this Request (Request → Trip is 1:N). */
+  hasLinkedTrips: boolean;
 }
 
-/**
- * Mirrors create_trip's own actual validation exactly (re-verified
- * directly against 20260831120000_controlled_trip_creation.sql, not
- * assumed from the S2A report alone): the ONLY hard blocker beyond what
- * a saved Request already structurally guarantees (pickup/destination
- * are NOT NULL columns) is a missing or inactive linked Passenger, and
- * only while the Request is still `pending` — `declined`/`cancelled`
- * are rejected outright by create_trip's own `state not in ('pending',
- * 'accepted')` check, and an already-`accepted` Request (meaning at
- * least one Trip already exists) is not "needs review" in the same
- * sense a pending one is.
- */
 export function deriveRequestReadiness(input: RequestReadinessInput): RequestReadiness {
-  if (input.state === "accepted") {
-    return "accepted";
-  }
   if (input.state === "declined" || input.state === "cancelled") {
     return "not_convertible";
   }
-  // pending (or any unrecognized value, treated defensively the same
-  // way pending is — never silently claimed "ready" for an unknown
-  // state).
-  if (input.passengerId !== null && input.passengerActive) {
-    return "ready";
+  if (input.hasLinkedTrips) {
+    return "trip_created";
   }
-  return "needs_passenger";
+  const passengerResolved = input.passengerId !== null && input.passengerActive;
+  if (input.state === "accepted") {
+    return passengerResolved ? "ready" : "needs_passenger";
+  }
+  // pending (or any unrecognized value, treated defensively like pending —
+  // never "ready", because only an accepted Request may become a Trip).
+  return passengerResolved ? "awaiting_decision" : "needs_passenger";
+}
+
+export interface RequestActions {
+  canAccept: boolean;
+  canDecline: boolean;
+  /** Accepted, no Trip yet. Request-level cancel never cascades into Trips. */
+  canCancel: boolean;
+  /** Accepted + a Trip already exists: cancellation is managed on the Trip instead. */
+  cancelBlockedByTrips: boolean;
+  /** First Trip from an accepted, ready Request. */
+  canCreateTrip: boolean;
+  /** Additional Trip (return / multi-leg) from an accepted Request whose Passenger is still active. */
+  canCreateAnotherTrip: boolean;
+  /** Mirrors link_request_passenger: pending or accepted, until the first Trip exists. */
+  canLinkPassenger: boolean;
+}
+
+/**
+ * UI gating only — every rule here is re-enforced by the database RPCs
+ * (accept/decline/cancel_transportation_request, link_request_passenger,
+ * create_trip), which remain the authority.
+ */
+export function deriveRequestActions(input: RequestReadinessInput): RequestActions {
+  const isPending = input.state === "pending";
+  const isAccepted = input.state === "accepted";
+  const passengerActive = input.passengerId !== null && input.passengerActive;
+  return {
+    canAccept: isPending,
+    canDecline: isPending,
+    canCancel: isAccepted && !input.hasLinkedTrips,
+    cancelBlockedByTrips: isAccepted && input.hasLinkedTrips,
+    canCreateTrip: isAccepted && !input.hasLinkedTrips && passengerActive,
+    canCreateAnotherTrip: isAccepted && input.hasLinkedTrips && passengerActive,
+    canLinkPassenger: (isPending || isAccepted) && !input.hasLinkedTrips,
+  };
 }

@@ -8,7 +8,6 @@ import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 export interface RequestLinkedTripsPanelProps {
-  requestState: string;
   linkedTrips: RequestDetailLinkedTrip[];
   timezone: string;
 }
@@ -31,28 +30,15 @@ export interface RequestLinkedTripsPanelProps {
  * than "Assigned" in this compact list; the linked Trip's own Detail
  * page always shows the precise, authoritative status.
  */
-export function RequestLinkedTripsPanel({ requestState, linkedTrips, timezone }: RequestLinkedTripsPanelProps) {
-  // P1-E1-S2E §22 — an accepted Request with zero linked Trips should
-  // not normally occur under the controlled mutation model (create_trip
-  // is the only path that ever sets state = 'accepted', and it does so
-  // in the same transaction it creates the Trip), but legacy/test data
-  // could theoretically contain it. Never crash, never fabricate a Trip,
-  // never alter Request state, never add repair logic here — just a
-  // restrained, distinct message from the ordinary "no Trips yet" case.
-  const isAcceptedWithNoTrips = requestState === "accepted" && linkedTrips.length === 0;
-
+export function RequestLinkedTripsPanel({ linkedTrips, timezone }: RequestLinkedTripsPanelProps) {
   return (
     <Panel>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Linked Trips</h3>
       <div className="mt-zw-md">
         {linkedTrips.length === 0 ? (
           <EmptyState
-            title={isAcceptedWithNoTrips ? "No linked trips found" : "No trips yet"}
-            description={
-              isAcceptedWithNoTrips
-                ? "This request is accepted but no linked trip could be found."
-                : "Trips created from this request will appear here."
-            }
+            title="No trips yet"
+            description="Trips created from this request will appear here."
           />
         ) : (
           <ul className="flex flex-col gap-zw-sm">

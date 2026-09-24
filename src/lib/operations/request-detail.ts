@@ -2,6 +2,7 @@ import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { deriveRequestReadiness, type RequestReadiness } from "./request-readiness-core";
 import { acquisitionFromRpcRow, type RequestAcquisition } from "./request-acquisition-core";
+import { requestReasonLabel } from "./request-decision-reasons";
 
 /**
  * Server-side data access boundary for Operations Request Detail
@@ -200,6 +201,7 @@ export async function getRequestDetail(requestId: string, organizationId: string
     state: row.state,
     passengerId: row.passenger_id,
     passengerActive,
+    hasLinkedTrips: (tripsData ?? []).length > 0,
   });
 
   const linkedTrips: RequestDetailLinkedTrip[] = (tripsData ?? []).map((t) => ({
@@ -260,7 +262,7 @@ export interface RequestActivityEvent {
   id: string;
   eventType: string;
   occurredAt: string;
-  /** Only ever populated for `request_declined` (S2B's own `metadata.reason`, when supplied) — null for every other event_type and for a declined event with no reason given. */
+  /** Decline/cancel reason for display. P1-OPS-R1 events carry a structured reason_code (+ optional note), rendered as "Label — note"; historical declines fall back to their optional free-text `metadata.reason`. Null for every other event. */
   reason: string | null;
 }
 
@@ -296,7 +298,7 @@ export async function getRequestActivity(requestId: string, organizationId: stri
 
   const { data, error } = await supabase
     .from("request_events")
-    .select("id, event_type, occurred_at, metadata")
+    .select("id, event_type, occurred_at, metadata, reason_code, reason_note")
     .eq("request_id", requestId)
     .eq("organization_id", organizationId)
     .order("occurred_at", { ascending: true });
@@ -307,7 +309,10 @@ export async function getRequestActivity(requestId: string, organizationId: stri
 
   return (data ?? []).map((event) => {
     const metadata = event.metadata as Record<string, unknown> | null;
-    const reason = typeof metadata?.reason === "string" ? metadata.reason : null;
+    const legacyReason = typeof metadata?.reason === "string" ? metadata.reason : null;
+    const reason = event.reason_code
+      ? [requestReasonLabel(event.reason_code), event.reason_note].filter(Boolean).join(" — ")
+      : legacyReason;
     return {
       id: event.id,
       eventType: event.event_type,

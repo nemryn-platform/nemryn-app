@@ -30,7 +30,9 @@ insert into public.passengers (id, organization_id, display_name, phone, status)
   ('99000000-0000-0000-0000-0000000000a2', '10000000-0000-0000-0000-0000000000a1', 'Integrity Passenger B', '555-0911', 'active'),
   ('99000000-0000-0000-0000-0000000000a3', '10000000-0000-0000-0000-0000000000a1', 'Integrity Passenger C (inactive)', '555-0912', 'inactive');
 
--- Requests: pending+A, pending+NULL, pending+inactiveC, accepted+A, declined+A, cancelled+A.
+-- Requests: pending+A, accepted+NULL, accepted+inactiveC, accepted+A, declined+A, cancelled+A.
+-- (P1-OPS-R1: the Passenger-invariant fixtures are ACCEPTED so they still test the Passenger check,
+-- not merely the new accepted-only state gate.)
 insert into public.transportation_requests (
   id, organization_id, passenger_id, requester_name, requester_relationship,
   requester_phone, pickup_description, destination_description, return_trip_needed, state
@@ -38,9 +40,9 @@ insert into public.transportation_requests (
   ('99000000-0000-0000-0000-0000000000b1', '10000000-0000-0000-0000-0000000000a1', '99000000-0000-0000-0000-0000000000a1',
    'Integrity Requester Pending-A', 'self', '555-0920', 'Integrity pickup B1', 'Integrity destination B1', 'no', 'pending'),
   ('99000000-0000-0000-0000-0000000000b2', '10000000-0000-0000-0000-0000000000a1', null,
-   'Integrity Requester Pending-Null', 'self', '555-0921', 'Integrity pickup B2', 'Integrity destination B2', 'no', 'pending'),
+   'Integrity Requester Pending-Null', 'self', '555-0921', 'Integrity pickup B2', 'Integrity destination B2', 'no', 'accepted'),
   ('99000000-0000-0000-0000-0000000000b3', '10000000-0000-0000-0000-0000000000a1', '99000000-0000-0000-0000-0000000000a3',
-   'Integrity Requester Pending-InactiveC', 'self', '555-0922', 'Integrity pickup B3', 'Integrity destination B3', 'no', 'pending'),
+   'Integrity Requester Pending-InactiveC', 'self', '555-0922', 'Integrity pickup B3', 'Integrity destination B3', 'no', 'accepted'),
   ('99000000-0000-0000-0000-0000000000b4', '10000000-0000-0000-0000-0000000000a1', '99000000-0000-0000-0000-0000000000a1',
    'Integrity Requester Accepted-A', 'self', '555-0923', 'Integrity pickup B4', 'Integrity destination B4', 'yes', 'accepted'),
   ('99000000-0000-0000-0000-0000000000b5', '10000000-0000-0000-0000-0000000000a1', '99000000-0000-0000-0000-0000000000a1',
@@ -85,14 +87,29 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- TEST B: Pending Request + linked active Passenger A + Trip Passenger A
--- -> success, Request becomes accepted
+-- -> P1-OPS-R1: DENIED (a Trip requires an ACCEPTED Request); Request stays
+-- pending, no Trip. Then accept it explicitly and the same call succeeds
+-- without create_trip touching the Request state.
 -- ---------------------------------------------------------------------------
 do $$
 declare v_r public.trip_creation_result;
-declare v_state text;
+declare v_state text; v_denied boolean := false; v_trips int;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
+  begin
+    perform public.create_trip(
+      p_organization_id := '10000000-0000-0000-0000-0000000000a1',
+      p_passenger_id := '99000000-0000-0000-0000-0000000000a1',
+      p_pickup_description := 'Integrity matching pickup',
+      p_destination_description := 'Integrity matching destination',
+      p_request_id := '99000000-0000-0000-0000-0000000000b1'
+    );
+  exception when sqlstate 'ZW006' then
+    v_denied := true;
+  end;
+  select count(*) into v_trips from public.trips where request_id = '99000000-0000-0000-0000-0000000000b1';
+  perform public.accept_transportation_request('10000000-0000-0000-0000-0000000000a1', '99000000-0000-0000-0000-0000000000b1');
   v_r := public.create_trip(
     p_organization_id := '10000000-0000-0000-0000-0000000000a1',
     p_passenger_id := '99000000-0000-0000-0000-0000000000a1',
@@ -102,19 +119,19 @@ begin
   );
   reset role;
   select state into v_state from public.transportation_requests where id = '99000000-0000-0000-0000-0000000000b1';
-  if v_r.created and v_state = 'accepted' then
-    raise notice 'TEST B (pending + matching Passenger): PASS (ALLOW, request now accepted)';
+  if v_denied and v_trips = 0 and v_r.created and v_state = 'accepted' then
+    raise notice 'TEST B (pending denied; accepted + matching Passenger allowed): PASS';
   else
-    raise notice 'TEST B (pending + matching Passenger): FAIL (created=%, request_state=%)', v_r.created, v_state;
+    raise notice 'TEST B (pending denied; accepted + matching Passenger allowed): FAIL (denied=%, trips_while_pending=%, created=%, request_state=%)', v_denied, v_trips, v_r.created, v_state;
   end if;
 exception when others then
   reset role;
-  raise notice 'TEST B (pending + matching Passenger): FAIL (unexpected exception % sqlstate=%)', sqlerrm, sqlstate;
+  raise notice 'TEST B (pending denied; accepted + matching Passenger allowed): FAIL (unexpected exception % sqlstate=%)', sqlerrm, sqlstate;
 end $$;
 
 -- ---------------------------------------------------------------------------
 -- TEST C: Pending Request + linked active Passenger A + Trip Passenger B
--- (same org, active) -> rejected; no Trip; Request remains pending;
+-- (same org, active) -> rejected; no Trip; Request unchanged;
 -- no conversion TripEvent; no audit event.
 --
 -- Uses its OWN dedicated fixture (b7), independent of TEST B's own
@@ -125,7 +142,7 @@ insert into public.transportation_requests (
   requester_phone, pickup_description, destination_description, return_trip_needed, state
 ) values
   ('99000000-0000-0000-0000-0000000000b7', '10000000-0000-0000-0000-0000000000a1', '99000000-0000-0000-0000-0000000000a1',
-   'Integrity Requester Pending-A-ForMismatch', 'self', '555-0926', 'Integrity pickup B7', 'Integrity destination B7', 'no', 'pending');
+   'Integrity Requester Pending-A-ForMismatch', 'self', '555-0926', 'Integrity pickup B7', 'Integrity destination B7', 'no', 'accepted');
 
 do $$
 declare
@@ -163,11 +180,11 @@ begin
   select count(*) into v_event_count_after from public.trip_events where metadata->>'request_id' = '99000000-0000-0000-0000-0000000000b7';
   select count(*) into v_audit_count_after from public.audit_events where entity_type = 'trip' and after_data->>'request_id' = '99000000-0000-0000-0000-0000000000b7';
 
-  if v_caught_sqlstate = 'ZW006' and v_state_after = 'pending'
+  if v_caught_sqlstate = 'ZW006' and v_state_after = 'accepted'
      and v_trip_count_after = v_trip_count_before
      and v_event_count_after = v_event_count_before
      and v_audit_count_after = v_audit_count_before then
-    raise notice 'TEST C (pending + mismatched Passenger): PASS (DENY invalid_input, request still pending, zero new Trip/TripEvent/AuditEvent rows)';
+    raise notice 'TEST C (pending + mismatched Passenger): PASS (DENY invalid_input, request unchanged (accepted), zero new Trip/TripEvent/AuditEvent rows)';
   else
     raise notice 'TEST C (pending + mismatched Passenger): FAIL (sqlstate=%, request_state=%, trips %->%,  events %->%, audits %->%)',
       v_caught_sqlstate, v_state_after, v_trip_count_before, v_trip_count_after, v_event_count_before, v_event_count_after, v_audit_count_before, v_audit_count_after;
@@ -176,7 +193,7 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- TEST D: Pending Request + passenger_id NULL + supply active Passenger A
--- -> rejected; Request remains pending
+-- -> rejected; Request unchanged
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -199,8 +216,8 @@ begin
     v_caught_sqlstate := sqlstate;
   end;
   select state into v_state_after from public.transportation_requests where id = '99000000-0000-0000-0000-0000000000b2';
-  if v_caught_sqlstate = 'ZW006' and v_state_after = 'pending' then
-    raise notice 'TEST D (pending + NULL Request Passenger): PASS (DENY invalid_input, request still pending)';
+  if v_caught_sqlstate = 'ZW006' and v_state_after = 'accepted' then
+    raise notice 'TEST D (pending + NULL Request Passenger): PASS (DENY invalid_input, request unchanged (accepted))';
   else
     raise notice 'TEST D (pending + NULL Request Passenger): FAIL (sqlstate=%, request_state=%)', v_caught_sqlstate, v_state_after;
   end if;
@@ -232,8 +249,8 @@ begin
     v_caught_sqlstate := sqlstate;
   end;
   select state into v_state_after from public.transportation_requests where id = '99000000-0000-0000-0000-0000000000b3';
-  if v_caught_sqlstate = 'ZW006' and v_state_after = 'pending' then
-    raise notice 'TEST E (pending + inactive linked Passenger): PASS (DENY invalid_input, request still pending)';
+  if v_caught_sqlstate = 'ZW006' and v_state_after = 'accepted' then
+    raise notice 'TEST E (pending + inactive linked Passenger): PASS (DENY invalid_input, request unchanged (accepted))';
   else
     raise notice 'TEST E (pending + inactive linked Passenger): FAIL (sqlstate=%, request_state=%)', v_caught_sqlstate, v_state_after;
   end if;

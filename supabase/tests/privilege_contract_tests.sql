@@ -136,10 +136,12 @@ c_fn(sig, roles) as (values
   ('_create_public_request(uuid,text,text,text,text,text,text,text,text,date,time without time zone,text,text,text,text[],date,date,time without time zone,boolean,text,jsonb)', ''),
   ('_public_form_service_types(uuid,text[])', ''),
   ('_staff_invite_token_hash(text)', ''),
+  ('_validate_request_decision_reason(text,text,text)', ''),
   ('accept_staff_invite(text)', 'u'),
+  ('accept_transportation_request(uuid,uuid)', 'u'),
   ('assign_trip(uuid,uuid,uuid)', 'u'),
   ('cancel_staff_invite(uuid)', 'u'),
-  ('cancel_transportation_request(uuid,uuid)', 'u'),
+  ('cancel_transportation_request(uuid,uuid,text,text)', 'u'),
   ('cancel_trip(uuid,text)', 'u'),
   ('change_membership_role(uuid,text)', 'u'),
   ('check_and_record_public_intake_rate_limit(text,text)', 's'),
@@ -156,7 +158,7 @@ c_fn(sig, roles) as (values
   ('create_trip(uuid,uuid,text,text,timestamp with time zone,timestamp with time zone,uuid,uuid,text,text,uuid)', 'u'),
   ('create_trip_for_recurring_occurrence(uuid,uuid,date)', 'u'),
   ('current_driver_id(uuid)', 'u'),
-  ('decline_transportation_request(uuid,uuid,text)', 'u'),
+  ('decline_transportation_request(uuid,uuid,text,text)', 'u'),
   ('delete_unused_request_intake_integration(uuid)', 'u'),
   ('retire_request_intake_integration(uuid)', 'u'),
   ('list_previous_website_connections(uuid)', 'u'),
@@ -227,6 +229,15 @@ c_fn(sig, roles) as (values
   ('update_organization_settings(uuid,jsonb)', 'u'),
   ('update_request_intake_integration_origin(uuid,text)', 'u')
 ),
+-- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
+-- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required
+-- by check 14; check 29 fails while any of them still exists, so the window is visible and can not be forgotten.
+-- P1-OPS-R1: the pre-R1 decline / cancel overloads, dropped by 20260924091000_request_decision_workflow_contract.
+c_fn_transitional(sig, roles) as (values
+  ('cancel_transportation_request(uuid,uuid)', 'u'),
+  ('decline_transportation_request(uuid,uuid,text)', 'u')
+),
+c_fn_all as (select sig, roles from c_fn union all select sig, roles from c_fn_transitional),
 -- ----------------------------------------------------------------- CATALOG
 rel as (
   select c.oid, c.relname, c.relkind, c.relrowsecurity, pg_get_userbyid(c.relowner) as owner
@@ -302,20 +313,20 @@ checks(check_name, ok, detail) as (
   union all select '12 no client / service privilege on any public sequence', not exists (
            select 1 from seq s cross join roles r cross join (values ('USAGE'), ('SELECT'), ('UPDATE')) p(p) where has_sequence_privilege(r.r, s.oid, p.p)),
          coalesce((select string_agg(s.relname || ':' || r.r, ', ') from seq s cross join roles r cross join (values ('USAGE'), ('SELECT'), ('UPDATE')) p(p) where has_sequence_privilege(r.r, s.oid, p.p)), 'ok')
-  union all select '13 every public function is in the contract (platform helper rls_auto_enable excepted)', not exists (select 1 from fn where proname <> 'rls_auto_enable' and sig not in (select sig from c_fn)),
-         coalesce((select string_agg(sig, ', ') from fn where proname <> 'rls_auto_enable' and sig not in (select sig from c_fn)), 'ok')
+  union all select '13 every public function is in the contract (platform helper rls_auto_enable excepted)', not exists (select 1 from fn where proname <> 'rls_auto_enable' and sig not in (select sig from c_fn_all)),
+         coalesce((select string_agg(sig, ', ') from fn where proname <> 'rls_auto_enable' and sig not in (select sig from c_fn_all)), 'ok')
   union all select '14 every contract function exists', not exists (select 1 from c_fn where sig not in (select sig from fn)),
          coalesce((select string_agg(sig, ', ') from c_fn where sig not in (select sig from fn)), 'ok')
   union all select '15 PUBLIC has EXECUTE on no public function (rls_auto_enable excepted)', not exists (select 1 from fn_exec where pub and proname <> 'rls_auto_enable'),
          coalesce((select string_agg(sig, ', ') from fn_exec where pub and proname <> 'rls_auto_enable'), 'ok')
-  union all select '16 anon EXECUTE == the two invite-preview RPCs only', not exists (select 1 from fn_exec e join c_fn c using (sig) where e.a <> (c.roles like '%a%'))
+  union all select '16 anon EXECUTE == the two invite-preview RPCs only', not exists (select 1 from fn_exec e join c_fn_all c using (sig) where e.a <> (c.roles like '%a%'))
          and not exists (select 1 from fn_exec where a and proname = 'rls_auto_enable'),
          coalesce((select string_agg(sig, ', ') from fn_exec where a), 'ok')
-  union all select '17 authenticated EXECUTE == contract API', not exists (select 1 from fn_exec e join c_fn c using (sig) where e.u <> (c.roles like '%u%' or c.roles like '%a%'))
+  union all select '17 authenticated EXECUTE == contract API', not exists (select 1 from fn_exec e join c_fn_all c using (sig) where e.u <> (c.roles like '%u%' or c.roles like '%a%'))
          and not exists (select 1 from fn_exec where u and proname = 'rls_auto_enable'),
-         coalesce((select string_agg(e.sig, ', ') from fn_exec e join c_fn c using (sig) where e.u <> (c.roles like '%u%' or c.roles like '%a%')), 'ok')
-  union all select '18 service_role EXECUTE == the four server-only RPCs', not exists (select 1 from fn_exec e join c_fn c using (sig) where e.s <> (c.roles like '%s%')),
-         coalesce((select string_agg(e.sig, ', ') from fn_exec e join c_fn c using (sig) where e.s <> (c.roles like '%s%')), 'ok')
+         coalesce((select string_agg(e.sig, ', ') from fn_exec e join c_fn_all c using (sig) where e.u <> (c.roles like '%u%' or c.roles like '%a%')), 'ok')
+  union all select '18 service_role EXECUTE == the four server-only RPCs', not exists (select 1 from fn_exec e join c_fn_all c using (sig) where e.s <> (c.roles like '%s%')),
+         coalesce((select string_agg(e.sig, ', ') from fn_exec e join c_fn_all c using (sig) where e.s <> (c.roles like '%s%')), 'ok')
   union all select '19 every SECURITY DEFINER function pins search_path', not exists (select 1 from fn where prosecdef and not exists (select 1 from unnest(coalesce(proconfig, '{}')) c where c like 'search_path=%')),
          coalesce((select string_agg(sig, ', ') from fn where prosecdef and not exists (select 1 from unnest(coalesce(proconfig, '{}')) c where c like 'search_path=%')), 'ok')
   union all select '20 no policy targets anon or PUBLIC; every policy is TO authenticated', not exists (select 1 from pol where roles::text not like '{authenticated}'),
@@ -352,6 +363,9 @@ checks(check_name, ok, detail) as (
          exists (select 1 from defacl where owner = 'postgres' and schema = 'extensions' and objtype = 'f' and grantee = 'public' and priv = 'EXECUTE'),
          coalesce((select string_agg(objtype::text || ':' || grantee, ', ') from defacl where owner = 'postgres' and schema = 'extensions'), 'no default row for schema extensions')
   union all select '27 anon / authenticated cannot CREATE in schema public', not has_schema_privilege('anon', 'public', 'CREATE') and not has_schema_privilege('authenticated', 'public', 'CREATE'), 'schema public'
+  union all select '29 no TRANSITIONAL (expand -> contract) function remains -- fails by design only between an EXPAND and its CONTRACT migration',
+         not exists (select 1 from fn where sig in (select sig from c_fn_transitional)),
+         coalesce((select string_agg(sig, ', ') from fn where sig in (select sig from c_fn_transitional)), 'ok')
 )
 select check_name, ok, detail from checks
 union all select 'SUMMARY (violations = ' || count(*) filter (where not ok) || ' of ' || count(*) || ' checks)', count(*) filter (where not ok) = 0, ''

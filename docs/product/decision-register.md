@@ -646,8 +646,8 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 
 - **Date:** 2026-08-30
 - **Category:** Product / Architecture
-- **Decision:** TransportationRequest has exactly four states. `pending → accepted` is system-driven, triggered atomically by the creation of the first Trip against the request — never a separate manual action. Child Trip outcomes (cancellation, completion) never write back onto Request.state.
-- **Status:** CONFIRMED
+- **Decision:** TransportationRequest has exactly four states. ~~`pending → accepted` is system-driven, triggered atomically by the creation of the first Trip against the request — never a separate manual action.~~ (AMENDED by ZD-204: acceptance is an explicit operator decision.) Child Trip outcomes (cancellation, completion) never write back onto Request.state.
+- **Status:** CONFIRMED (amended by ZD-204)
 - **Reason:** Smallest state model that captures every real behavioral distinction the product needs (submitted-vs-reviewed carries no distinct behavior, so was collapsed into `pending`).
 - **Affected Product Areas:** TransportationRequest schema design
 - **Dependencies:** ZD-045
@@ -2477,6 +2477,18 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Engineering
 - **Review Trigger:** None anticipated.
 
-No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
+### ZD-204 — Explicit Request decision workflow (Accept / Decline / Cancel), separate from readiness
+
+- **Date:** 2026-09-24
+- **Category:** Product / Architecture
+- **Decision:** A pending Request needs an explicit business decision: **Accept** (`pending → accepted`, `accept_transportation_request`) or **Decline** (`pending → declined`, reason required). An accepted Request that will no longer proceed is **Cancelled** (`accepted → cancelled`, reason required, only while no Trip exists). `declined` and `cancelled` are terminal. Operational readiness (active linked Passenger) is derived and separate; Passenger linking never accepts. `create_trip` requires an `accepted` Request and never transitions it. Reasons are a closed per-decision code set stored on the decision's `request_events` row (`reason_code`, `reason_note`).
+- **Status:** CONFIRMED
+- **Reason:** First-customer QA: a pending website Request offered Decline + Cancel but no Accept, and Passenger linking read as a substitute for acceptance.
+- **Affected Product Areas:** Request Hub, Request Detail, New Trip from Request, request mutation RPCs
+- **Dependencies:** ZD-054 (amended), ZD-045
+- **Owner:** Product
+- **Review Trigger:** Customer communication workflow (accept/decline notifications), Request reopen
+
+No decisions have been REJECTED as of this update. ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

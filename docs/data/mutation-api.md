@@ -54,9 +54,9 @@ Organization Admin / Dispatcher only (`has_org_role`, same `ZW002` convention as
 - if both timestamps are given, `appointment_at >= scheduled_pickup_at`
 - `passenger_id`: required; must exist, same organization, `status='active'`
 - `pickup_facility_id`/`destination_facility_id` (optional): if given, must exist, same organization, `status='active'`
-- `request_id` (optional): if given, must exist, same organization, and be `state` `pending` or `accepted` (a `declined`/`cancelled` request is not usable)
+- `request_id` (optional): if given, must exist, same organization, and be `state` `accepted` (P1-OPS-R1; `pending`/`declined`/`cancelled` → ZW006), and its linked `passenger_id` must equal `p_passenger_id`
 
-**Request lifecycle side effect:** when `request_id` is supplied and that request is currently `pending`, it is atomically transitioned to `accepted` in the same transaction — the system-driven transition the `transportation_requests` table's own original comment anticipated but nothing implemented until this phase. An already-`accepted` request (e.g. creating a return-leg Trip) is left untouched — Request→Trip is never assumed 1:1.
+**Request lifecycle side effect:** none (P1-OPS-R1). Acceptance is exclusively `accept_transportation_request`; an accepted request may produce any number of Trips — Request→Trip is never assumed 1:1.
 
 **Does not assign a Driver/Vehicle.** Trip creation and assignment remain separate commands by design (ZD-102) — call `assign_trip` afterward.
 
@@ -226,3 +226,19 @@ Organization Admin/Dispatcher only — Driver never resolves (matches the schema
 | Real HTTP (`rpc_probe.js`/`create_trip_probe.js` pattern, see completion reports) | 18 | PostgREST/GoTrue cross-validation of one representative RPC per family, plus create_trip's full authorization matrix |
 
 All run against `supabase db reset` fresh-seeded data; see each file's header for exact run instructions.
+
+
+## Request decision RPCs (P1-OPS-R1)
+
+All: Organization Admin / Dispatcher of an active organization (`has_org_role`); ZW001 unauthenticated, ZW002 Driver / inactive / suspended / foreign / Platform Admin without Membership / not found, ZW004 illegal transition, ZW006 invalid input. Request row locked `FOR UPDATE` before any state check; returns `request_transition_result` with `changed` (idempotent no-op when the target state already holds).
+
+| RPC | Transition | Reason | Writes |
+|---|---|---|---|
+| `accept_transportation_request(org, request)` | `pending → accepted` | — | `request_accepted` RequestEvent + AuditEvent |
+| `decline_transportation_request(org, request, reason_code, reason_note?)` | `pending → declined` | required: `outside_service_area`, `no_availability`, `unsupported_transportation_need`, `requested_time_unavailable`, `duplicate_request`, `other` (note required) | `request_declined` RequestEvent (`reason_code`, `reason_note`) + AuditEvent (code only) |
+| `cancel_transportation_request(org, request, reason_code, reason_note?)` | `accepted → cancelled`, only while no Trip exists | required: `requester_cancelled`, `no_availability`, `unable_to_reach_requester`, `duplicate_request`, `other` (note required) | `request_cancelled` RequestEvent + AuditEvent (code only) |
+| `link_request_passenger(org, request, passenger)` | none (state unchanged) | — | legal while `pending` or `accepted` and no Trip exists |
+
+None of them creates a Passenger, Trip, or assignment, touches provenance (`intake_integration_id`, `source`, requester snapshot, acquisition), or sends an external notification.
+
+**Release shape (P1-OPS-R1R):** shipped as EXPAND (`20260924090000_request_decision_workflow_expand`) → deploy app → CONTRACT (`20260924091000_request_decision_workflow_contract`). Between the two, the pre-R1 `decline_transportation_request(uuid, uuid, text)` / `cancel_transportation_request(uuid, uuid)` overloads and `create_trip`'s implicit pending → accepted still exist for the previously deployed app, and the new `decline_transportation_request(uuid, uuid, text, text)` has no default for `p_reason_note` (callers pass it; `''` = none). CONTRACT removes the bridge, makes `create_trip` accepted-only, adds `p_reason_note default null`, and requires a reason code on every new decline/cancel event. The privilege contract lists the legacy overloads as TRANSITIONAL; check 29 fails until CONTRACT is applied.

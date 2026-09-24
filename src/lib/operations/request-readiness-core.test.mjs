@@ -10,77 +10,84 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { deriveRequestReadiness } = await import("./request-readiness-core.ts");
+const { deriveRequestReadiness, deriveRequestActions } = await import("./request-readiness-core.ts");
 
-test("deriveRequestReadiness — pending + active linked passenger -> ready", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "pending", passengerId: "passenger-1", passengerActive: true }),
-    "ready",
-  );
+const base = { passengerId: null, passengerActive: false, hasLinkedTrips: false };
+const linked = { passengerId: "passenger-1", passengerActive: true, hasLinkedTrips: false };
+
+test("readiness — pending + no passenger -> needs_passenger", () => {
+  assert.equal(deriveRequestReadiness({ ...base, state: "pending" }), "needs_passenger");
 });
 
-test("deriveRequestReadiness — pending + null passenger -> needs_passenger", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "pending", passengerId: null, passengerActive: false }),
-    "needs_passenger",
-  );
+test("readiness — pending + active passenger -> awaiting_decision (never ready: a pending Request cannot become a Trip)", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, state: "pending" }), "awaiting_decision");
 });
 
-test("deriveRequestReadiness — pending + linked but INACTIVE passenger -> needs_passenger (never ready merely because passengerId is set)", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "pending", passengerId: "passenger-1", passengerActive: false }),
-    "needs_passenger",
-  );
+test("readiness — pending + INACTIVE linked passenger -> needs_passenger", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, passengerActive: false, state: "pending" }), "needs_passenger");
 });
 
-test("deriveRequestReadiness — accepted -> accepted (never 'ready', never 'needs review')", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "accepted", passengerId: "passenger-1", passengerActive: true }),
-    "accepted",
-  );
+test("readiness — accepted + no passenger -> needs_passenger (H)", () => {
+  assert.equal(deriveRequestReadiness({ ...base, state: "accepted" }), "needs_passenger");
 });
 
-test("deriveRequestReadiness — accepted with no linked passenger is still 'accepted', not 'needs_passenger' (accepted means a Trip already has its own passenger_id — this Request-level field no longer gates anything)", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "accepted", passengerId: null, passengerActive: false }),
-    "accepted",
-  );
+test("readiness — accepted + active passenger + no trip -> ready (I)", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, state: "accepted" }), "ready");
 });
 
-test("deriveRequestReadiness — declined -> not_convertible", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "declined", passengerId: "passenger-1", passengerActive: true }),
-    "not_convertible",
-  );
+test("readiness — accepted + inactive passenger -> needs_passenger", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, passengerActive: false, state: "accepted" }), "needs_passenger");
 });
 
-test("deriveRequestReadiness — cancelled -> not_convertible", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "cancelled", passengerId: null, passengerActive: false }),
-    "not_convertible",
-  );
+test("readiness — accepted + trips -> trip_created", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, hasLinkedTrips: true, state: "accepted" }), "trip_created");
 });
 
-test("deriveRequestReadiness — declined with an active linked passenger is STILL not_convertible (state gates before passenger check, matching create_trip's own state-first validation order)", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "declined", passengerId: "passenger-1", passengerActive: true }),
-    "not_convertible",
-  );
+test("readiness — declined/cancelled -> not_convertible regardless of passenger/trips", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, state: "declined" }), "not_convertible");
+  assert.equal(deriveRequestReadiness({ ...linked, hasLinkedTrips: true, state: "cancelled" }), "not_convertible");
 });
 
-test("deriveRequestReadiness — unrecognized/unexpected state falls through to the same passenger-gated logic as pending, never silently 'ready'", () => {
-  assert.equal(
-    deriveRequestReadiness({ state: "some_future_state", passengerId: null, passengerActive: false }),
-    "needs_passenger",
-  );
-  assert.equal(
-    deriveRequestReadiness({ state: "some_future_state", passengerId: "passenger-1", passengerActive: true }),
-    "ready",
-  );
+test("readiness — unknown state is never ready", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, state: "some_future_state" }), "awaiting_decision");
+  assert.equal(deriveRequestReadiness({ ...base, state: "some_future_state" }), "needs_passenger");
 });
 
-test("deriveRequestReadiness — never returns a numeric score or anything outside the 4 closed states", () => {
-  const result = deriveRequestReadiness({ state: "pending", passengerId: "p1", passengerActive: true });
-  assert.equal(typeof result, "string");
-  assert.ok(["ready", "needs_passenger", "not_convertible", "accepted"].includes(result));
+test("actions — pending: Accept + Decline, never Cancel, never Create Trip (B/C/D/V)", () => {
+  const a = deriveRequestActions({ ...linked, state: "pending" });
+  assert.deepEqual(a, {
+    canAccept: true, canDecline: true, canCancel: false, cancelBlockedByTrips: false,
+    canCreateTrip: false, canCreateAnotherTrip: false, canLinkPassenger: true,
+  });
+});
+
+test("actions — accepted, no passenger: Cancel + link, no Create Trip, no Accept/Decline", () => {
+  const a = deriveRequestActions({ ...base, state: "accepted" });
+  assert.deepEqual(a, {
+    canAccept: false, canDecline: false, canCancel: true, cancelBlockedByTrips: false,
+    canCreateTrip: false, canCreateAnotherTrip: false, canLinkPassenger: true,
+  });
+});
+
+test("actions — accepted + ready: Create Trip + Cancel", () => {
+  const a = deriveRequestActions({ ...linked, state: "accepted" });
+  assert.equal(a.canCreateTrip, true);
+  assert.equal(a.canCancel, true);
+  assert.equal(a.canCreateAnotherTrip, false);
+});
+
+test("actions — accepted with trips: cancel blocked (N), Create Another Trip, passenger frozen", () => {
+  const a = deriveRequestActions({ ...linked, hasLinkedTrips: true, state: "accepted" });
+  assert.equal(a.canCancel, false);
+  assert.equal(a.cancelBlockedByTrips, true);
+  assert.equal(a.canCreateTrip, false);
+  assert.equal(a.canCreateAnotherTrip, true);
+  assert.equal(a.canLinkPassenger, false);
+});
+
+test("actions — declined/cancelled are terminal: no action at all (O/P)", () => {
+  for (const state of ["declined", "cancelled"]) {
+    const a = deriveRequestActions({ ...linked, state });
+    assert.ok(Object.values(a).every((v) => v === false), state);
+  }
 });

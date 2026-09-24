@@ -18,7 +18,10 @@
 # per RPC (mutation_concurrency_test.sh covers only assign_trip, not also
 # reassign_trip, which shares the same row-lock discipline).
 #
-# Scenario: Request R2 starts pending, zero linked Trips.
+# P1-OPS-R1: cancel is now accepted -> cancelled (reason required), so the
+# fixture starts ACCEPTED with a linked Passenger; the race is otherwise identical.
+#
+# Scenario: Request E1 starts accepted, zero linked Trips.
 #   Session A: opens a transaction, locks the Request row (FOR UPDATE),
 #     holds it for ~2 seconds (simulating a real in-flight mutation), then
 #     calls cancel_transportation_request and commits.
@@ -44,17 +47,17 @@ ORG='10000000-0000-0000-0000-0000000000a1'
 PASSENGER='40000000-0000-0000-0000-0000000000a1'
 DISPATCHER='20000000-0000-0000-0000-0000000000a2'
 
-echo "=== Fixture: fresh pending Request E1, zero linked Trips (re-runnable) ==="
+echo "=== Fixture: fresh accepted Request E1 (linked Passenger), zero linked Trips (re-runnable) ==="
 docker exec -i supabase_db_ZenWard psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<SQL
 delete from public.trips where request_id = '$REQUEST';
 delete from public.request_events where request_id = '$REQUEST';
 delete from public.transportation_requests where id = '$REQUEST';
 insert into public.transportation_requests (
-  id, organization_id, requester_name, requester_relationship, requester_phone,
+  id, organization_id, passenger_id, requester_name, requester_relationship, requester_phone,
   pickup_description, destination_description, return_trip_needed, source, state
 ) values (
-  '$REQUEST', '$ORG', 'Fictional Concurrency Test Requester', 'self', '555-0195',
-  'Concurrency test E1 pickup', 'Concurrency test E1 destination', 'no', 'phone', 'pending'
+  '$REQUEST', '$ORG', '$PASSENGER', 'Fictional Concurrency Test Requester', 'self', '555-0195',
+  'Concurrency test E1 pickup', 'Concurrency test E1 destination', 'no', 'phone', 'accepted'
 );
 SQL
 
@@ -65,7 +68,7 @@ SET request.jwt.claim.sub = '$DISPATCHER';
 BEGIN;
 SELECT id FROM public.transportation_requests WHERE id = '$REQUEST' FOR UPDATE;
 SELECT pg_sleep(2);
-SELECT cancel_transportation_request('$ORG', '$REQUEST');
+SELECT cancel_transportation_request('$ORG', '$REQUEST', 'requester_cancelled');
 COMMIT;
 SQL
 PID_A=$!

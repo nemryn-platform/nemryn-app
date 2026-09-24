@@ -102,6 +102,7 @@ export function RequestsTable({ rows, hasActiveFilters, organizationHasAnyReques
           state: row.state,
           passengerId: row.passengerId,
           passengerActive: row.passengerActive,
+          hasLinkedTrips: row.hasLinkedTrips,
         });
         return <span className={cn(typography.bodySmall, "font-medium", requestReadinessTextClass(readiness))}>{requestReadinessLabel(readiness)}</span>;
       },

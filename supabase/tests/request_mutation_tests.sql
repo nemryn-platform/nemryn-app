@@ -15,6 +15,11 @@
 -- Run with:
 --   docker exec -i supabase_db_ZenWard psql -U postgres -d postgres -f - < supabase/tests/request_mutation_tests.sql
 
+-- P1-OPS-R1: updated to the decision workflow — decline/cancel take a required
+-- reason_code (+ note), cancel is accepted -> cancelled (no Trips), and
+-- link_request_passenger is legal while pending or accepted until a Trip exists.
+-- Accept and the full matrix live in request_decision_workflow_tests.sql.
+
 \set ON_ERROR_STOP off
 \pset pager off
 
@@ -33,13 +38,13 @@ insert into public.transportation_requests (
   -- r1: pending, Org A — consumed by DECLINE-1/DECLINE-IDEMPOTENT-1
   ('92000000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-0000000000a1', null,
    'Fictional RM Requester 1', 'family', '555-0160', 'Fictional RM pickup 1', 'Fictional RM destination 1', 'no', 'phone', 'pending'),
-  -- r2: pending, Org A, zero linked trips — consumed by CANCEL-1/CANCEL-IDEMPOTENT-1
+  -- r2: ACCEPTED (P1-OPS-R1), Org A, zero linked trips — consumed by CANCEL-1/CANCEL-IDEMPOTENT-1
   ('92000000-0000-0000-0000-000000000012', '10000000-0000-0000-0000-0000000000a1', null,
-   'Fictional RM Requester 2', 'self', '555-0161', 'Fictional RM pickup 2', 'Fictional RM destination 2', 'no', 'facility', 'pending'),
+   'Fictional RM Requester 2', 'self', '555-0161', 'Fictional RM pickup 2', 'Fictional RM destination 2', 'no', 'facility', 'accepted'),
   -- r3: pending, Org A — consumed by LINK-1/LINK-IDEMPOTENT-1
   ('92000000-0000-0000-0000-000000000013', '10000000-0000-0000-0000-0000000000a1', null,
    'Fictional RM Requester 3', 'caregiver', '555-0162', 'Fictional RM pickup 3', 'Fictional RM destination 3', 'yes', 'email', 'pending'),
-  -- r4: accepted, Org A (fixture-seeded directly, no real Trip needed to exercise the rejection path) — read-only across LINK-4/DECLINE-2/CANCEL-3
+  -- r4: accepted, Org A (fixture-seeded directly) — read-only for DECLINE-2
   ('92000000-0000-0000-0000-000000000014', '10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000001',
    'Fictional RM Requester 4', 'self', '555-0163', 'Fictional RM pickup 4', 'Fictional RM destination 4', 'no', 'web', 'accepted'),
   -- r5: declined, Org A — read-only across LINK-5/CANCEL-4
@@ -48,9 +53,9 @@ insert into public.transportation_requests (
   -- r6: cancelled, Org A — read-only across LINK-6/DECLINE-3
   ('92000000-0000-0000-0000-000000000016', '10000000-0000-0000-0000-0000000000a1', null,
    'Fictional RM Requester 6', 'family', '555-0165', 'Fictional RM pickup 6', 'Fictional RM destination 6', 'no', 'phone', 'cancelled'),
-  -- r7: pending, Org A, but with a linked Trip already (cancelled-state Trip, deliberately — proves ANY linked Trip blocks cancellation regardless of its own state) — consumed by CANCEL-2
+  -- r7: ACCEPTED, Org A, with a linked Trip already (cancelled-state Trip, deliberately — proves ANY linked Trip blocks cancellation and freezes the Passenger regardless of its own state) — read-only across CANCEL-2/LINK-4
   ('92000000-0000-0000-0000-000000000017', '10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000001',
-   'Fictional RM Requester 7', 'self', '555-0166', 'Fictional RM pickup 7', 'Fictional RM destination 7', 'no', 'phone', 'pending'),
+   'Fictional RM Requester 7', 'self', '555-0166', 'Fictional RM pickup 7', 'Fictional RM destination 7', 'no', 'phone', 'accepted'),
   -- r8: pending, Org B — consumed by the cross-tenant DECLINE/CANCEL/LINK tests
   ('92000000-0000-0000-0000-000000000018', '10000000-0000-0000-0000-0000000000b1', null,
    'Fictional RM Requester 8 (Org B)', 'self', '555-0260', 'Fictional RM Org B pickup', 'Fictional RM Org B destination', 'no', 'phone', 'pending');
@@ -380,13 +385,13 @@ begin
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
     perform public.link_request_passenger(
-      '10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000014', '92000000-0000-0000-0000-000000000001' -- accepted request
+      '10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000017', '92000000-0000-0000-0000-000000000001' -- accepted request WITH a linked Trip
     );
-    raise notice 'TEST LINK-4 (accepted request): FAIL (expected denial, got success)';
+    raise notice 'TEST LINK-4 (accepted request with a linked Trip): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW004' then
-    raise notice 'TEST LINK-4 (accepted request): PASS (DENY, illegal_transition)';
+    raise notice 'TEST LINK-4 (accepted request with a linked Trip): PASS (DENY, illegal_transition)';
   when others then
-    raise notice 'TEST LINK-4 (accepted request): FAIL (wrong error % %)', sqlstate, sqlerrm;
+    raise notice 'TEST LINK-4 (accepted request with a linked Trip): FAIL (wrong error % %)', sqlstate, sqlerrm;
   end;
 end $$;
 reset role;
@@ -480,7 +485,7 @@ declare v_r public.request_transition_result;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
-  v_r := public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000011', 'Fictional decline reason');
+  v_r := public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000011', 'other', 'Fictional decline reason');
   reset role;
   if v_r.current_state = 'declined' and v_r.changed then
     raise notice 'TEST DECLINE-1 (pending -> declined): PASS (ALLOW, changed=true)';
@@ -493,12 +498,12 @@ reset role;
 do $$
 declare v_reason text;
 begin
-  select metadata->>'reason' into v_reason
+  select reason_code || '|' || reason_note into v_reason
     from public.request_events where request_id = '92000000-0000-0000-0000-000000000011' and event_type = 'request_declined';
-  if v_reason = 'Fictional decline reason' then
-    raise notice 'TEST DECLINE-EVENT-1 (reason persisted in event metadata): PASS';
+  if v_reason = 'other|Fictional decline reason' then
+    raise notice 'TEST DECLINE-EVENT-1 (structured reason persisted on the event): PASS';
   else
-    raise notice 'TEST DECLINE-EVENT-1 (reason persisted in event metadata): FAIL (reason=%)', v_reason;
+    raise notice 'TEST DECLINE-EVENT-1 (structured reason persisted on the event): FAIL (reason=%)', v_reason;
   end if;
 end $$;
 
@@ -507,7 +512,7 @@ declare v_r public.request_transition_result;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
-  v_r := public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000011', null);
+  v_r := public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000011', 'no_availability');
   reset role;
   if v_r.changed = false and v_r.current_state = 'declined' then
     raise notice 'TEST DECLINE-IDEMPOTENT-1 (decline already-declined): PASS (no-op, changed=false)';
@@ -522,7 +527,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000014', null); -- accepted
+    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000014', 'no_availability'); -- accepted
     raise notice 'TEST DECLINE-2 (accepted request): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW004' then
     raise notice 'TEST DECLINE-2 (accepted request): PASS (DENY, illegal_transition)';
@@ -537,7 +542,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000016', null); -- cancelled
+    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000016', 'no_availability'); -- cancelled
     raise notice 'TEST DECLINE-3 (cancelled request): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW004' then
     raise notice 'TEST DECLINE-3 (cancelled request): PASS (DENY, illegal_transition)';
@@ -552,7 +557,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a3'; -- Driver
   begin
-    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000012', null);
+    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000012', 'no_availability');
     raise notice 'TEST DECLINE-ROLE-1 (Driver): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW002' then
     raise notice 'TEST DECLINE-ROLE-1 (Driver): PASS (DENY)';
@@ -567,7 +572,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000018', null); -- Org B request
+    perform public.decline_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000018', 'no_availability'); -- Org B request
     raise notice 'TEST DECLINE-CROSS-ORG-1 (Org B request via Org A context): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW002' then
     raise notice 'TEST DECLINE-CROSS-ORG-1 (Org B request via Org A context): PASS (DENY, not_found)';
@@ -586,12 +591,12 @@ declare v_r public.request_transition_result;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
-  v_r := public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000012');
+  v_r := public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000012', 'requester_cancelled');
   reset role;
   if v_r.current_state = 'cancelled' and v_r.changed then
-    raise notice 'TEST CANCEL-1 (pending + zero trips -> cancelled): PASS (ALLOW, changed=true)';
+    raise notice 'TEST CANCEL-1 (accepted + zero trips -> cancelled): PASS (ALLOW, changed=true)';
   else
-    raise notice 'TEST CANCEL-1 (pending + zero trips -> cancelled): FAIL (current_state=%, changed=%)', v_r.current_state, v_r.changed;
+    raise notice 'TEST CANCEL-1 (accepted + zero trips -> cancelled): FAIL (current_state=%, changed=%)', v_r.current_state, v_r.changed;
   end if;
 end $$;
 reset role;
@@ -601,7 +606,7 @@ declare v_r public.request_transition_result;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
-  v_r := public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000012');
+  v_r := public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000012', 'requester_cancelled');
   reset role;
   if v_r.changed = false and v_r.current_state = 'cancelled' then
     raise notice 'TEST CANCEL-IDEMPOTENT-1 (cancel already-cancelled): PASS (no-op, changed=false)';
@@ -616,12 +621,12 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000017'); -- pending, but has a linked (cancelled-state) Trip
-    raise notice 'TEST CANCEL-2 (pending + ANY linked Trip, including a cancelled one): FAIL (expected denial, got success)';
+    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000017', 'requester_cancelled'); -- accepted, but has a linked (cancelled-state) Trip
+    raise notice 'TEST CANCEL-2 (accepted + ANY linked Trip, including a cancelled one): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW004' then
-    raise notice 'TEST CANCEL-2 (pending + ANY linked Trip, including a cancelled one): PASS (DENY, illegal_transition)';
+    raise notice 'TEST CANCEL-2 (accepted + ANY linked Trip, including a cancelled one): PASS (DENY, illegal_transition)';
   when others then
-    raise notice 'TEST CANCEL-2 (pending + ANY linked Trip, including a cancelled one): FAIL (wrong error % %)', sqlstate, sqlerrm;
+    raise notice 'TEST CANCEL-2 (accepted + ANY linked Trip, including a cancelled one): FAIL (wrong error % %)', sqlstate, sqlerrm;
   end;
 end $$;
 reset role;
@@ -631,12 +636,12 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000014'); -- accepted
-    raise notice 'TEST CANCEL-3 (accepted request): FAIL (expected denial, got success)';
+    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000013', 'requester_cancelled'); -- pending
+    raise notice 'TEST CANCEL-3 (pending request): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW004' then
-    raise notice 'TEST CANCEL-3 (accepted request): PASS (DENY, illegal_transition)';
+    raise notice 'TEST CANCEL-3 (pending request): PASS (DENY, illegal_transition)';
   when others then
-    raise notice 'TEST CANCEL-3 (accepted request): FAIL (wrong error % %)', sqlstate, sqlerrm;
+    raise notice 'TEST CANCEL-3 (pending request): FAIL (wrong error % %)', sqlstate, sqlerrm;
   end;
 end $$;
 reset role;
@@ -646,7 +651,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000015'); -- declined
+    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000015', 'requester_cancelled'); -- declined
     raise notice 'TEST CANCEL-4 (declined request): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW004' then
     raise notice 'TEST CANCEL-4 (declined request): PASS (DENY, illegal_transition)';
@@ -661,7 +666,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a3'; -- Driver
   begin
-    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000011');
+    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000011', 'requester_cancelled');
     raise notice 'TEST CANCEL-ROLE-1 (Driver): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW002' then
     raise notice 'TEST CANCEL-ROLE-1 (Driver): PASS (DENY)';
@@ -676,7 +681,7 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
   begin
-    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000018'); -- Org B request
+    perform public.cancel_transportation_request('10000000-0000-0000-0000-0000000000a1', '92000000-0000-0000-0000-000000000018', 'requester_cancelled'); -- Org B request
     raise notice 'TEST CANCEL-CROSS-ORG-1 (Org B request via Org A context): FAIL (expected denial, got success)';
   exception when sqlstate 'ZW002' then
     raise notice 'TEST CANCEL-CROSS-ORG-1 (Org B request via Org A context): PASS (DENY, not_found)';

@@ -20,7 +20,8 @@ const INITIAL_STATE: LinkPassengerActionState = { status: "idle" };
 
 export interface RequestPassengerPanelProps {
   requestId: string;
-  requestState: string;
+  /** P1-OPS-R1: link_request_passenger's own rule — pending or accepted, until the first Trip exists. Linking never changes the decision state. */
+  canLinkPassenger: boolean;
   passenger: RequestDetailPassenger | null;
   candidatePassengers: NewTripPassengerOption[];
   /** True only if the active-Passenger option list itself failed to load — a soft-degrade of the search/link sub-feature, never a reason to fail the whole Detail page (that list is not part of the Request's own authoritative data). */
@@ -52,14 +53,14 @@ export interface RequestPassengerPanelProps {
  *     (Combobox, selection alone never mutates anything — §14) +
  *     "Add New Passenger" (reuses AddPassengerDialog unmodified) +  an
  *     explicit "Link Passenger" confirm step.
- *   - Non-pending (accepted/declined/cancelled), OR linked+active: plain
- *     read-only presentation, no actions at all (§16/S2E-R1 §9) — the
- *     RPC itself rejects linking outside `pending`, and no UI here ever
- *     offers the attempt regardless of the linked Passenger's status.
+ *   - Not linkable (declined/cancelled, or a Trip already exists), OR
+ *     linked+active: plain read-only presentation, no actions at all —
+ *     the RPC itself rejects linking there (P1-OPS-R1: linking is legal
+ *     while pending or accepted, until the first Trip exists).
  */
 export function RequestPassengerPanel({
   requestId,
-  requestState,
+  canLinkPassenger,
   passenger,
   candidatePassengers: initialCandidates,
   candidatesUnavailable,
@@ -123,13 +124,14 @@ export function RequestPassengerPanel({
   // regardless of the current one's status — confirmed directly against
   // the S2B migration, S2E-R1 §2 — this component is the one that
   // chooses NOT to expose that for an already-active linkage).
-  const isUnlinkedPending = requestState === "pending" && passenger === null;
-  // The ONE recovery-eligible condition (S2E-R1 §3, locked): pending +
-  // a linked Passenger that is no longer active. Never eligible for a
-  // linked ACTIVE Passenger (§8 — no casual reassignment) and never for
-  // accepted/declined/cancelled regardless of linked-Passenger status
-  // (§9), since `requestState === "pending"` gates both branches here.
-  const isInactiveLinkedPending = requestState === "pending" && passenger !== null && passenger.status !== "active";
+  const isUnlinkedPending = canLinkPassenger && passenger === null;
+  // The ONE recovery-eligible condition (S2E-R1 §3): a linkable Request
+  // (pending, or accepted with no Trip yet — P1-OPS-R1) whose linked
+  // Passenger is no longer active. Never eligible for a linked ACTIVE
+  // Passenger (§8 — no casual reassignment), and never once declined/
+  // cancelled or once a Trip exists — `canLinkPassenger` gates both
+  // branches here.
+  const isInactiveLinkedPending = canLinkPassenger && passenger !== null && passenger.status !== "active";
   const canShowLinkUi = isUnlinkedPending || (isInactiveLinkedPending && recoveryFlowOpen);
 
   return (

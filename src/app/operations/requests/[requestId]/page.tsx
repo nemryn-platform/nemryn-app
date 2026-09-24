@@ -6,7 +6,7 @@ import { getRequestDetail, getRequestActivity, getRequestAcquisition, type Reque
 import type { RequestAcquisition } from "@/lib/operations/request-acquisition-core";
 import { getLogRequestFormData } from "@/lib/operations/log-request";
 import { requestStatusLabel, requestStatusCategory, requestReadinessLabel, requestReadinessTextClass, formatOperationsLongDate } from "@/lib/operations/presentation";
-import { deriveRequestReadiness } from "@/lib/operations/request-readiness-core";
+import { deriveRequestActions, deriveRequestReadiness } from "@/lib/operations/request-readiness-core";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -34,11 +34,14 @@ import { cn } from "@/lib/cn";
  * error/ok result contract, and bare-`Panel`-plus-`<h3>` read-only
  * sections.
  *
- * Does NOT include: return-trip creation, Request reopening, accepted-
- * Request cancellation, Trip cancellation, Passenger reassignment,
- * notification infrastructure, Operations Brief request count, public
- * intake, or a recurring-care engine — all explicitly out of scope for
- * this phase.
+ * P1-OPS-R1: the Request's business DECISION (Accept / Decline on a
+ * pending Request, Cancel on an accepted one) is explicit and separate
+ * from operational READINESS (an active linked Passenger). Linking a
+ * Passenger never accepts; accepting never creates a Passenger or Trip.
+ *
+ * Does NOT include: Request reopening / undo, Trip cancellation from
+ * here, Passenger reassignment once a Trip exists, or external
+ * (passenger-facing) notifications.
  */
 export default async function RequestDetailPage({ params }: { params: Promise<{ requestId: string }> }) {
   const { requestId } = await params;
@@ -105,8 +108,16 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   // through yet" state.
   let candidatePassengers: NewTripPassengerOption[] = [];
   let candidatesUnavailable = false;
+  const hasLinkedTrips = request.linkedTrips.length > 0;
+  const readinessInput = {
+    state: request.state,
+    passengerId: request.passenger?.id ?? null,
+    passengerActive: request.passenger?.status === "active",
+    hasLinkedTrips,
+  };
+  const actions = deriveRequestActions(readinessInput);
   const passengerNeedsResolution =
-    request.state === "pending" && (request.passenger === null || request.passenger.status !== "active");
+    actions.canLinkPassenger && (request.passenger === null || request.passenger.status !== "active");
   if (passengerNeedsResolution) {
     try {
       const formData = await getLogRequestFormData(organization.organizationId);
@@ -143,48 +154,8 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   }
 
   const identity = request.passenger?.displayName ?? request.requesterName;
-  const readiness = deriveRequestReadiness({
-    state: request.state,
-    passengerId: request.passenger?.id ?? null,
-    passengerActive: request.passenger?.status === "active",
-  });
-
-  // P1-E1-S2F-B1 §10-§12 — the ONE primary operational action this
-  // phase adds. Pending + Ready (readiness already encodes "has an
-  // active linked Passenger") offers first conversion; Accepted + an
-  // ACTIVE linked Passenger offers an additional Trip (return-
-  // transportation / multi-Trip, preserving the existing 1:N model).
-  // Readiness alone cannot distinguish "accepted + active" from
-  // "accepted + inactive" (deriveRequestReadiness always returns
-  // "accepted" for that state regardless of Passenger status, S2E-R1
-  // §10), so the accepted case checks request.passenger.status
-  // directly — deliberately, not an oversight. Every other combination
-  // (pending+unresolved, pending+inactive, accepted+inactive, declined,
-  // cancelled) shows neither action, matching §12's own explicit list;
-  // an accepted Request with an inactive Passenger stays read-only —
-  // no reassignment path is invented here (S2E-R1's own locked rule).
-  const canCreateTrip = request.state === "pending" && readiness === "ready";
-  const canCreateAnotherTrip = request.state === "accepted" && request.passenger !== null && request.passenger.status === "active";
+  const readiness = deriveRequestReadiness(readinessInput);
   const createTripHref = `/operations/trips/new?${new URLSearchParams({ requestId: request.id }).toString()}`;
-
-  // P1-E1-S2F-B2 §5 — Decline is available for ANY pending Request
-  // (resolved or not; Decline doesn't require a Passenger, unlike
-  // conversion). Cancel is available only while pending AND zero
-  // linked Trips exist — the UI gate is a convenience, never the
-  // authority: `cancel_transportation_request`'s own "ANY linked Trip
-  // row blocks cancellation" rule (S2B, locked) remains authoritative
-  // regardless of what this boolean ever says (§12). Neither action is
-  // ever offered for accepted/declined/cancelled Requests — no Reopen,
-  // no accepted-Request cancellation, no Trip cancellation path exists
-  // here or anywhere in this phase.
-  const canDecline = request.state === "pending";
-  const canCancel = request.state === "pending" && request.linkedTrips.length === 0;
-  // A rare, mostly-legacy-data edge case (§11): a pending Request that
-  // somehow already has a linked Trip (not reachable through this
-  // phase's own controlled UI, but not something to hide silently
-  // either) — a restrained, informational note only, never an enabled
-  // action, never a cascade into Trip cancellation.
-  const hasUncancellableLinkedTrips = request.state === "pending" && request.linkedTrips.length > 0;
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -209,33 +180,24 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             {identity} · Logged {formatOperationsLongDate(new Date(request.createdAt), timezone)}
           </p>
         </div>
-        <RequestActionBar
-          requestId={request.id}
-          canCreateTrip={canCreateTrip}
-          canCreateAnotherTrip={canCreateAnotherTrip}
-          canDecline={canDecline}
-          canCancel={canCancel}
-          createTripHref={createTripHref}
-        />
+        <RequestActionBar requestId={request.id} actions={actions} createTripHref={createTripHref} />
       </div>
 
-      {hasUncancellableLinkedTrips && (
+      {actions.cancelBlockedByTrips && (
         <p className={cn(typography.bodySmall, "text-text-muted")}>
-          This request has linked trips and cannot be cancelled here.
+          This request already has transportation scheduled. Manage cancellation from the linked trip.
         </p>
       )}
 
-      {/* READINESS (P1-E1-S2E §10/§11) — the one normal pending blocker
-          is Passenger resolution; a missing preferred date/time is never
-          treated as a readiness blocker (§11). Only the "needs_passenger"
-          case gets a prominent warning banner — ready/accepted/
-          not_convertible are calm, restrained facts, not something to
-          visually flag. */}
+      {/* READINESS (P1-E1-S2E §10/§11, P1-OPS-R1) — separate from the
+          decision. The one operational blocker is Passenger resolution;
+          only "needs_passenger" gets a warning banner, and its copy never
+          implies that linking a Passenger accepts the Request. */}
       {readiness === "needs_passenger" ? (
         <AttentionState
           level="warning"
           title="Passenger needed"
-          description="Link a passenger below to mark this request ready."
+          description="Link or create the passenger before this request can be scheduled."
         />
       ) : (
         <p className={cn(typography.bodySmall, "font-medium", requestReadinessTextClass(readiness))}>
@@ -247,7 +209,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
         <div className="flex flex-col gap-zw-lg">
           <RequestPassengerPanel
             requestId={request.id}
-            requestState={request.state}
+            canLinkPassenger={actions.canLinkPassenger}
             passenger={request.passenger}
             candidatePassengers={candidatePassengers}
             candidatesUnavailable={candidatesUnavailable}
@@ -260,7 +222,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             preferredTime={request.preferredTime}
             returnTripNeeded={request.returnTripNeeded}
           />
-          <RequestLinkedTripsPanel requestState={request.state} linkedTrips={request.linkedTrips} timezone={timezone} />
+          <RequestLinkedTripsPanel linkedTrips={request.linkedTrips} timezone={timezone} />
         </div>
 
         <div className="flex flex-col gap-zw-lg">

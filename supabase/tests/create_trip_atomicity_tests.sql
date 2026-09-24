@@ -20,7 +20,7 @@ insert into public.transportation_requests (
   requester_phone, pickup_description, destination_description, return_trip_needed, state
 ) values (
   '94000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', '94000000-0000-0000-0000-0000000000a1',
-  'Fictional Atomicity Requester', 'self', '555-0141', 'Fictional atomicity pickup', 'Fictional atomicity destination', 'no', 'pending'
+  'Fictional Atomicity Requester', 'self', '555-0141', 'Fictional atomicity pickup', 'Fictional atomicity destination', 'no', 'accepted'
 );
 
 -- ---------------------------------------------------------------------------
@@ -47,8 +47,8 @@ create trigger _test_force_trip_creation_audit_failure_trigger
 -- ---------------------------------------------------------------------------
 -- Attempt a create_trip call whose AuditEvent insert is forced to fail.
 -- Expect: the whole call fails, and NOTHING it did persists -- no Trip
--- row, no TripEvent row, and the TransportationRequest stays 'pending'
--- (not advanced to 'accepted').
+-- row, no TripEvent row, and the TransportationRequest is untouched
+-- (P1-OPS-R1: Request must already be 'accepted'; create_trip never changes it).
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -79,8 +79,8 @@ begin
 
       if v_trips_after = v_trips_before and v_trips_after = 0
          and v_events_after = v_events_before
-         and v_req_state_after = v_req_state_before and v_req_state_after = 'pending' then
-        raise notice 'TEST ATOMIC-1: PASS (forced late failure rolled back everything: no Trip row, no TripEvent row, TransportationRequest still pending)';
+         and v_req_state_after = v_req_state_before and v_req_state_after = 'accepted' then
+        raise notice 'TEST ATOMIC-1: PASS (forced late failure rolled back everything: no Trip row, no TripEvent row, TransportationRequest still accepted)';
       else
         raise notice 'TEST ATOMIC-1: FAIL (partial write survived -- trips: before=% after=%, events: before=% after=%, request_state: before=% after=%)',
           v_trips_before, v_trips_after, v_events_before, v_events_after, v_req_state_before, v_req_state_after;

@@ -6,6 +6,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapLinkPassengerError, type LinkPassengerErrorCode } from "@/lib/operations/link-passenger-errors";
 import { mapRequestLifecycleError, type RequestLifecycleErrorCode } from "@/lib/operations/request-lifecycle-errors";
+import { validateRequestReason, type RequestDecisionKind } from "@/lib/operations/request-decision-reasons";
 
 export interface LinkPassengerActionState {
   status: "idle" | "success" | "error";
@@ -68,30 +69,17 @@ export interface RequestLifecycleActionState {
 }
 
 /**
- * Decline Request (P1-E1-S2F-B2 §8) — calls `decline_transportation_
- * request` ONLY, never a raw `.update({ state: 'declined' })` or a raw
- * `request_events` INSERT (both were deliberately retired/never
- * granted in S2B — the RPC's own pending-only + idempotent-no-op +
- * atomic-event-write behavior would otherwise be bypassed entirely).
- *
- * `requestId` and the optional `reason` are the only client-supplied
- * values; `organizationId` is re-derived fresh from the validated
- * session via `requireOperationsAccess`, exactly like
- * `linkPassengerAction` above — never read from the client, and
- * `actor_user_id` is never accepted from the client at all (the RPC
- * derives it itself from `auth.uid()`).
+ * Accept Request (P1-OPS-R1) — calls `accept_transportation_request`
+ * ONLY. pending → accepted; the RPC is idempotent (a double click or a
+ * concurrent second Accept is a no-op) and never creates a Passenger,
+ * Trip or assignment. `organizationId` is re-derived from the validated
+ * session, never read from the client.
  */
-export async function declineRequestAction(
+export async function acceptRequestAction(
   _prevState: RequestLifecycleActionState,
   formData: FormData,
 ): Promise<RequestLifecycleActionState> {
   const requestId = typeof formData.get("requestId") === "string" ? (formData.get("requestId") as string).trim() : "";
-  const rawReason = formData.get("reason");
-  // Empty/whitespace-only normalizes to undefined (never sent as an
-  // empty string) — the RPC's own `nullif(btrim(...), '')` would treat
-  // them identically anyway, but normalizing here keeps the actual
-  // network payload honest about "no reason was given."
-  const reason = typeof rawReason === "string" && rawReason.trim().length > 0 ? rawReason.trim() : undefined;
 
   if (!requestId) {
     return { status: "error", errorCode: "INVALID_INPUT" };
@@ -101,20 +89,15 @@ export async function declineRequestAction(
   const organization = await requireOperationsAccess(pathname);
 
   const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.rpc("decline_transportation_request", {
+  const { error } = await supabase.rpc("accept_transportation_request", {
     p_organization_id: organization.organizationId,
     p_request_id: requestId,
-    p_reason: reason,
   });
 
   if (error) {
     return { status: "error", errorCode: mapRequestLifecycleError(error.code) };
   }
 
-  // Request Hub's queue view/counts and this Request's own Detail page
-  // (status, readiness, lifecycle actions, Request Activity) all need
-  // fresh data on the very next navigation — same discipline as
-  // linkPassengerAction above.
   revalidatePath(`/operations/requests/${requestId}`);
   revalidatePath("/operations/requests");
 
@@ -122,22 +105,37 @@ export async function declineRequestAction(
 }
 
 /**
- * Cancel Request (P1-E1-S2F-B2 §12) — calls
- * `cancel_transportation_request` ONLY. Deliberately does NOT perform
- * its own linked-Trip check before calling the RPC — the RPC's own
- * "ANY linked Trip row blocks cancellation" rule (S2B, locked) remains
- * the sole authority; duplicating it here would only create a second
- * place that check could drift out of sync with the database, for no
- * real benefit (the UI's own `linkedTrips.length === 0` gate is a
- * convenience that hides the button, not a trust boundary).
+ * Decline Request (P1-E1-S2F-B2, reworked by P1-OPS-R1) — calls
+ * `decline_transportation_request` ONLY. pending → declined; a reason
+ * code from the closed decline set is REQUIRED (note required for
+ * `other`). Validated here for a clean error, and again by the RPC,
+ * which remains the authority.
+ */
+export async function declineRequestAction(
+  _prevState: RequestLifecycleActionState,
+  formData: FormData,
+): Promise<RequestLifecycleActionState> {
+  return decideRequest("decline", formData);
+}
+
+/**
+ * Cancel Request (P1-OPS-R1) — calls `cancel_transportation_request`
+ * ONLY. accepted → cancelled, reason REQUIRED. The RPC's own "ANY linked
+ * Trip blocks cancellation" rule is the authority; the UI hiding the
+ * button is only a convenience.
  */
 export async function cancelRequestAction(
   _prevState: RequestLifecycleActionState,
   formData: FormData,
 ): Promise<RequestLifecycleActionState> {
-  const requestId = typeof formData.get("requestId") === "string" ? (formData.get("requestId") as string).trim() : "";
+  return decideRequest("cancel", formData);
+}
 
-  if (!requestId) {
+async function decideRequest(kind: RequestDecisionKind, formData: FormData): Promise<RequestLifecycleActionState> {
+  const requestId = typeof formData.get("requestId") === "string" ? (formData.get("requestId") as string).trim() : "";
+  const reason = validateRequestReason(kind, formData.get("reasonCode"), formData.get("reasonNote"));
+
+  if (!requestId || !reason.ok) {
     return { status: "error", errorCode: "INVALID_INPUT" };
   }
 
@@ -145,9 +143,13 @@ export async function cancelRequestAction(
   const organization = await requireOperationsAccess(pathname);
 
   const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.rpc("cancel_transportation_request", {
+  const { error } = await supabase.rpc(kind === "decline" ? "decline_transportation_request" : "cancel_transportation_request", {
     p_organization_id: organization.organizationId,
     p_request_id: requestId,
+    p_reason_code: reason.reasonCode,
+    // Always sent: between the P1-OPS-R1 EXPAND and CONTRACT migrations the new decline overload has no default
+    // for p_reason_note (it must not be ambiguous with the legacy 3-argument overload). '' is normalised to NULL.
+    p_reason_note: reason.reasonNote ?? "",
   });
 
   if (error) {

@@ -25,6 +25,8 @@ export interface RequestsListRow {
   passengerName: string | null;
   /** The linked Passenger's own current active status — false (never assumed true) when passengerId is null. Required for readiness (P1-E1-S2D §13 — never derived from passengerId presence alone). */
   passengerActive: boolean;
+  /** Whether at least one Trip exists for this Request (P1-OPS-R1 readiness: "Trip created" vs "Ready to schedule"). */
+  hasLinkedTrips: boolean;
   pickupDescription: string;
   destinationDescription: string;
   preferredDate: string | null;
@@ -95,6 +97,8 @@ interface RequestRow {
   created_at: string;
   updated_at: string;
   passengers: { display_name: string; status: string } | { display_name: string; status: string }[] | null;
+  /** At most one row (limited on the referenced table) — existence only, for readiness. */
+  trips: { id: string }[] | null;
 }
 
 function unwrapPassenger(value: RequestRow["passengers"]): { display_name: string; status: string } | null {
@@ -173,10 +177,11 @@ export async function getRequestsList(organizationId: string, filters: RequestsL
   let query = supabase
     .from("transportation_requests")
     .select(
-      "id, requester_name, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, state, created_at, updated_at, passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status)",
+      "id, requester_name, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, state, created_at, updated_at, passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status), trips(id)",
       { count: "exact" },
     )
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .limit(1, { referencedTable: "trips" });
 
   if (state !== "all") {
     query = query.eq("state", state);
@@ -255,6 +260,7 @@ export async function getRequestsList(organizationId: string, filters: RequestsL
       passengerId: row.passenger_id,
       passengerName: passenger?.display_name ?? null,
       passengerActive: passenger?.status === "active",
+      hasLinkedTrips: (row.trips ?? []).length > 0,
       pickupDescription: row.pickup_description,
       destinationDescription: row.destination_description,
       preferredDate: row.preferred_date,

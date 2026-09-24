@@ -773,6 +773,8 @@ export type Database = {
           metadata: Json
           occurred_at: string
           organization_id: string
+          reason_code: string | null
+          reason_note: string | null
           request_id: string
         }
         Insert: {
@@ -782,6 +784,8 @@ export type Database = {
           metadata?: Json
           occurred_at?: string
           organization_id: string
+          reason_code?: string | null
+          reason_note?: string | null
           request_id: string
         }
         Update: {
@@ -791,6 +795,8 @@ export type Database = {
           metadata?: Json
           occurred_at?: string
           organization_id?: string
+          reason_code?: string | null
+          reason_note?: string | null
           request_id?: string
         }
         Relationships: [
@@ -1679,12 +1685,30 @@ export type Database = {
       _require_platform_admin: { Args: never; Returns: undefined }
       _sanitize_acquisition: { Args: { p_acquisition: Json }; Returns: Json }
       _staff_invite_token_hash: { Args: { p_token: string }; Returns: string }
+      _validate_request_decision_reason: {
+        Args: {
+          p_event_type: string
+          p_reason_code: string
+          p_reason_note: string
+        }
+        Returns: string
+      }
       accept_staff_invite: {
         Args: { p_token: string }
         Returns: Database["public"]["CompositeTypes"]["staff_invite_acceptance_result"]
         SetofOptions: {
           from: "*"
           to: "staff_invite_acceptance_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      accept_transportation_request: {
+        Args: { p_organization_id: string; p_request_id: string }
+        Returns: Database["public"]["CompositeTypes"]["request_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "request_transition_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1701,7 +1725,12 @@ export type Database = {
       }
       cancel_staff_invite: { Args: { p_invite_id: string }; Returns: boolean }
       cancel_transportation_request: {
-        Args: { p_organization_id: string; p_request_id: string }
+        Args: {
+          p_organization_id: string
+          p_reason_code: string
+          p_reason_note?: string
+          p_request_id: string
+        }
         Returns: Database["public"]["CompositeTypes"]["request_transition_result"]
         SetofOptions: {
           from: "*"
@@ -1867,7 +1896,8 @@ export type Database = {
       decline_transportation_request: {
         Args: {
           p_organization_id: string
-          p_reason?: string
+          p_reason_code: string
+          p_reason_note?: string
           p_request_id: string
         }
         Returns: Database["public"]["CompositeTypes"]["request_transition_result"]

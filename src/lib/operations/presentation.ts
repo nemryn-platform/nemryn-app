@@ -186,10 +186,11 @@ export function requestStatusCategory(state: string): StatusCategory {
  * or made to look like the same kind of thing.
  */
 export function requestReadinessLabel(readiness: RequestReadiness): string {
-  if (readiness === "ready") return "Ready";
+  if (readiness === "awaiting_decision") return "Awaiting decision";
   if (readiness === "needs_passenger") return "Passenger needed";
-  if (readiness === "not_convertible") return "Not convertible";
-  return "Accepted";
+  if (readiness === "ready") return "Ready to schedule";
+  if (readiness === "trip_created") return "Trip created";
+  return "Not convertible";
 }
 
 /** Maps to an existing semantic TEXT color token only (never a new color) — used as a plain `text-*` class, not a badge background. */
@@ -254,10 +255,11 @@ export function formatRequestServiceDate(preferredDate: string | null, preferred
   return `${dateLabel} · ${timeLabel}`;
 }
 
-/** `request_events.event_type` (P1-E1-S2B's own closed, allow-listed set) → restrained human label, for Request Detail's Activity panel (P1-E1-S2F-B2 §16). Never exposes the raw event_type string; an unrecognized value falls through to itself rather than crashing, matching every other label lookup in this file. */
+/** `request_events.event_type` (P1-E1-S2B's own closed, allow-listed set, plus P1-OPS-R1's request_accepted) → restrained human label, for Request Detail's Activity panel (P1-E1-S2F-B2 §16). Never exposes the raw event_type string; an unrecognized value falls through to itself rather than crashing, matching every other label lookup in this file. */
 const REQUEST_EVENT_LABEL: Record<string, string> = {
   request_logged: "Request logged",
   passenger_linked: "Passenger linked",
+  request_accepted: "Request accepted",
   request_declined: "Request declined",
   request_cancelled: "Request cancelled",
 };

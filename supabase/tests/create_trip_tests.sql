@@ -2,7 +2,7 @@
 --
 -- Covers the required test matrix from the work item: role/membership
 -- authorization, cross-tenant Passenger/Facility/Request denial, the
--- Request lifecycle transition (pending -> accepted), the impossibility
+-- Request precondition (P1-OPS-R1: accepted only, never transitioned here), the impossibility
 -- of caller-chosen initial state, and the direct-INSERT retirement
 -- regression. Same SET ROLE/request.jwt.claim.sub methodology as every
 -- other suite in this repository.
@@ -237,23 +237,26 @@ begin
 end $$;
 reset role;
 
+-- P1-OPS-R1: a Trip can only be created from an explicitly ACCEPTED Request.
+-- A pending Request is rejected (ZW006) and create_trip never transitions it.
 do $$
-declare v_r public.trip_creation_result;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
-  v_r := public.create_trip(
-    '10000000-0000-0000-0000-0000000000a1', '40000000-0000-0000-0000-0000000000a1', 'Fictional pickup', 'Fictional destination',
-    null, null, null, null, null, null,
-    '93000000-0000-0000-0000-0000000000a1' -- valid pending request, same org
-  );
-  reset role;
-  if v_r.state = 'scheduled' and v_r.created then
-    raise notice 'TEST VAL-3 (Valid Request same org, pending): PASS (ALLOW)';
-  else
-    raise notice 'TEST VAL-3 (Valid Request same org, pending): FAIL (state=%, created=%)', v_r.state, v_r.created;
-  end if;
+  begin
+    perform public.create_trip(
+      '10000000-0000-0000-0000-0000000000a1', '40000000-0000-0000-0000-0000000000a1', 'Fictional pickup', 'Fictional destination',
+      null, null, null, null, null, null,
+      '93000000-0000-0000-0000-0000000000a1' -- pending request, same org, linked active Passenger
+    );
+    raise notice 'TEST VAL-3 (pending Request same org): FAIL (expected denial, got success)';
+  exception when sqlstate 'ZW006' then
+    raise notice 'TEST VAL-3 (pending Request same org): PASS (DENY, invalid_input)';
+  when others then
+    raise notice 'TEST VAL-3 (pending Request same org): FAIL (wrong error % %)', sqlstate, sqlerrm;
+  end;
 end $$;
+reset role;
 
 do $$
 declare v_req_state text; v_events int;
@@ -262,10 +265,10 @@ begin
   select count(*) into v_events from public.trip_events
     where organization_id = '10000000-0000-0000-0000-0000000000a1' and event_type = 'request_converted_to_trip'
       and (metadata->>'request_id')::uuid = '93000000-0000-0000-0000-0000000000a1';
-  if v_req_state = 'accepted' and v_events = 1 then
-    raise notice 'TEST VAL-3B (Request transitioned pending->accepted, TripEvent recorded): PASS';
+  if v_req_state = 'pending' and v_events = 0 then
+    raise notice 'TEST VAL-3B (pending Request not auto-accepted, no TripEvent): PASS';
   else
-    raise notice 'TEST VAL-3B (Request transitioned pending->accepted, TripEvent recorded): FAIL (state=%, events=%)', v_req_state, v_events;
+    raise notice 'TEST VAL-3B (pending Request not auto-accepted, no TripEvent): FAIL (state=%, events=%)', v_req_state, v_events;
   end if;
 end $$;
 

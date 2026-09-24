@@ -78,10 +78,10 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
 
 ### 3.3 Functions
 
-* **D — authenticated RPC (81):** every function the application calls with a user session, plus the RLS helpers that policies evaluate as the invoker (`has_org_role`, `is_org_member`, `current_driver_id`, `is_driver_assigned_to_trip`, `is_platform_admin`) and `is_valid_iana_timezone`. Every application `.rpc()` name was cross-checked against this list.
+* **D — authenticated RPC (82):** every function the application calls with a user session, plus the RLS helpers that policies evaluate as the invoker (`has_org_role`, `is_org_member`, `current_driver_id`, `is_driver_assigned_to_trip`, `is_platform_admin`) and `is_valid_iana_timezone`. Every application `.rpc()` name was cross-checked against this list. P1-OPS-R1 added `accept_transportation_request(uuid, uuid)` and replaced `decline_transportation_request` / `cancel_transportation_request` with reason-aware `(uuid, uuid, text, text)` signatures (authenticated EXECUTE only, like their predecessors).
 * **E — anon (2):** `get_driver_invite_preview`, `get_staff_invite_preview`: the `/join/[token]` and `/team-invite/[token]` pages render before sign-in with the publishable key. They are token-based and return nothing for an unknown token.
 * **F — service_role only (6):** P1-COMM-D2 added exactly two: `get_public_request_form(text)` (public passenger-facing config of an ACTIVE published form; no row for any unavailable key) and `submit_public_form_request(text, … , jsonb)` (creates a Request from a published form through the shared internal primitive). **No table privilege was added for service_role**; `website_request_form_publications` stays class A. The internal helpers `_create_public_request(uuid, …)` (the extracted canonical Request-creation logic shared by website intake and the published form) and `_public_form_service_types(uuid, text[])` have **no** EXECUTE for any role. Previously (4): `submit_public_transportation_request` (S4C: gained the optional trailing `p_acquisition jsonb`; the old 21-argument signature was dropped so there is one overload; EXECUTE restated service_role-only), `check_and_record_public_intake_rate_limit` (website intake), `claim_notification_dispatch`, `complete_notification_dispatch` (notification dispatch).
-* **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
+* **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C; `_validate_request_decision_reason`, P1-OPS-R1), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
 * Every SECURITY DEFINER function pins `search_path` (contract check 19). Functions executable by clients that contain no inline `auth.uid()` / role check are: the three service-only RPCs (validate the integration / dispatch event themselves), the six `driver_*` transition wrappers (delegate to `_driver_execute_trip_transition`, which authorises), the two anon previews (token-scoped), and `is_valid_iana_timezone` (pure).
 
 ## 4. What a new object must do
@@ -90,13 +90,14 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
 2. In the same migration, `grant` exactly what the product path needs (table/column privileges to `authenticated`; `execute` to the specific role).
 3. Add it to the contract CTEs in `privilege_contract_tests.sql` **and** the arrays in the baseline migration's design (the migration is idempotent, so a follow-up "contract" migration can re-run the same reset-and-grant pattern). Check 01 (tables) and 13 (functions) fail for an unlisted object — deliberately.
 4. Run `scripts/verify-db-privileges.sh local`, then `production` after release.
+5. **Expand / contract releases (P1-OPS-R1).** When a release must keep an old function alive for the previously deployed app, list it in `c_fn_transitional` instead of `c_fn`. Its ACL is still checked (checks 13 and 16–18), it is not required to exist (check 14), and **check 29 fails while it exists**. Between EXPAND and CONTRACT the expected result is therefore exactly `1 of 29` (check 29 only); after CONTRACT it is `0 of 29`. Remove entries from `c_fn_transitional` in a later cleanup once no environment can still hold them.
 
 ## 5. Verifying production
 
 ```
 scripts/verify-db-privileges.sh production        # or: supabase db query --linked -f supabase/tests/privilege_contract_tests.sql
 ```
-The file is a single SELECT. Expect every row `ok = true` and `SUMMARY (violations = 0 of 28 checks)`. Drift after a release means an object was created outside the contract or a platform default changed.
+The file is a single SELECT. Expect every row `ok = true` and `SUMMARY (violations = 0 of 29 checks)` (28 checks before P1-OPS-R1 added check 29; exactly `1 of 29` — check 29 only — is expected between an EXPAND and its CONTRACT migration). Drift after a release means an object was created outside the contract or a platform default changed.
 
 ## 6. Retained without a current caller (owner review candidates)
 

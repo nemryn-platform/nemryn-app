@@ -54,11 +54,36 @@ begin
   end if;
 end $$;
 
+-- P1-OPS-R1: accept_transportation_request, and the reason-less decline/cancel overloads are gone.
 do $$
 begin
-  if has_function_privilege('authenticated', 'public.decline_transportation_request(uuid,uuid,text)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('anon', 'public.decline_transportation_request(uuid,uuid,text)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('public', 'public.decline_transportation_request(uuid,uuid,text)'::regprocedure, 'EXECUTE') then
+  if has_function_privilege('authenticated', 'public.accept_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('anon', 'public.accept_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('public', 'public.accept_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('service_role', 'public.accept_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE') then
+    raise notice 'REQ-PRIV accept_transportation_request exposed-authenticated-only: PASS';
+  else
+    raise notice 'REQ-PRIV accept_transportation_request exposed-authenticated-only: FAIL';
+  end if;
+  if to_regprocedure('public.decline_transportation_request(uuid,uuid,text)') is null
+     and to_regprocedure('public.cancel_transportation_request(uuid,uuid)') is null then
+    raise notice 'REQ-PRIV reason-less decline/cancel overloads removed: PASS';
+  else
+    raise notice 'REQ-PRIV reason-less decline/cancel overloads removed: FAIL';
+  end if;
+  if not has_function_privilege('authenticated', 'public._validate_request_decision_reason(text,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('anon', 'public._validate_request_decision_reason(text,text,text)'::regprocedure, 'EXECUTE') then
+    raise notice 'REQ-PRIV _validate_request_decision_reason internal-only: PASS';
+  else
+    raise notice 'REQ-PRIV _validate_request_decision_reason internal-only: FAIL';
+  end if;
+end $$;
+
+do $$
+begin
+  if has_function_privilege('authenticated', 'public.decline_transportation_request(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('anon', 'public.decline_transportation_request(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('public', 'public.decline_transportation_request(uuid,uuid,text,text)'::regprocedure, 'EXECUTE') then
     raise notice 'REQ-PRIV decline_transportation_request exposed-authenticated-only: PASS';
   else
     raise notice 'REQ-PRIV decline_transportation_request exposed-authenticated-only: FAIL';
@@ -67,9 +92,9 @@ end $$;
 
 do $$
 begin
-  if has_function_privilege('authenticated', 'public.cancel_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('anon', 'public.cancel_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('public', 'public.cancel_transportation_request(uuid,uuid)'::regprocedure, 'EXECUTE') then
+  if has_function_privilege('authenticated', 'public.cancel_transportation_request(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('anon', 'public.cancel_transportation_request(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('public', 'public.cancel_transportation_request(uuid,uuid,text,text)'::regprocedure, 'EXECUTE') then
     raise notice 'REQ-PRIV cancel_transportation_request exposed-authenticated-only: PASS';
   else
     raise notice 'REQ-PRIV cancel_transportation_request exposed-authenticated-only: FAIL';
@@ -83,7 +108,7 @@ end $$;
 do $$
 declare v_p pg_proc%rowtype; v_name text;
 begin
-  for v_name in select unnest(array['log_transportation_request', 'link_request_passenger', 'decline_transportation_request', 'cancel_transportation_request'])
+  for v_name in select unnest(array['log_transportation_request', 'link_request_passenger', 'accept_transportation_request', 'decline_transportation_request', 'cancel_transportation_request'])
   loop
     select * into v_p from pg_proc where proname = v_name and pronamespace = 'public'::regnamespace;
     if v_p.prosecdef and v_p.proconfig is not null and 'search_path=public, pg_temp' = any(v_p.proconfig)

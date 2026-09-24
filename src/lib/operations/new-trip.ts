@@ -26,7 +26,8 @@ export interface NewTripFormData {
   requests: NewTripRequestOption[];
 }
 
-const REQUEST_ELIGIBLE_STATES = ["pending", "accepted"];
+// P1-OPS-R1: only an explicitly ACCEPTED Request may become a Trip (create_trip enforces the same rule).
+const REQUEST_ELIGIBLE_STATES = ["accepted"];
 
 interface RequestPassengerEmbed {
   display_name: string;
@@ -56,7 +57,7 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
       .eq("status", "active")
       .order("name", { ascending: true }),
     // Eligible candidates only (P1-E3-S7 §14, tightened by P1-E1-S2F-B1
-    // §5): state pending/accepted — the exact same states create_trip's
+    // §5, narrowed by P1-OPS-R1): state accepted — the exact state create_trip's
     // own p_request_id validation accepts — AND passenger_id IS NOT
     // NULL AND the linked Passenger is active. Request Hub/Request
     // Detail is where Passenger resolution happens (S2E/S2E-R1); New

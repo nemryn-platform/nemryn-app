@@ -1,68 +1,85 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { Button } from "@/components/ui/Button";
+import { acceptRequestAction, type RequestLifecycleActionState } from "@/app/operations/requests/[requestId]/actions";
+import { requestLifecycleErrorMessage } from "@/lib/operations/request-lifecycle-errors";
+import type { RequestActions } from "@/lib/operations/request-readiness-core";
+import { cn } from "@/lib/cn";
+import { typography } from "@/design/typography";
 import { DeclineRequestDialog } from "./DeclineRequestDialog";
 import { CancelRequestDialog } from "./CancelRequestDialog";
 
+const INITIAL_STATE: RequestLifecycleActionState = { status: "idle" };
+
 export interface RequestActionBarProps {
   requestId: string;
-  canCreateTrip: boolean;
-  canCreateAnotherTrip: boolean;
-  canDecline: boolean;
-  canCancel: boolean;
+  actions: RequestActions;
   createTripHref: string;
 }
 
 /**
- * Request Detail's full action cluster (P1-E1-S2F-B1's Create Trip/
- * Create Another Trip, extended by P1-E1-S2F-B2 with Decline/Cancel).
- * Mirrors `TripDetailActionBar`'s own established convention exactly
- * (the closest existing Nemryn precedent, per §6's own explicit
- * permission to follow it instead of inventing a "More actions"
- * sub-grouping that doesn't exist anywhere else in this codebase): a
- * single flat row, no dropdown/overflow menu, differentiated purely by
- * button variant — Create Trip/Create Another Trip keeps its existing
- * DEFAULT (filled, primary) styling as the one productive action;
- * Decline/Cancel use `variant="outline"` as their TRIGGER buttons
- * (matching Cancel Trip's own trigger button in TripDetailActionBar —
- * secondary weight, never a same-size same-color competitor to the
- * primary CTA), with the actual destructive weight expressed only
- * once each action reaches its own confirmation dialog
- * (`variant="destructive"` on the confirm button inside, exactly like
- * `CancelTripDialog`).
+ * Request Detail's action cluster (P1-E1-S2F-B1/B2, reworked by
+ * P1-OPS-R1). One flat row, secondary actions first, the one positive
+ * action last and filled:
+ *   pending:            [Decline Request] [Accept Request]
+ *   accepted, no Trip:  [Cancel Request]  [Create Trip]  (Create Trip only when ready)
+ *   accepted, Trips:    [Create Another Trip]            (when the Passenger is still active)
+ *   declined/cancelled: nothing
+ * Accept is a direct, deliberate action (no confirmation — it is not
+ * terminal and changes nothing but the decision state). Decline/Cancel
+ * are terminal and open a reason dialog. Every gate is UI convenience
+ * only; the RPCs are the authority.
  */
-export function RequestActionBar({
-  requestId,
-  canCreateTrip,
-  canCreateAnotherTrip,
-  canDecline,
-  canCancel,
-  createTripHref,
-}: RequestActionBarProps) {
+export function RequestActionBar({ requestId, actions, createTripHref }: RequestActionBarProps) {
   const [activeDialog, setActiveDialog] = useState<"decline" | "cancel" | null>(null);
+  const [acceptState, acceptAction, accepting] = useActionState(acceptRequestAction, INITIAL_STATE);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (acceptState.status !== "idle") router.refresh();
+  }, [acceptState, router]);
+
+  const hasAny =
+    actions.canAccept || actions.canDecline || actions.canCancel || actions.canCreateTrip || actions.canCreateAnotherTrip;
+  if (!hasAny) return null;
 
   return (
-    <>
+    <div className="flex flex-col items-start gap-2 sm:items-end">
       <div className="flex flex-wrap items-center gap-2">
-        {(canCreateTrip || canCreateAnotherTrip) && (
-          <LinkButton href={createTripHref}>{canCreateTrip ? "Create Trip" : "Create Another Trip"}</LinkButton>
-        )}
-        {canDecline && (
-          <Button type="button" variant="outline" onClick={() => setActiveDialog("decline")}>
+        {actions.canDecline && (
+          <Button type="button" variant="outline" onClick={() => setActiveDialog("decline")} disabled={accepting}>
             Decline Request
           </Button>
         )}
-        {canCancel && (
+        {actions.canAccept && (
+          <form action={acceptAction}>
+            <input type="hidden" name="requestId" value={requestId} />
+            <Button type="submit" loading={accepting} disabled={accepting}>
+              {accepting ? "Accepting…" : "Accept Request"}
+            </Button>
+          </form>
+        )}
+        {actions.canCancel && (
           <Button type="button" variant="outline" onClick={() => setActiveDialog("cancel")}>
             Cancel Request
           </Button>
         )}
+        {(actions.canCreateTrip || actions.canCreateAnotherTrip) && (
+          <LinkButton href={createTripHref}>{actions.canCreateTrip ? "Create Trip" : "Create Another Trip"}</LinkButton>
+        )}
       </div>
+
+      {acceptState.status === "error" && (
+        <p role="alert" className={cn(typography.bodySmall, "text-critical-text")}>
+          {requestLifecycleErrorMessage(acceptState.errorCode ?? "UNKNOWN")}
+        </p>
+      )}
 
       {activeDialog === "decline" && <DeclineRequestDialog requestId={requestId} onClose={() => setActiveDialog(null)} />}
       {activeDialog === "cancel" && <CancelRequestDialog requestId={requestId} onClose={() => setActiveDialog(null)} />}
-    </>
+    </div>
   );
 }

@@ -1,0 +1,691 @@
+NEMRYN PLATFORM
+P1-OPS-R1 -- REQUEST ACCEPTANCE + DECISION WORKFLOW
+Local implementation only. NOT committed, NOT pushed, NOT deployed, `supabase db push` NOT run. The real
+production Zenward QA Request was not touched. The old Zenward organization was not deleted. D3 and S5B were not started.
+Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+Repository /Users/datamatics/Nemryn, branch main at bcf66c9 ("docs: record D2 + D2A production release").
+Latest migration in repo and production: 20260921150000_website_connection_lifecycle.sql (D2/D2A).
+Local Supabase restarted (the DB container had exited), migrated through 20260921150000, then this phase's one migration.
+Trigger: the first real Zenward website Request in the new tenant was Pending and offered "Decline Request" + "Cancel
+Request" but no Accept, with the copy "Link a passenger below to mark this request ready."
+
+======================================================================
+CURRENT REQUEST STATE MACHINE   (audited before any change)
+======================================================================
+transportation_requests.state CHECK (pending, accepted, declined, cancelled) -- in place since 20260830130900.
+`accepted` already existed as a value, but there was NO accept RPC. Transitions before this phase:
+  pending -> accepted   ONLY implicitly, inside create_trip (20260916110000): the first Trip created from a pending
+                        Request flipped it to accepted. "Accepted" meant "converted" (ZD-054).
+  pending -> declined   decline_transportation_request(org, req, p_reason text default null)
+  pending -> cancelled  cancel_transportation_request(org, req); blocked by ANY linked Trip
+  accepted -> *         nothing (terminal for the Request's own field)
+Readiness: derived in request-readiness-core.ts (pending + active linked Passenger = "ready"; accepted = "accepted").
+Not stored.
+link_request_passenger: legal ONLY while pending. An "Accept -> Link Passenger" flow would have hit a dead end.
+create_trip(p_request_id): accepted pending OR accepted; enforced Request.passenger_id = p_passenger_id (S2F-A).
+New Trip Request picker: states pending + accepted.
+All mutations are SECURITY DEFINER, has_org_role(org, [organization_admin, dispatcher]). This helper already requires an
+active Membership and an active (not suspended) organization. PlatformAdminGrant never satisfies it.
+request_events event_type allow-list: request_logged, passenger_linked, request_declined, request_cancelled.
+Decisions wrote no audit_events rows. Activity (list_activity_events) shows administrative actions only, by design.
+Every intake path hard-codes 'pending': log_transportation_request (manual/phone), _create_public_request (website
+connection, hosted form, embed).
+
+======================================================================
+CURRENT DECLINE SEMANTICS   (before)
+======================================================================
+pending -> declined only; idempotent no-op when already declined; ZW004 from accepted/cancelled.
+Reason: optional free text (<= 500) in request_events.metadata.reason. No taxonomy. No AuditEvent.
+UI: "Decline request" dialog with an optional reason textarea.
+
+======================================================================
+CURRENT CANCEL SEMANTICS   (before)
+======================================================================
+pending -> cancelled only (the model this phase inverts); blocked by any linked Trip; idempotent when already cancelled.
+No reason. No AuditEvent. UI: "Cancel request" dialog offered on every pending Request with zero Trips. That is why the
+QA Request showed Cancel next to Decline.
+
+======================================================================
+PRODUCT DECISION   (implemented; recorded as ZD-204, amends ZD-054)
+======================================================================
+DECISION (stored state), explicit operator actions only:
+  pending  -> accepted   Accept Request
+  pending  -> declined   Decline Request   (reason required)
+  accepted -> cancelled  Cancel Request    (reason required; only while no Trip exists)
+  declined, cancelled    terminal. No reopen / undo / restore.
+READINESS (derived, never stored): what still prevents an ACCEPTED Request from becoming a Trip. This is only the
+requirement create_trip already enforces: an active linked Passenger. No new readiness requirement was invented and
+no `ready` state was added.
+
+======================================================================
+ACCEPTED STATE
+======================================================================
+Meaning changed from "a Trip exists" to "the operator reviewed it and intends to service it". The CHECK constraint is
+unchanged. Accepted may exist with no Passenger and no Trip. An accepted Request may produce any number of Trips (1:N
+preserved).
+
+======================================================================
+READINESS SEPARATION
+======================================================================
+request-readiness-core.ts (pure, unit-tested) now takes hasLinkedTrips and returns:
+  awaiting_decision  pending + active Passenger          ("Awaiting decision")
+  needs_passenger    no active Passenger, pending or accepted-without-Trips ("Passenger needed", warning)
+  ready              accepted + active Passenger + no Trip ("Ready to schedule")
+  trip_created       accepted + >= 1 Trip                 ("Trip created")
+  not_convertible    declined / cancelled
+A pending Request is never "ready". An unknown state is never "ready".
+deriveRequestActions() in the same module is the single UI gate for Accept / Decline / Cancel / Create Trip /
+Create Another Trip / Link Passenger. It mirrors the RPC rules exactly; the RPCs remain the authority.
+Request Hub gets hasLinkedTrips via a bounded embed (trips(id), limit 1 per row), so Accepted rows read "Trip
+created" vs "Ready to schedule" correctly.
+Copy: "Passenger needed -- Link or create the passenger before this request can be scheduled." (old "mark this
+request ready" copy removed).
+
+======================================================================
+ACCEPT MUTATION
+======================================================================
+public.accept_transportation_request(p_organization_id uuid, p_request_id uuid) -> request_transition_result
+SECURITY DEFINER, search_path pinned. auth.uid() required (ZW001). has_org_role(org, [organization_admin,
+dispatcher]) (ZW002 otherwise). Request row locked FOR UPDATE before any state check.
+  already accepted       -> changed=false, no event, no audit (idempotent)
+  declined / cancelled   -> ZW004
+  pending                -> UPDATE state only; request_accepted RequestEvent; AuditEvent
+Touches NOTHING else: no Passenger, Trip, TripAssignment, Driver, Vehicle, provenance, requester or acquisition field.
+Server action acceptRequestAction (org re-derived from session, never from the client). UI: direct primary button, no
+confirmation (not terminal). The button shows loading/disabled while the action runs.
+
+======================================================================
+DECLINE MUTATION
+======================================================================
+decline_transportation_request(org, req, p_reason_code text, p_reason_note text default null). The old (uuid, uuid,
+text) overload is DROPPED, so no reason-less path survives.
+pending -> declined only. accepted/cancelled -> ZW004. Already declined -> no-op.
+Reason validated by _validate_request_decision_reason (internal, owner-only); ZW006 on a missing or unknown code, a
+note over 500 characters, or `other` without a note.
+Writes a request_declined RequestEvent (reason_code, reason_note) and an AuditEvent (before/after state + reason_code;
+never the free-text note).
+UI dialog: title "Decline this request?", copy "This request will be marked as declined and will not move forward to
+scheduling." Required Reason select; Note (required for Other). Confirm is disabled until a reason is chosen and shows
+a loading state.
+
+======================================================================
+CANCEL MUTATION
+======================================================================
+cancel_transportation_request(org, req, p_reason_code text, p_reason_note text default null). The old (uuid, uuid)
+overload is DROPPED.
+accepted -> cancelled only. pending/declined -> ZW004. Already cancelled -> no-op.
+ANY Trip for the Request (any Trip state) -> ZW004. No cascade into Trips (unchanged locked rule).
+Writes a request_cancelled RequestEvent (reason) and an AuditEvent (code only).
+UI: offered only for accepted + zero Trips. Accepted + Trips shows "This request already has transportation
+scheduled. Manage cancellation from the linked trip." Dialog: title "Cancel this request?", copy "This accepted request
+will no longer move forward. Previous request history will remain available." Required reason.
+
+======================================================================
+REASON MODEL
+======================================================================
+No existing taxonomy existed (decline reason was optional free text; cancel had none). Stored on the immutable decision
+record, request_events, as two typed columns rather than a jsonb blob, so the question is a plain GROUP BY:
+  select reason_code, count(*) from request_events where event_type = 'request_declined' group by 1;
+Columns rather than transportation_requests fields, because the event row is the append-only evidence of the decision
+(actor, time, reason together) and there is exactly one decision event per terminal transition.
+  request_events.reason_code  CHECK: only on request_declined / request_cancelled; closed per-event set
+    decline: outside_service_area, no_availability, unsupported_transportation_need, requested_time_unavailable,
+             duplicate_request, other
+    cancel:  requester_cancelled, no_availability, unable_to_reach_requester, duplicate_request, other
+  request_events.reason_note  CHECK: 1..500 chars, trimmed; required when reason_code = 'other'
+  request_events_decision_reason_required  CHECK ... NOT VALID: every NEW decline/cancel event must carry a code.
+    Historical rows (optional metadata.reason, or none) are deliberately not re-validated.
+  Partial index (organization_id, event_type, reason_code) where reason_code is not null.
+The app's code lists (request-decision-reasons.ts) are unit-tested to match the migration's constraint text exactly.
+
+======================================================================
+TRIP CREATION INVARIANT
+======================================================================
+create_trip (same signature, CREATE OR REPLACE): with p_request_id, the Request must be state = 'accepted' (pending,
+declined, cancelled -> ZW006) AND its linked passenger_id must equal p_passenger_id (unchanged S2F-A rule). The
+implicit pending -> accepted UPDATE is REMOVED; create_trip never changes Request state. The backend is the
+authority. The UI (no Create Trip on pending) and the New Trip picker (accepted only) are conveniences on top.
+This closes the "Trip from a still-Pending Request" path at the database.
+
+======================================================================
+PASSENGER LINKING
+======================================================================
+link_request_passenger: legal while pending OR accepted, and only while NO Trip exists (a Request that produced a Trip
+has a frozen Passenger, since every later Trip must carry the same one). Never changes decision state; unlink/relink
+never accepts, declines or cancels.
+requested_passenger_name (website snapshot) and the linked Passenger remain separate concepts, both displayed.
+The inactive-Passenger recovery flow now also works for accepted-without-Trips Requests.
+
+======================================================================
+REQUEST DETAIL UX
+======================================================================
+Pending:   status Pending; [Decline Request (outline)] [Accept Request (filled, primary)]; no Cancel, no Create Trip.
+Accepted:  status Accepted; [Cancel Request] while no Trip; [Create Trip] once ready.
+           With Trips: [Create Another Trip] (active Passenger), plus the Trip-level cancellation note.
+Declined / Cancelled: status badge only; no decision actions; "Not convertible".
+Readiness banner copy per READINESS SEPARATION. Linked Trips empty state simplified: "accepted with no Trips" is now
+normal, not a data anomaly. Request Activity shows "Request accepted" and "<Reason label> -- <note>" for decisions
+(legacy free-text reasons still display).
+Screens: the Operations workspace is md+ (>= 768 px) by existing design (OperationsShell shows a "tablet and desktop"
+gate on phones). This phase does not change that. Verified at 1440 px and 768 px, plus the unchanged gate at 390 px.
+
+======================================================================
+REQUEST HUB
+======================================================================
+No redesign. The Pending/Accepted/Declined/Cancelled/All tabs and the four status badges already existed. Readiness
+column updated (see above). The "N pending" summary and the Operations Brief pending count keep the same query.
+Pending now means "awaiting a decision".
+
+======================================================================
+REQUEST EVENTS
+======================================================================
+Allow-list extended with request_accepted. New decisions write exactly one immutable event each (actor =
+auth.uid()). Decline/cancel carry reason_code/reason_note columns. metadata = '{}' (no PHI). Nothing is
+overwritten.
+
+======================================================================
+AUDIT
+======================================================================
+audit_events rows, entity_type 'transportation_request', actions request_accepted / request_declined /
+request_cancelled: before_data {state}, after_data {state[, reason_code]}, reason = reason_code, actor recorded. The
+free-text note is never copied into audit. These are operational rows, so they are not added to the administrative
+Activity feed (list_activity_events whitelist unchanged, consistent with trip audits).
+
+======================================================================
+AUTHORIZATION
+======================================================================
+Accept / Decline / Cancel: Organization Admin and Dispatcher of an ACTIVE organization (the existing Request
+operations roles). Denied, all ZW002 (no oracle): Driver, inactive Membership, suspended organization, foreign
+tenant (own-org context or target-org context), Platform Admin without Membership. Unauthenticated -> ZW001.
+anon and service_role have no EXECUTE (42501). Driver UI: redirected to /driver, never sees Request Detail.
+
+======================================================================
+RLS / PRIVILEGES
+======================================================================
+No RLS policy change, no table or column grant change (state and passenger_id stay non-client-writable).
+New: accept_transportation_request(uuid,uuid) EXECUTE authenticated only. _validate_request_decision_reason
+(text,text,text) owner-only.
+Replaced: decline_transportation_request(uuid,uuid,text,text), cancel_transportation_request(uuid,uuid,text,text),
+EXECUTE authenticated only. Old overloads dropped.
+Privilege contract (supabase/tests/privilege_contract_tests.sql) updated with the 2 new and 2 re-signed functions.
+scripts/verify-db-privileges.sh local on a fresh reset: 29 checks, 29 ok, 0 violations. (The contract now has 29
+checks; the brief's "0/28" predates the D2 additions.)
+database.types.ts regenerated from the local schema. Only the expected diffs (2 columns, 2 new functions, 2
+re-signed).
+
+======================================================================
+PRODUCTION STATE COMPATIBILITY
+======================================================================
+A READ-ONLY production aggregate was attempted (counts only, no PHI) via `supabase db query --linked`. It was REFUSED:
+"403 ... account does not have the necessary privileges". Production counts are therefore NOT verified by this
+phase. Analysis from code history instead:
+  * The state CHECK constraint is unchanged, so every existing row fits by construction. No mapping is needed and no
+    row is rewritten.
+  * Existing `accepted` rows could only be produced by create_trip, so each has >= 1 Trip. Under the new model: "Trip
+    created", Request-level cancel blocked. This is the correct treatment.
+  * Existing `cancelled` rows were cancelled from pending (old semantics). They stay valid terminal history; nothing
+    reads them differently.
+  * Existing `declined`/`cancelled` events with no reason_code are exempt (NOT VALID constraint).
+  * Existing pending Requests (including the Zenward QA Request) stay pending and now need an explicit Accept before
+    a Trip can be created.
+REQUIRED before release (owner, read-only):
+  select r.state, count(*),
+         count(*) filter (where exists (select 1 from trips t where t.request_id = r.id)) as with_trips
+  from transportation_requests r group by 1;
+  Expected: every `accepted` row has with_trips = count. Any accepted row WITHOUT a Trip would only show as
+  "accepted, needs passenger / ready" with Cancel available. That is harmless, but it should be reviewed if present.
+
+======================================================================
+CONCURRENCY
+======================================================================
+supabase/tests/request_decision_concurrency_test.sh (NEW). Genuine separate psql sessions queued behind a
+lock-holding session, 3 rounds each. 21/21 PASS:
+  A  5 concurrent Accepts (Admin + Dispatcher mix): 1 changed / 4 no-op, 1 request_accepted, 1 AuditEvent
+  B  Accept vs Decline (both orders across rounds): exactly one decision wins, the loser gets ZW004, never both
+     events
+  C  Cancel queued before Accept: Cancel sees pending -> ZW004; ends accepted, 0 cancel events
+  D  Decline vs Passenger link (both outcomes seen): always declined, no accept, passenger column matches the event
+     log
+  E  create_trip queued before Accept: ZW006, 0 Trips; ends accepted
+  F  3 concurrent Declines / 3 concurrent Cancels: one terminal transition + one event each
+request_lifecycle_concurrency_test.sh (updated fixture: accepted): PASS, create_trip blocked 1.8 s on the lock,
+then rejected against the committed cancellation.
+UI: Accept / Decline / Cancel buttons disable and show loading while pending. The browser double-click on Accept
+produced exactly 1 event + 1 audit.
+
+======================================================================
+BROWSER E2E
+======================================================================
+.tmp-qa/p1-ops-r1-decision-e2e.mjs. Local production build (`next start -p 3100`) + local Supabase, fictional seed Org
+A (dispatcher org-a-dispatcher@example.test). Website Requests created through the REAL public intake route (POST
+/api/public-intake/website with Origin) against a harness-created fictional connection. 52/52 PASS:
+  intake -> Pending, no Passenger; Hub shows Pending / "Passenger needed"
+  Pending detail: Decline + Accept present, NO Cancel, NO Create Trip, new copy, Accept filled / Decline outline
+  Accept (double-click): Accepted badge, 1 event + 1 audit, no Passenger, no Trip, "Passenger needed", Cancel offered,
+    no Create Trip, Activity "Request accepted"
+  Add New Passenger on the accepted Request -> linked, state still accepted, "Ready to schedule", Create Trip shown
+  Create Trip -> New Trip with the Request preselected -> Trip created; Request still accepted; provenance +
+    acquisition hashes unchanged
+  With a Trip: Cancel gone + Trip-level note; "Trip created"; Create Another Trip
+  Decline: dialog title/copy, confirm disabled until reason, Other -> note required; declined with structured reason;
+    no actions; Activity "Outside service area -- <note>"
+  Accept -> Cancel: dialog title/copy, cancel-only reason set; cancelled with reason; no actions
+  Hub: Accepted/"Trip created", Declined, Cancelled
+  Phone 390 px: existing tablet/desktop gate unchanged. Tablet 768 px: Decline + Accept (no Cancel), Accept works, Cancel
+    dialog fits, no horizontal overflow
+  Driver: redirected to /driver, no decision actions
+Harness defects found and fixed during the run (not product defects): multi-line SQL escaping; helper signIn defaulting
+to port 3000; Hub row lookup keyed on requester name while the Hub shows the linked passenger's name; the first "mobile"
+checks at 390 px read hidden DOM text behind the Operations phone gate (replaced by real 768 px checks).
+The production Zenward QA Request was not used or touched.
+
+======================================================================
+APPLICATION TESTS
+======================================================================
+npx tsc --noEmit   PASS
+npm run lint       PASS (0 errors; 86 warnings, all in pre-existing untracked .tmp-qa/ scripts, none in src/)
+npm test           509/509 PASS (includes 14 new readiness/action tests + 5 new reason tests)
+npm run build      PASS
+SQL (each suite on its own fresh `supabase db reset`), 0 real failures in all:
+  request_decision_workflow_tests (NEW) 59 PASS -- matrix A-X, auth, constraints, provenance, no notifications
+  request_mutation_tests 38, request_mutation_atomicity 3, request_mutation_privilege 22,
+  request_trip_passenger_integrity 10, create_trip 20, create_trip_atomicity 2, create_trip_privilege 5,
+  rls_adversarial 32, function_privilege 7, security_definer_exposure 20, privilege_baseline_behavior 30,
+  public_request_intake 42, website_intake_acquisition 52, website_request_form_publication 50,
+  website_requests_form 37, website_connection_lifecycle 36, notifications_activity 42, platform_admin_foundation 58,
+  recurring_trip_creation 24, mutation_lifecycle 24, client_privilege_surface 21, constraint 13
+  concurrency: request_decision 21/21, request_lifecycle 1/1, public_request_intake PASS (0 failures),
+  website_request_form_publication 29 PASS (0 failures), website_intake_acquisition PASS (0 failures)
+Updated to the new contract (old expectations encoded the old model): request_mutation_tests (reason-coded
+decline/cancel, cancel = accepted -> cancelled, link blocked once a Trip exists), request_mutation_atomicity
+(accepted fixture), request_mutation_privilege (new signatures, accept, old overloads gone), create_trip_tests
+(VAL-3: pending Request now DENIED and not auto-accepted), create_trip_atomicity (accepted fixture),
+request_trip_passenger_integrity (TEST B: pending denied, then accepted allowed; C/D/E fixtures accepted so they still
+exercise the Passenger check), request_lifecycle_concurrency (accepted fixture).
+Not re-run this phase: the remaining 25 SQL suites unrelated to Requests/Trips (driver, recurring arrangement, team,
+tenant settings, onboarding, etc.). The full 47-suite run was started, then stopped after 3 suites (all PASS) in
+favour of the proportional set, because each suite needs a ~2.5 min reset.
+
+======================================================================
+FILES CREATED
+======================================================================
+supabase/migrations/20260924090000_request_decision_workflow.sql
+supabase/tests/request_decision_workflow_tests.sql
+supabase/tests/request_decision_concurrency_test.sh
+src/lib/operations/request-decision-reasons.ts
+src/lib/operations/request-decision-reasons.test.mjs
+src/components/operations/requests/RequestDecisionDialog.tsx
+.tmp-qa/p1-ops-r1-decision-e2e.mjs            (untracked QA harness, like prior phases)
+docs/reports/p1-ops-r1-request-acceptance-decision-workflow.txt
+
+======================================================================
+FILES MODIFIED
+======================================================================
+src/app/operations/requests/[requestId]/actions.ts      acceptRequestAction; decline/cancel require a reason
+src/app/operations/requests/[requestId]/page.tsx        derived actions, copy, cancel-blocked note
+src/components/operations/requests/RequestActionBar.tsx Accept primary + loading; per-state action set
+src/components/operations/requests/DeclineRequestDialog.tsx / CancelRequestDialog.tsx  wrappers over the shared dialog
+src/components/operations/requests/RequestPassengerPanel.tsx  canLinkPassenger gate (pending or accepted, no Trip)
+src/components/operations/requests/RequestLinkedTripsPanel.tsx  accepted-without-Trips is normal
+src/components/operations/requests/RequestsTable.tsx     readiness with hasLinkedTrips
+src/lib/operations/request-readiness-core.ts (+ .test.mjs)  readiness model + deriveRequestActions
+src/lib/operations/request-detail.ts                     readiness input; structured reason in Activity
+src/lib/operations/requests-list.ts                      hasLinkedTrips (bounded trips embed)
+src/lib/operations/new-trip.ts                           Request picker: accepted only
+src/lib/operations/presentation.ts                       readiness labels, request_accepted label
+src/lib/operations/request-lifecycle-errors.ts           comment only
+src/lib/supabase/database.types.ts                       regenerated
+supabase/tests/privilege_contract_tests.sql + the 7 suites listed under APPLICATION TESTS
+docs/product/lifecycle-model.md, decision-register.md (ZD-204, ZD-054 amended), authorization-model.md,
+ui-data-action-map.md, docs/data/mutation-api.md
+
+======================================================================
+MIGRATION
+======================================================================
+20260924090000_request_decision_workflow.sql. It sorts after the production head 20260921150000. D2/D2A migrations
+are untouched. Contents: request_events event_type + reason columns/constraints/index; _validate_request_decision_reason;
+accept_transportation_request (new); decline_/cancel_transportation_request (drop + recreate with required reason);
+link_request_passenger (accepted allowed until first Trip); create_trip (accepted-only, no implicit transition);
+table/function comments. The state CHECK and all grants/policies are unchanged. Applies cleanly on a fresh reset.
+DEPLOY ORDER: apply the migration, then deploy the app IMMEDIATELY. Between the two steps the old app's Decline/Cancel
+calls (old signatures) fail with a generic error, and its "Create Trip" on a pending Request is rejected (intended).
+There is no data risk in that window.
+
+======================================================================
+OPEN ISSUES
+======================================================================
+1. Production state counts were NOT read (CLI 403). Owner runs the read-only query in PRODUCTION STATE
+   COMPATIBILITY before release. The analysis says no mapping is needed.
+2. Pending production Requests that already have a linked Passenger previously read "Ready" and offered Create Trip.
+   After release they read "Awaiting decision" and need Accept first. This is intended and worth one line to the
+   operator.
+3. Historical declines keep optional free-text reasons (metadata.reason) and historical cancels have none. Reason
+   reporting covers decisions from this release forward.
+4. No customer-facing Accepted/Declined/Cancelled notification. Deliberately out of scope (internal website_request
+   notification unchanged).
+5. Operations remains md+ only (existing product decision). There is no phone layout for Request Detail.
+
+PENDING ACCEPT:                 PASS
+PENDING DECLINE:                PASS
+PENDING CANCEL:                 BLOCKED
+ACCEPTED CANCEL:                PASS
+ACCEPT CREATES PASSENGER:       NO
+ACCEPT CREATES TRIP:            NO
+PASSENGER LINK IMPLIES ACCEPT:  NO
+PENDING TRIP CREATION:          BLOCKED
+ACCEPTED READY TRIP CREATION:   PASS
+DECLINE REASON:                 REQUIRED
+CANCEL REASON:                  REQUIRED
+DECLINED TERMINAL:              PASS
+CANCELLED TERMINAL:             PASS
+REQUEST PROVENANCE:             PRESERVED
+ACQUISITION:                    PRESERVED
+CROSS-TENANT:                   BLOCKED
+DRIVER:                         BLOCKED
+ACL CONTRACT:                   PASS
+LOCAL ACL VIOLATIONS:           0/expected 0   (29 checks)
+CONCURRENCY:                    PASS
+TSC:                            PASS
+LINT:                           PASS
+UNIT:                           509/509
+BUILD:                          PASS
+
+READY FOR PRODUCTION RELEASE:   YES -- subject to the owner's read-only production state check (OPEN ISSUE 1)
+BLOCKERS:                       NONE
+
+NEXT IF PASS:
+Owner review
+-> P1-OPS-R1 production release (migration, then app immediately; verify-db-privileges.sh production)
+-> manually verify using the real Zenward QA Request:
+   Pending -> Accept Request -> Accepted -> Passenger needed -> Link Passenger -> Create Trip
+
+DO NOT BEGIN PRODUCTION RELEASE AUTOMATICALLY.
+STOP.
+
+
+######################################################################
+P1-OPS-R1R -- RELEASE COMPATIBILITY HARDENING
+######################################################################
+Local only. NOT committed, NOT pushed, NOT deployed, `supabase db push` NOT run. Production NOT mutated. The real
+Zenward QA Request was not touched. The R1 product model is unchanged: no redesign. The final schema, final
+generated types and final behaviour are identical to R1. Only the delivery is restructured. This addendum
+SUPERSEDES the R1 sections MIGRATION and "DEPLOY ORDER" above: the single file 20260924090000_request_decision_
+workflow.sql no longer exists and has been split into EXPAND + CONTRACT.
+Correction to R1: the privilege contract had 28 checks, not 29 (the verifier's 29th row was the SUMMARY line). It
+now has 29 checks (new check 29, below).
+
+======================================================================
+PRODUCTION STATE CHECK
+======================================================================
+Tried again, READ-ONLY, same CLI identity: `supabase db query --linked` -> "unexpected login role status 403 ...
+Your account does not have the necessary privileges". No privilege escalation or alternative route was attempted.
+OWNER ACTION REQUIRED -- run in the Supabase PRODUCTION SQL editor (aggregate only, no PHI):
+
+  select
+    r.state,
+    count(*) as request_count,
+    count(*) filter (
+      where exists (
+        select 1
+        from trips t
+        where t.request_id = r.id
+      )
+    ) as with_trips
+  from transportation_requests r
+  group by r.state
+  order by r.state;
+
+  select count(*) as accepted_without_trip
+  from transportation_requests r
+  where r.state = 'accepted'
+  and not exists (
+    select 1
+    from trips t
+    where t.request_id = r.id
+  );
+
+Expected under the historical model: accepted_without_trip = 0 (pre-R1, `accepted` was only ever set by
+create_trip in the same transaction that inserted the Trip; no other path and no client UPDATE of state exists).
+If accepted_without_trip > 0: STOP the release and report the count. Do not inspect rows without approval.
+Neither result blocks anything technically (the state CHECK is unchanged and every state/trip combination is
+handled). The check exists to confirm the historical invariant before R1 changes what `accepted` means.
+
+======================================================================
+CURRENT RELEASE WINDOW   (the problem R1 left)
+======================================================================
+R1's single migration, applied before the new app is live, would break three calls the deployed app makes:
+  decline_transportation_request(p_organization_id, p_request_id[, p_reason])  -> old overload dropped
+  cancel_transportation_request(p_organization_id, p_request_id)                -> old overload dropped
+  create_trip(... p_request_id => <pending Request>)                             -> now rejected (ZW006)
+Reproduced locally in this phase (negative control, OLD app on the CONTRACT schema): Create Trip from Pending,
+Decline and Cancel all fail in the old UI (5 of 8 old-app checks FAIL). This is exactly what the new release order
+prevents: CONTRACT runs only after the new app is live.
+
+======================================================================
+EXPAND/CONTRACT DECISION
+======================================================================
+Chosen: option C, "keep the pre-R1 functions untouched during the window, then remove them".
+  EXPAND  20260924090000_request_decision_workflow_expand.sql   (purely additive for the deployed app)
+    + request_accepted event type; request_events.reason_code / reason_note + checks + partial index
+    + _validate_request_decision_reason (internal, owner-only)
+    + accept_transportation_request(uuid, uuid)
+    + decline_transportation_request(uuid, uuid, text, text)  NEW overload, p_reason_note WITHOUT default
+    + cancel_transportation_request(uuid, uuid, text, text)   NEW overload (accepted -> cancelled)
+    ~ link_request_passenger widened: pending OR accepted-without-Trips (superset of the old rule)
+    = decline_transportation_request(uuid, uuid, text)  kept as-is, re-commented LEGACY/transitional
+    = cancel_transportation_request(uuid, uuid)         kept as-is, re-commented LEGACY/transitional
+    = create_trip                                       untouched (pending|accepted, implicit acceptance)
+  CONTRACT 20260924091000_request_decision_workflow_contract.sql
+    - drop the two legacy overloads
+    ~ decline(uuid, uuid, text, text): p_reason_note gains `default null` (CREATE OR REPLACE may add a default;
+      probed locally)
+    ~ create_trip: accepted-only, implicit pending -> accepted removed
+    + request_events_decision_reason_required CHECK ... NOT VALID (every NEW decline/cancel needs a code)
+Why not A (convert old pending-Cancel into Decline with a system reason): it silently records a different
+business decision from the one the operator clicked. Why not B (two app deploys): more moving parts for the same
+result; the old UI already never generates new-model calls, and the new UI never generates old ones.
+Why C is safe for the new state model: every row the legacy paths can write during the window has a shape
+production ALREADY holds from before R1:
+  - legacy decline: pending -> declined, optional free-text metadata.reason, no reason_code  (= all pre-R1 declines)
+  - legacy cancel:  pending -> cancelled, no reason, only while no Trip exists           (= all pre-R1 cancels)
+  - legacy create_trip: pending -> accepted together with its first Trip                 (= all pre-R1 accepts)
+None of them can act on a new-model state. The legacy cancel refuses an ACCEPTED Request (ZW004, tested), so it
+can never cancel something the new app accepted. Every path takes the same Request row lock, so the race
+guarantees are unchanged. The only cost is that decisions made by the OLD app during the minutes-long window carry
+no structured reason, exactly like history. Documented; no invented decision.
+
+======================================================================
+OLD APP + EXPAND
+======================================================================
+Method: OLD app = production commit bcf66c9, built from a git worktree (fonts from the main build cache), served
+by `next start -p 3101`. The database was reset to the production-equivalent schema (migrations through
+20260921150000; the R1 files were moved aside for the reset only), then the EXPAND file was applied ON TOP of
+that populated database (as production would receive it) and recorded in schema_migrations.
+STATE A  production schema + OLD app    .tmp-qa/p1-ops-r1r-old-app-e2e.mjs  8/8 PASS (baseline)
+STATE B  EXPAND schema    + OLD app     .tmp-qa/p1-ops-r1r-old-app-e2e.mjs  8/8 PASS
+  website intake -> pending; old UI (Decline + Cancel, no Accept); Add New Passenger links on pending; Create Trip
+  from PENDING succeeds and implicitly accepts; Decline with free-text reason (legacy metadata shape); Cancel on
+  PENDING; no error text anywhere.
+  + supabase/tests/request_decision_expand_compat_tests.sql (NEW) 19/19 PASS: legacy decline called positionally
+    (3 args -- no "is not unique" ambiguity), with PostgREST-style named args, and with the reason omitted; legacy
+    cancel pending -> cancelled; legacy cancel REFUSES an accepted Request; legacy create_trip from pending; new
+    decline/accept/cancel/link/create_trip side by side; legacy ACL authenticated-only with role checks intact
+    (Driver / foreign admin / Platform Admin -> ZW002, anon -> 42501).
+  + The pre-R1 (HEAD) SQL suites run against the EXPAND schema: create_trip 20/20, create_trip_atomicity 2/2,
+    request_trip_passenger_integrity 10/10, request_mutation_privilege 18/18, request_mutation_atomicity 3/3,
+    request_mutation 37/38. The one difference is LINK-4 (HEAD expects linking a Passenger on an ACCEPTED
+    Request to be refused). EXPAND deliberately widens that so Accept -> Link Passenger works. The old app can't
+    reach it: its UI only offers linking on pending Requests.
+  PostgREST reloads its schema cache on DDL through the pgrst_ddl_watch / pgrst_drop_watch event triggers (present
+  locally, standard on hosted Supabase). No manual reload step.
+
+======================================================================
+NEW APP + EXPAND
+======================================================================
+STATE C  EXPAND schema + NEW app  .tmp-qa/p1-ops-r1-decision-e2e.mjs  52/52 PASS (the full R1 journey: Pending
+  -> Accept -> Passenger needed -> create/link Passenger -> Create Trip; Decline with reason; Accept -> Cancel with
+  reason; Hub badges; 768 px tablet; Driver blocked).
+  App change for EXPAND: the decline/cancel server action always sends p_reason_note ('' when empty; normalised
+  to NULL by _validate_request_decision_reason), because the new decline overload has no default until CONTRACT.
+  No other app change. EXPAND still accepts a pending create_trip at the database. The new app can't produce that
+  call: Create Trip is hidden on Pending, and the New Trip Request picker lists accepted Requests only. CONTRACT
+  then closes it at the database.
+
+======================================================================
+NEW APP + CONTRACT
+======================================================================
+CONTRACT was applied ON TOP of the STATE B/C database, which by then held 6 reason-less legacy decline events and
+pending-cancelled rows written "during the window". It applied cleanly: the NOT VALID constraint does not
+re-check history.
+STATE D  CONTRACT schema + NEW app  .tmp-qa/p1-ops-r1-decision-e2e.mjs  52/52 PASS
+  + request_decision_workflow_tests.sql 59/59 on that database (pending create_trip BLOCKED, reasons REQUIRED,
+    terminal states, auth matrix, provenance).
+Negative control (OLD app + CONTRACT): 5 FAIL, as expected. Confirms CONTRACT must follow the new deploy.
+Schema equivalence: `pg_dump --schema-only --schema=public` of the incrementally migrated DB (A -> EXPAND ->
+CONTRACT) is byte-identical to a fresh `supabase db reset` (only pg_dump's random \restrict token differs).
+`supabase gen types` from the final schema is byte-identical to the R1 database.types.ts.
+
+======================================================================
+LEGACY RPC COMPATIBILITY
+======================================================================
+Overload resolution (probed locally, not assumed):
+  - With legacy decline(uuid,uuid,text) and a new decline(uuid,uuid,text,text DEFAULT NULL) both present, a
+    3-argument positional call fails "function ... is not unique". So in EXPAND the new decline has NO default:
+    positional 3-arg -> legacy only, 4-arg -> new only. PostgREST calls with named args (old app: p_reason or
+    nothing; new app: p_reason_code + p_reason_note), which are unambiguous either way.
+  - cancel: legacy (uuid,uuid) vs new (uuid,uuid,text,text DEFAULT NULL) never overlap in arity -> safe with the
+    default. A 3-arg positional call resolves to the new overload.
+  - CONTRACT adds decline's default after dropping the legacy overload (CREATE OR REPLACE may add defaults).
+The legacy overloads keep their original bodies and ACL: authenticated EXECUTE only, has_org_role inside.
+
+======================================================================
+CREATE_TRIP COMPATIBILITY
+======================================================================
+EXPAND: create_trip untouched. The OLD app's Create Trip from a pending, passenger-resolved Request keeps working
+(implicit accept), and the new app creates Trips only from accepted Requests.
+DEPLOY: the new UI no longer offers Create Trip on Pending ("Accept Request" first); New Trip lists accepted only.
+CONTRACT: create_trip requires accepted; the implicit acceptance is removed.
+So no operator ever sees a Create Trip button that the database will reject.
+Residual: a browser tab still open on the OLD build after the new deploy gets Next's normal server-action
+version mismatch (reload) no matter what the database does. That is not specific to R1.
+
+======================================================================
+FINAL PRIVILEGE CONTRACT
+======================================================================
+supabase/tests/privilege_contract_tests.sql:
+  + c_fn_transitional: the two legacy overloads, roles 'u'. Tolerated by checks 13/16/17/18, so their ACL must be
+    exactly authenticated-only; NOT required by check 14.
+  + check 29 "no TRANSITIONAL (expand -> contract) function remains": fails BY DESIGN only between EXPAND and
+    CONTRACT, so the window is visible in the verifier and can't be forgotten.
+  c_fn: accept_transportation_request(uuid,uuid), decline/cancel (uuid,uuid,text,text), and
+  _validate_request_decision_reason (internal), as in R1.
+Results (scripts/verify-db-privileges.sh local):
+  STATE B/C (EXPAND): 1 of 29 -> only check 29, listing decline(uuid,uuid,text), cancel(uuid,uuid). All ACL checks
+                      pass.
+  STATE D (CONTRACT, incremental DB):      0 of 29
+  fresh `supabase db reset` (both files):  0 of 29
+No raw table write, no table/column grant, no RLS change in either migration.
+
+======================================================================
+RELEASE ORDER
+======================================================================
+0. Owner: run the two read-only aggregates (PRODUCTION STATE CHECK). accepted_without_trip must be 0.
+   Baseline: scripts/verify-db-privileges.sh production from the CURRENT production commit (bcf66c9) -> 0 of 28.
+   (This session's CLI identity gets 403 on production, so the owner runs every production step.)
+1. EXPAND: apply 20260924090000_request_decision_workflow_expand.sql ONLY.
+   Old app keeps working unchanged (proven: STATE B).
+   Verifier with the new contract file: exactly 1 expected violation (check 29). Anything else -> stop.
+2. DEPLOY the new application (commit containing both migrations + app).
+   New app on EXPAND (proven: STATE C).
+3. PRODUCTION SMOKE, synthetic tenant only (NOT the Zenward QA Request): website/manual Request -> Pending ->
+   Accept -> Accepted -> Passenger needed -> link/create Passenger -> Create Trip; Decline with reason; Accept ->
+   Cancel with reason.
+4. CONTRACT: apply 20260924091000_request_decision_workflow_contract.sql.
+5. FINAL: verify-db-privileges.sh production -> 0 of 29; repeat the step-3 smoke (plus: pending Create Trip is not
+   offered). Then the owner verifies with the real Zenward QA Request: Pending -> Accept -> Accepted -> Passenger
+   needed -> Link Passenger -> Create Trip.
+Rollback: before step 4 the old app can be redeployed as-is (EXPAND is additive; the old app ran green on it).
+After step 4, roll forward only.
+Note: `supabase db push` applies ALL pending migrations. For step 1, apply EXPAND on its own (e.g. with only the
+EXPAND file pending/pushed), so CONTRACT isn't pushed with it.
+
+======================================================================
+APPLICATION / REGRESSION (R1R)
+======================================================================
+tsc PASS. lint 0 errors (86 warnings, all pre-existing untracked .tmp-qa/). unit 509/509. build PASS.
+Unit fix made during this phase: the reason-code/constraint test pointed at the old migration filename; it now
+reads the EXPAND file.
+Final state (fresh `supabase db reset` = EXPAND + CONTRACT, each suite on its own reset), 0 failures:
+  request_decision_workflow 59, request_mutation 38, request_mutation_privilege 22, request_mutation_atomicity 3,
+  request_trip_passenger_integrity 10, create_trip 20, create_trip_atomicity 2, create_trip_privilege 5,
+  security_definer_exposure 20, function_privilege 7, rls_adversarial 32, privilege_baseline_behavior 30,
+  public_request_intake 42, website_intake_acquisition 52; concurrency request_decision 21/21,
+  request_lifecycle 1/1; verifier 0 of 29.
+
+======================================================================
+FILES (R1R)
+======================================================================
+Renamed + reworked: supabase/migrations/20260924090000_request_decision_workflow.sql
+                 -> supabase/migrations/20260924090000_request_decision_workflow_expand.sql
+Created:  supabase/migrations/20260924091000_request_decision_workflow_contract.sql
+          supabase/tests/request_decision_expand_compat_tests.sql
+          .tmp-qa/p1-ops-r1r-old-app-e2e.mjs   (untracked QA harness)
+Modified: supabase/tests/privilege_contract_tests.sql (transitional list + check 29)
+          src/app/operations/requests/[requestId]/actions.ts (always send p_reason_note)
+          src/lib/operations/request-decision-reasons.ts + .test.mjs (migration filename)
+          docs/data/mutation-api.md (release shape)
+Temporary: an OLD-app git worktree in the session scratchpad (removed after the run; not in the repo).
+
+PRODUCTION STATE COUNTS:           OWNER ACTION REQUIRED
+ACCEPTED WITHOUT TRIP:             UNKNOWN
+OLD APP + EXPAND:                  PASS
+NEW APP + EXPAND:                  PASS
+NEW APP + CONTRACT:                PASS
+TEMPORARY OLD RPC BREAKAGE:        NONE
+TEMPORARY CREATE_TRIP BREAKAGE:    NONE
+FINAL ACL:                         PASS
+READY FOR ZERO-DOWNTIME PRODUCTION RELEASE:  YES, once the owner confirms accepted_without_trip = 0
+BLOCKERS:                          the production state check (owner action; CLI identity is 403)
+
+DO NOT DEPLOY.
+STOP.
+
+
+======================================================================
+OWNER PRODUCTION STATE CHECK   (run by the owner, PRODUCTION SQL editor, 2026-09-24; aggregate only, no PHI)
+======================================================================
+The two read-only aggregates from the R1R section, run manually by the owner:
+
+PRODUCTION STATE COUNTS:
+  accepted:   4 total / 4 with Trips
+  cancelled:  1 total / 0 with Trips
+  declined:  14 total / 0 with Trips
+  pending:    5 total / 0 with Trips
+  accepted_without_trip: 0
+
+Result: the historical invariant holds. Every accepted Request has >= 1 Trip, so no accepted-without-Trip legacy
+state needs remediation and no Request data migration is required. The 5 pending Requests (the real Zenward QA
+Request among them) stay pending and will need an explicit Accept after release.
+
+PRODUCTION STATE COUNTS:  VERIFIED
+ACCEPTED WITHOUT TRIP:    0
+R1R BLOCKER:              CLOSED
+
+======================================================================
+FINAL LOCAL RELEASE GATE   (CONTRACT schema, fresh `supabase db reset` per suite, 2026-09-24)
+======================================================================
+scripts/verify-db-privileges.sh local: 0 violations of 29.
+0 failures in every suite: request_decision_workflow 59, request_mutation 38, request_mutation_privilege 22,
+request_mutation_atomicity 3, request_trip_passenger_integrity 10, create_trip 20, create_trip_atomicity 2,
+create_trip_privilege 5, security_definer_exposure 20, function_privilege 7, rls_adversarial 32,
+privilege_baseline_behavior 30, public_request_intake 42, website_intake_acquisition 52;
+request_decision_concurrency 21/21, request_lifecycle_concurrency 1/1.
+tsc PASS; lint PASS (0 errors; 86 warnings, all in untracked .tmp-qa/); unit 509/509; build PASS.
+Secret / PHI review of the committed file set: no keys, tokens, JWTs, passwords, private keys or .env content; the
+only email address is the fictional org-a-dispatcher@example.test; no production row data (aggregate counts only).
+Scope review: Request decision workflow only. No D3, Zenward-Web, old Zenward organization deletion, S5B, billing,
+Facility Portal, broker integration or unrelated redesign.

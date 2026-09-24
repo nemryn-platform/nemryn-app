@@ -1,6 +1,6 @@
 /**
  * Narrow ZW-code → user-facing message mapping for Request Detail's
- * lifecycle actions (P1-E1-S2F-B2: Decline/Cancel) — mirrors
+ * lifecycle actions (Accept/Decline/Cancel — P1-E1-S2F-B2, P1-OPS-R1) — mirrors
  * `trip-detail-errors.ts`'s established 5-code pattern exactly (the
  * closest precedent: both wrap a mutation RPC that can legally raise
  * unauthorized/not-found/illegal-transition/invalid-input). Never

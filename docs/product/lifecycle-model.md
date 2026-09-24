@@ -27,19 +27,21 @@ A great deal of what looks like "status" in the UI references is not a new lifec
 
 | State | Meaning | Terminal? |
 |---|---|---|
-| `pending` | Submitted (via public intake or internal entry), awaiting operations action. No distinct "under review" state — nothing behaviorally different happens between "just submitted" and "someone is looking at it" until an outcome is recorded, so a second state would track nothing real. | No |
-| `accepted` | At least one Trip has been created from this request. | Yes, for the request's own lifecycle (see below) |
-| `declined` | Operations reviewed and will not fulfill it. | Yes |
-| `cancelled` | Withdrawn before fulfillment. | Yes |
+| `pending` | Submitted (via public intake or internal entry), awaiting the operator's business decision. No distinct "under review" state. | No |
+| `accepted` | Operations reviewed it and intends to service it (explicit **Accept Request**, P1-OPS-R1). Says nothing about whether a Passenger is linked or a Trip exists. | No — may still be cancelled while no Trip exists |
+| `declined` | Operations reviewed a *new* request and will not service it. Reason required. | Yes |
+| `cancelled` | A request that was *accepted* will no longer proceed. Reason required. | Yes |
 
-- **`pending → accepted` is system-driven, not a discretionary click.** It happens automatically, in the same transaction as the first Trip created from this request — "accepted" *means* "converted," nothing more and nothing less. There is no separate manual "mark as accepted" action independent of creating a Trip.
-- **A request can create zero, one, or many Trips.** Reaching `accepted` does not prevent more Trips from being created later against the same request (e.g., adding a return leg after the outbound is already running) — the request simply stays `accepted`; no further request-level state transition happens as a result.
-- **Child Trip outcomes never write back onto Request.state.** If every Trip created from an `accepted` request is later cancelled, the request does not revert to `pending` or move to any new state — that would be exactly the "one entity's status representing another's lifecycle" mistake this document exists to prevent. The request's own history (§F) remains an honest record of what was asked for and when it was converted, independent of what later happened operationally.
-- **Terminal states:** `declined` and `cancelled` are terminal — no further transition. `accepted` is terminal *for the request's own state field* (no other value follows it), even though the request continues to be a live reference point for its child Trips indefinitely.
-- **Who may transition:**
-  - `pending → accepted`: system (triggered by the trusted Trip-creation path used by operations staff).
-  - `pending → declined`: Dispatcher, Organization Admin.
-  - `pending → cancelled`: Dispatcher, Organization Admin.
+**P1-OPS-R1 (ZD-204) supersedes the original "accepted = converted" rule.** Decision and operational readiness are separate:
+
+- **Decision (stored `state`)** — changed only by explicit operator actions: `pending → accepted` (Accept), `pending → declined` (Decline), `accepted → cancelled` (Cancel). Linking a Passenger never accepts; accepting never creates a Passenger, Trip, or assignment.
+- **Readiness (derived, never stored)** — an accepted request is *ready to schedule* once it has an active linked Passenger (the only requirement `create_trip` enforces). A Trip can be created **only** from an `accepted` request; `create_trip` never changes the request state.
+- **A request can create zero, one, or many Trips.** Additional Trips (e.g. a return leg) are created from the same `accepted` request.
+- **Request-level Cancel is only available while no Trip exists.** Once any Trip exists, cancellation is managed on each Trip — nothing cascades from the request.
+- **Child Trip outcomes never write back onto Request.state.**
+- **Terminal states:** `declined` and `cancelled`. No reopen / undo in this release.
+- **Legacy data:** requests accepted before P1-OPS-R1 were accepted implicitly by their first Trip (so every one has a Trip); requests cancelled before P1-OPS-R1 were cancelled from `pending`. Both remain valid historical records.
+- **Who may transition:** Dispatcher and Organization Admin of an active organization, for all three decisions. Never Driver, never a Platform Admin grant on its own.
 - **Can the public requester cancel before review?** Not at MVP. No requester self-service capability is approved (per product-definition.md and the explicit instruction not to build one here). A requester wanting to withdraw a request does so through whatever channel operations currently uses (phone, etc.), and a staff member performs the `cancelled` transition — the request record itself does not grant the original submitter any direct mutation right.
 
 ## C. Trip state model
