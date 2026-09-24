@@ -555,3 +555,192 @@ BLOCKERS:                                    NONE (SETUP_HELP_EMAIL remains an o
 
 DO NOT DEPLOY.
 STOP.
+
+
+######################################################################
+P1-COMM-D3 + D3R -- PRODUCTION RELEASE
+######################################################################
+Released 2026-09-24 to Nemryn production (Vercel nemryn/nemryn-app; Supabase wyocbivzgrbekuyqdfts) using the D3R
+zero-exposure order. All mutating smoke used the synthetic QA tenant "Siloan Medical Centre" only. No Zenward data or
+Zenward-Web was used or touched. D4 / S5B / billing were not started.
+
+======================================================================
+RELEASE COMMIT
+======================================================================
+b2b2cb1206001fa3038d5a71acefb09cef0c8fd9  "feat: commercialize website request setup"  (Nemryn <nemryn.app@gmail.com>)
+19 files: exactly the reviewed D3 + D3R scope (Website Requests UI, setup core + tests, developer examples, request-host
+proxy allowlist, public-form own-origin, preferred hosted link, rate-limit classification + tests, .env.example names,
+report). No .tmp-qa, scratch, logs or env values. The secret / PHI scan was clean. Pre-commit gate: rate-limit matrix
+16/16, D3 browser E2E 55/55, examples 15/15, unit 528/528, tsc / lint (0 in src) / build PASS.
+
+======================================================================
+GITHUB PUSH
+======================================================================
+Identity nemryn; one push, no force: e9cd8f1..b2b2cb1. It also carried the earlier local-only docs commits 33a7683
+(R1A release record) and 6f10c09 (ZW1 purge report). Local HEAD == origin/main == b2b2cb1. PASS.
+
+======================================================================
+INITIAL VERCEL DEPLOY
+======================================================================
+The existing nemryn-app project deployed b2b2cb1 (commit status "Vercel success -- Deployment has completed");
+REQUEST_FORM_ORIGIN was still unset. App-host regression (.tmp-qa/d3-prod-app-host.mjs): 15/16 PASS. The one FAIL was
+the known sign-in timing artifact (URL read before the redirect settled; every signed-in page after it loaded). The
+copied link was app.nemryn.com/request/<key> as expected. This session had no Vercel login and no DNS access; the
+owner did steps 9, 11 and 12.
+
+======================================================================
+REQUEST_FORM_ORIGIN
+======================================================================
+The owner set Production REQUEST_FORM_ORIGIN=https://request.nemryn.com and redeployed b2b2cb1. NEXT_PUBLIC_APP_URL and
+Supabase Auth settings unchanged; SETUP_HELP_EMAIL left unset (the graceful fallback is shown; no address invented).
+
+======================================================================
+APP HOST REGRESSION   (after the REQUEST_FORM_ORIGIN deploy, BEFORE the domain was attached)
+======================================================================
+.tmp-qa/d3-prod-app-host.mjs --expect-request-origin: 16/16 PASS. Sign-in -> Operations; Operations / Requests / Trips
+load; the new Website Requests UI (summary, builder chooser, setup help fallback); no internal names; developer page
+with 4 example tabs + server-side + Origin + 120/hour; the copied hosted link now https://request.nemryn.com/<key>; legacy
+app.nemryn.com/request/<key> 200 with its headers; embed loader 200; embed page frameable; intake API generic 400.
+The domain was attached only after this passed.
+
+======================================================================
+VERCEL DOMAIN / DNS / TLS
+======================================================================
+The owner added request.nemryn.com to the existing nemryn-app project (Production, no redirect) and created the record
+at Namecheap. Authoritative answer (pdns1.registrar-servers.com): request.nemryn.com CNAME
+49802dd8fc5c391c.vercel-dns-017.com. Public resolvers (Google, Quad9, OpenDNS) resolved it. This machine briefly
+held a stale negative cache (SOA negative TTL 3601s); it was flushed locally with no DNS change. TLS: certificate
+CN / SAN request.nemryn.com, valid 2026-09-24 -> 2026-12-23, chain verified.
+
+======================================================================
+FIRST REQUEST-DOMAIN SECURITY GATE
+======================================================================
+The first requests to the live hostname already saw the allowlist. There was no moment of dashboard exposure:
+REQUEST_FORM_ORIGIN was live before the domain existed. Checked twice (pinned curl to the Vercel edge, then the normal
+resolver), each path -> 404 body "Not found", no Set-Cookie:
+  /  /sign-in  /operations  /platform  /driver  /request/<key>  /embed/request-form.js  /embed/request/<key>
+  /api/public-intake/website (GET and POST)  /api/ping  /operations/settings/website-requests  unknown paths
+No dashboard, login page, tenant navigation, Set-Cookie or session refresh. PASS.
+
+======================================================================
+HOSTED FORM
+======================================================================
+https://request.nemryn.com/<key> (synthetic Siloan form, v5): 200 with company identity, form title and public fields;
+no operator navigation, login or internal ids. Headers: Content-Security-Policy frame-ancestors 'none', X-Frame-Options
+DENY, X-Robots-Tag noindex/nofollow, Referrer-Policy strict-origin-when-cross-origin, Cache-Control no-store; no
+Set-Cookie. PASS.
+
+======================================================================
+HOSTED SUBMISSION
+======================================================================
+ONE synthetic submission through https://request.nemryn.com/<key>?utm_source=d3prod: Request pending, source web,
+request_events = request_logged only, no Passenger, no Trip. Acquisition: landing_path = submission_path = "/<key>"
+(pathname only, no host / full URL), utm_source d3prod, form_version nemryn-form-v5. PASS.
+
+======================================================================
+LEGACY HOSTED URL
+======================================================================
+https://app.nemryn.com/request/<key> -> 200, no redirect, security headers intact. PASS.
+
+======================================================================
+EMBED
+======================================================================
+app.nemryn.com/embed/request-form.js 200; app.nemryn.com/embed/request/<key> 200 with frame-ancestors * (frameable as
+before); one synthetic embed submission -> Pending. request.nemryn.com serves no embed paths (404). PASS.
+
+======================================================================
+WEBSITE CONNECTION
+======================================================================
+Siloan: connect a fictional website (https://www.d3prod-<stamp>.example.test) -> Turn on callout + (unused) Delete
+connection -> Developer page package -> Turn on from the callout -> one synthetic server-side POST with the approved
+Origin -> 200 -> Request pending -> status Connected. PASS. (No bulk traffic; the 120/hour boundary was proven locally,
+not in production.)
+
+======================================================================
+DEVELOPER PACKAGE
+======================================================================
+The production package has all 12 sections in order (WHAT THIS DOES ... COMMON ISSUES), the server-side warning, the
+explicit Origin requirement, the connection-must-be-ON requirement and "120 requests per rolling hour", and no
+privileged credential. PASS.
+
+======================================================================
+RATE LIMIT CONTRACT
+======================================================================
+Deployed as specified in D3R: verified live connections -> 120 per integration per rolling hour, not limited by the
+per-IP bucket; unverified traffic -> 8 per client IP per rolling hour, charged to "unverified:<id>"; hosted / embed
+form limiter unchanged; generic public errors (production: an unknown id -> the same generic 400). Boundary behaviour
+proven locally (16/16); production saw only 1 synthetic server-side submission.
+
+======================================================================
+CONNECTION LIFECYCLE
+======================================================================
+Unused -> Delete connection; after the request -> Remove connection -> the connection retired (DB: retired, is_active
+false, its 1 Request kept) and listed under Previous connections with no technical ids. The smoke's "was removed" wait
+missed the auto-clearing notice (harness timing); the state was verified directly in the DB and the UI. The D2
+leftover synthetic connection (…v2four) was untouched: inactive, not retired, 0 requests. Siloan restored: synthetic form
+disabled again, 0 active intake paths. PASS.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+Organization Admin (Siloan) configured everything above. Siloan Driver -> /operations/settings/website-requests
+redirects to /driver (no configuration). No authorization change in D3. Dispatcher / Platform Admin were not exercised in
+production (no safe credentials); they are covered locally and unchanged.
+
+======================================================================
+DATABASE / ACL
+======================================================================
+supabase migration list --linked: 68 migrations, head 20260924091000, none pending, none remote-only (unchanged by D3).
+scripts/verify-db-privileges.sh production: 0 violations of 29 (run before the domain attach and again after the smoke).
+No migration, RPC, RLS, grant or schema change.
+
+======================================================================
+OPEN ITEMS
+======================================================================
+1. SETUP_HELP_EMAIL: unset by design until the owner sets up a mailbox (e.g. setup@nemryn.com); the fallback text shows.
+2. Synthetic data added to Siloan: 3 Requests (hosted via request.nemryn.com, embed, website connection) and 1 retired
+   synthetic website connection. No Trips, no Passengers.
+3. The Supabase CLI flipped to another account during this release (again). Always confirm `supabase projects list`
+   shows Nemryn before production database steps.
+4. D3 carry-over (unchanged): setup-method step needs a visit to a method page; no QR code; the card's "Existing
+   connection" label for method-less connections.
+
+D3 RELEASE COMMIT:                 b2b2cb1206001fa3038d5a71acefb09cef0c8fd9
+GITHUB PUSH:                       PASS
+VERCEL:                            PASS
+REQUEST_FORM_ORIGIN:               https://request.nemryn.com
+REQUEST DOMAIN VERIFIED:           PASS
+TLS:                               PASS
+REQUEST HOST ROOT:                 BLOCKED
+REQUEST HOST SIGN-IN:              BLOCKED
+REQUEST HOST OPERATIONS:           BLOCKED
+REQUEST HOST PLATFORM:             BLOCKED
+REQUEST HOST DRIVER:               BLOCKED
+REQUEST HOST WEBSITE INTAKE API:   BLOCKED
+HOSTED FORM:                       PASS
+HOSTED SUBMISSION:                 PASS
+OLD HOSTED URL:                    PASS
+EMBED:                             PASS
+ACQUISITION:                       PASS
+WEBSITE CONNECTION:                PASS
+DEVELOPER PACKAGE:                 PASS
+VALID CONNECTION LOW-IP LIMIT:     REMOVED
+INTEGRATION LIMIT:                 120/HOUR
+GENERIC PUBLIC ERRORS:             PASS
+CONNECTION LIFECYCLE:              PASS
+DATABASE MIGRATION:                NONE
+ACL:                               0/29 VIOLATIONS
+TSC:                               PASS
+LINT:                              PASS
+UNIT:                              528/528
+BUILD:                             PASS
+PRODUCTION RELEASE:                PASS
+BLOCKERS:                          NONE
+
+NEXT:
+Return for owner review.
+
+DO NOT BEGIN D4.
+DO NOT BEGIN S5B.
+DO NOT BEGIN BILLING.
+STOP.
