@@ -1,0 +1,262 @@
+NEMRYN PLATFORM
+P1-OPS-PROG3B -- PRODUCTION RELEASE + VERIFICATION GATE
+
+======================================================================
+STARTING REPOSITORY STATE
+======================================================================
+  - Branch main; HEAD = origin/main = 4b2b6ae, as the implementation report recorded. Upstream had not moved.
+  - Nothing was staged.
+  - The working tree held exactly the PROG3B change set, matching the implementation report's file lists:
+      - 20 modified files
+      - 5 new source files (including src/components/onboarding/)
+      - 2 untracked reports: the PROG3A spec and the PROG3B implementation report
+  - Other untracked items were left alone:
+      - .tmp-qa local QA scripts (not ignored by .gitignore; excluded by hand)
+      - older reports already untracked before this work
+  - Git author: Nemryn <nemryn.app@gmail.com>. GitHub identity: nemryn.
+
+======================================================================
+REVIEWED COMMIT
+======================================================================
+51939f3800dbd9f7e6630e90378723faab27bc14   "feat(operations): release PROG3B fact-signal composition"
+Parent: 4b2b6ae. 27 files, +2206 / -419.
+
+======================================================================
+FILES COMMITTED
+======================================================================
+Added:
+  docs/reports/p1-ops-prog3a-fact-signal-composition-spec.txt
+  docs/reports/p1-ops-prog3b-fact-signal-composition-implementation.txt
+  src/components/onboarding/BusinessBasicsForm.tsx
+  src/lib/operations/assignment-attribution-core.ts / .test.mjs
+  src/lib/operations/progressive-operations-core.ts / .test.mjs
+Modified:
+  src/app/complete-signup/actions.ts, src/app/complete-signup/route.ts, src/app/sign-up/actions.ts
+  src/app/onboarding/{actions.ts, page.tsx, layout.tsx, basics/page.tsx, vehicle/page.tsx, driver/page.tsx,
+    facility/page.tsx, passenger/page.tsx}
+  src/app/operations/layout.tsx, src/app/operations/page.tsx, src/app/operations/trips/[tripId]/page.tsx
+  src/components/operations/OperationsBrief.tsx, src/components/operations/OperationsSidebar.tsx,
+    src/components/operations/trip-detail/CurrentStatusPanel.tsx
+  src/design/icons.ts
+  src/lib/operations/presentation.ts, src/lib/operations/trip-detail.ts
+Excluded: .tmp-qa, logs, screenshots, browser profiles, .env files, credentials and unrelated reports. The staged
+list contained 0 matches for tmp-qa / .env / .png / .log.
+Secret/PHI scan of all 27 files: no keys, tokens, JWTs, emails or credentials.
+  - The only "Zenward" matches are existing, public OperationsSidebar comments that are not part of this diff.
+  - Every business_stage mention in the diff is a comment stating it is NOT used.
+
+======================================================================
+PROG3A SPEC TRACKING STATUS
+======================================================================
+docs/reports/p1-ops-prog3a-fact-signal-composition-spec.txt was reviewed. It matches the approved source of truth
+(the spec this implementation was built from, with owner decisions Q1–Q6 recorded in the PROG3B report). It is now
+TRACKED in 51939f3.
+
+======================================================================
+PRE-RELEASE VERIFICATION
+======================================================================
+TypeScript (npx tsc --noEmit) .... PASS
+Lint (npm run lint) .............. PASS (0 errors; the 91 warnings are all in untracked .tmp-qa scripts)
+Unit (npm test) .................. 585/585
+Build (npm run build) ............ PASS
+
+======================================================================
+PROG1 RESULT
+======================================================================
+46/46 PASS (.tmp-qa/p1-ops-prog1-assignment-e2e.mjs, final build).
+  - The first run showed 45/46. The single failure was the script's own cleanup comparison, which compared an
+    UNORDERED string_agg of Org A driver/vehicle statuses. Row order changes after UPDATEs.
+  - The actual database state was verified correct: both seed drivers and both vans were active, and 0 PROG1
+    fixtures remained.
+  - The local QA script (untracked) was changed to compare with `order by id`, a harness defect only. No product
+    code and no expectation changed. The rerun gave 46/46.
+
+======================================================================
+PROG2 RESULT
+======================================================================
+56/56 PASS (.tmp-qa/p1-ops-prog2-readiness-e2e.mjs, final build).
+
+======================================================================
+PROG3B BROWSER E2E RESULT
+======================================================================
+51/51 PASS (.tmp-qa/p1-ops-prog3b-composition-e2e.mjs, final build). It uses a fictional tenant made through the real
+/sign-up form. Covered:
+  - onboarding: basics first with no exit; steps 2–5 skippable; /onboarding redirect
+  - fresh composition and Get started
+  - Attention first; requests after it
+  - Today, Tomorrow, Recurring and Proof states
+  - Driver Snapshot 0 / 1 / 3
+  - all-clear
+  - business_stage having no effect
+  - attribution: you / admin name / "a team member" / reason
+  - Settings and Drive behaviour
+  - Driver redirect
+  - 1440 and 768
+
+======================================================================
+PUSH RESULT
+======================================================================
+Pushed once as `nemryn` to https://github.com/nemryn-platform/nemryn-app.git main (4b2b6ae..51939f3), with no force
+push. After fetch: local HEAD == origin/main == 51939f3.
+
+======================================================================
+PRODUCTION DEPLOYMENT
+======================================================================
+Existing Vercel project nemryn-app, through the existing GitHub → Vercel path. No DNS, project or environment
+variable change.
+  - GitHub Production deployment 6654602510: state = success.
+  - Deployment SHA = 51939f3800dbd9f7e6630e90378723faab27bc14, the reviewed release commit.
+  - https://app.nemryn.com/sign-in → 200.
+
+======================================================================
+PRODUCTION SMOKE CHECKS   (.tmp-qa/p1-ops-prog3b-prod-smoke.mjs; synthetic tenant "Siloan Medical Centre" only)
+======================================================================
+Result: 0 failures. Tenant guard enforced. Zenward was not touched.
+  - No Membership role change and no business_stage change (verified unchanged at cleanup).
+  - No new production credential.
+  - Fixtures, labelled "PROG3B QA", were removed:
+      - 1 passenger
+      - 2 trips
+      - 1 pending request
+  - Siloan driver statuses were toggled temporarily and restored (verified).
+Checks:
+  - Authentication: the admin signed in and landed in Operations.
+  - Existing-organization Overview: standard composition, HTTP 200, no failed same-origin resources, no error text.
+  - Navigation: Overview, Requests, Trips, Dispatch, Tomorrow, Recurring Care, Passengers, Facilities, Drivers,
+    Fleet, then Drive (the admin has an active linked driver) and Settings. Proof of Service is NOT in the sidebar.
+  - The duplicate lower Needs Attention table is gone ("Needs Attention" appears at most once).
+  - Proof of Service: its Overview entry (calm or work row) is present with its link.
+  - The multi-driver snapshot is factual: "On trip now: X of N active drivers".
+  - Recurring Care: in the nav. With 1 active arrangement, it appears on the Overview (as a work row when there are
+    gaps).
+  - Pages load with no runtime error: Requests, Trips, Dispatch, Tomorrow, Recurring Care, Proof of Service,
+    Drivers, Fleet, Settings.
+  - Onboarding (read-only, not submitted): /onboarding → /onboarding/basics, "Step 1 of 5", "Current timezone:"
+    shown, no size question, no Finish-later exit.
+  - Composition with fixtures:
+      - An unassigned trip later today gives Attention first, then pending Requests.
+      - The priority order is preserved (attention, requests, recurring).
+      - A tomorrow trip needing preparation gives a Tomorrow work row.
+  - One active driver: the Driver Snapshot is omitted.
+  - 0 active drivers with existing trips: the "No active drivers — trips can't be assigned" row, with Set up drivers
+    (admin).
+  - Navigation is unchanged across driver-count changes.
+  - Trip Detail attribution: the assigning admin sees "Assigned by you · Sep 25, 1:53 AM" in the organization's
+    timezone. America/New_York was checked against the clock.
+  - Responsive: the Overview has no horizontal overflow at 1440px and 768px.
+  - A Driver membership is redirected to /driver from /operations and /operations/settings/organization.
+
+======================================================================
+PRODUCTION CONSOLE / RUNTIME OBSERVATIONS
+======================================================================
+The smoke harness has no raw DevTools console hook. On every visited page it inspected:
+  - the navigation response status: 200 everywhere
+  - Resource Timing entries with responseStatus ≥ 400 on the app origin: none
+  - Next.js / app error-boundary text ("Application error", "Something went wrong", "Unhandled Runtime Error",
+    "couldn't load"): none
+No material application failure was observed. A full DevTools console transcript was NOT captured, because the
+harness has no console API.
+
+======================================================================
+AUTHORIZATION VERIFICATION
+======================================================================
+  - Driver membership redirected from Operations and Settings (production): PASS.
+  - Admin: Settings present (production).
+  - Dispatcher Settings denial: MANUAL / NOT EXECUTED in production, because no synthetic dispatcher credential
+    exists and the QA policy forbids role mutation. It is verified locally (E14: no Settings nav, refused
+    server-side).
+  - Drive shown only for an active linked driver: PASS in production (linked admin shows Drive). The "absent until
+    linked" case is verified locally (E14).
+  - Every server guard is unchanged (requireOperationsAccess / requireOrganizationAdminAccess /
+    requireOnboardingAccess / requireDriverAccess). Navigation is presentation only.
+
+======================================================================
+ASSIGNMENT ATTRIBUTION VERIFICATION
+======================================================================
+  - Production: "Assigned by you · <Mon D, h:mm AM/PM>" for the assigning admin. PASS.
+  - Dispatcher viewing another member's assignment ("a team member"): MANUAL / NOT EXECUTED in production. Verified
+    locally: a Dispatcher saw "Assigned by a team member" (the admin's name was not exposed), and an admin saw
+    "Reassigned by Dana Dispatcher" plus "Reason: Driver unavailable".
+  - No RPC, service-role lookup, RLS policy or privilege was added. Names come only from the viewer's existing
+    user_profiles RLS.
+
+======================================================================
+RESPONSIVE VERIFICATION
+======================================================================
+The Overview has no horizontal overflow at 1440px and 768px, both in production and locally. Operations remains md+,
+with no new phone UI.
+
+======================================================================
+DATABASE-CHANGE VERIFICATION
+======================================================================
+  - Preflight: `supabase projects list` showed Nemryn / wyocbivzgrbekuyqdfts (linked). It was run before the
+    migration check, the ACL check and the smoke.
+  - `supabase migration list --linked`: 68/68 local == remote; head 20260924091000, unchanged. There is no new
+    migration.
+  - `git diff 4b2b6ae 51939f3 -- supabase`: empty. No schema file changed.
+  - No destructive production SQL was run. The only production writes were synthetic Siloan fixtures and temporary
+    driver-status toggles, all removed or restored.
+
+======================================================================
+RLS / RPC / PRIVILEGE VERIFICATION
+======================================================================
+  - `scripts/verify-db-privileges.sh production` after deploy: violations = 0 of 29.
+  - The release diff adds no service-role usage, no admin client and no new `.rpc(` call.
+  - The only new read is user_profiles (id, display_name) under the existing RLS.
+  - There is no RPC mutation, RLS mutation, privilege mutation, service-role exposure or tenant-isolation change.
+
+======================================================================
+NOT EXECUTED (AND WHY)
+======================================================================
+  - Dispatcher attribution view and Dispatcher Settings denial in production: MANUAL / NOT EXECUTED. No synthetic
+    dispatcher credential exists, and the QA policy forbids role mutation. Both are covered by the local E2E.
+  - Fresh-organization composition in production: NOT EXECUTED. It would require creating a new production
+    organization and auth user. Covered locally (E1/E3).
+  - business_stage variation in production: NOT EXECUTED. Changing a tenant's settings is not needed. Covered by the
+    unit test and local E2E E15.
+  - A full DevTools console log capture: not available in the harness. See CONSOLE / RUNTIME OBSERVATIONS.
+
+======================================================================
+OPEN ISSUES
+======================================================================
+  1. There is no synthetic dispatcher credential, so Dispatcher production checks stay MANUAL (owner decision to
+     create one).
+  2. The PROG1 local QA harness's cleanup comparison was unordered. It has been fixed locally (the script is
+     untracked).
+  3. On an active day where every remaining trip is overdue, the Today line reads "Nothing departing in the next 2
+     hours." That is factual; lateness is undefined.
+  4. Local fixture tenants "PROG3 Tenant <stamp>" remain in the LOCAL database only.
+
+======================================================================
+DEFERRED ITEMS   (documented, not implemented)
+======================================================================
+  - normal-work folding
+  - B1: Dispatcher-visible assigner names
+  - B2: assignment events in Activity
+  - persisted timezone confirmation
+  - a Proof of Service sidebar entry
+  - optional business_stage schema cleanup
+  - the Recurring Care "rides" → "trips" wording
+  - formal running-late semantics
+
+======================================================================
+ROLLBACK POINT
+======================================================================
+4b2b6aef0a4eaf6a6f14ddc708f2a0a4dfefb31a (the previous production release, PROG2 closeout). The release is
+application-only, with no database change, so a rollback is either of:
+  - `git revert 51939f3` pushed through the same path;
+  - Vercel promotion of the previous production deployment.
+No database rollback is needed.
+
+======================================================================
+FINAL RELEASE DISPOSITION
+======================================================================
+Reviewed commit 51939f3 is deployed to production. The pre-release gate is green:
+  - tsc, lint, unit 585/585, build
+  - PROG1 46/46, PROG2 56/56, PROG3B E2E 51/51
+The production smoke has 0 failures, there is no database change, and ACL is 0/29.
+This release record was committed in the PROG3B closeout documentation commit (no application change).
+
+PROG3B PRODUCTION RELEASE: PASS
+READY FOR OWNER REVIEW OF NEXT PHASE: YES
+DO NOT BEGIN PROG4.
