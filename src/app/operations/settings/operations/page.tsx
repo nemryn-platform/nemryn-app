@@ -5,6 +5,7 @@ import { getOperationsPreferences } from "@/lib/operations/organization-preferen
 import { timezoneOptionsFor } from "@/lib/operations/organization-settings-core";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { OperatingScheduleForm } from "@/components/operations/settings/OperatingScheduleForm";
+import { TripDefaultsForm } from "@/components/operations/settings/TripDefaultsForm";
 
 export const metadata = { title: "Operations settings" };
 
@@ -35,6 +36,7 @@ export default async function OperationsSettingsPage() {
         timezoneLabel={timezoneLabel}
         business={{ phone: preferences.businessPhone, email: preferences.businessEmail, contact: preferences.primaryContactName }}
       />
+      <TripDefaultsForm defaultTripDurationMinutes={preferences.defaultTripDurationMinutes} />
     </div>
   );
 }

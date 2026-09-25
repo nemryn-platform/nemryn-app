@@ -9,6 +9,7 @@ import { mapNewTripError, type NewTripErrorCode } from "@/lib/operations/new-tri
 import { callAssignmentRpc } from "@/lib/operations/assignment-mutation";
 import type { DispatchErrorCode } from "@/lib/operations/dispatch-errors";
 import type { CreateTripAssignmentOutcome } from "@/lib/operations/readiness-actions-core";
+import { isValidExpectedDuration } from "@/lib/operations/trip-overlap-core";
 
 export interface CreateTripActionState {
   status: "idle" | "success" | "error";
@@ -62,6 +63,10 @@ export async function createTripAction(
   // in the form only while the operator has it switched on.
   const assignNow = formData.get("assignNow") === "on";
   const assignDriverId = stringField(formData, "driverId");
+  // P1-OPS-PROG4: optional expected duration. Empty = not entered -> create_trip snapshots the organization default
+  // (source organization_default) or leaves it UNKNOWN; a value is an explicit trip duration (source trip).
+  const durationRaw = stringField(formData, "expectedDurationMinutes");
+  const expectedDurationMinutes = durationRaw === null ? null : /^\d+$/.test(durationRaw) ? Number(durationRaw) : NaN;
   const assignVehicleId = stringField(formData, "vehicleId");
 
   // Obvious client-catchable validation (work item §36) — improves
@@ -90,6 +95,9 @@ export async function createTripAction(
   // never silently become an unassigned Trip.
   if (assignNow && !assignDriverId) {
     return { status: "error", errorCode: "ASSIGN_DRIVER_REQUIRED" };
+  }
+  if (expectedDurationMinutes !== null && !isValidExpectedDuration(expectedDurationMinutes)) {
+    return { status: "error", errorCode: "INVALID_DURATION" };
   }
 
   const pathname = await getCurrentPathname("/operations/trips/new");
@@ -171,6 +179,7 @@ export async function createTripAction(
     p_assistance_notes: assistanceNotes ?? undefined,
     p_instructions: instructions ?? undefined,
     p_request_id: requestId ?? undefined,
+    p_expected_duration_minutes: expectedDurationMinutes ?? undefined,
   });
 
   if (error) {

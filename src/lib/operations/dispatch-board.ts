@@ -3,6 +3,8 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationDayBoundsUtc } from "./day-bounds";
 import { operationsTripStatusLabel } from "./presentation";
 import { getLatestLocationsByTrip, type DispatchTripLocation } from "./live-location";
+import { getOverlapCandidates } from "./trip-overlap";
+import { deriveResourceOverlap, deriveTripExtent, type ResourceCheckStatus } from "./trip-overlap-core";
 
 /**
  * Server-side data access boundary for the Dispatch Board (P1-E3-S5, work
@@ -24,7 +26,7 @@ import { getLatestLocationsByTrip, type DispatchTripLocation } from "./live-loca
  */
 
 const TRIP_COLUMNS =
-  "id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, recurring_arrangement_id, " +
+  "id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, recurring_arrangement_id, expected_duration_minutes, " +
   "passengers!trips_passenger_id_organization_id_fkey(display_name), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name), " +
@@ -75,6 +77,7 @@ interface TripRow {
   pickup_description: string;
   destination_description: string;
   recurring_arrangement_id: string | null;
+  expected_duration_minutes: number | null;
   passengers: NameRelation;
   trip_assignments: TripAssignmentEmbed[] | null;
 }
@@ -105,6 +108,17 @@ export interface DispatchTrip {
   driverLocation: DispatchTripLocation | null;
   /** P1-OPS-PROG2 — the recurring arrangement this Trip was generated from, if any (recurring-history prefill lookup only). */
   recurringArrangementId: string | null;
+  /** P1-OPS-PROG4 — planned duration (null = unknown; drawn as a "Duration not set" chip, never a made-up width). */
+  expectedDurationMinutes: number | null;
+  /** P1-OPS-PROG4 — overlap facts for the trip's CURRENT driver / vehicle (canonical trip-overlap-core); null when unassigned / no vehicle. */
+  overlap: {
+    driver: ResourceCheckStatus | null;
+    vehicle: ResourceCheckStatus | null;
+    /** P1-OPS-PROG4B-R2 — the driver or vehicle also holds an active assigned trip with NO pickup time (never drawn on the board). */
+    unknownTimeCommitment: boolean;
+  };
+  /** P1-OPS-PROG4 — still non-terminal although its known planned end has passed (a fact, not a lateness claim). */
+  pastPlannedEnd: boolean;
   /** P1-E3-S8 — a real open TripException exists for this Trip. Restrained use only (work item §31): a small indicator on the grid block, never a second full location-style panel. */
   hasOpenException: boolean;
 }
@@ -145,6 +159,9 @@ function mapTripRow(
     vehicleLabel: vehicle?.label ?? null,
     driverLocation,
     recurringArrangementId: row.recurring_arrangement_id,
+    expectedDurationMinutes: row.expected_duration_minutes,
+    overlap: { driver: null, vehicle: null, unknownTimeCommitment: false },
+    pastPlannedEnd: false,
     hasOpenException: openExceptionTripIds.has(row.id),
   };
 }
@@ -164,7 +181,11 @@ export interface DispatchDriverRow {
   trips: DispatchTrip[];
 }
 
+export type DispatchDay = "today" | "tomorrow";
+
 export interface DispatchBoardData {
+  /** P1-OPS-PROG4 — which org-local day this board shows (same engine for both). */
+  day: DispatchDay;
   dayBoundsUtc: { startUtc: string; endUtc: string };
   /** Every non-terminal Trip scheduled today, assigned or not — the full working set the board is built from. */
   trips: DispatchTrip[];
@@ -192,8 +213,11 @@ export interface DispatchBoardData {
   };
 }
 
-export async function getDispatchBoardData(organizationId: string, timezone: string): Promise<DispatchBoardData> {
-  const { startUtc, endUtc } = organizationDayBoundsUtc(new Date(), timezone);
+export async function getDispatchBoardData(organizationId: string, timezone: string, day: DispatchDay = "today"): Promise<DispatchBoardData> {
+  const now = new Date();
+  const today = organizationDayBoundsUtc(now, timezone);
+  // Tomorrow = the same helper composed on today's end (DST-safe), exactly as Tomorrow readiness does.
+  const { startUtc, endUtc } = day === "tomorrow" ? organizationDayBoundsUtc(today.endUtc, timezone) : today;
   const startIso = startUtc.toISOString();
   const endIso = endUtc.toISOString();
 
@@ -261,6 +285,28 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
   const openExceptionTripIds = new Set((exceptionsResult.data ?? []).map((row) => row.trip_id));
 
   const trips = (tripsResult.data ?? []).map((row) => mapTripRow(row, locationsByTrip, openExceptionTripIds));
+
+  // P1-OPS-PROG4 — overlap facts for every assigned trip from ONE candidate set (three paginated families: the day
+  // window with the 48 h look-back, older still-open assigned trips, and assigned trips with no pickup time),
+  // derived in memory by the canonical pure model. No per-trip query.
+  const nowMs = now.getTime();
+  const candidateSet = await getOverlapCandidates(organizationId, startUtc.getTime(), endUtc.getTime());
+  for (const trip of trips) {
+    const extent = deriveTripExtent(trip.scheduledPickupAt, trip.expectedDurationMinutes);
+    trip.pastPlannedEnd = extent.kind === "known" && extent.endMs < nowMs;
+    if (!trip.driverId && !trip.vehicleId) continue;
+    const result = deriveResourceOverlap(
+      { tripId: trip.id, scheduledPickupAt: trip.scheduledPickupAt, expectedDurationMinutes: trip.expectedDurationMinutes, driverId: trip.driverId, vehicleId: trip.vehicleId },
+      candidateSet.candidates,
+      nowMs,
+      candidateSet.coverage,
+    );
+    trip.overlap = {
+      driver: result.driver?.status ?? null,
+      vehicle: result.vehicle?.status ?? null,
+      unknownTimeCommitment: (result.driver?.missingSchedule.length ?? 0) + (result.vehicle?.missingSchedule.length ?? 0) > 0,
+    };
+  }
   const unassignedTrips = trips.filter((trip) => trip.state === "scheduled" && trip.driverId === null);
   const assignedTrips = trips.filter((trip) => trip.driverId !== null);
 
@@ -279,6 +325,7 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
   }));
 
   return {
+    day,
     dayBoundsUtc: { startUtc: startIso, endUtc: endIso },
     trips,
     unassignedTrips,

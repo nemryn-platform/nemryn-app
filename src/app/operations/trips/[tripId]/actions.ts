@@ -8,6 +8,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapTripDetailError, type TripDetailErrorCode } from "@/lib/operations/trip-detail-errors";
+import { isValidExpectedDuration } from "@/lib/operations/trip-overlap-core";
 import { mapTripExceptionError, type TripExceptionErrorCode, EXCEPTION_TYPE_VALUES } from "@/lib/operations/trip-exception-errors";
 
 export interface TripDetailActionState {
@@ -243,5 +244,45 @@ export async function resolveExceptionAction(
 
   await revalidateTripDetailRoutes(tripId);
   revalidatePath("/operations/dispatch");
+  return { status: "success" };
+}
+
+/**
+ * P1-OPS-PROG4 -- set or clear ONLY a trip's expected duration, through the
+ * set_trip_expected_duration RPC (Organization Admin / Dispatcher, non-terminal
+ * trips; the RPC re-validates everything). Empty clears it to UNKNOWN (the
+ * organization default is not re-applied). General trip editing stays out of
+ * scope.
+ */
+export async function setTripDurationAction(
+  _prevState: TripDetailActionState,
+  formData: FormData,
+): Promise<TripDetailActionState> {
+  const tripId = formData.get("tripId");
+  const raw = formData.get("expectedDurationMinutes");
+  if (typeof tripId !== "string" || tripId.length === 0) {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+  const text = typeof raw === "string" ? raw.trim() : "";
+  const minutes = text === "" ? null : /^\d+$/.test(text) ? Number(text) : NaN;
+  if (minutes !== null && !isValidExpectedDuration(minutes)) {
+    return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+
+  const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
+  await requireOperationsAccess(pathname);
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("set_trip_expected_duration", {
+    p_trip_id: tripId,
+    // null clears the value (the generated type does not model the nullable argument).
+    p_expected_duration_minutes: minutes as number,
+  });
+  if (error) {
+    return { status: "error", errorCode: mapTripDetailError(error.code) };
+  }
+
+  await revalidateTripDetailRoutes(tripId);
+  revalidatePath("/operations/tomorrow");
   return { status: "success" };
 }

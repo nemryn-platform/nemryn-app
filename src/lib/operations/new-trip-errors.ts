@@ -25,6 +25,7 @@ export type NewTripErrorCode =
   | "INVALID_INPUT"
   | "SCHEDULE_UNRESOLVABLE"
   | "ASSIGN_DRIVER_REQUIRED"
+  | "INVALID_DURATION"
   | "UNKNOWN";
 
 const NEW_TRIP_ERROR_MESSAGE: Record<NewTripErrorCode, string> = {
@@ -36,6 +37,8 @@ const NEW_TRIP_ERROR_MESSAGE: Record<NewTripErrorCode, string> = {
     "That date and time couldn't be resolved in the organization's timezone (it may fall in a daylight-saving change). Choose a different time.",
   // P1-OPS-PROG2: caught BEFORE create_trip runs, so nothing is created.
   ASSIGN_DRIVER_REQUIRED: "Choose a driver for Assign now, or turn Assign now off to create the trip unassigned.",
+  // P1-OPS-PROG4: caught before create_trip runs.
+  INVALID_DURATION: "Expected duration must be a whole number of minutes from 1 to 2880 (48 hours), or left empty.",
   UNKNOWN: "Something went wrong. Try again.",
 };
 

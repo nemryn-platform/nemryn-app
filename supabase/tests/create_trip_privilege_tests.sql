@@ -8,9 +8,9 @@
 
 do $$
 begin
-  if has_function_privilege('authenticated', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('anon', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('public', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid)'::regprocedure, 'EXECUTE') then
+  if has_function_privilege('authenticated', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid,integer)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('anon', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid,integer)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('public', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid,integer)'::regprocedure, 'EXECUTE') then
     raise notice 'CREATE-TRIP-PRIV exposed-authenticated-only: PASS (authenticated yes, anon/PUBLIC no)';
   else
     raise notice 'CREATE-TRIP-PRIV exposed-authenticated-only: FAIL';

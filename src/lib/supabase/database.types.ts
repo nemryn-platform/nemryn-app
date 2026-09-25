@@ -449,6 +449,7 @@ export type Database = {
           business_phone: string | null
           business_stage: string | null
           created_at: string
+          default_trip_duration_minutes: number | null
           id: string
           name: string
           operating_closes_at: string | null
@@ -466,6 +467,7 @@ export type Database = {
           business_phone?: string | null
           business_stage?: string | null
           created_at?: string
+          default_trip_duration_minutes?: number | null
           id?: string
           name: string
           operating_closes_at?: string | null
@@ -483,6 +485,7 @@ export type Database = {
           business_phone?: string | null
           business_stage?: string | null
           created_at?: string
+          default_trip_duration_minutes?: number | null
           id?: string
           name?: string
           operating_closes_at?: string | null
@@ -1269,6 +1272,8 @@ export type Database = {
           created_at: string
           destination_description: string
           destination_facility_id: string | null
+          expected_duration_minutes: number | null
+          expected_duration_source: string | null
           id: string
           instructions: string | null
           no_show_at: string | null
@@ -1291,6 +1296,8 @@ export type Database = {
           created_at?: string
           destination_description: string
           destination_facility_id?: string | null
+          expected_duration_minutes?: number | null
+          expected_duration_source?: string | null
           id?: string
           instructions?: string | null
           no_show_at?: string | null
@@ -1313,6 +1320,8 @@ export type Database = {
           created_at?: string
           destination_description?: string
           destination_facility_id?: string | null
+          expected_duration_minutes?: number | null
+          expected_duration_source?: string | null
           id?: string
           instructions?: string | null
           no_show_at?: string | null
@@ -1862,6 +1871,7 @@ export type Database = {
           p_assistance_notes?: string
           p_destination_description: string
           p_destination_facility_id?: string
+          p_expected_duration_minutes?: number
           p_instructions?: string
           p_organization_id: string
           p_passenger_id: string
@@ -2599,6 +2609,16 @@ export type Database = {
         }
         Returns: boolean
       }
+      set_trip_expected_duration: {
+        Args: { p_expected_duration_minutes: number; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_expected_duration_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_expected_duration_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       signup_create_organization: {
         Args: {
           p_business_name: string
@@ -2733,6 +2753,19 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      update_organization_trip_defaults: {
+        Args: {
+          p_default_trip_duration_minutes: number
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["organization_trip_defaults_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_trip_defaults_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       update_request_intake_integration_origin: {
         Args: { p_integration_id: string; p_origin: string }
         Returns: Database["public"]["CompositeTypes"]["request_intake_integration_result"]
@@ -2844,6 +2877,11 @@ export type Database = {
         membership_id: string | null
         role: string | null
         created: boolean | null
+      }
+      organization_trip_defaults_result: {
+        organization_id: string | null
+        default_trip_duration_minutes: number | null
+        changed: boolean | null
       }
       owner_driver_link_result: {
         driver_id: string | null
@@ -2964,6 +3002,12 @@ export type Database = {
         created_at: string | null
         changed: boolean | null
         notification_event_id: string | null
+      }
+      trip_expected_duration_result: {
+        trip_id: string | null
+        expected_duration_minutes: number | null
+        expected_duration_source: string | null
+        changed: boolean | null
       }
       trip_transition_result: {
         trip_id: string | null

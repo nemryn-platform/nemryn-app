@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { usePathname } from "next/navigation";
-import { Plus, CaretLeft, CaretRight, Gear } from "@phosphor-icons/react/dist/ssr";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Plus, Gear } from "@phosphor-icons/react/dist/ssr";
 import { OperationsShell } from "@/components/operations/OperationsShell";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Button } from "@/components/ui/Button";
@@ -10,8 +10,6 @@ import { LinkButton } from "@/components/ui/LinkButton";
 import { formatOperationsLongDate } from "@/lib/operations/presentation";
 import type { AppHeaderProps } from "@/components/operations/AppHeader";
 import type { OrganizationContext } from "@/lib/auth/types";
-import { cn } from "@/lib/cn";
-import { typography } from "@/design/typography";
 
 const SECTION_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/operations/tomorrow", label: "Tomorrow" },
@@ -95,6 +93,7 @@ function buildHeaderProps(
   avatarName: string,
   dispatcherEmail: string | null,
   hasMultipleOrganizations: boolean,
+  dispatchDay: "today" | "tomorrow" = "today",
 ): AppHeaderProps {
   const identity = {
     avatarName,
@@ -126,37 +125,12 @@ function buildHeaderProps(
   if (pathname === "/operations/dispatch") {
     return {
       title: "Dispatch",
-      description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
+      // P1-OPS-PROG4: the board has a real Today / Tomorrow switch in the page; the old disabled day navigator
+      // placeholder was removed so the header never contradicts the selected day.
+      description: dispatchDay === "tomorrow" ? "Tomorrow" : formatOperationsLongDate(new Date(), organization.organizationTimezone),
       ...identity,
       actions: (
         <>
-          {/* Day navigator — real, visible, disabled (matching the Export
-              Day Sheet / ZD-134 treatment): the board only ever queries the
-              organization's own "today" (work item's own day-scoping),
-              there is no other-day query built this phase, so a live
-              navigator would be a fake affordance. "Today" is a static
-              label, not a button. */}
-          <div className="hidden items-center gap-1 rounded-sm border border-border-strong px-1 py-1 md:flex">
-            <Button
-              variant="text"
-              size="sm"
-              disabled
-              aria-label="Previous day (not available yet)"
-              title="Day navigation is not available yet — the board shows today only."
-            >
-              <CaretLeft className="size-4" aria-hidden />
-            </Button>
-            <span className={cn(typography.bodySmall, "px-1 font-medium text-text-secondary")}>Today</span>
-            <Button
-              variant="text"
-              size="sm"
-              disabled
-              aria-label="Next day (not available yet)"
-              title="Day navigation is not available yet — the board shows today only."
-            >
-              <CaretRight className="size-4" aria-hidden />
-            </Button>
-          </div>
           <HeaderSearch />
           <Button
             variant="outline"
@@ -207,6 +181,8 @@ export function OperationsLayoutClient({
   children,
 }: OperationsLayoutClientProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const dispatchDay = searchParams.get("day") === "tomorrow" ? "tomorrow" : "today";
 
   return (
     <OperationsShell
@@ -217,7 +193,7 @@ export function OperationsLayoutClient({
         hasLinkedDriverProfile,
         canManageSettings: organization.role === "organization_admin",
       }}
-      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations)}
+      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations, dispatchDay)}
     >
       {children}
     </OperationsShell>

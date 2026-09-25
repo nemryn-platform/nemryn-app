@@ -19,6 +19,8 @@ import {
 } from "@/lib/operations/assignment-context";
 import type { RecurringAssignmentHint } from "@/lib/operations/assignment-defaults-core";
 import { deriveTomorrowAssignAction, type TomorrowAssignAction } from "@/lib/operations/readiness-actions-core";
+import { getKnownOverlapTripIds } from "@/lib/operations/trip-overlap";
+import { deriveTripExtent, formatTripExtent } from "@/lib/operations/trip-overlap-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -126,6 +128,22 @@ export default async function TomorrowReadinessPage() {
     }
   }
 
+  // P1-OPS-PROG4: planned window + a NEUTRAL overlap badge per row, from ONE candidate set for tomorrow and the
+  // canonical pure model. Informational only: readiness (READY / NEEDS_PREPARATION and the counts) is untouched.
+  const extentLabels = new Map<string, string | null>();
+  for (const item of items) {
+    const target = data.assignmentTargets[item.tripId];
+    extentLabels.set(item.tripId, target ? formatTripExtent(deriveTripExtent(target.scheduledPickupAt, target.expectedDurationMinutes), timezone) : null);
+  }
+  // Overlap facts unavailable -> no badges plus the incomplete note; readiness is unaffected. An incomplete set
+  // keeps the known badges and adds one factual note: the absence of a badge then proves nothing.
+  const { tripIds: overlapping, coverage: overlapCoverage } = await getKnownOverlapTripIds(
+    organization.organizationId,
+    { fromMs: Date.parse(data.tomorrowStartUtc), toMs: Date.parse(data.tomorrowEndUtc) },
+    items.map((item) => data.assignmentTargets[item.tripId]).filter((t): t is NonNullable<typeof t> => Boolean(t)),
+  ).catch(() => ({ tripIds: new Set<string>(), coverage: "incomplete" as const }));
+  const extentText = (tripId: string) => extentLabels.get(tripId) ?? "Duration not set";
+
   const summaryItems: SummaryItem[] = [
     { label: totalScheduledTrips === 1 ? "scheduled trip" : "scheduled trips", value: totalScheduledTrips },
     { label: "ready", value: readyCount, dot: true },
@@ -137,6 +155,9 @@ export default async function TomorrowReadinessPage() {
   return (
     <div className="flex flex-col gap-zw-lg">
       <PageHeader title="Tomorrow" description={dateLabel} />
+      <Link href="/operations/dispatch?day=tomorrow" className={cn(typography.bodySmall, "self-start font-medium text-text-link hover:underline")} data-testid="tomorrow-dispatch-link">
+        Open in Dispatch
+      </Link>
 
       {totalScheduledTrips === 0 ? (
         <Panel>
@@ -148,6 +169,11 @@ export default async function TomorrowReadinessPage() {
       ) : (
         <>
           <SummaryStrip inline items={summaryItems} />
+          {overlapCoverage !== "complete" && (
+            <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="tomorrow-overlap-incomplete">
+              Some trip commitments could not be fully checked for other trips at the same time.
+            </p>
+          )}
 
           {needsPreparationCount === 0 ? (
             <Panel>
@@ -176,10 +202,14 @@ export default async function TomorrowReadinessPage() {
                         <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>
                           {formatOperationsTime(item.scheduledPickupAt, timezone)} · {item.passengerDisplayName}
                         </p>
+                        <p className={cn(typography.metadata, "text-text-muted")} data-testid="tomorrow-extent">
+                          {extentText(item.tripId)}
+                        </p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
                           {item.readiness.reasons.map((reason) => (
                             <StatusBadge key={reason} label={tripReadinessReasonLabel(reason)} category="warning" />
                           ))}
+                          {overlapping.has(item.tripId) && <StatusBadge label="Overlaps another trip" category="neutral" />}
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-2">
@@ -220,7 +250,11 @@ export default async function TomorrowReadinessPage() {
                         className={cn(typography.bodySmall, "min-w-0 flex-1 truncate text-text-secondary hover:text-text-link hover:underline")}
                       >
                         {formatOperationsTime(item.scheduledPickupAt, timezone)} · {item.passengerDisplayName}
+                        <span className={cn(typography.metadata, "ml-2 text-text-muted")} data-testid="tomorrow-extent">
+                          {extentText(item.tripId)}
+                        </span>
                       </Link>
+                      {overlapping.has(item.tripId) && <StatusBadge label="Overlaps another trip" category="neutral" />}
                       <span className={cn(typography.metadata, "shrink-0 text-success-text")}>Ready</span>
                     </li>
                   ))}

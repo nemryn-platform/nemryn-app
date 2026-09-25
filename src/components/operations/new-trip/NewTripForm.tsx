@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User, Calendar, MapPin, Flag, NotePencil, ClipboardText, Plus, DownloadSimple, X, SteeringWheel } from "@phosphor-icons/react/dist/ssr";
+import { User, Calendar, MapPin, Flag, NotePencil, ClipboardText, Plus, DownloadSimple, X, SteeringWheel, Clock } from "@phosphor-icons/react/dist/ssr";
 import { Select } from "@/components/ui/Select";
 import { Combobox } from "@/components/ui/Combobox";
 import { Avatar } from "@/components/ui/Avatar";
@@ -29,6 +29,7 @@ import { AssignmentFields } from "@/components/operations/dispatch/AssignmentFie
 import type { AssignmentOptions } from "@/lib/operations/assignment-context";
 import { deriveAssignmentDefaults } from "@/lib/operations/assignment-defaults-core";
 import { createTripNoticeParam } from "@/lib/operations/readiness-actions-core";
+import { formatDurationMinutes } from "@/lib/operations/trip-overlap-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -47,6 +48,8 @@ export interface NewTripFormProps {
   assignmentOptions: AssignmentOptions | null;
   operatorDriverId: string | null;
   canManageDriverSetup: boolean;
+  /** P1-OPS-PROG4: the organization's optional default trip duration (placeholder only; null = no default). */
+  defaultTripDurationMinutes: number | null;
 }
 
 /**
@@ -81,6 +84,7 @@ export function NewTripForm({
   assignmentOptions,
   operatorDriverId,
   canManageDriverSetup,
+  defaultTripDurationMinutes,
 }: NewTripFormProps) {
   const [state, formAction, pending] = useActionState(createTripAction, INITIAL_STATE);
   const router = useRouter();
@@ -114,6 +118,10 @@ export function NewTripForm({
   const [pickupDate, setPickupDate] = useState(() => preselectedRequest?.preferredDate ?? "");
   const [pickupTime, setPickupTime] = useState(() => preselectedRequest?.preferredTime?.slice(0, 5) ?? "");
   const [appointmentDate, setAppointmentDate] = useState("");
+  // P1-OPS-PROG4: empty = not entered (create_trip snapshots the organization default, or the duration stays
+  // unknown); a value is this trip's own duration. The default is shown as a placeholder, never pre-typed, so an
+  // untouched default is recorded honestly as "organization default".
+  const [expectedDuration, setExpectedDuration] = useState("");
   const [appointmentTime, setAppointmentTime] = useState("");
 
   const [pickupFacilityId, setPickupFacilityId] = useState("");
@@ -343,6 +351,31 @@ export function NewTripForm({
             </div>
           </FormSection>
 
+          <FormSection icon={<Clock className="size-5" aria-hidden />} title="Expected duration">
+            <div className="sm:w-64">
+              <Input
+                label="Minutes (optional)"
+                name="expectedDurationMinutes"
+                type="number"
+                min={1}
+                max={2880}
+                step={1}
+                inputMode="numeric"
+                placeholder={defaultTripDurationMinutes !== null ? `${defaultTripDurationMinutes} (organization default)` : "Not set"}
+                value={expectedDuration}
+                onChange={(e) => setExpectedDuration(e.target.value)}
+                data-testid="expected-duration"
+              />
+            </div>
+            <p className={cn(typography.metadata, "text-text-muted")} data-testid="expected-duration-help">
+              {expectedDuration.trim() !== ""
+                ? "This trip's own duration. Used to show when a driver or vehicle has another trip at the same time."
+                : defaultTripDurationMinutes !== null
+                  ? `Organization default: ${formatDurationMinutes(defaultTripDurationMinutes)} — applied when left empty.`
+                  : "Not set. Leave empty if unknown — overlaps simply can't be checked for this trip."}
+            </p>
+          </FormSection>
+
           <FormSection icon={<MapPin className="size-5" aria-hidden />} title="Pickup">
             <Select
               label="Pickup Facility"
@@ -458,7 +491,19 @@ export function NewTripForm({
                       driverOptions: assignmentOptions.driverOptions,
                       vehicleOptions: assignmentOptions.vehicleOptions,
                     })}
-                    dayTarget={pickupDate ? { kind: "date", dateKey: pickupDate } : null}
+                    dayTarget={
+                      pickupDate
+                        ? {
+                            kind: "date",
+                            dateKey: pickupDate,
+                            pickupTime: pickupTime || null,
+                            // The duration create_trip will store: the typed value, else the organization default.
+                            expectedDurationMinutes: /^\d+$/.test(expectedDuration.trim())
+                              ? Number(expectedDuration.trim())
+                              : defaultTripDurationMinutes,
+                          }
+                        : null
+                    }
                     disabled={pending}
                   />
                 </>

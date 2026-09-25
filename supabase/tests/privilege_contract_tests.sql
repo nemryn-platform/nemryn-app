@@ -155,7 +155,7 @@ c_fn(sig, roles) as (values
   ('create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date)', 'u'),
   ('create_request_intake_integration(uuid,text)', 'u'),
   ('create_staff_invite(uuid,text,text)', 'u'),
-  ('create_trip(uuid,uuid,text,text,timestamp with time zone,timestamp with time zone,uuid,uuid,text,text,uuid)', 'u'),
+  ('create_trip(uuid,uuid,text,text,timestamp with time zone,timestamp with time zone,uuid,uuid,text,text,uuid,integer)', 'u'),
   ('create_trip_for_recurring_occurrence(uuid,uuid,date)', 'u'),
   ('current_driver_id(uuid)', 'u'),
   ('decline_transportation_request(uuid,uuid,text,text)', 'u'),
@@ -226,6 +226,8 @@ c_fn(sig, roles) as (values
   ('submit_public_transportation_request(text,text,text,text,text,text,text,text,text,date,time without time zone,text,text,text,text,text[],date,date,time without time zone,boolean,text,jsonb)', 's'),
   ('unskip_recurring_occurrence(uuid,uuid,date)', 'u'),
   ('update_organization_operating_schedule(uuid,smallint[],time without time zone,time without time zone)', 'u'),
+  ('set_trip_expected_duration(uuid,integer)', 'u'),
+  ('update_organization_trip_defaults(uuid,integer)', 'u'),
   ('update_organization_settings(uuid,jsonb)', 'u'),
   ('update_request_intake_integration_origin(uuid,text)', 'u')
 ),

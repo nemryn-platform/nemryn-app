@@ -3,6 +3,7 @@ import { cache } from "react";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { addDaysToDateKey, localMidnightUtc, organizationDayBoundsUtc } from "./day-bounds";
 import { formatOperationsLongDate, formatOperationsTime, operationsTripStatusLabel } from "./presentation";
+import { deriveTripExtent, formatTripExtent } from "./trip-overlap-core";
 import {
   deriveDriverDayFacts,
   IN_PROGRESS_TRIP_STATES,
@@ -29,13 +30,14 @@ const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CONTEXT_ROW_LIMIT = 50;
 
 const DRIVER_TRIP_COLUMNS =
-  "id, state, scheduled_pickup_at, pickup_description, destination_description, " +
+  "id, state, scheduled_pickup_at, expected_duration_minutes, pickup_description, destination_description, " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey!inner(id)";
 
 interface DriverTripRow {
   id: string;
   state: string;
   scheduled_pickup_at: string | null;
+  expected_duration_minutes: number | null;
   pickup_description: string;
   destination_description: string;
 }
@@ -56,6 +58,8 @@ export const getOperatorLinkedDriverId = cache(async (organizationId: string): P
 export interface DriverDayTripView {
   tripId: string;
   timeLabel: string;
+  /** P1-OPS-PROG4: the planned extent ("9:30 AM – 10:15 AM") when the trip's duration is known, else null. */
+  extentLabel: string | null;
   statusLabel: string;
   pickupDescription: string;
   destinationDescription: string;
@@ -82,8 +86,14 @@ function toFact(row: DriverTripRow): DriverTripFact {
   };
 }
 
-/** Which day the driver-day context is for: an existing Trip's own org-local day, or (New Trip) a chosen org-local date. */
-export type DriverDayTarget = { kind: "trip"; tripId: string } | { kind: "date"; dateKey: string };
+/**
+ * Which day the driver-day context is for: an existing Trip's own org-local day, or (New Trip) a chosen org-local
+ * date. P1-OPS-PROG4: a New Trip target may also carry the entered pickup time and expected duration, used only
+ * by the overlap read (the day list itself is keyed on the date).
+ */
+export type DriverDayTarget =
+  | { kind: "trip"; tripId: string }
+  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null };
 
 export async function getDriverDayContext(
   organizationId: string,
@@ -147,6 +157,9 @@ export async function getDriverDayContext(
   ]);
   if (dayResult.error || currentResult.error) return { status: "unavailable" };
 
+  const durations = new Map(
+    [...(dayResult.data ?? []), ...(currentResult.data ?? [])].map((row) => [row.id, row.expected_duration_minutes] as const),
+  );
   const facts = deriveDriverDayFacts({
     targetTripId: excludeTripId ?? "",
     dayStartUtc: bounds ? bounds.startUtc.toISOString() : null,
@@ -160,6 +173,7 @@ export async function getDriverDayContext(
     otherTrips: facts.otherTrips.map((trip) => ({
       tripId: trip.tripId,
       timeLabel: formatOperationsTime(trip.scheduledPickupAt, timezone),
+      extentLabel: formatTripExtent(deriveTripExtent(trip.scheduledPickupAt, durations.get(trip.tripId) ?? null), timezone),
       statusLabel: operationsTripStatusLabel(trip.state, true),
       pickupDescription: trip.pickupDescription,
       destinationDescription: trip.destinationDescription,

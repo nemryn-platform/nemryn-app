@@ -5,6 +5,7 @@ import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateOperatingSchedule } from "@/lib/operations/operating-schedule-core";
+import { isValidExpectedDuration } from "@/lib/operations/trip-overlap-core";
 
 export interface OperatingScheduleActionState {
   status: "idle" | "success" | "error";
@@ -66,4 +67,47 @@ export async function saveOperatingScheduleAction(
     message: !data?.changed ? "No changes to save." : schedule ? "Operating schedule saved." : "Operating schedule cleared.",
     ...(schedule ? { days: schedule.days, opensAt: schedule.opensAt, closesAt: schedule.closesAt } : { days: [], opensAt: "", closesAt: "" }),
   };
+}
+
+export interface TripDefaultsActionState {
+  status: "idle" | "success" | "error";
+  message?: string;
+  value?: string;
+}
+
+/**
+ * P1-OPS-PROG4 -- save the optional default trip duration (Organization Admin
+ * only; re-derived per call and enforced by update_organization_trip_defaults,
+ * so a Dispatcher is refused server-side). Empty clears it. Applied only to
+ * trips created afterwards -- existing trips keep their own duration.
+ */
+export async function saveTripDefaultsAction(_prev: TripDefaultsActionState, formData: FormData): Promise<TripDefaultsActionState> {
+  const pathname = await getCurrentPathname("/operations/settings/operations");
+  const organization = await requireOrganizationAdminAccess(pathname);
+
+  const raw = formData.get("defaultTripDurationMinutes");
+  const value = typeof raw === "string" ? raw.trim() : "";
+  const minutes = value === "" ? null : /^\d+$/.test(value) ? Number(value) : NaN;
+  if (minutes !== null && !isValidExpectedDuration(minutes)) {
+    return { status: "error", message: "Enter a whole number of minutes from 1 to 2880 (48 hours), or leave it empty.", value };
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("update_organization_trip_defaults", {
+    p_organization_id: organization.organizationId,
+    // null clears the default (the generated type does not model the nullable argument).
+    p_default_trip_duration_minutes: minutes as number,
+  });
+  if (error) {
+    const message =
+      error.code === "ZW002"
+        ? "Only an Organization Admin can change the default trip duration."
+        : error.code === "ZW006"
+          ? "Enter a whole number of minutes from 1 to 2880 (48 hours), or leave it empty."
+          : "Something went wrong saving the default. Try again.";
+    return { status: "error", message, value };
+  }
+  revalidatePath("/operations/settings/operations");
+  revalidatePath("/operations/trips/new");
+  return { status: "success", message: minutes === null ? "Default trip duration cleared." : "Default trip duration saved.", value };
 }

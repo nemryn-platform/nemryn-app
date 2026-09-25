@@ -4,6 +4,8 @@ import { DefinitionList } from "@/components/ui/DefinitionList";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { formatOperationsTime, formatOperationsShortDateTime } from "@/lib/operations/presentation";
 import type { AssignmentAttribution } from "@/lib/operations/assignment-attribution-core";
+import type { AssignmentOverlapView } from "@/lib/operations/trip-overlap";
+import { OverlapNotes } from "@/components/operations/overlap/OverlapNotes";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -21,6 +23,8 @@ export interface CurrentStatusPanelProps {
   assignmentControl?: ReactNode;
   /** P1-OPS-PROG3B: who assigned the current (or last) assignment and when, from stored facts; null when never assigned. */
   attribution?: AssignmentAttribution | null;
+  /** P1-OPS-PROG4: overlap facts for the current assignment (warning only), or null. */
+  overlap?: AssignmentOverlapView | null;
 }
 
 /**
@@ -51,6 +55,7 @@ export function CurrentStatusPanel({
   hasActiveAssignment,
   assignmentControl,
   attribution = null,
+  overlap = null,
 }: CurrentStatusPanelProps) {
   const items = [
     ...(driverName ? [{ label: "Driver", value: driverName }] : []),
@@ -76,6 +81,11 @@ export function CurrentStatusPanel({
           </div>
         )}
       </div>
+      {overlap && (
+        <div className="mt-zw-md" data-testid="current-assignment-overlap">
+          <OverlapNotes view={overlap} />
+        </div>
+      )}
       {eligibleForAssignmentAction && assignmentControl && <div className="mt-zw-lg">{assignmentControl}</div>}
       {eligibleForAssignmentAction && !assignmentControl && (
         <div className="mt-zw-lg">

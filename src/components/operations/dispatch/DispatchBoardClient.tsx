@@ -42,17 +42,20 @@ export function DispatchBoardClient({ data, timezone, operatorDriverId, canManag
         <NeedsAssignmentQueue
           trips={data.unassignedTrips}
           timezone={timezone}
+          day={data.day}
           onAssign={(trip) => setActiveDialog({ trip, mode: "assign" })}
         />
         <AssignmentGrid
           driverRows={data.driverRows}
           timezone={timezone}
+          day={data.day}
+          dayStartUtc={data.dayBoundsUtc.startUtc}
           onReassign={(trip) => setActiveDialog({ trip, mode: "reassign" })}
           emptyAction={
             <NoActiveDriversActions canManageDriverSetup={canManageDriverSetup} hasLinkedDriver={operatorDriverId !== null} />
           }
         />
-        <DriverCapacityPanel driverRows={data.driverRows} />
+        <DriverCapacityPanel driverRows={data.driverRows} day={data.day} />
       </div>
 
       {activeDialog && (

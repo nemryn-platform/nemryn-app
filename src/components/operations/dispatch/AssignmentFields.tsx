@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Select } from "@/components/ui/Select";
-import { driverDayContextAction } from "@/app/operations/dispatch/actions";
+import { assignmentOverlapAction, driverDayContextAction } from "@/app/operations/dispatch/actions";
+import { OverlapNotes, overlapUnavailableView } from "@/components/operations/overlap/OverlapNotes";
+import type { AssignmentOverlapView } from "@/lib/operations/trip-overlap";
 import type { DispatchDriverOption, DispatchVehicleOption } from "@/lib/operations/dispatch-board";
 import type { DriverDayContext, DriverDayTarget } from "@/lib/operations/assignment-context";
 import {
@@ -50,7 +52,8 @@ function targetKey(target: DriverDayTarget | null): string {
  * shared by the Assign/Reassign dialog and New Trip's "Assign now"
  * (P1-OPS-PROG2) so both surfaces follow exactly the same rules: prefill
  * only from `deriveAssignmentDefaults`, "(you)" ordering, driver-day facts
- * (never "conflict"/"overlap"/"available"), the non-blocking vehicle note
+ * (never "conflict"/"available"; P1-OPS-PROG4 adds factual overlap notes
+ * only from two KNOWN planned intervals), the non-blocking vehicle note
  * and the zero-driver guidance. Submits as plain `driverId` / `vehicleId`
  * form fields of whichever form contains it; writes nothing itself.
  */
@@ -66,6 +69,7 @@ export function AssignmentFields({
   const [driverId, setDriverId] = useState<string>(defaults.driverId ?? "");
   const [vehicleId, setVehicleId] = useState<string>(defaults.vehicleId ?? "");
   const [dayContext, setDayContext] = useState<DayContextState | null>(null);
+  const [overlap, setOverlap] = useState<{ key: string; view: AssignmentOverlapView | null } | null>(null);
 
   const dayKey = `${targetKey(dayTarget)}|${driverId}`;
   useEffect(() => {
@@ -86,6 +90,32 @@ export function AssignmentFields({
     // dayTarget is compared by its key so a re-created object with the same meaning does not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayKey]);
+
+  // P1-OPS-PROG4: overlap facts for the selected driver / vehicle (warning only; never gates the submit button).
+  const overlapKey = JSON.stringify([dayTarget, driverId, vehicleId]);
+  useEffect(() => {
+    if (!dayTarget || (!driverId && !vehicleId)) return;
+    let ignore = false;
+    const key = overlapKey;
+    const timer = setTimeout(() => {
+      assignmentOverlapAction(dayTarget, driverId || null, vehicleId || null).then(
+        (view) => {
+          if (!ignore) setOverlap({ key, view });
+        },
+        () => {
+          // A failed read is uncertainty, not "nothing to report".
+          if (!ignore) setOverlap({ key, view: overlapUnavailableView(Boolean(driverId), Boolean(vehicleId)) });
+        },
+      );
+    }, 250);
+    return () => {
+      ignore = true;
+      clearTimeout(timer);
+    };
+    // overlapKey captures dayTarget / driverId / vehicleId by value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlapKey]);
+  const currentOverlap = overlap && overlap.key === overlapKey ? overlap.view : null;
 
   const orderedDrivers = orderDriversForOperator(driverOptions, operatorDriverId);
   const selectedDriver = orderedDrivers.find((d) => d.id === driverId) ?? null;
@@ -146,6 +176,8 @@ export function AssignmentFields({
         </button>
       )}
 
+      <OverlapNotes view={driverId || vehicleId ? currentOverlap : null} />
+
       {vehicleGuidance === "no_vehicle_selected" && (
         <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="no-vehicle-note">
           No vehicle selected. Tomorrow readiness will show this trip as needing a vehicle.
@@ -195,7 +227,9 @@ function DriverDayPanel({ driverName, context }: { driverName: string; context: 
               <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
                 {context.otherTrips.map((item) => (
                   <li key={item.tripId} className="flex min-w-0 gap-3" data-testid="driver-day-trip">
-                    <span className={cn(typography.bodySmall, "w-20 shrink-0 font-medium text-text-primary tabular-nums")}>{item.timeLabel}</span>
+                    <span className={cn(typography.bodySmall, "shrink-0 font-medium text-text-primary tabular-nums", item.extentLabel ? "w-40" : "w-20")}>
+                      {item.extentLabel ?? item.timeLabel}
+                    </span>
                     <span className={cn(typography.bodySmall, "min-w-0 break-words text-text-secondary")}>
                       {item.pickupDescription} → {item.destinationDescription}
                     </span>

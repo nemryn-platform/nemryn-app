@@ -1,0 +1,374 @@
+NEMRYN PLATFORM
+P1-OPS-PROG4B-R1 -- OVERLAP CANDIDATE COMPLETENESS HARDENING -- LOCAL
+A narrow remediation of P1-OPS-PROG4B (docs/reports/p1-ops-prog4b-trip-time-extent-overlap-implementation.txt).
+Local only: NOT committed, NOT pushed, NOT deployed. Production (wyocbivzgrbekuyqdfts) was not touched; no production
+command was run. PROG4 was not redesigned. PROG5 was not started.
+
+======================================================================
+1. STARTING REPOSITORY STATE
+======================================================================
+  - Branch main, HEAD = origin/main = c625689 (the PROG3B closeout).
+  - The PROG4B implementation is uncommitted in the working tree: 27 modified files plus the new files listed in the
+    PROG4B report.
+  - Local database: migration 20260925100000_trip_expected_duration applied (local only).
+  - PROG4B's final local state: 611/611 unit tests; E2E PROG4B 45, PROG1 46, PROG2 56, PROG3B 51; privilege
+    contract 0/29.
+
+======================================================================
+2. ROOT CAUSE
+======================================================================
+Before R1, getOverlapCandidates made one request per query family and trusted the result as the whole set:
+  - A (window family): `.limit(2000)`
+  - B (older still-open family): `.limit(500)`
+PostgREST caps every response at the project's max_rows. supabase/config.toml sets `max_rows = 1000`, and hosted
+Supabase also defaults to 1000. The cap is SILENT:
+  - there is no error;
+  - there is no header the loader checked;
+  - a capped response is indistinguishable from a naturally short one.
+Consequences:
+  1. Family A could never return more than 1000 rows, even though it asked for 2000. The "2000" bound was never
+     real.
+  2. Nothing distinguished "complete" from "truncated", in either family.
+  3. The pure core then derived "clear" for any resource whose relevant trips fell beyond the cut. That is exactly the
+     forbidden inference: unknown became clear.
+
+Reproduced against the LOCAL database, with the pre-R1 query shape and the Org A admin session (RLS):
+  - Setup: 1,102 window trips, where a same-driver trip and a same-vehicle trip sort after 1,100 earlier trips.
+  - The `.limit(2000)` request returned exactly 1000 rows: no error, no signal.
+  - Both relevant trips were absent.
+  - The pre-R1 derivation reported driver "clear" AND vehicle "clear", despite two real overlaps.
+
+======================================================================
+3. PREVIOUS 2000 / 500 BEHAVIOUR (as inspected)
+======================================================================
+  - Two parallel requests, ordered by scheduled_pickup_at only (not a total order), with no pagination and no
+    completeness signal.
+  - Family A: effectively ≤ 1000 rows (max_rows), silently.
+  - Family B: ≤ 500 rows, silently.
+  - Beyond either bound, candidates simply disappeared, and every caller derived from them as if complete:
+      - Dispatch Today / Tomorrow
+      - Tomorrow badges
+      - the Assign / Reassign dialog
+      - New Trip "Assign now"
+      - Trip Detail's current-assignment overlap
+
+======================================================================
+4. CHOSEN PAGINATION / COMPLETENESS MODEL
+======================================================================
+Complete keyset pagination, with an explicit coverage result. There are still two query FAMILIES (never one query per
+trip), both organization-scoped on the caller's RLS session client. There is no service role.
+  - Page size: OVERLAP_CANDIDATE_PAGE_SIZE = 500. This must be ≤ max_rows, so a full page is never confused with a
+    capped one. The unit tests assert 500 ≤ 1000.
+  - Stable ordering: ORDER BY scheduled_pickup_at ASC, id ASC. This is a total order, since id is unique and both
+    families exclude NULL starts through their range filters.
+  - Cursor: strictly after the last row, using the PostgREST keyset predicate
+      or=(scheduled_pickup_at.gt."<ts>",and(scheduled_pickup_at.eq."<ts>",id.gt."<id>"))
+    The values are double-quoted, because timestamps contain reserved characters. It was verified against real
+    PostgREST locally. There is no OFFSET, so there is no duplicate or skipped row between pages from unstable
+    ordering.
+  - Stopping condition: a page with fewer rows than the page size proves exhaustion (coverage "complete").
+      - A page of exactly 500 always triggers the next read, so exact multiples are proven, not assumed.
+  - Safety ceiling: OVERLAP_CANDIDATE_MAX_PAGES = 20 per family (10,000 non-terminal trips per family).
+      - If the 20th page is still full, the family stops and reports "incomplete". Exactly 10,000 is also reported
+        as incomplete, because more cannot be ruled out.
+      - Nothing is silently sliced.
+  - The set's coverage is "complete" only when BOTH families are complete; otherwise it is "incomplete".
+  - Diagnostics (rows, pages and completeness per family) are returned for logs. When incomplete, the server logs one
+    console.warn with those numbers. Row counts never reach operator copy.
+
+======================================================================
+5. INCOMPLETE-COVERAGE BEHAVIOUR
+======================================================================
+  - An incomplete set NEVER yields "clear", for any driver or vehicle.
+      - Nemryn does not guess which resource the unread trips belong to.
+      - A resource that would otherwise be clear becomes "not_fully_checkable", with the distinct flag
+        candidateSetIncomplete = true.
+  - Known overlaps found in the pages that were read still stand: the status stays "overlap", and the incomplete
+    flag is carried alongside it.
+  - Existing reasons are preserved, not collapsed. The status precedence is unchanged, with incompleteness added
+    last:
+      1. overlap
+      2. not_checkable (missing extent)
+      3. not_fully_checkable (still open past planned end, Q7)
+      4. not_fully_checkable (candidate set incomplete)
+      5. clear
+    missingExtent[] and stillOpenPastPlannedEnd[] are still reported alongside the new flag.
+  - Q7 is not weakened. A still-open trip past its planned end remains not_fully_checkable: never late, never an
+    automatic overlap, never clear. Incompleteness is an ADDITIONAL uncertainty.
+  - A target with no pickup time is unchanged. No candidates can be placed against it, so nothing is loaded and its
+    coverage is trivially complete. The target itself is still reported as unknown ("can't check").
+  - Failed reads are uncertainty too (see §8, UI):
+      - Dialog / Assign now: a failed overlap read now shows the "can't fully check" line instead of nothing.
+      - Trip Detail: the same.
+      - Tomorrow: a failed read shows the incomplete note instead of silently showing no badges.
+      - Dispatch: a failed candidate read still surfaces as a page error (unchanged), never silently.
+
+======================================================================
+6. OVERLAP-CORE CHANGES (src/lib/operations/trip-overlap-core.ts, pure)
+======================================================================
+  - New type CandidateCoverage = "complete" | "incomplete".
+  - deriveResourceOverlap(target, candidates, nowMs, coverage). The coverage argument is REQUIRED, so TypeScript
+    forces every caller to state it. At runtime, anything other than exactly "complete" (undefined, a typo,
+    "truncated") is treated as incomplete. The safe failure direction is uncertainty.
+  - ResourceCheck gains candidateSetIncomplete: boolean.
+  - checkResource: `else if (candidateSetIncomplete) status = "not_fully_checkable"` sits just before "clear".
+  - overlapNotices: the resource input gains an optional candidateSetIncomplete. When set, it adds one line:
+    "Can't fully check this assignment right now." (kind cannot_fully_check).
+      - It is added after the overlap and other lines, so a known overlap is still stated first.
+      - In the target-unknown branch it is not added, because that line already says the time can't be checked.
+  - There is still one semantics model, and no query-limit behaviour lives in React. The UI consumes the derived
+    result.
+
+======================================================================
+7. LOADER CHANGES
+======================================================================
+  - NEW src/lib/operations/overlap-candidate-loader.ts has type imports only, so the local integration check runs it
+    directly under Node. It contains:
+      - collectKeysetPages(fetchPage, {pageSize, maxPages}) → {rows, complete, pages}: generic keyset paging with the
+        stop and ceiling rules.
+      - keysetAfterFilter(cursor): the quoted PostgREST keyset predicate.
+      - loadOverlapCandidates(supabase, org, fromMs, toMs, {lookbackMs, pageSize?, maxPages?}) → CandidateSet
+        {candidates, details, coverage, diagnostics}. It holds the two families with the same filters as PROG4B:
+          - organization_id = the org;
+          - non-terminal states;
+          - A: start in [from − 48 h, to), active assignment left-joined;
+          - B: start < from − 48 h, active assignment inner-joined.
+  - src/lib/operations/trip-overlap.ts:
+      - getOverlapCandidates now creates the session client, calls the loader with lookbackMs = OVERLAP_LOOKBACK_MS,
+        and logs incomplete coverage.
+      - getAssignmentOverlap passes set.coverage to the core.
+      - ResourceOverlapView gains candidateSetIncomplete.
+      - getKnownOverlapTripIds returns {tripIds, coverage}.
+      - The old WINDOW_LIMIT = 2000 / STILL_OPEN_LIMIT = 500 single requests are removed.
+  - src/lib/operations/dispatch-board.ts passes candidateSet.coverage. The existing grid rendering already shows
+    "Can't fully check" for not_fully_checkable, so an incomplete day shows that flag on assigned blocks, and never a
+    false clear.
+
+======================================================================
+8. UI COPY CHANGES
+======================================================================
+  - Dialog, New Trip "Assign now" and Trip Detail (via OverlapNotes):
+    "Can't fully check this assignment right now." This appears only on incomplete coverage or a failed overlap
+    read. The helper is overlapUnavailableView() in OverlapNotes.tsx.
+  - Tomorrow: "Some trip commitments could not be fully checked for other trips at the same time."
+    (data-testid tomorrow-overlap-incomplete). It appears only on incomplete coverage or a failed read. Readiness is
+    untouched.
+  - Dispatch grid: no new copy (the existing "Can't fully check" flag).
+  - Operator copy never contains: error, database, limit, row counts, truncated, query. A unit test asserts this.
+    The PROG1–3 forbidden-word expectations are unchanged: the word "overlap" is not used.
+  - No button is ever disabled by any of this (see §13).
+
+======================================================================
+9. QUERY-COUNT / PERFORMANCE BEHAVIOUR
+======================================================================
+  - Per candidate set: two families in parallel. Each family takes ceil((N + 1) / 500) sequential keyset requests for
+    N rows, capped at 20.
+  - The typical small or mid organization (1 → 3 → 10 → 30 vehicles) has far fewer than 500 non-terminal trips in a
+    ~3-day window. That is 1 request per family, i.e. 2 parallel requests: identical to PROG4B.
+  - At 100+ vehicles with, say, 1,200 window trips: 3 requests for A (sequential), usually 1 for B.
+  - It is still never N+1 (no per-trip query). Terminal history is never fetched.
+  - The window family is org-, time- and state-bounded. The still-open family is org- and state-bounded, with an
+    active assignment only.
+  - Keyset predicates use the existing (organization_id, scheduled_pickup_at) index path. No new index was added.
+  - One candidate set per surface is unchanged: Dispatch day, Tomorrow, the dialog target, Trip Detail.
+
+======================================================================
+10. TENANT-ISOLATION EVIDENCE
+======================================================================
+  - Every page request carries .eq("organization_id", serverResolvedOrg) and runs on the RLS session client. The
+    keyset cursor only narrows within that filter.
+  - Unit test R1-J: Org B rows interleaved at the same times are never returned for Org A, across multiple pages.
+  - Real local database (Org A admin session):
+      - no Org B trip appeared in Org A's candidate set;
+      - an Org A session asking for Org B's organization id received 0 candidates (RLS), with pagination still
+        terminating cleanly.
+
+======================================================================
+11. NEW UNIT RESULTS
+======================================================================
+trip-overlap-core.test.mjs: 28/28 (22 existing + 6 new). The existing test helper now passes "complete" explicitly;
+no existing expectation changed. New tests:
+  - R1-H: incomplete + no known overlap → not_fully_checkable, never clear; the control with complete coverage is
+    clear.
+  - R1-I: incomplete + a known overlap → overlap kept, flag set.
+  - R1-K: missing-duration behaviour identical under both coverages.
+  - R1-L: still-open-past-planned-end identical, with incomplete added as an extra flag.
+  - Conservative runtime: undefined or "truncated" are treated as incomplete.
+  - Notice copy: one factual line, overlap stated first, no technical wording.
+overlap-candidate-loader.test.mjs (new): 14/14. The loader runs against an in-memory PostgREST stand-in that applies
+the same filters, the keyset `or` predicate, the two-column order, `limit` and a max_rows = 1000 cap:
+  - A: fewer than the page size → one request, complete.
+  - B: exactly the page size → the next page is read, complete.
+  - C: several pages → every row once, in order.
+  - G: the ceiling reached (exactly and beyond) → incomplete.
+  - The keyset predicate format; page size ≤ max_rows; ceiling 10,000.
+  - Pre-R1 contrast: 1,501 rows are all retrieved, pages ≤ 500, and the overlap on the last row is detected.
+  - D: a driver candidate on a later page → overlap.
+  - E: a vehicle candidate on a later page → overlap.
+  - F: an older still-open candidate on a later page → not_fully_checkable.
+  - G/H: the ceiling in either family → incomplete → never clear.
+  - I: incomplete, with an overlap found in the pages that were read, keeps the overlap.
+  - J: organization boundary.
+  - Terminal trips and ended assignments are excluded; start-time ties are paged by id.
+Complete unit suite (npm test): 631/631 (611 + 20).
+
+======================================================================
+12. NEW LOCAL INTEGRATION / E2E RESULTS
+======================================================================
+.tmp-qa/p1-ops-prog4b-r1-candidates-local.mjs (local, untracked) runs the REAL loader against LOCAL PostgREST + RLS
+as the fictional Org A admin. It seeds 1,100 fillers plus the relevant trips on a far-future day and removes them in
+`finally`. Result: 19/19 PASS:
+  - ROOT CAUSE ×3 (the 1000-row silent cap; the relevant trip absent; pre-R1 would say "clear" for both resources).
+  - Default page 500 → complete, 1,102 window rows, 3 pages, no duplicates.
+  - D: the driver overlap is found beyond row 1000.
+  - E: the vehicle overlap is found beyond row 1000.
+  - F: the older still-open trip is returned and the driver is not_fully_checkable; with page size 1 it is found on a
+    later still-open page.
+  - The keyset predicate is accepted by PostgREST; page 97 gives the identical set.
+  - G: the ceiling gives incomplete. H: not_fully_checkable, while the complete-set control is clear.
+  - J ×2: no Org B rows; the Org A session reading Org B gets 0.
+  - Cleanup: 0 fixtures left.
+.tmp-qa/p1-ops-prog4b-r1-dialog-probe.mjs (local diagnostic) timed the Trip Detail assign dialog on the final code:
+  - the overlap notes rendered;
+  - Assign stayed enabled;
+  - the assignment was written 3.1 s after the click;
+  - the page raised no exceptions or console errors.
+
+======================================================================
+13. REGRESSIONS (browser E2E, final code, `next start -p 3100`, local)
+======================================================================
+Expectations were not changed in any suite. Every result below is on the FINAL code, on a clean Org A:
+  PROG4B E2E: 45/45 PASS (includes the dialog's "Assign stays enabled" / "overlap never blocks" and New Trip
+              "Assign now: Create Trip stays enabled" checks).
+  PROG1 E2E:  46/46 PASS
+  PROG2 E2E:  56/56 PASS
+  PROG3B E2E: 51/51 PASS
+Test-environment incident (NOT a product defect; recorded in full):
+  - The workstation was severely memory-starved during this phase: about 32 GB used, 16 MB to 1 GB free, load
+    average up to 21.
+  - Several browser runs aborted mid-suite with Node's "unsettled top-level await". Every such run had ZERO FAIL
+    assertions up to the abort.
+  - I added opt-in harness diagnostics (HARNESS_DEBUG=1) to find the cause. The Chrome DevTools websocket dropped
+    abnormally (close code 1006) while the Chrome process was still alive. Chrome was then killed only by the
+    harness's own exit hook.
+  - So the harness did not kill the browser prematurely, and the product did not hang. The CDP transport dropped
+    under memory pressure. Reruns of the same suites on the same code passed.
+  - One run, under the same pressure, recorded "Dialog: assignment succeeds" as FAIL. Its 15 s wait expired before
+    the page had finished loading, and the next step then threw because the dialog had not opened.
+      - The separate timed probe (§12) showed the dialog assigning in 3.1 s.
+      - The clean rerun of the full suite passed 45/45.
+  - Aborted runs never reach their `finally` cleanup. After each one, fictional Org A was restored LOCALLY with
+    .tmp-qa/restore-org-a-after-aborted-prog-e2e.sql, which mirrors the suites' own cleanup. Before every counted
+    run, Org A was verified identical to the pre-phase snapshot:
+      - drivers A1 / A2 active;
+      - vans A1 / A2 active;
+      - 21 trips;
+      - default null;
+      - the 3 seed trips back at their original times.
+  - It is identical again now.
+QA harness process leak (brief §13):
+  - Change: a small, isolated fix in the UNTRACKED .tmp-qa/local-helper.mjs. It tracks spawned Chrome pids and kills
+    the whole detached process group on close() AND on process exit (and SIGINT / SIGTERM).
+  - Evidence: a probe that aborts without close() left 0 Chrome processes, and every run in this phase ended with 0.
+  - Also added: the opt-in HARNESS_DEBUG diagnostics above.
+  - There was no framework rewrite, and no suite expectation changed.
+
+======================================================================
+14. SQL / PRIVILEGE CONTRACT / APPLICATION GATE
+======================================================================
+SQL:
+  - R1 changes no database object.
+  - trip_expected_duration_tests.sql was rerun locally anyway: 26/26 PASS, 0 FAIL / ERROR.
+Privilege contract:
+  - scripts/verify-db-privileges.sh local: violations = 0 of 29.
+  - R1 did not modify supabase/tests/privilege_contract_tests.sql. Its diff is the PROG4B diff only.
+Application gate:
+  TypeScript (npx tsc --noEmit) .... PASS
+  Lint (npm run lint) .............. PASS (0 errors; the 93 warnings are all in untracked .tmp-qa scripts, the same
+                                     count as PROG4B)
+  Unit (npm test) .................. 631/631
+  Build (npm run build) ............ PASS
+
+======================================================================
+15. FILES
+======================================================================
+Created (tracked candidates):
+  src/lib/operations/overlap-candidate-loader.ts
+  src/lib/operations/overlap-candidate-loader.test.mjs
+  docs/reports/p1-ops-prog4b-r1-candidate-completeness-hardening.txt
+Modified by R1 (all of them already new or modified by PROG4B, uncommitted):
+  src/lib/operations/trip-overlap-core.ts ....... coverage input, candidateSetIncomplete, notice line
+  src/lib/operations/trip-overlap-core.test.mjs . helper passes "complete"; 6 R1 tests
+  src/lib/operations/trip-overlap.ts ............ uses the paginated loader; coverage threaded; logs incomplete
+  src/lib/operations/dispatch-board.ts .......... passes coverage
+  src/app/operations/tomorrow/page.tsx .......... coverage-aware badges and the incomplete note; a failed read counts
+                                                  as incomplete
+  src/components/operations/overlap/OverlapNotes.tsx ... overlapUnavailableView()
+  src/components/operations/dispatch/AssignmentFields.tsx ... a failed overlap read → "can't fully check"
+  src/app/operations/trips/[tripId]/page.tsx .... a failed overlap read → "can't fully check"
+Local QA only (untracked, never to be committed):
+  .tmp-qa/local-helper.mjs (process-group cleanup + opt-in diagnostics)
+  .tmp-qa/p1-ops-prog4b-r1-candidates-local.mjs
+  .tmp-qa/p1-ops-prog4b-r1-dialog-probe.mjs
+  .tmp-qa/restore-org-a-after-aborted-prog-e2e.sql
+NOT changed:
+  - the PROG4B migration
+  - generated types
+  - RLS, grants, RPCs, the privilege contract
+  - the Driver PWA
+
+======================================================================
+16. MIGRATION STATE / PRODUCTION
+======================================================================
+  - No new migration. 20260925100000_trip_expected_duration.sql is unchanged and is applied LOCALLY only. The local
+    migration head is 20260925100000.
+  - Production is UNTOUCHED:
+      - no `supabase db push`;
+      - 20260925100000 not applied;
+      - no push to main, no deploy;
+      - no tenant mutation;
+      - no Vercel or DNS change.
+    The production migration head remains 20260924091000.
+
+======================================================================
+17. REMAINING OPEN ISSUES
+======================================================================
+  1. Production max_rows was NOT verified in this phase, because production access was not permitted. The
+     completeness proof requires production PostgREST max_rows ≥ 500.
+       - The hosted default is 1000, and the repository's config says 1000.
+       - If production were configured below 500, a capped page would read as the last page.
+       - This is a read-only release preflight (§18).
+  2. A non-terminal ASSIGNED trip with NO pickup time is never a candidate. This is unchanged PROG4B behaviour: both
+     families filter by start time. It is a separate completeness question, and needs an owner decision:
+       - include such trips as "can't check" for that resource, with copy other than "duration not set"; or
+       - leave them excluded.
+     Not changed here, to avoid redesign.
+  3. Keyset pages are successive reads, not one snapshot. A trip created or rescheduled between page reads can be
+     seen or missed, like any read a moment later. No row is duplicated or skipped because of ordering.
+  4. The local browser E2E harness is fragile under memory pressure (CDP websocket 1006), and an aborted run skips its
+     own cleanup. This is local tooling only; the restore script and diagnostics are in .tmp-qa.
+
+======================================================================
+18. EXACT PROPOSED PROG4B PRODUCTION-RELEASE BOUNDARY (unchanged from PROG4B, plus R1)
+======================================================================
+One implementation commit containing:
+  - all PROG4B files (per the PROG4B report);
+  - the R1 files in §15 (tracked candidates only);
+  - both reports and the amended PROG4A spec.
+Excluded: .tmp-qa, logs and screenshots.
+Release order:
+  0. NEW read-only preflight: confirm production PostgREST max_rows ≥ 500 (Dashboard → API settings, or a read-only
+     Management API GET). If it is lower, STOP: lower OVERLAP_CANDIDATE_PAGE_SIZE first.
+  1. The Supabase preflight: `supabase projects list` shows Nemryn / wyocbivzgrbekuyqdfts.
+  2. `supabase db push` of 20260925100000 ONLY.
+  3. `scripts/verify-db-privileges.sh production`: 0/29.
+  4. Push / deploy through the existing path.
+  5. The production smoke on the synthetic tenant, as in the PROG4B report. Dispatcher checks stay MANUAL; no role
+     mutation.
+Rollback: application-only, as in the PROG4B report. R1 adds no schema.
+
+PROG4B-R1 CANDIDATE COMPLETENESS: PASS
+PRODUCTION MIGRATION APPLIED: NO
+PRODUCTION DEPLOYED: NO
+READY FOR PROG4B PRODUCTION RELEASE REVIEW: YES
+PROG5 STARTED: NO

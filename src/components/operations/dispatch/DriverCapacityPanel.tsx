@@ -8,6 +8,8 @@ import { cn } from "@/lib/cn";
 
 export interface DriverCapacityPanelProps {
   driverRows: DispatchDriverRow[];
+  /** P1-OPS-PROG4: which org-local day the board shows (copy only). */
+  day?: "today" | "tomorrow";
 }
 
 /**
@@ -22,7 +24,7 @@ export interface DriverCapacityPanelProps {
  * precedent alone. A Driver with no active-state Trip right now shows no
  * status pill at all — never a fabricated "Available".
  */
-export function DriverCapacityPanel({ driverRows }: DriverCapacityPanelProps) {
+export function DriverCapacityPanel({ driverRows, day = "today" }: DriverCapacityPanelProps) {
   return (
     <div className="flex flex-col gap-zw-md">
       <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Driver Capacity</h2>
@@ -56,8 +58,8 @@ export function DriverCapacityPanel({ driverRows }: DriverCapacityPanelProps) {
                     {onTrip
                       ? `${onTrip.passengerName}${onTrip.vehicleLabel ? ` · ${onTrip.vehicleLabel}` : ""}`
                       : trips.length > 0
-                        ? `${trips.length} trip${trips.length === 1 ? "" : "s"} today, none in progress`
-                        : "No trips today"}
+                        ? `${trips.length} trip${trips.length === 1 ? "" : "s"} ${day === "tomorrow" ? "tomorrow" : "today"}, none in progress`
+                        : `No trips ${day === "tomorrow" ? "tomorrow" : "today"}`}
                   </p>
                 </div>
               </Panel>

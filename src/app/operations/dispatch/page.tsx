@@ -1,7 +1,10 @@
 import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getDispatchBoardData } from "@/lib/operations/dispatch-board";
+import Link from "next/link";
+import { getDispatchBoardData, type DispatchDay } from "@/lib/operations/dispatch-board";
+import { typography } from "@/design/typography";
+import { cn } from "@/lib/cn";
 import { getOperatorLinkedDriverId, getRecurringAssignmentHints } from "@/lib/operations/assignment-context";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -18,15 +21,22 @@ import { DispatchLiveRefresh } from "@/components/operations/dispatch/DispatchLi
  * navigator, "Dispatch Settings" — none have a real data source or a
  * defined product rule yet).
  */
-export default async function DispatchBoardPage() {
+export default async function DispatchBoardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const pathname = await getCurrentPathname("/operations/dispatch");
   const organization = await requireOperationsAccess(pathname);
+  // P1-OPS-PROG4: ?day=today (default) | tomorrow -- the SAME board engine for either org-local day.
+  const query = await searchParams;
+  const day: DispatchDay = query.day === "tomorrow" ? "tomorrow" : "today";
 
   let data: Awaited<ReturnType<typeof getDispatchBoardData>>;
   let operatorDriverId: string | null;
   try {
     [data, operatorDriverId] = await Promise.all([
-      getDispatchBoardData(organization.organizationId, organization.organizationTimezone),
+      getDispatchBoardData(organization.organizationId, organization.organizationTimezone, day),
       getOperatorLinkedDriverId(organization.organizationId),
     ]);
   } catch {
@@ -34,7 +44,7 @@ export default async function DispatchBoardPage() {
       <EmptyState
         icon={<WarningCircle className="size-8" aria-hidden />}
         title="Couldn't load the Dispatch Board"
-        description="Something went wrong loading today's trips and drivers. Try refreshing the page in a moment."
+        description={`Something went wrong loading ${day === "tomorrow" ? "tomorrow" : "today"}'s trips and drivers. Try refreshing the page in a moment.`}
       />
     );
   }
@@ -54,10 +64,33 @@ export default async function DispatchBoardPage() {
   return (
     <div className="flex flex-col gap-zw-lg">
       <DispatchLiveRefresh />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <nav aria-label="Dispatch day" className="inline-flex rounded-md border border-border-subtle bg-surface-elevated p-0.5" data-testid="dispatch-day-switch">
+          {(["today", "tomorrow"] as const).map((option) => (
+            <Link
+              key={option}
+              href={option === "today" ? "/operations/dispatch" : "/operations/dispatch?day=tomorrow"}
+              aria-current={day === option ? "page" : undefined}
+              className={cn(
+                typography.bodySmall,
+                "rounded-sm px-3 py-1.5 font-medium",
+                day === option ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:text-text-primary",
+              )}
+            >
+              {option === "today" ? "Today" : "Tomorrow"}
+            </Link>
+          ))}
+        </nav>
+        {day === "tomorrow" && (
+          <Link href="/operations/tomorrow" className={cn(typography.bodySmall, "font-medium text-text-link hover:underline")} data-testid="dispatch-tomorrow-readiness-link">
+            Tomorrow readiness
+          </Link>
+        )}
+      </div>
       <SummaryStrip
         inline
         items={[
-          { label: "open trips today", value: data.summary.todayCount },
+          { label: day === "tomorrow" ? "open trips tomorrow" : "open trips today", value: data.summary.todayCount },
           { label: "unassigned", value: data.summary.unassignedCount, tone: "warning", dot: true },
           { label: "active", value: data.summary.activeCount, dot: true },
           ...(data.summary.attentionCount > 0

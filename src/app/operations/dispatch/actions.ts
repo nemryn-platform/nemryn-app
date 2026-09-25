@@ -6,6 +6,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { DispatchErrorCode } from "@/lib/operations/dispatch-errors";
 import { callAssignmentRpc } from "@/lib/operations/assignment-mutation";
+import { getAssignmentOverlap, type AssignmentOverlapView } from "@/lib/operations/trip-overlap";
 import { getDriverDayContext, type DriverDayContext, type DriverDayTarget } from "@/lib/operations/assignment-context";
 
 export interface AssignmentActionState {
@@ -114,6 +115,25 @@ export async function driverDayContextAction(target: unknown, driverId: unknown)
     return await getDriverDayContext(organization.organizationId, organization.organizationTimezone, target, driverId);
   } catch {
     return { status: "unavailable" };
+  }
+}
+
+/**
+ * P1-OPS-PROG4 overlap facts for the Assign / Reassign dialog and New Trip "Assign now": the target (a Trip, or a
+ * New Trip's date + time + duration) against the selected driver / vehicle. A READ only -- the assignment RPCs
+ * never consult it; overlap is a warning, confirmation always stays available.
+ */
+export async function assignmentOverlapAction(target: unknown, driverId: unknown, vehicleId: unknown): Promise<AssignmentOverlapView | null> {
+  if (!isDriverDayTarget(target)) return null;
+  const driver = typeof driverId === "string" && driverId.length > 0 ? driverId : null;
+  const vehicle = typeof vehicleId === "string" && vehicleId.length > 0 ? vehicleId : null;
+  if (!driver && !vehicle) return null;
+  const pathname = await getCurrentPathname("/operations/dispatch");
+  const organization = await requireOperationsAccess(pathname);
+  try {
+    return await getAssignmentOverlap(organization.organizationId, organization.organizationTimezone, target, driver, vehicle);
+  } catch {
+    return null;
   }
 }
 

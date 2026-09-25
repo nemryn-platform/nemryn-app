@@ -43,6 +43,8 @@ export interface TomorrowAssignmentTarget {
   driverName: string | null;
   vehicleId: string | null;
   vehicleLabel: string | null;
+  /** P1-OPS-PROG4: planned duration (null = unknown). Display + overlap only -- never a readiness input. */
+  expectedDurationMinutes: number | null;
 }
 
 /**
@@ -74,7 +76,7 @@ export interface TomorrowAssignmentTarget {
  */
 
 const TOMORROW_CANDIDATE_COLUMNS =
-  "id, state, scheduled_pickup_at, pickup_description, destination_description, recurring_arrangement_id, " +
+  "id, state, scheduled_pickup_at, pickup_description, destination_description, recurring_arrangement_id, expected_duration_minutes, " +
   "passengers!trips_passenger_id_organization_id_fkey(display_name, status), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, vehicle_id, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name, status), " +
@@ -109,6 +111,7 @@ interface TripRow {
   pickup_description: string;
   destination_description: string;
   recurring_arrangement_id: string | null;
+  expected_duration_minutes: number | null;
   passengers: PassengerRelation;
   trip_assignments: AssignmentEmbed[] | null;
 }
@@ -280,6 +283,7 @@ export async function getTomorrowReadiness(
       driverName: activeAssignment ? (driver?.display_name ?? null) : null,
       vehicleId: activeAssignment?.vehicle_id ?? null,
       vehicleLabel: activeAssignment?.vehicle_id ? (vehicle?.label ?? null) : null,
+      expectedDurationMinutes: row.expected_duration_minutes,
     };
 
     return {

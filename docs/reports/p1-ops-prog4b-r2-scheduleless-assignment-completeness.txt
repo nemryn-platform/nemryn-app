@@ -1,0 +1,382 @@
+NEMRYN PLATFORM
+P1-OPS-PROG4B-R2 -- SCHEDULELESS ACTIVE-ASSIGNMENT COMPLETENESS -- LOCAL
+A narrow correctness remediation of P1-OPS-PROG4B, following R1:
+  - docs/reports/p1-ops-prog4b-trip-time-extent-overlap-implementation.txt
+  - docs/reports/p1-ops-prog4b-r1-candidate-completeness-hardening.txt
+Local only: NOT committed, NOT pushed, NOT deployed. Production (wyocbivzgrbekuyqdfts) was not touched and no
+production setting was inspected. No database change was made. PROG4 was not redesigned. PROG5 was not started.
+
+======================================================================
+1. STARTING STATE
+======================================================================
+  - Branch main; HEAD = origin/main = c625689 (the PROG3B closeout).
+  - PROG4B and R1 are uncommitted in the working tree.
+  - Local database: migration 20260925100000 applied (local only). Local migration head: 20260925100000.
+  - R1's final local state:
+      - unit tests 631/631;
+      - E2E PROG4B 45, PROG1 46, PROG2 56, PROG3B 51;
+      - R1 real-database integration 19/19;
+      - privilege contract 0/29.
+
+======================================================================
+2. ROOT CAUSE (from the code, not the reports)
+======================================================================
+The R1 loader (src/lib/operations/overlap-candidate-loader.ts) has two families:
+  - A: `.gte("scheduled_pickup_at", lookback).lt("scheduled_pickup_at", to)`
+  - B: `.lt("scheduled_pickup_at", lookback)` with an inner-joined active assignment
+In SQL, a comparison against NULL is never true, so a trip with scheduled_pickup_at IS NULL can match neither family.
+Such a trip was therefore never a candidate. The pure core (trip-overlap-core.ts) handled a pickup-less candidate
+correctly ("missing"), but it was never given one.
+Result: a driver or vehicle whose only other commitment was a pickup-less active trip derived "clear". That breaks
+"unknown remains unknown".
+
+Two further defects were found on inspection:
+  1. The core's candidate reason was a single "missing" bucket. overlapNotices rendered every missing candidate as
+     "…: duration not set.", so a pickup-less candidate would have been described with the WRONG missing fact.
+  2. A TARGET with no pickup time (New Trip "Assign now" after a date is chosen but before a time; Trip Detail of a
+     pickup-less trip):
+       - getAssignmentOverlap has no window for it, so it loaded no candidates and used coverage "complete";
+       - the core then returned "clear" for every resource;
+       - no note appeared at all.
+     Silence read as "nothing to check".
+
+Affected surfaces, each confirmed in code:
+  - AssignmentFields (the Assign / Reassign dialog, and New Trip "Assign now"): assignmentOverlapAction →
+    getAssignmentOverlap.
+  - Trip Detail current assignment: getAssignmentOverlap → CurrentStatusPanel / OverlapNotes.
+  - Dispatch (today / tomorrow): getDispatchBoardData → getOverlapCandidates → deriveResourceOverlap per assigned
+    block.
+  - Tomorrow: getKnownOverlapTripIds. This surfaces KNOWN overlaps only, plus the R1 page-level incomplete note, so
+    no "clear" claim was shown there, but the same candidate set was used.
+  - OverlapNotes: the copy source (overlapNotices).
+
+======================================================================
+3. ACTUAL POSSIBILITY / PATH FOR ASSIGNED NULL-SCHEDULE TRIPS
+======================================================================
+  - create_trip (20260925100000): p_scheduled_pickup_at timestamptz DEFAULT NULL. No rule requires it.
+  - assign_trip (20260831100200): guards the role, tenant, state ('scheduled', 'en_route_to_pickup',
+    'arrived_at_pickup'), active driver and vehicle. It does NOT guard the schedule.
+  - The New Trip UI requires a date and time (new/actions.ts). That is a UI decision, not a database rule.
+  - Real paths:
+      - an authenticated Organization Admin or Dispatcher calling create_trip without a pickup, then assign_trip
+        (for example through the API);
+      - any pre-existing pickup-less trip, assigned from Trip Detail.
+  - Proven locally through the REAL RPCs as the Org A admin (§16): create_trip with no pickup → a trip with
+    scheduled_pickup_at NULL; assign_trip → an active assignment.
+  - Recurring occurrences require a scheduled start (unchanged), so they cannot produce one.
+
+======================================================================
+4. FAMILY C DESIGN
+======================================================================
+A third family, in loadOverlapCandidates:
+  C. trips WHERE organization_id = <org>
+       AND state IN (non-terminal)
+       AND scheduled_pickup_at IS NULL
+       AND an ACTIVE assignment exists
+     The assignment is inner-joined through trip_assignments_trip_id_organization_id_fkey, with ended_at IS NULL.
+  - Minimal columns: id, state, scheduled_pickup_at, expected_duration_minutes, plus the active assignment's
+    driver_id, vehicle_id and ended_at.
+      - NO pickup or destination description, passenger or other trip detail. A Family C trip can never be a known
+        overlap, so there is nothing to list.
+      - The unit test asserts that the Family C select contains no route or passenger column.
+  - Terminal trips, ended assignments and unassigned trips are never fetched.
+  - It uses the same RLS session client and an explicit organization filter. No service role.
+
+======================================================================
+5. PAGINATION
+======================================================================
+  - Ordering: id ASC. id is unique, so this is a total order. There is no start time to order by.
+  - Cursor: `.gt("id", lastId)`. Keyset, no OFFSET.
+  - The same page size (500) and ceiling (20 pages = 10,000 rows) as R1.
+  - Stopping condition: a page shorter than the page size proves exhaustion. A full page always triggers the next
+    read.
+  - Implementation: R1's pager was generalised to collectPages(fetchPage, options, cursorOf).
+      - collectKeysetPages (A / B, cursor (scheduled_pickup_at, id)) keeps its exact R1 behaviour.
+      - collectIdPages (C, cursor id) is new.
+  - All three families run in parallel.
+
+======================================================================
+6. COMPLETENESS INTEGRATION
+======================================================================
+  - coverage = "complete" only when window (A) AND still-open (B) AND scheduleless (C) are all complete. Otherwise it
+    is "incomplete", and R1's conservative behaviour applies: never "clear", with known overlaps kept.
+  - Diagnostics gain schedulelessRows, schedulelessPages and schedulelessComplete (logs only).
+
+======================================================================
+7. CORE-DOMAIN CHANGE (trip-overlap-core.ts, pure)
+======================================================================
+  - The pair outcome now names its reason:
+      - missing_schedule (the candidate has no pickup time);
+      - missing_duration (the candidate has a start but no duration, and could intersect);
+      - missing_target (the target's own extent is unknown).
+  - ResourceCheck gains:
+      - missingSchedule: string[]
+      - missingDuration: string[]
+    missingExtent is kept as their union plus the target-caused entries, so the R1 / PROG4B semantics and tests are
+    unchanged.
+  - Resource-specific. Candidates are still filtered per resource: the driver by activeDriverId, the vehicle by a
+    non-null activeVehicleId. A pickup-less trip on Driver A never touches Driver B. A NULL vehicle affects the
+    driver only.
+  - Precedence (R1 unchanged, plus one rule):
+      1. overlap
+      2. target without a pickup time → not_checkable
+      3. target unknown + missing / still-open → not_checkable
+      4. missing (schedule or duration) → not_checkable
+      5. still open past planned end → not_fully_checkable
+      6. candidate set incomplete → not_fully_checkable
+      7. clear
+    Rule 2 is new. A target that cannot be placed in time is never "clear", even with no other trips, because
+    nothing can be checked against an unplaceable interval. No candidates are loaded for it; its window is null, as
+    before.
+  - A known overlap stays "overlap". missingSchedule, missingDuration, stillOpenPastPlannedEnd and
+    candidateSetIncomplete are all still reported next to it.
+  - Q7 is untouched. A pickup-less trip has no planned end, so it is never "still open past planned end". The two
+    reasons stay separate. There is no lateness semantics.
+
+======================================================================
+8. MISSING-SCHEDULE vs MISSING-DURATION REPRESENTATION
+======================================================================
+  - Domain: the separate missingSchedule[] and missingDuration[] arrays in the pure ResourceCheck (not in React).
+  - The view (trip-overlap.ts ResourceOverlapView) gains missingScheduleCount next to missingExtentCount.
+  - overlapNotices takes an optional missingScheduleCount. The duration count is missingExtentCount minus
+    missingScheduleCount. When the target is known, every missing entry is candidate-caused.
+  - Target reason: deriveTripExtent already returns "no_schedule" before "no_duration". Pickup time is the more
+    fundamental missing fact when both are absent. This is unchanged and tested.
+
+======================================================================
+9. COPY
+======================================================================
+  - Candidate, driver: "Can't check 1 of this driver's assigned trips: pickup time not set." (N pluralises by number)
+  - Candidate, vehicle: "Can't check 1 of this vehicle's assigned trips: pickup time not set."
+  - Candidate with a missing duration (unchanged): "Can't check N of this driver's trips: duration not set."
+  - Target without a pickup time (changed from "…at this time: this trip has no pickup time."):
+    "Can't check for other trips: this trip's pickup time isn't set."
+  - Tests assert the absence of: conflict, late, risk, error, invalid, double-booked, unavailable. They also assert
+    that pickup-time copy never mentions "duration".
+
+======================================================================
+10. ASSIGN / REASSIGN
+======================================================================
+  - Selecting a driver or vehicle holding an active pickup-less trip shows the pickup-time note from the canonical
+    copy source.
+  - An unrelated driver or vehicle shows nothing.
+  - Assign / Reassign stay enabled.
+  - No mutation RPC changed. No blocking, no auto-reassignment.
+
+======================================================================
+11. NEW TRIP (Assign now)
+======================================================================
+  - A date chosen but no time yet shows "Can't check for other trips: this trip's pickup time isn't set." Before R2
+    this showed nothing, silently.
+  - With a time set, selecting a driver with a pickup-less commitment shows the pickup-time note.
+  - Create Trip stays enabled, and the trip is created and assigned.
+
+======================================================================
+12. TRIP DETAIL
+======================================================================
+  - The same getAssignmentOverlap / OverlapNotes path. If the current driver or vehicle holds another pickup-less
+    active trip, the pickup-time note appears in current-assignment-overlap. There is no separate implementation.
+  - A pickup-less trip's own detail page (with an assignment) follows the target rule by the same path. This is
+    covered by the core test R2-10; it was not separately browser-tested.
+
+======================================================================
+13. DISPATCH
+======================================================================
+  - No block is fabricated for a pickup-less trip. The day query never includes it, and it is not placed at
+    midnight or at "now".
+  - DispatchTrip.overlap gains unknownTimeCommitment: whether the block's driver or vehicle has missingSchedule > 0.
+    A scheduled block of that driver or vehicle shows the existing restrained "Can't fully check" flag, and gets
+    data-unknown-time="1".
+  - Reasoning: unlike a missing-duration trip, which appears on the same row as a "Duration not set" chip, a
+    pickup-less commitment is invisible on the board.
+  - When a known overlap exists, "Overlaps another trip" keeps precedence on the block, as in R1.
+  - The board is otherwise unchanged. No redesign.
+
+======================================================================
+14. TOMORROW
+======================================================================
+  - Readiness, reasons and counts are unchanged. A pickup-less commitment is not a readiness reason and never
+    produces NEEDS_PREPARATION.
+  - The Tomorrow surface exposes only KNOWN-overlap badges and the R1 page-level incomplete note. It exposes no
+    per-row uncertainty for missing durations either, so no per-row pickup-time note was added. That would be a new
+    surface feature, not a correctness fix.
+  - Family C is included in its candidate set: its coverage now includes C.
+  - E2E: the counts are identical before and after the pickup-less commitment exists, and no pickup-time text is
+    shown.
+
+======================================================================
+15. TENANT ISOLATION
+======================================================================
+  - Family C carries .eq("organization_id", serverResolvedOrg) on the RLS session client. The id cursor only narrows
+    within that filter.
+  - Unit test R2-17: Org B pickup-less trips never appear across pages.
+  - Real local database:
+      - an Org B pickup-less assigned trip was absent from Org A's set;
+      - an Org A session requesting Org B received 0 candidates, and all three families completed.
+
+======================================================================
+16. TEST RESULTS
+======================================================================
+Pure core, trip-overlap-core.test.mjs: 35/35 (28 existing + 7 new; no existing expectation changed):
+  R2-1/2/3   same driver / same vehicle / both → not_checkable; missingSchedule set; missingDuration empty
+  R2-4/5     a pickup-less trip on another driver and vehicle → the target's resources stay clear
+  R2-6       NULL vehicle → driver only
+  R2-7       a known overlap plus a pickup-less commitment → overlap kept; missingSchedule preserved
+  R2-8/9     missing duration and still-open stay distinct; a pickup-less trip is never "still open"
+  R2-10      target without a pickup → not_checkable even with no other trips; both missing → no_schedule
+  R2 notices pickup copy vs duration copy, pluralisation, target copy, no alarm wording
+Candidate loader, overlap-candidate-loader.test.mjs: 21/21 (14 existing + 7 new). It runs against the in-memory
+PostgREST stand-in, which now also applies `is scheduled_pickup_at null`, `gt id` and id-only ordering, and asserts
+that Family C selects no route columns and inner-joins the assignment:
+  R2-11/12/13 active pickup-less returned; terminal, ended and unassigned excluded
+  R2-14/18   multi-page by id; each row exactly once; deterministic regardless of input order
+  R2-15      an exactly full page → the next read ([3, 0]); complete
+  R2-16      the Family C ceiling → incomplete → not_fully_checkable
+  R2-17      tenant isolation
+  R2-19      Families A / B unchanged (window 8 rows / 3 pages; still-open 1; overlap still found; another driver's
+             pickup-less trips do not affect d1)
+  collectIdPages: stops on a short page; the ceiling gives incomplete
+Complete unit suite (npm test): 645/645 (631 + 14).
+Real-database integration, .tmp-qa/p1-ops-prog4b-r2-scheduleless-local.mjs (the REAL loader, local PostgREST + RLS,
+Org A admin): 16/16 PASS:
+  - PATH: create_trip with no pickup, then assign_trip (real RPCs).
+  - Tests 11, 12, 13 and 17.
+  - The active driver and vehicle are carried, with no route detail.
+  - 1–3: the resources of the pickup-less trip → not_checkable.
+  - 4/5: unrelated resources stay clear.
+  - Pickup copy, not duration copy.
+  - 14/18: page size 3, Family C over 3 pages, the same set as page size 500, no duplicates.
+  - 16: the ceiling → incomplete → never clear.
+  - 17: cross-tenant request → 0.
+  - Cleanup: 0 fixtures left.
+Browser E2E, .tmp-qa/p1-ops-prog4b-r2-scheduleless-e2e.mjs: 20/20 PASS:
+  - 20, 21, 22, 23, 24 (dialog).
+  - 25 (Trip Detail).
+  - 26 ×4 (New Trip: the target without a time shows the pickup copy; the driver note; Create Trip enabled; the trip
+    created and assigned).
+  - 27 ×4 (Dispatch: no fabricated block; the affected block flagged; the unrelated block not flagged; no alarm
+    wording).
+  - 28 ×2 (Tomorrow counts identical; no readiness text).
+  - 29 ×2 (Driver PWA shows no check information; Operations still redirects).
+  - Cleanup.
+
+======================================================================
+17. R1 >1000-ROW REGRESSION (real PostgREST)
+======================================================================
+.tmp-qa/p1-ops-prog4b-r1-candidates-local.mjs: 19/19 PASS, unchanged. It covers:
+  - the root-cause reproduction;
+  - 1,102 window rows over 3 pages, complete;
+  - a driver or vehicle overlap beyond row 1000;
+  - the still-open family paged;
+  - the keyset predicate accepted by PostgREST;
+  - the ceiling giving incomplete and never clear;
+  - tenant isolation.
+Multi-page A and B, completeness, the ceiling uncertainty and tenant isolation have not regressed.
+
+======================================================================
+18. FULL REGRESSION (final code, sequential, `next start -p 3100`, local)
+======================================================================
+  PROG4B E2E ........... 45/45 PASS
+  PROG1 E2E ............ 46/46 PASS
+  PROG2 E2E ............ 56/56 PASS
+  PROG3B E2E ........... 51/51 PASS
+  R1 integration ....... 19/19 PASS
+  R2 integration ....... 16/16 PASS
+  R2 browser E2E ....... 20/20 PASS
+  - All ran sequentially on a clean Org A.
+  - No aborts, and no websocket drops (the HARNESS_DEBUG diagnostics recorded no code=1006).
+  - No restore was needed. Org A is identical to the pre-phase snapshot.
+  - No existing expectation was changed.
+
+======================================================================
+19. SQL / PRIVILEGE CONTRACT / APPLICATION GATE
+======================================================================
+SQL:
+  - supabase/tests/trip_expected_duration_tests.sql: 26/26 PASS, 0 FAIL / ERROR. R2 has no database change.
+Privilege contract:
+  - scripts/verify-db-privileges.sh local: violations = 0 of 29.
+  - privilege_contract_tests.sql is unchanged by R2.
+Application gate:
+  TypeScript (npx tsc --noEmit) .... PASS
+  Lint (npm run lint) .............. PASS (0 errors; all 94 warnings are in untracked .tmp-qa scripts: 93 + 1 from
+                                     the new local QA file; none in src)
+  Unit (npm test) .................. 645/645
+  Build (npm run build) ............ PASS
+
+======================================================================
+20. FILES MODIFIED
+======================================================================
+Tracked candidates (all were already new or modified by PROG4B / R1; uncommitted):
+  src/lib/operations/trip-overlap-core.ts ............ reason-bearing outcomes; missingSchedule / missingDuration;
+                                                       target-without-pickup rule; pickup-time copy
+  src/lib/operations/trip-overlap-core.test.mjs ...... +7 R2 tests
+  src/lib/operations/overlap-candidate-loader.ts ..... Family C; collectPages / collectIdPages; three-family
+                                                       coverage; diagnostics
+  src/lib/operations/overlap-candidate-loader.test.mjs  stand-in extended; +7 R2 tests
+  src/lib/operations/trip-overlap.ts ................. missingScheduleCount in the view; diagnostics; comment
+  src/lib/operations/dispatch-board.ts ............... overlap.unknownTimeCommitment
+  src/components/operations/dispatch/AssignmentGrid.tsx  "Can't fully check" for unknownTimeCommitment;
+                                                       data-unknown-time
+  src/components/operations/overlap/OverlapNotes.tsx . overlapUnavailableView includes missingScheduleCount
+  docs/reports/p1-ops-prog4b-r2-scheduleless-assignment-completeness.txt (new)
+Local QA only (untracked, never committed):
+  .tmp-qa/p1-ops-prog4b-r2-scheduleless-local.mjs
+  .tmp-qa/p1-ops-prog4b-r2-scheduleless-e2e.mjs
+  (.tmp-qa/local-helper.mjs keeps R1's small process-group cleanup; unchanged in R2)
+NOT changed:
+  - 20260925100000_trip_expected_duration.sql (file untouched since PROG4B)
+  - no new migration, no RPC, no RLS, no grant
+  - generated types (the diff is still PROG4B's +44 lines only)
+  - the privilege contract
+  - the Driver PWA
+  - Tomorrow readiness
+
+======================================================================
+21. MIGRATION STATE / PRODUCTION
+======================================================================
+  - DATABASE CHANGE: none. The local migration head is still 20260925100000, applied LOCALLY only.
+  - Production is UNTOUCHED:
+      - no db push, no push, no deploy;
+      - no Vercel or DNS change;
+      - no tenant mutation;
+      - no settings inspection.
+    The production migration head remains 20260924091000.
+
+======================================================================
+22. REMAINING RELEASE PREFLIGHTS (required, read-only, at release time only)
+======================================================================
+  1. Production PostgREST max_rows must be ≥ OVERLAP_CANDIDATE_PAGE_SIZE (500).
+       - Check it through the Dashboard → API settings, or a read-only Management API GET.
+       - It now applies to all THREE families.
+       - If it is lower: STOP the release, lower the page size, and retest.
+  2. `supabase projects list` must show Nemryn / wyocbivzgrbekuyqdfts before any production database command.
+  3. After the push: `scripts/verify-db-privileges.sh production` → 0/29.
+
+======================================================================
+23. EXACT FINAL PROG4B PRODUCTION-RELEASE BOUNDARY
+======================================================================
+One implementation commit containing:
+  - all PROG4B files (per the PROG4B report);
+  - the R1 files (per the R1 report);
+  - the R2 tracked files in §20;
+  - the PROG4A amended spec, and the PROG4B, R1 and R2 reports.
+Excluded: .tmp-qa, logs, screenshots and scratch.
+Release order:
+  0. Read-only preflight: production max_rows ≥ 500. If not: STOP.
+  1. `supabase projects list` shows Nemryn / wyocbivzgrbekuyqdfts.
+  2. `supabase db push` of 20260925100000 ONLY.
+  3. `scripts/verify-db-privileges.sh production` → 0/29.
+  4. Push / deploy through the existing path.
+  5. Production smoke on the synthetic tenant:
+       - the PROG4B items;
+       - the R1 behaviour;
+       - a pickup-less assigned synthetic trip, showing the pickup-time note in the Assign dialog.
+     Dispatcher checks stay MANUAL; no role mutation.
+Rollback: application-only. R1 and R2 add no schema.
+
+PROG4B-R2 SCHEDULELESS COMPLETENESS: PASS
+DATABASE CHANGE: NO
+PRODUCTION MIGRATION APPLIED: NO
+PRODUCTION DEPLOYED: NO
+READY FOR PROG4B PRODUCTION RELEASE REVIEW: YES
+PROG5 STARTED: NO

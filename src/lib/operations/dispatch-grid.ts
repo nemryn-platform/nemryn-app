@@ -57,3 +57,59 @@ export function orgLocalHourMinute(iso: string, timezone: string): { hour: numbe
   const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
   return { hour, minute };
 }
+
+// ---------------------------------------------------------------------------
+// P1-OPS-PROG4B -- proportional time extent on a fact-derived axis
+// ---------------------------------------------------------------------------
+// Positions are measured in ABSOLUTE time from the organization-local day
+// start (so a 23 h or 25 h DST day is drawn honestly); axis labels are the
+// local clock time at each hour mark. A block's width comes ONLY from a known
+// expected duration; an unknown duration gets a fixed, clearly-labelled chip
+// that implies no length. Nothing is stretched to "now".
+
+export const EXTENT_HOUR_WIDTH_PX = 64;
+export const EXTENT_MIN_BLOCK_WIDTH_PX = 28;
+export const UNKNOWN_EXTENT_CHIP_WIDTH_PX = 128;
+export const EXTENT_LANE_HEIGHT_PX = 56;
+export const EXTENT_ROW_MIN_HEIGHT_PX = 68;
+
+export interface ExtentBlockInput {
+  startMs: number;
+  durationMinutes: number | null;
+}
+
+export interface ExtentBlockGeometry {
+  left: number;
+  width: number;
+  known: boolean;
+  /** The planned interval started before the visible axis (e.g. yesterday). */
+  clippedStart: boolean;
+  /** The planned interval continues past the visible axis (e.g. into the next day). */
+  continuesAfter: boolean;
+}
+
+/** Hours from the day start (fractional, absolute time). */
+export function hoursFromDayStart(ms: number, dayStartMs: number): number {
+  return (ms - dayStartMs) / 3_600_000;
+}
+
+export function extentBlockGeometry(input: ExtentBlockInput, dayStartMs: number, axis: { start: number; end: number }): ExtentBlockGeometry {
+  const axisStartPx = 0;
+  const axisEndPx = (axis.end - axis.start) * EXTENT_HOUR_WIDTH_PX;
+  const rawLeft = (hoursFromDayStart(input.startMs, dayStartMs) - axis.start) * EXTENT_HOUR_WIDTH_PX;
+  if (input.durationMinutes === null) {
+    const left = Math.min(Math.max(rawLeft, axisStartPx), Math.max(axisEndPx - UNKNOWN_EXTENT_CHIP_WIDTH_PX, 0));
+    return { left, width: UNKNOWN_EXTENT_CHIP_WIDTH_PX, known: false, clippedStart: rawLeft < axisStartPx, continuesAfter: false };
+  }
+  const rawRight = rawLeft + (input.durationMinutes / 60) * EXTENT_HOUR_WIDTH_PX;
+  const left = Math.max(rawLeft, axisStartPx);
+  const right = Math.min(rawRight, axisEndPx);
+  const width = Math.max(right - left, EXTENT_MIN_BLOCK_WIDTH_PX);
+  return {
+    left: Math.min(left, Math.max(axisEndPx - width, 0)),
+    width,
+    known: true,
+    clippedStart: rawLeft < axisStartPx,
+    continuesAfter: rawRight > axisEndPx,
+  };
+}

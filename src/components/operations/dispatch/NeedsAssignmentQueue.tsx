@@ -11,6 +11,8 @@ import { cn } from "@/lib/cn";
 export interface NeedsAssignmentQueueProps {
   trips: DispatchTrip[];
   timezone: string;
+  /** P1-OPS-PROG4: which org-local day the board shows (copy only). */
+  day?: "today" | "tomorrow";
   onAssign: (trip: DispatchTrip) => void;
 }
 
@@ -25,7 +27,7 @@ export interface NeedsAssignmentQueueProps {
  * Attention precedent (ZD-130). Every card here reads exactly one real
  * condition: `state='scheduled'` with no active `trip_assignments` row.
  */
-export function NeedsAssignmentQueue({ trips, timezone, onAssign }: NeedsAssignmentQueueProps) {
+export function NeedsAssignmentQueue({ trips, timezone, day = "today", onAssign }: NeedsAssignmentQueueProps) {
   return (
     <div className="flex flex-col gap-zw-md">
       <div className="flex items-center gap-2">
@@ -39,7 +41,7 @@ export function NeedsAssignmentQueue({ trips, timezone, onAssign }: NeedsAssignm
         <Panel>
           <EmptyState
             title="Nothing needs assignment"
-            description="Every trip scheduled today already has a driver."
+            description={`Every trip scheduled ${day === "tomorrow" ? "tomorrow" : "today"} already has a driver.`}
           />
         </Panel>
       ) : (

@@ -25,6 +25,10 @@ import type { RecurringAssignmentHint } from "@/lib/operations/assignment-defaul
 import { ASSIGNABLE_TRIP_STATES } from "@/lib/operations/readiness-actions-core";
 import { dispatchErrorMessage, type DispatchErrorCode } from "@/lib/operations/dispatch-errors";
 import { TripReadinessPanel } from "@/components/operations/trip-detail/TripReadinessPanel";
+import { TripDurationPanel } from "@/components/operations/trip-detail/TripDurationPanel";
+import { getAssignmentOverlap, type AssignmentOverlapView } from "@/lib/operations/trip-overlap";
+import { deriveTripExtent, formatTripExtent } from "@/lib/operations/trip-overlap-core";
+import { overlapUnavailableView } from "@/components/operations/overlap/OverlapNotes";
 import { TripExceptionsPanel } from "@/components/operations/trip-detail/TripExceptionsPanel";
 import { TripNotesPanel } from "@/components/operations/trip-detail/TripNotesPanel";
 import { typography } from "@/design/typography";
@@ -106,6 +110,20 @@ export default async function TripDetailPage({
     assignments.map((a) => a.assignedBy).filter((id): id is string => id !== null),
   ).catch(() => new Map<string, string>());
   const attribution = deriveAssignmentAttribution(assignments, viewer?.id ?? null, visibleNames);
+
+  // P1-OPS-PROG4: the planned window (a plan, never a lifecycle fact) and, for a non-terminal trip with a current
+  // assignment, the same canonical overlap facts the dialog uses. A failed read shows "Can't fully check" (R1).
+  const plannedExtentLabel = formatTripExtent(deriveTripExtent(trip.scheduledPickupAt, trip.expectedDurationMinutes), timezone);
+  let currentOverlap: AssignmentOverlapView | null = null;
+  if (!trip.isTerminal && trip.activeAssignmentId && (trip.driverId || trip.vehicleId)) {
+    currentOverlap = await getAssignmentOverlap(
+      organization.organizationId,
+      timezone,
+      { kind: "trip", tripId: trip.id },
+      trip.driverId,
+      trip.vehicleId,
+    ).catch(() => overlapUnavailableView(Boolean(trip.driverId), Boolean(trip.vehicleId)));
+  }
   const lastUpdateAt = events[0]?.occurredAt ?? trip.updatedAt;
 
   // P1-E1-S4D §16: Trip Readiness is only ever fetched/rendered for a
@@ -259,6 +277,7 @@ export default async function TripDetailPage({
             eligibleForAssignmentAction={!trip.isTerminal}
             hasActiveAssignment={trip.activeAssignmentId !== null}
             attribution={attribution}
+            overlap={currentOverlap}
             assignmentControl={
               assignmentOptions ? (
                 <TripAssignmentButton
@@ -281,6 +300,13 @@ export default async function TripDetailPage({
                 />
               ) : undefined
             }
+          />
+          <TripDurationPanel
+            tripId={trip.id}
+            expectedDurationMinutes={trip.expectedDurationMinutes}
+            expectedDurationSource={trip.expectedDurationSource}
+            plannedExtentLabel={plannedExtentLabel}
+            canEdit={!trip.isTerminal}
           />
           <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
           <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />

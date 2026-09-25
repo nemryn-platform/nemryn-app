@@ -9,6 +9,8 @@ export interface OperationsPreferences {
   businessPhone: string | null;
   businessEmail: string | null;
   primaryContactName: string | null;
+  /** P1-OPS-PROG4: optional default trip duration in minutes (null = no default; there is no Nemryn default). */
+  defaultTripDurationMinutes: number | null;
 }
 
 /**
@@ -22,7 +24,7 @@ export async function getOperationsPreferences(organizationId: string): Promise<
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("organizations")
-    .select("timezone, operating_days, operating_opens_at, operating_closes_at, business_phone, business_email, primary_contact_name")
+    .select("timezone, operating_days, operating_opens_at, operating_closes_at, business_phone, business_email, primary_contact_name, default_trip_duration_minutes")
     .eq("id", organizationId)
     .maybeSingle();
   if (error) throw new Error("Failed to load operations preferences");
@@ -37,5 +39,18 @@ export async function getOperationsPreferences(organizationId: string): Promise<
     businessPhone: data.business_phone,
     businessEmail: data.business_email,
     primaryContactName: data.primary_contact_name,
+    defaultTripDurationMinutes: data.default_trip_duration_minutes,
   };
+}
+
+/** P1-OPS-PROG4: the organization's optional default trip duration (own organization only, member SELECT policy). */
+export async function getOrganizationTripDefault(organizationId: string): Promise<number | null> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("organizations")
+    .select("default_trip_duration_minutes")
+    .eq("id", organizationId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data.default_trip_duration_minutes;
 }

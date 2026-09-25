@@ -1,0 +1,661 @@
+NEMRYN PLATFORM
+P1-OPS-PROG4A -- TRIP TIME EXTENT (GAP-11) + HONEST OVERLAP WARNINGS -- SPECIFICATION
+Specification only. NO application change, no migration, no Supabase change, no deployment. PROG4B and PROG5 NOT
+started. Written from a fresh read of the code and the local database at main = origin/main = c625689 (the PROG3B
+release 51939f3 plus the PROG3B release-record docs commit).
+
+======================================================================
+0. PHASE 0 -- PROG3B RELEASE RECORD CLOSEOUT
+======================================================================
+  - docs/reports/p1-ops-prog3b-production-release.txt was reviewed and is accurate to the completed release.
+      - Its closing line was updated from "local and uncommitted" to "committed in the PROG3B closeout
+        documentation commit".
+  - Committed ALONE as c625689098945c20e83fdd69067c6322584fd85e: "docs(operations): record PROG3B production
+    release", documentation only.
+  - Pushed once as `nemryn` (51939f3..c625689). HEAD == origin/main.
+  - No application change. The GitHub → Vercel integration will redeploy the same application code for this docs
+    commit; nothing functional changes.
+
+======================================================================
+1. CURRENT-STATE AUDIT
+======================================================================
+public.organizations
+  Columns:
+    - id, name, status, timezone (NOT NULL, IANA-validated), business_stage
+    - service_area_description, business_phone, business_email, business_address, primary_contact_name
+    - operating_days smallint[], operating_opens_at time, operating_closes_at time
+  RLS:
+    - organizations_select_members: SELECT for every active member, drivers included
+    - organizations_update_org_admin
+  Client grant: SELECT only. Writes go through typed admin-only SECURITY DEFINER RPCs:
+    - update_organization_settings(p_organization_id, p_changes jsonb), a text-field allowlist
+    - update_organization_operating_schedule(p_organization_id, p_days, p_opens_at, p_closes_at), which checks
+      has_org_role(..., ['organization_admin'])
+  Timezone is the single source for org-local days:
+    - day-bounds.ts organizationDayBoundsUtc / localMidnightUtc
+    - SQL _organization_local_to_utc (DST-safe)
+
+public.trips
+  Columns:
+    - id, organization_id, request_id, passenger_id, state (9-value check)
+    - scheduled_pickup_at timestamptz NULL, appointment_at timestamptz NULL
+    - pickup/destination descriptions + facility ids
+    - assistance_notes, instructions
+    - completed_at, cancelled_at, cancellation_reason, no_show_at
+    - created_at, updated_at, recurring_arrangement_id
+  There is NO duration and NO expected drop-off: this is GAP-11.
+  RLS: trips_select_org_operations and trips_update_org_operations (organization_admin | dispatcher).
+  Column-level UPDATE is granted to authenticated for the planning fields only:
+    - scheduled_pickup_at, appointment_at
+    - pickup/destination description and facility
+    - assistance_notes, instructions
+  This is authorization-model §K. NO application code uses it: Trip Detail's "Edit Trip" button is rendered
+  DISABLED ("Editing a trip's own details is not available yet.").
+  Drivers have no direct SELECT; they read through driver_list_active_trips / driver_get_trip_detail /
+  driver_list_trip_history (SECURITY DEFINER, explicit columns).
+  Indexes:
+    - trips_org_scheduled_pickup_idx (organization_id, scheduled_pickup_at)
+    - trips_org_state_idx
+    - trips_recurring_arrangement_id_idx (partial)
+    - trips_request_id_idx (partial)
+    - trips_passenger_id_idx
+public.trip_assignments
+  Columns: id, organization_id, trip_id, driver_id, vehicle_id NULL, assigned_by, assigned_at, ended_at,
+  end_reason, created_at.
+  - trip_assignments_one_active_per_trip is a unique index on (trip_id) WHERE ended_at IS NULL.
+  - Other indexes: driver_id, trip_id, organization_id. There is NO vehicle_id index.
+  - Client grant: SELECT only. Writes happen only through assign_trip / reassign_trip / the lifecycle RPCs.
+RPCs (current identity signatures)
+  - create_trip(p_organization_id uuid, p_passenger_id uuid, p_pickup_description text,
+      p_destination_description text, p_scheduled_pickup_at timestamptz, p_appointment_at timestamptz,
+      p_pickup_facility_id uuid, p_destination_facility_id uuid, p_assistance_notes text, p_instructions text,
+      p_request_id uuid)
+      - Trailing parameters default to null. Latest body: 20260924091000_request_decision_workflow_contract.sql.
+      - Returns trip_creation_result. It is NOT idempotent (ZD-102).
+  - create_trip_for_recurring_occurrence(p_organization_id, p_arrangement_id, p_service_date)
+      - Calls create_trip POSITIONALLY with 5 arguments (org, passenger, pickup, destination,
+        _organization_local_to_utc(...)).
+      - It then sets recurring_arrangement_id. It is idempotent per (arrangement, service_date) for non-cancelled
+        trips.
+  - assign_trip(p_trip_id, p_driver_id, p_vehicle_id)
+  - reassign_trip(p_trip_id, p_driver_id, p_vehicle_id, p_reason, p_expected_assignment_id)
+      - Checks: same organization, active driver/vehicle, and state scheduled / en_route_to_pickup /
+        arrived_at_pickup.
+      - One active assignment (ZW005); expected-assignment concurrency.
+  - There is no trip-edit RPC.
+Request → Trip
+  Website intake (/api/public-intake/website, hosted form) creates PENDING transportation_requests only. Accepting a
+  request and then "Create Trip" (/operations/trips/new?requestId=) goes through the same createTripAction →
+  create_trip (the request must be accepted).
+New Trip
+  src/app/operations/trips/new/{page.tsx, actions.ts} + src/components/operations/new-trip/NewTripForm.tsx.
+  - Pickup date+time are required; the appointment is optional.
+  - Org-local → UTC conversion happens server-side.
+  - PROG2 "Assign now" (create, then assign through callAssignmentRpc).
+Trip Detail
+  src/app/operations/trips/[tripId]/page.tsx, with TripInfoStrip, TripRoutePanel, CurrentStatusPanel (PROG1/2
+  assignment dialog, PROG3B attribution) and TripReadinessPanel.
+Dispatch
+  /operations/dispatch, dispatch-board.ts getDispatchBoardData:
+    - TODAY only: organizationDayBoundsUtc(now), non-terminal states.
+    - NeedsAssignmentQueue, AssignmentGrid, DriverCapacityPanel.
+  dispatch-grid.ts: FIXED 6:00–20:00 axis, GRID_BLOCK_WIDTH_PX = 144, blocks positioned by start only. It is
+  documented as "no duration field exists".
+  AssignmentDialog / AssignmentFields (PROG1/2): driver-day facts via driverDayContextAction (times + routes, "no
+  overlap claims"), with the target being a Trip or a date.
+Tomorrow
+  /operations/tomorrow, tomorrow-readiness.ts: scheduled trips in tomorrow's org-local window, readiness reasons,
+  and PROG2 inline Assign / Add vehicle.
+Driver PWA
+  /driver/trips/[tripId] shows the pickup time and "Appt: …" from driver_get_trip_detail.
+Privilege contract
+  supabase/tests/privilege_contract_tests.sql (29 checks, run by scripts/verify-db-privileges.sh local|production).
+  Relevant checks:
+    - 09 authenticated COLUMN privileges == contract
+    - 13 / 14 / 17 function contract (every function listed; authenticated EXECUTE == contract API)
+    - 19 SECURITY DEFINER pins search_path
+    - 29 no TRANSITIONAL function remains
+  Plus the SQL suites create_trip_tests, create_trip_privilege_tests, recurring_trip_creation_tests,
+  rls_adversarial_tests, organization_timezone_tests and team_services_operations_tests.
+
+======================================================================
+2. PRODUCT DECISIONS (APPROVED, CARRIED INTO THIS SPEC)
+======================================================================
+  D1  Duration is operator-entered per trip, with an OPTIONAL organization default that the trip value overrides.
+      There are no facility defaults, no route-derived durations, no external routing and no historical inference.
+  D2  There is no Nemryn default. With no trip value and no organization default, the time extent is UNKNOWN.
+  D3  Snapshot semantics: see §5. The recommendation is to SNAPSHOT at creation.
+  D4  An overlap is a WARNING only. It never blocks, removes, reassigns or cancels.
+  D5  An overlap is claimed only when BOTH intervals are known. UNKNOWN means no claim.
+  D6  Resources: same driver and same vehicle only.
+  D7  Running-late stays DEFERRED. No schema is added now (see §17).
+  D8  Dispatch shows proportional blocks for known extents and an honest treatment for unknown ones.
+  D9  Dispatch gets a Tomorrow scope on the same model. The /operations/tomorrow readiness page stays.
+  D10 No drag-and-drop.
+  D11 No PROG5 scope: shifts, time off, out-of-service windows, "available" and capabilities are all excluded.
+  D12 No routing, traffic, deadhead, nearest-driver, sequencing, scoring or automated dispatch.
+
+======================================================================
+3. RECOMMENDED DATA MODEL
+======================================================================
+trips (additive, nullable):
+  expected_duration_minutes  integer NULL
+    CHECK (expected_duration_minutes IS NULL OR expected_duration_minutes BETWEEN 1 AND 2880)
+  expected_duration_source   text NULL
+    CHECK (expected_duration_source IN ('trip', 'organization_default'))
+    CHECK ((expected_duration_minutes IS NULL) = (expected_duration_source IS NULL))
+organizations (additive, nullable):
+  default_trip_duration_minutes integer NULL
+    CHECK (default_trip_duration_minutes IS NULL OR default_trip_duration_minutes BETWEEN 1 AND 2880)
+Derived, never stored: expected_end_at = scheduled_pickup_at + expected_duration_minutes * interval '1 minute'.
+It exists only when both are non-null.
+Why duration rather than an end timestamp:
+  - The duration is what an operator knows ("about 45 minutes").
+  - It survives pickup-time edits: the end moves with the pickup.
+  - It is DST-safe: minutes are absolute, and the arithmetic is in UTC.
+  - It gives one source of truth.
+Why a source column:
+  - It is honest copy: "45 min (organization default)" versus "45 min".
+  - It is audit clarity: a snapshot from the default is distinguishable from an operator entry, without guessing.
+No backfill: every existing trip stays NULL / NULL, which means UNKNOWN.
+Upper bound 2880 (48 h) -- OWNER DECISION Q1: an integrity ceiling only, chosen so legitimate long-distance medical
+transports longer than 24 h are never rejected, and to keep the overlap candidate window finite (§8). It is NEVER a
+default duration.
+
+======================================================================
+4. ALTERNATIVES REJECTED
+======================================================================
+  B. expected_dropoff_at only
+     - The end would need recomputing whenever the pickup is edited, or it would silently diverge.
+     - Operators do not think in drop-off timestamps for transport planning.
+     - Its DST and day handling is error-prone in forms.
+  C. Both a duration and an end
+     - Two sources of truth that can contradict each other, which needs invariants or triggers. There is no benefit
+       at this stage.
+  D1. A dynamic organization default (inherited at read time)
+     - Changing the default would silently rewrite the implied extent of every existing trip, including past and
+       in-progress ones.
+     - Overlap warnings on already-planned days would appear or disappear without any operator action.
+     - It violates the rule of historical truth.
+  D2. Per-facility, per-passenger or per-arrangement defaults, or historical averages
+     - Out of scope by owner decision D1. Per-arrangement is listed as Q3.
+  D3. Using appointment_at as the end
+     - The appointment is a destination commitment, not a drop-off. Inferring from it contradicts D1.
+  D4. A range type (tstzrange) column with an exclusion constraint
+     - An exclusion constraint would BLOCK overlaps, which contradicts D4.
+     - A stored range duplicates the start and must be kept in sync.
+     - The pure derivation in memory is sufficient at the target scale.
+
+======================================================================
+5. ORGANIZATION-DEFAULT SEMANTICS (D3)
+======================================================================
+Recommendation: SNAPSHOT AT CREATION, inside create_trip:
+  - If p_expected_duration_minutes is given, store it with source 'trip'.
+  - Else, if organizations.default_trip_duration_minutes is not null, store it with source 'organization_default'.
+  - Else store NULL / NULL (unknown).
+Consequences:
+  - The organization changes its default tomorrow: existing trips are unchanged. Only trips created after the change
+    use the new default. The Settings copy says so.
+  - Previously created trips never change implicitly. Changing a trip's duration requires an explicit operator
+    action per trip (§7). A bulk "apply the default to upcoming trips without a duration" action is NOT in PROG4B
+    (Q2).
+  - Recurring occurrences: generated through create_trip, so they snapshot the default in force at GENERATION time.
+    Deterministic, since the same inputs give the same stored value.
+  - Edited pickup time: the duration is kept and the derived end moves with the new start.
+  - Imported / intake-created requests: requests carry no duration. The trip created from a request follows the
+    ordinary New Trip rules (operator value, or the default snapshot).
+  - An operator clears a trip's duration: it becomes UNKNOWN (NULL/NULL). The default is NOT re-applied, so an
+    explicit "unknown" is respected.
+
+======================================================================
+6. TRIP TIME-EXTENT SEMANTICS
+======================================================================
+Interval for a trip = [scheduled_pickup_at, scheduled_pickup_at + expected_duration_minutes) (half-open, UTC).
+  - KNOWN only when scheduled_pickup_at IS NOT NULL and expected_duration_minutes IS NOT NULL.
+  - UNKNOWN otherwise. There is no substitution, no estimate and no display of a made-up end.
+  - Display: start–end in the organization timezone ("9:30–10:15 AM"; when crossing midnight, "11:30 PM – 12:45 AM
+    (next day)").
+  - The extent is PLANNED, not actual: in-progress and completed trips keep their planned interval. Actual times are
+    lifecycle facts (trip_events / completed_at) and are never overwritten by the plan.
+
+======================================================================
+7. MUTATION-CONTRACT CHANGES (FUTURE, PROG4B)
+======================================================================
+7.1 create_trip: one new trailing parameter
+  p_expected_duration_minutes integer DEFAULT NULL
+  - Validation: null, or 1..2880, else ZW006. The organization default is snapshotted as in §5.
+  - Authorization: unchanged (existing has_org_role checks).
+  - Compatibility: existing callers use named parameters (supabase-js rpc), and the recurring function uses 5
+    positional arguments. Both resolve to the new 12-argument function because the new parameter is trailing with a
+    default.
+  - Implementation: in ONE migration transaction, DROP the 11-argument function, CREATE the 12-argument function,
+    re-apply COMMENT, REVOKE ALL FROM PUBLIC, and GRANT EXECUTE TO authenticated.
+  - No transitional overload is left behind (privilege check 29 stays green).
+7.2 NEW set_trip_expected_duration(p_trip_id uuid, p_expected_duration_minutes integer)
+  - Returns (trip_id uuid, expected_duration_minutes integer, expected_duration_source text, changed boolean).
+  - SECURITY DEFINER, pinned search_path, has_org_role(org, ['organization_admin','dispatcher']).
+  - Row lock on the trip.
+  - Allowed only for NON-TERMINAL trips: scheduled and the five in-progress states. A terminal trip returns ZW004.
+  - null clears the value to unknown (source null); a value sets source 'trip'. Idempotent (`changed`).
+  - Writes one audit_events row (action 'trip_expected_duration_updated', before/after).
+  - It does NOT touch assignments and does NOT check overlaps (warning-only).
+  - REVOKE PUBLIC; GRANT authenticated.
+  - Why an RPC rather than extending the §K column grant: validation beyond a CHECK, source coherence, an audit
+    trail, and a terminal-state rule. The direct planning-column grant is NOT extended to the new columns.
+7.3 NEW update_organization_trip_defaults(p_organization_id uuid, p_default_trip_duration_minutes integer)
+  - Returns (organization_id uuid, default_trip_duration_minutes integer, changed boolean).
+  - Organization Admin only, mirroring update_organization_operating_schedule.
+  - null clears it. 1..2880. It never touches trips.
+  - Writes one audit_events row (action 'organization_trip_defaults_updated'). Adding it to Settings → Activity is
+    optional (it needs the list_activity_events allowlist; Q5).
+7.4 Flows
+  - Manual New Trip: optional "Expected duration" → create_trip(p_expected_duration_minutes).
+  - Request conversion: the same form and path.
+  - Website intake: unchanged (requests only).
+  - Recurring occurrence generation: create_trip_for_recurring_occurrence is unchanged; the default is snapshotted
+    inside create_trip.
+  - Recurring prefill (PROG2): unchanged. The hint stays driver/vehicle only.
+  - Trip editing: only the duration, via set_trip_expected_duration from Trip Detail. General trip editing (pickup
+    time etc.) stays out of scope: the Edit Trip button stays disabled.
+  - Assign / reassign: the RPCs are UNCHANGED. Overlap is computed for display before confirmation and never
+    evaluated inside the mutation (warning-only).
+
+======================================================================
+8. OVERLAP DERIVATION (ONE CANONICAL PURE MODEL)
+======================================================================
+Module: src/lib/operations/trip-overlap-core.ts (pure, unit-tested; the same code runs for every surface).
+Input: the target interval, plus candidate trips with {tripId, state, scheduledPickupAt, expectedDurationMinutes,
+activeDriverId, activeVehicleId}.
+Rules:
+  - Intervals are half-open [start, end). A and B overlap iff A.start < B.end AND B.start < A.end.
+      - Touching boundaries (A.end == B.start): NO overlap.
+      - Partial overlap, full containment and identical intervals: overlap.
+  - Only ACTIVE assignments count: ended_at IS NULL. Reassignment history (ended rows) is ignored.
+  - Candidate states: scheduled plus the five in-progress states. completed, cancelled and no_show are EXCLUDED; a
+    completed trip's plan is history, not a commitment.
+  - A same-trip pair is excluded. For a hypothetical assignment (the dialog), the target's resources are the
+    SELECTED driver/vehicle.
+  - Resource match: driverOverlap if activeDriverId == target driver; vehicleOverlap if activeVehicleId == target
+    vehicle and both are non-null. Different resources never match.
+  - UNKNOWN: if the target interval is unknown, or a candidate's is, that pair is "not checkable".
+      - It is never "overlapping" and never "clear".
+      - The output counts uncheckable same-resource candidates so the UI can say so factually.
+  - Output per target:
+      { driverOverlaps: tripId[], vehicleOverlaps: tripId[],
+        driverUncheckable: number, vehicleUncheckable: number,
+        targetKnown: boolean }
+    There is no score, no ranking and no probability.
+Candidate window: every trip whose START is in [dayStart − 2880 min, dayEnd). The 48-hour bound makes it complete
+for any trip whose PLANNED interval can reach the day, including across midnight.
+AMENDED (owner decision Q7): the candidate set ALSO includes every older still-non-terminal trip that holds an active
+assignment. Its commitment past an expired planned end is UNRESOLVED (see §8a).
+
+======================================================================
+8a. AMENDMENT (OWNER DECISION Q7) -- STILL-OPEN TRIPS PAST THEIR PLANNED END
+======================================================================
+A planned extent does not prove that a resource became free when the plan ended. Take a candidate that:
+  - still holds an ACTIVE assignment;
+  - is still NON-TERMINAL (scheduled or in progress);
+  - has a KNOWN planned end that is earlier than `now`.
+Its commitment AFTER that planned end is UNKNOWN. Nemryn neither extends it to an invented end nor calls it clear.
+The pure derivation therefore distinguishes four outcomes per resource:
+  1. KNOWN OVERLAP: the target intersects a candidate's planned interval. A still-open candidate's planned portion
+     can still produce a known overlap.
+  2. KNOWN NON-OVERLAP: every same-resource candidate has a known interval, none intersects, and none is unresolved.
+  3. NOT CHECKABLE (missing extent): the target or a candidate has no scheduled start or no duration.
+  4. NOT FULLY CHECKABLE (still open past its planned end): a still-open candidate's expired planned end is before
+     the END of the target interval, so the time after it cannot be judged.
+     - This is NOT an overlap and NOT clear.
+     - Copy: "Can't fully check this driver: an assigned trip has passed its planned end and is still open."
+     - The same applies to vehicles.
+This is not running-late: no threshold, and never the word "late". `now` is a factual input to the pure function.
+
+======================================================================
+9. QUERY / INDEX STRATEGY
+======================================================================
+  - Dispatch (Today / Tomorrow): ONE trips query for the day window (extended back 48 h) plus one small still-open query (§8a), using the existing
+    (organization_id, scheduled_pickup_at) index, with the active assignment embedded. Overlaps for every block are
+    derived in memory. That is O(n log n) per day; n is in the tens to low hundreds even at 30–100 vehicles. No N+1.
+  - Assign dialog: extend the PROG1 on-demand driver-day read to return interval fields. Add a vehicle-day read of
+    the same shape, loaded only when a vehicle is selected. Both are single bounded queries on the org + date
+    index, filtered by embedded assignment.
+  - New Trip (Assign now): the same reads with a date target (PROG2).
+  - Tomorrow page: its existing single query gains the duration columns. The overlap for each row is derived from
+    the same day candidate set (one extra day-window query, not per row).
+  - Indexes: NONE required for PROG4B. Every query is org + date bounded on the existing index, and resource
+    filtering happens on a small embedded set.
+      - If profiling at larger tenants shows vehicle-scoped reads dominating, a later additive partial index on
+        trip_assignments(vehicle_id) WHERE ended_at IS NULL is the candidate. It is not added speculatively.
+
+======================================================================
+10. ONE-VEHICLE UX
+======================================================================
+  - The organization sets a default once (Settings → Operations → "Default trip duration", optional). New trips then
+    carry it with no typing, and the field shows "45 min · organization default" and can be changed.
+  - Without a default, the field is empty: "Not set". Nothing nags, nothing blocks, and no overlap is claimed.
+  - Warnings appear only when the single driver or vehicle genuinely has two known intervals that overlap. For one
+    vehicle this is exactly the double-promised-time mistake owners worry about.
+  - Dispatch stays a simple one-row board. Blocks gain real widths, and there are no new controls.
+  - PROG1/2 behaviour is unchanged: prefills, "(you)", Assign now, Tomorrow actions.
+
+======================================================================
+11. GROWING-FLEET UX (NO SIZE MODES)
+======================================================================
+The same model scales by facts alone:
+  - 1 → 3 vehicles: warnings help when juggling two drivers.
+  - 10: the Dispatch grid with proportional blocks shows free and busy spans per driver at a glance.
+  - 30+: the Tomorrow scope on Dispatch plus the overlap count make next-day balancing practical.
+Nothing reads business_stage, vehicle counts or membership counts. Warnings appear only where facts exist, so a
+larger operation sees more of them only because it has more overlapping commitments.
+
+======================================================================
+12. DISPATCH TODAY / TOMORROW
+======================================================================
+  - Scope switch: /operations/dispatch?day=today (default) | ?day=tomorrow, a two-option segmented control in the
+    header.
+      - The same loader is used with day bounds from organizationDayBoundsUtc(now) or its composed tomorrow. It is
+        the same model and the same warnings; there is no separate engine.
+  - Relationship: Operations → Tomorrow stays the PREPARATION checklist (readiness reasons, Assign / Add vehicle).
+    Dispatch → Tomorrow is the RESOURCE/TIME view (who is doing what, and when).
+      - Each links to the other: "Open in Dispatch" on Tomorrow, and "Tomorrow readiness" on Dispatch-Tomorrow.
+      - Readiness is not duplicated on the board.
+  - The queue: Today shows the unassigned scheduled trips of today; Tomorrow shows tomorrow's.
+  - Grid:
+      - Rows are active drivers, as today.
+      - Axis: 06:00–20:00 by default, EXPANDED to cover the earliest start and the latest known end of the day's
+        trips. This is fact-derived, so no trip is clipped.
+      - Known extent: the block width is proportional to the duration (px per minute), with a minimum rendered
+        width of 28 px so short trips stay clickable and the label is truncated with a tooltip. There is no maximum
+        other than the axis. A block that continues past midnight ends at the axis edge with "→ next day".
+      - Unknown extent: a start marker, a narrow fixed-width chip with a dashed outline and the label "Duration not
+        set". It never has a proportional width.
+      - Overlapping known blocks in one driver row: stacked into deterministic lanes (sorted by start, then trip id),
+        each overlapping block marked with the overlap indicator. There is no colour-coded severity.
+      - Active trips: the existing in-progress styling on the planned interval. Completed, cancelled and no-show:
+        not on the board (current non-terminal rule, kept).
+  - Responsive: at 1440 and 768 the grid keeps its horizontal scroll inside its panel (existing behaviour), with no
+    page overflow. Operations remains md+, and no phone board is added.
+  - Drag-and-drop: none. Assign / Reassign stay click → dialog → confirm.
+
+======================================================================
+13. WARNING UX (FACTUAL, NON-ALARMIST)
+======================================================================
+Copy:
+  - "This driver has another trip during this time" (+ "9:30–10:15 AM · Home → Clinic")
+  - "This vehicle has another trip during this time"
+  - "Can't check for overlaps: this trip's duration isn't set"
+  - "Can't check 2 of this driver's trips that day: duration not set"
+Placement:
+  - AssignmentFields (dialog and New Trip), under the driver-day / vehicle-day facts.
+  - Trip Detail → Current Status (for the current assignment).
+  - The Dispatch block indicator.
+  - Tomorrow rows: a neutral badge "Overlaps another trip".
+Never used: conflict, risk, score, optimized, recommended / best driver, AI, "impossible", "can't assign".
+Confirmation stays enabled. A warning never changes a button's disabled state.
+
+======================================================================
+14. UI SPECIFICATION BY SURFACE
+======================================================================
+1. New Trip
+   - Field: "Expected duration" (minutes; helper "Used to show overlaps. Leave empty if unknown.").
+   - Source: operator input, prefilled from the organization default with "organization default" noted.
+   - Unknown: empty, "Not set".
+   - Warnings: in the Assign now section, when the pickup date, time and duration are set and the selected
+     driver/vehicle overlaps.
+   - Actions: none new.
+   - Permissions: admin and dispatcher (existing).
+   - NOT shown: any estimate when blank; any route time.
+2. Edit Trip
+   - The general Edit Trip stays disabled. Only "Expected duration" is editable, from Trip Detail, through a small
+     dialog → set_trip_expected_duration.
+   - Admin / dispatcher, non-terminal trips only.
+3. Assignment dialog
+   - Driver-day and vehicle-day facts show intervals when known.
+   - The overlap warnings above; the "Can't check" note when the target or others are unknown.
+   - Assign stays enabled.
+4. Reassignment
+   - The same as the dialog, evaluated against the NEWLY selected driver/vehicle.
+   - The current (to-be-ended) assignment is excluded from candidates.
+5. Dispatch — Today: §12.
+6. Dispatch — Tomorrow: §12.
+7. Tomorrow readiness
+   - Rows add the extent ("9:30–10:15 AM" or "Duration not set") and, if applicable, the neutral "Overlaps another
+     trip" badge.
+   - This is NOT a readiness reason: READY / NEEDS_PREPARATION and the counts are unchanged (Q4).
+8. Trip Detail
+   - Info strip: "Expected duration: 45 min (organization default) · until 10:15 AM" or "Not set".
+   - "Edit duration" for admin / dispatcher on non-terminal trips.
+   - The Current Status overlap line for the current assignment.
+9. Organization Settings
+   - Settings → Operations, admin-only: "Default trip duration (minutes) — optional".
+   - Helper: "Applied to new trips when no duration is entered. Existing trips keep their own duration."
+   - Clearing it means no default.
+10. Recurring generated trips
+   - The default is snapshotted at generation. The Recurring Care UI is unchanged.
+   - Trip Detail shows the source "organization default".
+11. Request conversion
+   - The same as New Trip (the request carries no duration). No change to request pages or intake.
+
+======================================================================
+15. PERMISSIONS
+======================================================================
+  - Set a trip's expected duration: organization_admin and dispatcher (planning, as with scheduled_pickup_at).
+  - Set the organization default: organization_admin only.
+  - Read durations and overlaps: operations roles only (existing Trip / Dispatch / Tomorrow guards).
+  - Driver: no write. No overlap or other-driver information. No new read (§18).
+  - Platform Admin without a membership: nothing, as today.
+
+======================================================================
+16. RLS / SECURITY IMPACT
+======================================================================
+  - The new columns inherit the existing table RLS:
+      - trips: trips_select_org_operations
+      - organizations: organizations_select_members, which lets drivers read the organization default. That is a
+        non-sensitive planning number; accepted, and documented.
+  - No new policy.
+  - NO new column UPDATE grant: the new trip columns are written ONLY through create_trip and
+    set_trip_expected_duration; the organization column only through update_organization_trip_defaults.
+  - Future review list: the three RPCs above (SECURITY DEFINER, pinned search_path, has_org_role, organization
+    match, ZW codes).
+      - create_trip grants re-applied after DROP/CREATE.
+      - trips/organizations column grants unchanged (check 09).
+      - driver_* RPCs unchanged.
+  - Deny-by-default holds: no service role, no client-only authorization, and every page guard kept.
+  - Adversarial tests: cross-tenant set_trip_expected_duration / update_organization_trip_defaults (ZW002).
+      - Dispatcher calling update_organization_trip_defaults (ZW002).
+      - Driver calling either (ZW002).
+      - Direct client UPDATE of trips.expected_duration_minutes and organizations.default_trip_duration_minutes:
+        permission denied.
+
+======================================================================
+17. RUNNING-LATE (D7) -- DECISION
+======================================================================
+DEFERRED ENTIRELY. There is no schema now: an additive organizations.running_late_threshold_minutes can be
+introduced later without touching PROG4 structures. No part of PROG4 depends on it, and adding it now would ship an
+unused field. When it is built:
+  - it is organization-configured only, with no global default;
+  - it uses lifecycle facts (state still 'scheduled' with no en_route event) against now and scheduled_pickup_at;
+  - it never contradicts a recorded state.
+
+======================================================================
+18. DRIVER PWA IMPACT
+======================================================================
+None in PROG4.
+  - A driver needs the pickup time and the appointment, which they already see.
+  - An expected end is planning data for the office. Showing it could be read as a deadline and adds no action for
+    the driver.
+  - Overlap and conflict information about other drivers or trips must never reach the Driver PWA.
+  - driver_get_trip_detail / driver_list_active_trips stay unchanged, so there is no new driver read or RLS
+    exposure.
+
+======================================================================
+19. PRIVILEGE-CONTRACT IMPACT
+======================================================================
+supabase/tests/privilege_contract_tests.sql must be updated in the same PROG4B change:
+  - the function contract (13 / 14 / 17): the create_trip identity changes to 12 arguments, plus two new functions,
+    set_trip_expected_duration and update_organization_trip_defaults, with authenticated EXECUTE;
+  - 09: column privileges UNCHANGED, which must be asserted;
+  - 29: stays green, with no transitional overload.
+Expected total: still 29 checks, 0 violations. Extend create_trip_tests / create_trip_privilege_tests /
+recurring_trip_creation_tests / rls_adversarial_tests / team_services_operations_tests.
+
+======================================================================
+20. MIGRATION STRATEGY
+======================================================================
+ONE expand-only migration, for example 2026MMDDhhmmss_trip_expected_duration.sql, in a single transaction:
+  1. alter table trips add column expected_duration_minutes integer, add column expected_duration_source text,
+     plus the three CHECKs (NOT VALID is unnecessary, since every existing row is null and passes).
+  2. alter table organizations add column default_trip_duration_minutes integer, plus the CHECK.
+  3. drop function create_trip(11 args); create function create_trip(12 args, trailing default null) with the §5
+     snapshot. Re-comment; revoke all from public; grant execute to authenticated.
+  4. create set_trip_expected_duration and update_organization_trip_defaults, with revoke / grant.
+  5. No data backfill.
+  6. Update the column / table comments.
+Why a single migration and not expand/contract:
+  - The change is purely additive, and the new parameter is trailing with a default. The currently deployed app
+    (11 named arguments) and the recurring function (5 positional) both resolve to the new function immediately.
+  - No behaviour changes for callers that don't pass it: they get the organization default snapshot, which is null
+    until an admin sets one.
+Release order:
+  1. The migration (production preflight: `supabase projects list` shows Nemryn / wyocbivzgrbekuyqdfts).
+  2. Regenerate database.types.ts.
+  3. The privilege contract, 0/29.
+  4. Deploy the app.
+  5. The production smoke on the synthetic tenant.
+
+======================================================================
+21. COMPATIBILITY STRATEGY
+======================================================================
+  - Old app against the new DB: works. create_trip resolves, the new columns are ignored, and trips are created
+    unknown or with the default.
+  - New app against the old DB: never deployed in that order; the migration runs first.
+  - The PostgREST schema cache refreshes after the migration, and the named-argument call has no ambiguity (only one
+    overload).
+  - Existing data: every trip is unknown, and nothing is fabricated.
+
+======================================================================
+22. TEST MATRIX (FUTURE, PROG4B)
+======================================================================
+SQL (local, then the production ACL check only):
+  - create_trip:
+      - with no duration and no default: null / null
+      - with an explicit value: source 'trip'
+      - with a default only: source 'organization_default'
+      - explicit value overriding the default
+      - bounds 0 / 2881: ZW006
+  - Changing the default does not modify existing trips.
+  - Recurring generation snapshots the default in force.
+  - Request-linked create_trip, with the duration persisted.
+  - An old 11-named-argument caller still works.
+  - set_trip_expected_duration: set, clear (unknown, default not re-applied), terminal state ZW004, idempotent
+    `changed`, and an audit row.
+  - update_organization_trip_defaults: admin OK; dispatcher, driver and cross-tenant ZW002; clear.
+  - Adversarial: a direct UPDATE of the new columns is denied, and cross-tenant reads return nothing.
+  - Privilege contract 29 / 29.
+Unit (trip-overlap-core):
+  - Touching boundaries: none. Partial, containment and identical: overlap.
+  - Same driver; same vehicle; both; neither; different resources.
+  - Cancelled, no-show and completed candidates excluded. Ended assignments ignored. Target excluded.
+  - Unknown target or candidate: uncheckable counts, never overlap.
+  - Midnight crossing via the 48-hour window. DST fall-back and spring-forward (absolute minutes).
+  - The extent formatter, including "(next day)".
+  - Grid geometry: minimum width, unknown chip, lanes, expanded axis.
+Browser E2E (local, fictional tenants):
+  - New Trip with and without the default; the source label; empty equals "Not set".
+  - Assign-now overlap warning (driver, vehicle); no warning when unknown, with the "Can't check" note.
+  - Dialog assign and reassign with overlaps; confirmation still enabled; an assignment created.
+  - Trip Detail duration edit (admin, dispatcher); a terminal trip has no edit control.
+  - Settings default admin-only; a dispatcher is refused server-side.
+  - Dispatch Today / Tomorrow scope: proportional blocks, unknown chips, lanes, expanded axis.
+  - Tomorrow page extent and overlap badge; readiness counts unchanged.
+  - One-driver tenant; multi-driver tenant; 0-driver state (the PROG3B row, still).
+  - A Driver PWA shows no new data.
+  - 1440 / 768: no overflow. Phone: Operations md+, not applicable.
+  - PROG1 / PROG2 / PROG3B regressions.
+Production smoke (synthetic tenant only; no role mutation; dispatcher checks MANUAL without a credential):
+  - Migration applied, ACL 0/29, the default set and cleared on the synthetic tenant only.
+  - A trip created with a duration; an overlap warning shown.
+  - The Dispatch Tomorrow scope loads.
+  - Cleanup, and the synthetic tenant restored.
+
+======================================================================
+23. ROLLOUT PLAN
+======================================================================
+PROG4B implementation, done locally:
+  - migration
+  - RPCs
+  - types
+  - pure overlap core
+  - loaders
+  - UI surfaces
+  - tests
+Then the owner review, then a PROG4B production release gate:
+  - migration first, with the Supabase preflight
+  - privilege contract
+  - deploy
+  - smoke
+The organization default is OFF for every tenant (null) until an admin sets it, so there is zero behavioural change
+at release until an operator opts in or types a duration.
+
+======================================================================
+24. ROLLBACK MODEL
+======================================================================
+  - Application: revert the PROG4B commit or promote the previous Vercel deployment. The old app works on the new
+    schema (§21).
+  - Database: NO rollback needed. The nullable additive columns and extra RPCs are inert for the old app.
+  - A reverse migration (dropping the columns and restoring the 11-argument create_trip) would only be written if
+    the owner requires physical removal. It would discard operator-entered durations, so it is not recommended.
+
+======================================================================
+25. OWNER DECISIONS ON THE OPEN QUESTIONS (FINAL, recorded before PROG4B)
+======================================================================
+  Q1 APPROVED: the ceiling is 1..2880 minutes (48 h) for the trip value and the organization default, and the
+     overlap candidate look-back is 48 h. It is an integrity ceiling only, never a default.
+  Q2 DEFERRED: no "apply the default to existing/upcoming trips" action. Existing trips stay historically stable.
+  Q3 DEFERRED: recurring arrangements get no duration. Occurrences snapshot the organization default in force when
+     each trip is generated.
+  Q4 Overlap stays a NEUTRAL warning. It is NOT a readiness reason; READY / NEEDS_PREPARATION and the counts are
+     unchanged.
+  Q5 The new RPCs write their audit_events rows. The Settings → Activity allowlist and UI are NOT changed (deferred).
+  Q6 DEFERRED: no appointment-arrival arithmetic.
+  Q7 AMENDED: a still-open trip past its planned end makes the resource NOT FULLY CHECKABLE (§8a). It is neither
+     clear nor an overlap.
+
+======================================================================
+26. EXACT PROPOSED PROG4B IMPLEMENTATION BOUNDARY
+======================================================================
+IN:
+  - the migration from §20: trips expected_duration_minutes / _source; organizations
+    default_trip_duration_minutes; create_trip + p_expected_duration_minutes; set_trip_expected_duration;
+    update_organization_trip_defaults
+  - generated types; the privilege contract plus SQL tests
+  - trip-overlap-core.ts (pure) with unit tests
+  - loaders: Dispatch day scope (today / tomorrow, 48-hour look-back + still-open candidates); driver-day intervals plus a vehicle-day read;
+    Tomorrow extent / overlap
+  - UI:
+      - the New Trip duration field
+      - the Trip Detail duration display and edit dialog, plus the overlap line
+      - AssignmentFields overlap and "can't check" notes
+      - Dispatch proportional grid, unknown chip, lanes, expanded axis, Today / Tomorrow switch
+      - the Tomorrow row extent and badge
+      - Settings → Operations default
+  - E2E; PROG1 / PROG2 / PROG3B regressions; the report
+OUT:
+  - running-late
+  - general Edit Trip (pickup / addresses)
+  - bulk default application
+  - per-arrangement or facility durations
+  - the appointment-arrival note
+  - Activity entries
+  - Driver PWA changes
+  - drag-and-drop
+  - PROG5 (shifts, time off, out-of-service windows, capabilities, "available")
+  - routing / optimization of any kind
+
+PROG4A SPECIFICATION: COMPLETE
+IMPLEMENTATION STARTED: NO
+READY FOR OWNER REVIEW: YES
+DO NOT BEGIN PROG4B.
+
+AMENDED AFTER OWNER REVIEW (before PROG4B): Q1–Q7 are final (§25); §8a has been added; the ceiling is 2880 and the
+look-back is 48 h.
