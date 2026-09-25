@@ -79,6 +79,14 @@ export function formatOperationsTime(iso: string | null, timezone: string): stri
   return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone }).format(date);
 }
 
+/** "Sep 25, 7:42 AM" style formatting, in the given IANA timezone (P1-OPS-PROG3B assignment attribution). */
+export function formatOperationsShortDateTime(iso: string, timezone: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: timezone }).format(date);
+  return `${day}, ${formatOperationsTime(iso, timezone)}`;
+}
+
 /** "Saturday, August 29" style formatting, in the given IANA timezone. */
 export function formatOperationsLongDate(date: Date, timezone: string): string {
   return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: timezone }).format(date);

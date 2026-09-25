@@ -28,7 +28,7 @@ export default function OnboardingVehiclePage() {
   return (
     <>
       <div>
-        <p className={cn(typography.metadata, "text-text-secondary")}>Step 3 of 6</p>
+        <p className={cn(typography.metadata, "text-text-secondary")}>Step 2 of 5</p>
         <h1 className={cn(typography.sectionHeading, "mt-1 text-text-primary")}>Add your first vehicle</h1>
         <p className={cn(typography.bodySmall, "mt-2 text-text-secondary")}>
           A name you&apos;ll recognize on Dispatch — you can add more, and edit this, anytime under Fleet.

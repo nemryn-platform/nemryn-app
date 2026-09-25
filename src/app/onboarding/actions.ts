@@ -12,42 +12,10 @@ export interface OnboardingActionState {
   error?: string;
 }
 
-const BUSINESS_STAGES = new Set(["starting", "growing", "established"]);
-
-/**
- * Business Stage (work item §3) — "How are you operating today?" Written
- * through update_organization_settings (audited, Organization Admin only)
- * since P1-PILOT-S4B-R4C; descriptive metadata only.
- */
-export async function setBusinessStageAction(
-  _prevState: OnboardingActionState,
-  formData: FormData,
-): Promise<OnboardingActionState> {
-  const stage = formData.get("businessStage");
-  if (typeof stage !== "string" || !BUSINESS_STAGES.has(stage)) {
-    return { status: "error", error: "Choose one of the three options to continue." };
-  }
-
-  const pathname = await getCurrentPathname("/onboarding");
-  const organization = await requireOnboardingAccess(pathname);
-
-  // business_stage is written through the audited, Organization Admin-only
-  // `update_organization_settings` (direct UPDATE of organizations is
-  // revoked entirely, P1-PILOT-S4B-R4C) -- the same single write path as
-  // every other organization setting.
-  const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.rpc("update_organization_settings", {
-    p_organization_id: organization.organizationId,
-    p_changes: { business_stage: stage },
-  });
-
-  if (error) {
-    return { status: "error", error: "Something went wrong saving that — please try again." };
-  }
-
-  revalidatePath("/onboarding");
-  redirect("/onboarding/basics");
-}
+// P1-OPS-PROG3B: the "How are you operating today?" size question and its
+// business_stage writer were retired -- onboarding captures facts only.
+// organizations.business_stage itself is untouched (nullable, kept for
+// historical Platform Admin display; no tenant behaviour reads it).
 
 /**
  * Business Basics (work item §6) — timezone (canonical, since Trip

@@ -47,6 +47,12 @@ const NAV_ITEMS: { key: keyof typeof navIcons; label: string; href: string }[] =
   { key: "requests", label: "Requests", href: "/operations/requests" },
   { key: "trips", label: "Trips", href: "/operations/trips" },
   { key: "dispatch", label: "Dispatch", href: "/operations/dispatch" },
+  // P1-OPS-PROG3B: permanent items -- always visible, never keyed to trip,
+  // driver, vehicle or recurring counts, or to business_stage. Placed after
+  // Dispatch as a time gradient: today's board -> tomorrow's preparation ->
+  // standing future work. Existing items keep their relative order.
+  { key: "tomorrow", label: "Tomorrow", href: "/operations/tomorrow" },
+  { key: "recurring", label: "Recurring Care", href: "/operations/recurring-care" },
   { key: "passengers", label: "Passengers", href: "/operations/passengers" },
   { key: "facilities", label: "Facilities", href: "/operations/facilities" },
   { key: "drivers", label: "Drivers", href: "/operations/drivers" },

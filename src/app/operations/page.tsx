@@ -1,12 +1,11 @@
 import Link from "next/link";
-import { WarningCircle, ArrowRight } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import {
   getTodaysOperations,
   type TodaysOperationsData,
   type TodaysOperationsTrip,
-  type TodaysOperationsAttentionItem,
 } from "@/lib/operations/todays-operations";
 import { getOnboardingChecklist, type OnboardingChecklist } from "@/lib/operations/onboarding-checklist";
 import {
@@ -24,9 +23,11 @@ import {
   type OperationsBriefRecurringCareSummary,
   type OperationsBriefProofOfServiceSummary,
 } from "@/lib/operations/operations-brief-core";
-import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
+import { formatOperationsTime } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
 import { OperationsBrief } from "@/components/operations/OperationsBrief";
+import { composeOperationsBrief, type ProgressiveOperationsSignals } from "@/lib/operations/progressive-operations-core";
+import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
 import { getOperationsPreferences } from "@/lib/operations/organization-preferences";
 import { formatSchedule } from "@/lib/operations/operating-schedule-core";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
@@ -34,9 +35,7 @@ import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { TripStatus } from "@/components/ui/TripStatus";
-import { LinkButton } from "@/components/ui/LinkButton";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -158,48 +157,35 @@ export default async function OperationsOverviewPage() {
   const brief = deriveOperationsBrief(data, driverSnapshot, requestSummary, tomorrowReadiness, recurringCare, proofOfService, now);
   const timezone = organization.organizationTimezone;
 
-  const attentionColumns: DataTableColumn<TodaysOperationsAttentionItem>[] = [
-    { key: "time", header: "Time", render: (row) => formatOperationsTime(row.trip.scheduledPickupAt, timezone) },
-    {
-      key: "passenger",
-      header: "Passenger",
-      primary: true,
-      render: (row) => (
-        <Link href={`/operations/trips/${row.trip.id}`} className="hover:text-text-link hover:underline">
-          {row.trip.passengerName}
-        </Link>
-      ),
-    },
-    {
-      key: "route",
-      header: "Route",
-      render: (row) => (
-        <span className="text-text-secondary">
-          {row.trip.pickupDescription} <ArrowRight className="inline size-3" aria-hidden /> {row.trip.destinationDescription}
-        </span>
-      ),
-    },
-    {
-      key: "issue",
-      header: "Reason",
-      render: (row) => <StatusBadge label={row.assurance.label} category={assuranceStatusCategory(row.assurance.code)} />,
-    },
-    {
-      key: "action",
-      header: "Action",
-      align: "right",
-      render: (row) =>
-        row.assurance.code === "NEEDS_ASSIGNMENT" ? (
-          <LinkButton href="/operations/dispatch" variant="outline" size="sm">
-            Assign
-          </LinkButton>
-        ) : (
-          <LinkButton href={`/operations/trips/${row.trip.id}`} variant="outline" size="sm">
-            Open Trip
-          </LinkButton>
-        ),
-    },
-  ];
+  // P1-OPS-PROG3B fact-signal composition -- assembled ONLY from data this
+  // page already loaded (no new query). null = could not be loaded, never 0.
+  // No business_stage, size, membership or vehicle input exists at all.
+  const tripChecklistItem = checklist?.items.find((item) => item.key === "trip") ?? null;
+  const nextTodayPickupAt =
+    data?.todayTrips
+      .filter((trip) => trip.state === "scheduled" && trip.scheduledPickupAt && Date.parse(trip.scheduledPickupAt) > now.getTime())
+      .map((trip) => trip.scheduledPickupAt as string)
+      .sort()[0] ?? null;
+  const signals: ProgressiveOperationsSignals = {
+    dayState: brief.dayState,
+    attentionCount: brief.attention?.length ?? null,
+    todayUnassignedCount: brief.unassignedCount,
+    activeNowCount: brief.activeNow?.length ?? null,
+    nextDepartureCount: brief.nextDepartures?.length ?? null,
+    nextTodayPickupAt,
+    pendingRequestCount: requestSummary?.pendingRequestCount ?? null,
+    tomorrowTripCount: tomorrowReadiness?.totalScheduledTrips ?? null,
+    tomorrowNeedsPreparationCount: tomorrowReadiness?.needsPreparationCount ?? null,
+    activeRecurringCount: recurringCare?.activeArrangementCount ?? null,
+    recurringMissingCount: recurringCare?.missingOccurrenceCount ?? null,
+    proofCompletedCount: proofOfService?.completedTripCount ?? null,
+    proofReviewCount: proofOfService?.needsReviewCount ?? null,
+    activeDriverCount: driverSnapshot?.totalActiveDrivers ?? null,
+    hasEverHadTrip: tripChecklistItem ? tripChecklistItem.complete : null,
+    checklistComplete: checklist ? checklist.isComplete : null,
+  };
+  const composition = composeOperationsBrief(signals);
+  const hasLinkedDriver = (await getOperatorLinkedDriverId(organization.organizationId)) !== null;
 
   const upcomingColumns: DataTableColumn<TodaysOperationsTrip>[] = [
     { key: "time", header: "Time", render: (row) => formatOperationsTime(row.scheduledPickupAt, timezone) },
@@ -237,9 +223,19 @@ export default async function OperationsOverviewPage() {
         </p>
       )}
 
-      <OperationsBrief brief={brief} timezone={timezone} />
+      <OperationsBrief
+        brief={brief}
+        composition={composition}
+        timezone={timezone}
+        nextTodayPickupAt={nextTodayPickupAt}
+        isAdmin={organization.role === "organization_admin"}
+        hasLinkedDriver={hasLinkedDriver}
+      />
 
-      {data === null ? (
+      {/* P1-OPS-PROG3B: a fresh organization (no trip yet, setup incomplete)
+          sees no lower "today" detail -- it would only be zero counters and
+          empty tables. It returns with the first trip. */}
+      {composition.kind === "fresh" ? null : data === null ? (
         // Contained, page-level unavailable treatment (P1-PILOT-S3 §7/§10)
         // for the ENTIRE tightly-coupled today's-operations-derived group
         // (SummaryStrip + Needs Attention/Upcoming Trips/Active Trips/
@@ -269,29 +265,11 @@ export default async function OperationsOverviewPage() {
 
           <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex flex-col gap-zw-lg">
-              <Panel className="p-0">
-                <div className="flex items-start justify-between gap-4 p-zw-lg pb-0">
-                  <div className="flex items-center gap-2">
-                    <WarningCircle className="size-5 text-warning-strong" weight="fill" aria-hidden />
-                    <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Needs Attention</h2>
-                  </div>
-                  {data.attentionItems.length > 0 && (
-                    <StatusBadge
-                      label={`${data.attentionItems.length} ${data.attentionItems.length === 1 ? "Item" : "Items"}`}
-                      category="warning"
-                    />
-                  )}
-                </div>
-                <div className="p-zw-lg">
-                  {data.attentionItems.length === 0 ? (
-                    <EmptyState title="Nothing needs attention" description="No open issues, unassigned trips, or location concerns right now." />
-                  ) : (
-                    <DataTable columns={attentionColumns} rows={data.attentionItems} getRowId={(row) => row.trip.id} />
-                  )}
-                </div>
-              </Panel>
-
-              <Panel className="p-0">
+              {/* P1-OPS-PROG3B (owner decision Q1): the full Needs Attention
+                  table that used to be here duplicated the Brief's own
+                  attention list -- removed. The Brief shows the first 5 with
+                  their actions; Dispatch is the complete surface. */}
+              <Panel className="scroll-mt-24 p-0" id="today-trips">
                 <div className="p-zw-lg pb-0">
                   <SectionHeader title="Upcoming Trips" />
                 </div>

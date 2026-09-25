@@ -4,7 +4,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getUser } from "@/lib/auth/session";
 import { getDisplayName } from "@/lib/auth/profile";
 import { getActiveMemberships } from "@/lib/auth/membership";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
 import { OperationsLayoutClient } from "@/components/operations/OperationsLayoutClient";
 
 /**
@@ -42,11 +42,9 @@ export default async function OperationsLayout({ children }: { children: ReactNo
   // itself. Purely a navigation-affordance signal (whether to show
   // "Drive" in the sidebar); requireDriverAccess independently re-checks
   // this exact fact server-side regardless of what this renders.
-  const supabase = await createServerSupabaseClient();
-  const { data: linkedDriverId } = await supabase.rpc("current_driver_id", {
-    p_org_id: organization.organizationId,
-  });
-  const hasLinkedDriverProfile = Boolean(linkedDriverId);
+  // P1-OPS-PROG3B: the same request-cached current_driver_id read the
+  // Overview composition and assignment surfaces use (one call per request).
+  const hasLinkedDriverProfile = (await getOperatorLinkedDriverId(organization.organizationId)) !== null;
 
   return (
     <OperationsLayoutClient

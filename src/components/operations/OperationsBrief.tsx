@@ -7,128 +7,297 @@ import { LinkButton } from "@/components/ui/LinkButton";
 import { deriveTomorrowSummaryLine } from "@/lib/operations/readiness-actions-core";
 import { formatOperationsTime, formatOperationsLongDate, formatServiceDateLabel, assuranceStatusCategory } from "@/lib/operations/presentation";
 import type { OperationsBriefData } from "@/lib/operations/operations-brief-core";
+import {
+  BRIEF_ROW_LIMIT,
+  type BriefCalmLine,
+  type BriefComposition,
+  type BriefHeadline,
+  type BriefTodayDetail,
+} from "@/lib/operations/progressive-operations-core";
 import type { TodaysOperationsTrip, TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 export interface OperationsBriefProps {
   brief: OperationsBriefData;
+  /** P1-OPS-PROG3B: the fact-derived section order/density (composeOperationsBrief). */
+  composition: BriefComposition;
   timezone: string;
+  /** The next scheduled pickup later today, for the collapsed Today line. */
+  nextTodayPickupAt: string | null;
+  /** Organization Admin: may use admin-only setup links (the destinations are still server-guarded). */
+  isAdmin: boolean;
+  /** The caller has an active linked Driver (owner-as-driver). */
+  hasLinkedDriver: boolean;
 }
 
 /**
  * The Operations Brief (P1-E1-S1C) — the operator's briefing layer,
- * rendered above the existing Today's Operations detail. Answers "what
- * needs attention / what's happening now / what's coming next / who's
- * responsible" from data S1B already composed
- * (src/lib/operations/operations-brief-core.ts) — this component renders
- * that data, it does not re-filter, re-sort, or re-derive any of it.
+ * rendered above the existing Today's Operations detail.
  *
- * Five render modes, driven by `brief.dayState` plus the real contents of
- * `attention`/`activeNow` (never `organizations.business_stage` — P1-E1-
- * S1A §11's own explicit instruction):
- *   - UNAVAILABLE (P1-PILOT-S3): dayState=UNAVAILABLE — the underlying
- *     getTodaysOperations fetch genuinely failed. A single contained
- *     "Today's operations unavailable" panel — never a fabricated
- *     "Nothing needs attention"/"0 active" claim (§9/§6 — "unknown is
- *     not zero"). `attention`/`activeNow`/`nextDepartures`/
- *     `unassignedCount` are all `null` in this mode (deriveOperationsBrief's
- *     own guaranteed invariant — see operations-brief-core.ts), so they
- *     are never read here.
- *   - QUIET: dayState=NO_TRIPS and both attention and activeNow are
- *     empty — a single calm "Nothing scheduled today" panel.
- *   - CARRYOVER: dayState=NO_TRIPS but attention or activeNow is
- *     non-empty (a prior-day trip still active, or an issue on it) —
- *     todaysOperations.ts's own activeTrips query has no day boundary
- *     (ZD-131), so this is a real, expected case, not a bug. Needs
- *     Attention and Active Now still render normally; Next Departures is
- *     skipped (it can only ever be empty here, since it is itself
- *     derived from today's — zero — scheduled trips) rather than
- *     stacking a redundant empty panel under an already-quiet headline.
- *   - ALL_COMPLETE: every trip today reached 'completed' — a single
- *     positive "All caught up" panel.
- *   - ACTIVE_DAY (default): the full 3-block grid, each with its own
- *     real content or its own calm empty state.
- * Driver Snapshot, Requests Awaiting Review, Tomorrow Readiness,
- * Recurring Care, and Proof of Service all render in EVERY mode
- * including UNAVAILABLE — none of them is trip-scoped or derived from
- * getTodaysOperations (P1-E1-S2G / P1-PILOT-S3 §11: a Today's Operations
- * failure must never take these independently-sourced blocks down with
- * it).
+ * P1-OPS-PROG3B (docs/reports/p1-ops-prog3a-fact-signal-composition-spec.txt):
+ * WHAT renders and in WHICH ORDER is decided by `composition`
+ * (composeOperationsBrief, a pure function of facts the Overview already
+ * loaded) -- never by business_stage, size, membership counts or any
+ * threshold. This component only renders that decision:
+ *   - fresh organization: Get started (+ Requests only when some are waiting);
+ *   - otherwise: the Today headline, then the WORK sections in the fixed
+ *     P0..P5 order (Needs Attention, Requests, No active drivers, Today,
+ *     Tomorrow, Recurring Care, Proof of Service), then ONE calm group of
+ *     single lines for everything with nothing waiting, and an
+ *     "… unavailable" line for any summary that failed to load (unknown
+ *     is never shown as zero, and never silently dropped).
+ * The individual blocks keep their existing data, copy and actions.
  */
-export function OperationsBrief({ brief, timezone }: OperationsBriefProps) {
-  const {
-    dayState,
-    attention,
-    activeNow,
-    nextDepartures,
-    unassignedCount,
-    driverSnapshot,
-    requestSummary,
-    tomorrowReadiness,
-    recurringCare,
-    proofOfService,
-  } = brief;
+export function OperationsBrief({ brief, composition, timezone, nextTodayPickupAt, isAdmin, hasLinkedDriver }: OperationsBriefProps) {
+  const { attention, activeNow, nextDepartures, unassignedCount, requestSummary, tomorrowReadiness, recurringCare, proofOfService } = brief;
 
-  const isUnavailable = dayState === "UNAVAILABLE";
-  const isQuiet = !isUnavailable && dayState === "NO_TRIPS" && activeNow!.length === 0 && attention!.length === 0;
-  const isAllComplete = dayState === "ALL_COMPLETE";
-  const isCarryoverOnly = !isUnavailable && dayState === "NO_TRIPS" && !isQuiet;
-
-  return (
-    <div className="flex flex-col gap-zw-lg">
-      <div>
-        <h2 className={cn(typography.sectionHeading, "text-text-primary")}>Operations Brief</h2>
-        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-          What needs your attention and what is happening next.
-        </p>
-      </div>
-
-      {isUnavailable ? (
-        <Panel>
-          <EmptyState
-            title="Today's operations unavailable"
-            description="We couldn't load today's trip activity. Refresh the page to try again."
-          />
-        </Panel>
-      ) : isQuiet ? (
-        <Panel>
-          <EmptyState title="Nothing scheduled today" description="Trips scheduled for today will appear here." />
-        </Panel>
-      ) : isAllComplete ? (
-        <Panel>
-          <EmptyState title="All caught up" description="Every trip scheduled for today has been completed." />
-        </Panel>
-      ) : (
-        <>
-          {isCarryoverOnly && (
-            <p className={cn(typography.bodySmall, "text-text-secondary")}>No new trips scheduled today.</p>
-          )}
-          {/* Non-null assertions below are safe by deriveOperationsBrief's
-              own guaranteed invariant: these 4 fields are non-null
-              whenever dayState !== "UNAVAILABLE" (already excluded via
-              `isUnavailable` above), exactly mirroring todays-operations.ts's
-              own established `candidateTrips.get(id)!` precedent for a
-              known-safe-by-construction lookup. */}
-          <NeedsAttentionBlock items={attention!} unassignedCount={unassignedCount!} timezone={timezone} />
-          {isCarryoverOnly ? (
-            <ActiveNowBlock trips={activeNow!} timezone={timezone} />
-          ) : (
-            <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
-              <ActiveNowBlock trips={activeNow!} timezone={timezone} />
-              <NextDeparturesBlock trips={nextDepartures!} timezone={timezone} />
-            </div>
-          )}
-        </>
-      )}
-
-      <DriverSnapshotBlock snapshot={driverSnapshot} />
-      <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
-      <TomorrowReadinessBlock summary={tomorrowReadiness} />
-      <RecurringCareBlock summary={recurringCare} />
-      <ProofOfServiceBlock summary={proofOfService} />
+  const heading = (
+    <div>
+      <h2 className={cn(typography.sectionHeading, "text-text-primary")}>Operations Brief</h2>
+      <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>What needs your attention and what is happening next.</p>
     </div>
   );
+
+  if (composition.kind === "fresh") {
+    return (
+      <div className="flex flex-col gap-zw-lg" data-testid="brief" data-brief-kind="fresh">
+        {heading}
+        <GetStartedPanel timezone={timezone} isAdmin={isAdmin} hasLinkedDriver={hasLinkedDriver} />
+        {composition.showRequests && (
+          <div data-brief-section="requests">
+            <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
+          </div>
+        )}
+        {composition.requestsUnavailable && (
+          <CalmGroup lines={[{ key: "unavailable", section: "requests" }]} brief={brief} />
+        )}
+      </div>
+    );
+  }
+
+  const noOtherWork = composition.work.every((section) => section === "today");
+  return (
+    <div className="flex flex-col gap-zw-lg" data-testid="brief" data-brief-kind="standard">
+      {heading}
+      <TodayHeadline
+        headline={composition.headline}
+        detail={composition.todayDetail}
+        nothingWaiting={noOtherWork}
+        nextTodayPickupAt={nextTodayPickupAt}
+        timezone={timezone}
+      />
+      {composition.work.map((section) => (
+        <div key={section} data-brief-section={section}>
+          {section === "attention" && (
+            <NeedsAttentionBlock items={attention ?? []} unassignedCount={unassignedCount ?? 0} timezone={timezone} />
+          )}
+          {section === "requests" && <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />}
+          {section === "noActiveDrivers" && <NoActiveDriversRow isAdmin={isAdmin} />}
+          {section === "today" && (
+            <div
+              className={cn(
+                "grid grid-cols-1 gap-zw-lg",
+                composition.todayShowsActiveNow && composition.todayShowsNextDepartures && "lg:grid-cols-2",
+              )}
+            >
+              {composition.todayShowsActiveNow && <ActiveNowBlock trips={activeNow ?? []} timezone={timezone} />}
+              {composition.todayShowsNextDepartures && <NextDeparturesBlock trips={nextDepartures ?? []} timezone={timezone} />}
+            </div>
+          )}
+          {section === "tomorrow" && <TomorrowReadinessBlock summary={tomorrowReadiness} />}
+          {section === "recurring" && <RecurringCareBlock summary={recurringCare} />}
+          {section === "proof" && <ProofOfServiceBlock summary={proofOfService} />}
+        </div>
+      ))}
+      {composition.calm.length > 0 && <CalmGroup lines={composition.calm} brief={brief} />}
+    </div>
+  );
+}
+
+/** The Today headline: one calm line (or the existing contained panels for unavailable / all clear). */
+function TodayHeadline({
+  headline,
+  detail,
+  nothingWaiting,
+  nextTodayPickupAt,
+  timezone,
+}: {
+  headline: BriefHeadline;
+  detail: BriefTodayDetail;
+  nothingWaiting: boolean;
+  nextTodayPickupAt: string | null;
+  timezone: string;
+}) {
+  if (headline === "today_unavailable") {
+    return (
+      <Panel data-testid="brief-headline" data-headline={headline}>
+        <EmptyState title="Today's operations unavailable" description="We couldn't load today's trip activity. Refresh the page to try again." />
+      </Panel>
+    );
+  }
+  if (headline === "all_clear") {
+    return (
+      <Panel data-testid="brief-headline" data-headline={headline}>
+        <EmptyState title="All clear" description="Every trip today is complete. Nothing is waiting for you." />
+      </Panel>
+    );
+  }
+  if (headline === "attention_present") {
+    return null;
+  }
+  const text: Record<Exclude<BriefHeadline, "today_unavailable" | "all_clear" | "attention_present">, string> = {
+    all_complete: "Every trip today is complete.",
+    nothing_scheduled: nothingWaiting ? "Nothing scheduled today. Nothing is waiting for you." : "Nothing scheduled today.",
+    carryover: "No new trips scheduled today.",
+    nothing_needs_attention: "Nothing needs attention right now.",
+  };
+  return (
+    <div data-testid="brief-headline" data-headline={headline}>
+      <p className={cn(typography.body, "text-text-primary")}>{text[headline]}</p>
+      {detail === "next_trip_later_today" && nextTodayPickupAt && (
+        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Next trip today at {formatOperationsTime(nextTodayPickupAt, timezone)}.</p>
+      )}
+      {detail === "nothing_departing_soon" && (
+        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Nothing departing in the next 2 hours.</p>
+      )}
+    </div>
+  );
+}
+
+/** Fresh organization (never had a trip, setup incomplete): one concise Get started panel instead of empty widgets. */
+function GetStartedPanel({ timezone, isAdmin, hasLinkedDriver }: { timezone: string; isAdmin: boolean; hasLinkedDriver: boolean }) {
+  return (
+    <Panel className="flex flex-col gap-zw-md" data-testid="get-started">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Get started</h3>
+        <LinkButton href="/operations/trips/new" size="sm">
+          Create your first trip
+        </LinkButton>
+      </div>
+      <ul className="flex flex-col divide-y divide-border-subtle">
+        <li className="flex flex-wrap items-center justify-between gap-3 py-zw-sm first:pt-0">
+          <div>
+            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Business basics</p>
+            {/* The stored value is shown as a fact -- never claimed as "confirmed" (no persisted confirmation exists). */}
+            <p className={cn(typography.metadata, "text-text-secondary")} data-testid="get-started-timezone">
+              Timezone: {timezone}
+            </p>
+          </div>
+          {isAdmin && (
+            <LinkButton href="/onboarding/basics" variant="outline" size="sm">
+              Review business basics
+            </LinkButton>
+          )}
+        </li>
+        {isAdmin && (
+          <li className="flex flex-wrap items-center justify-between gap-3 py-zw-sm">
+            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Website requests</p>
+            <LinkButton href="/operations/settings/website-requests" variant="outline" size="sm">
+              Open
+            </LinkButton>
+          </li>
+        )}
+        {isAdmin && !hasLinkedDriver && (
+          <li className="flex flex-wrap items-center justify-between gap-3 py-zw-sm last:pb-0">
+            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Do you also drive?</p>
+            <LinkButton href="/operations/settings/my-access" variant="outline" size="sm">
+              I also drive
+            </LinkButton>
+          </li>
+        )}
+      </ul>
+    </Panel>
+  );
+}
+
+/** Trips exist but no active Driver can be assigned (activeDriverCount = 0). Admin gets the setup link; a Dispatcher gets a factual note. */
+function NoActiveDriversRow({ isAdmin }: { isAdmin: boolean }) {
+  return (
+    <Panel className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Drivers</h3>
+        <p className={cn(typography.bodySmall, "mt-1 text-warning-text")}>No active drivers — trips can&apos;t be assigned.</p>
+        {!isAdmin && <p className={cn(typography.metadata, "mt-1 text-text-muted")}>An organization admin can add drivers.</p>}
+      </div>
+      {isAdmin && (
+        <LinkButton href="/operations/drivers" variant="outline" size="sm">
+          Set up drivers
+        </LinkButton>
+      )}
+    </Panel>
+  );
+}
+
+/** One compact group of single-line summaries -- no zero tiles, no percentages. */
+function CalmGroup({ lines, brief }: { lines: BriefCalmLine[]; brief: OperationsBriefData }) {
+  return (
+    <Panel data-testid="brief-calm">
+      <ul className="divide-y divide-border-subtle">
+        {lines.map((line) => {
+          const row = calmRow(line, brief);
+          return (
+            <li
+              key={line.key === "unavailable" ? `unavailable-${line.section}` : line.key}
+              className="flex flex-wrap items-center justify-between gap-3 py-zw-sm first:pt-0 last:pb-0"
+              data-calm={line.key === "unavailable" ? `unavailable-${line.section}` : line.key}
+              data-testid={line.key === "tomorrow" ? "brief-tomorrow" : undefined}
+            >
+              <div className="min-w-0">
+                <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>{row.title}</p>
+                <p
+                  className={cn(typography.bodySmall, line.key === "unavailable" ? "text-text-muted" : "text-text-secondary")}
+                  data-testid={line.key === "tomorrow" ? "brief-tomorrow-line" : undefined}
+                >
+                  {row.text}
+                </p>
+              </div>
+              <Link href={row.href} className={cn(typography.bodySmall, "shrink-0 font-medium text-text-link hover:underline")}>
+                {row.action}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </Panel>
+  );
+}
+
+function calmRow(line: BriefCalmLine, brief: OperationsBriefData): { title: string; text: string; href: string; action: string } {
+  switch (line.key) {
+    case "tomorrow":
+      return { title: "Tomorrow", text: deriveTomorrowSummaryLine(brief.tomorrowReadiness), href: "/operations/tomorrow", action: "Review tomorrow" };
+    case "requests":
+      return { title: "Requests", text: "No requests awaiting review", href: "/operations/requests", action: "Open" };
+    case "recurring":
+      return { title: "Recurring care", text: "Recurring care is covered", href: "/operations/recurring-care", action: "Open" };
+    case "proof":
+      return {
+        title: "Proof of service",
+        text: line.state === "ready" ? "Yesterday's completed trips are ready for review" : "Nothing from yesterday to review",
+        href: "/operations/proof-of-service",
+        action: "Open",
+      };
+    case "drivers": {
+      const snapshot = brief.driverSnapshot;
+      return {
+        title: "Drivers",
+        text: snapshot ? `On trip now: ${snapshot.driversCurrentlyOnTrip} of ${snapshot.totalActiveDrivers} active drivers` : "Driver snapshot unavailable",
+        href: "/operations/dispatch",
+        action: "View Dispatch",
+      };
+    }
+    case "unavailable": {
+      const map = {
+        tomorrow: { title: "Tomorrow", text: "Tomorrow unavailable", href: "/operations/tomorrow" },
+        requests: { title: "Requests", text: "Request summary unavailable", href: "/operations/requests?state=pending" },
+        recurring: { title: "Recurring care", text: "Recurring care unavailable", href: "/operations/recurring-care" },
+        proof: { title: "Proof of service", text: "Proof-of-service review unavailable", href: "/operations/proof-of-service" },
+        drivers: { title: "Drivers", text: "Driver snapshot unavailable", href: "/operations/dispatch" },
+      } as const;
+      return { ...map[line.section], action: "Open" };
+    }
+  }
 }
 
 /** Restrained maximum row count for the Brief's own compact Needs Attention list (P1-E1-S1C §10) — the existing, unchanged, full Needs Attention table further down the page remains the "see everything" surface; this block's own overflow link goes to Dispatch, the same already-existing destination NEEDS_ASSIGNMENT rows already route to. */
@@ -266,7 +435,11 @@ function ActiveNowBlock({ trips, timezone }: { trips: TodaysOperationsTrip[]; ti
   );
 }
 
-function NextDeparturesBlock({ trips, timezone }: { trips: TodaysOperationsTrip[]; timezone: string }) {
+function NextDeparturesBlock({ trips: allTrips, timezone }: { trips: TodaysOperationsTrip[]; timezone: string }) {
+  // P1-OPS-PROG3B: at most BRIEF_ROW_LIMIT rows (the Brief's existing list
+  // cap), then a link to the full list of today's trips below.
+  const trips = allTrips.slice(0, BRIEF_ROW_LIMIT);
+  const overflow = allTrips.length - trips.length;
   return (
     <Panel>
       <BlockHeading title="Next Departures" description="Scheduled to depart within 2 hours." />
@@ -295,50 +468,14 @@ function NextDeparturesBlock({ trips, timezone }: { trips: TodaysOperationsTrip[
             ))}
           </ul>
         )}
+        {overflow > 0 && (
+          <div className="mt-zw-md border-t border-border-subtle pt-zw-md text-center">
+            <Link href="#today-trips" className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}>
+              View today&apos;s trips <ArrowRight className="size-4" aria-hidden />
+            </Link>
+          </div>
+        )}
       </div>
-    </Panel>
-  );
-}
-
-/**
- * `snapshot === null` (P1-PILOT-S3R) means the underlying
- * `getDriverSnapshot` fetch genuinely failed — renders "Driver snapshot
- * unavailable," never a fabricated "0 active drivers"/"No drivers set up
- * yet" (that copy is reserved for the real, successfully-fetched
- * `totalActiveDrivers === 0` case). Mirrors `TomorrowReadinessBlock`'s own
- * established null-branch convention exactly.
- */
-function DriverSnapshotBlock({ snapshot }: { snapshot: OperationsBriefData["driverSnapshot"] }) {
-  if (snapshot === null) {
-    return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Driver Snapshot</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Driver snapshot unavailable</p>
-        </div>
-        <LinkButton href="/operations/dispatch" variant="outline" size="sm">
-          View Dispatch
-        </LinkButton>
-      </Panel>
-    );
-  }
-
-  const { totalActiveDrivers, driversCurrentlyOnTrip } = snapshot;
-  const hasDrivers = totalActiveDrivers > 0;
-
-  return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Driver Snapshot</h3>
-        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-          {hasDrivers
-            ? `On trip now: ${driversCurrentlyOnTrip} of ${totalActiveDrivers} active drivers`
-            : "No drivers set up yet."}
-        </p>
-      </div>
-      <LinkButton href={hasDrivers ? "/operations/dispatch" : "/operations/drivers"} variant="outline" size="sm">
-        {hasDrivers ? "View Dispatch" : "Set up drivers"}
-      </LinkButton>
     </Panel>
   );
 }

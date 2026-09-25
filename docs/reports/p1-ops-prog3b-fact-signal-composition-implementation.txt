@@ -1,0 +1,491 @@
+NEMRYN PLATFORM
+P1-OPS-PROG3B -- FACT-SIGNAL COMPOSITION IMPLEMENTATION
+Local implementation only. NOT committed, NOT pushed, NOT deployed. No Supabase change, no migration, no RPC, no RLS,
+no privilege change, no Vercel / DNS change, no production data touched. PROG4, PROG5, D4, S5B, billing, duration,
+availability, vehicle capability, drag-and-drop and route optimization were NOT started.
+Returned for owner review.
+
+======================================================================
+STARTING STATE
+======================================================================
+main = origin/main = 4b2b6ae. PROG1 (8df57ef) and PROG2 (6126ce8) are released and closed. Migration head is
+20260924091000, and production ACL is 0/29.
+Source of truth: docs/reports/p1-ops-prog3a-fact-signal-composition-spec.txt. It is approved, but still UNTRACKED
+locally.
+
+======================================================================
+PROG3A OWNER DECISIONS   (implemented as stated)
+======================================================================
+Q1  The lower duplicate Needs Attention table is REMOVED. SummaryStrip, Upcoming Trips, Active Trips and Activity Log
+    are kept unchanged.
+Q2  There is no timezone-confirmation field.
+      - A new organization starts at /onboarding/basics, and step 1 is required in the guided flow.
+      - The fresh-organization Overview shows "Timezone: <stored value>" with Review business basics.
+      - The timezone is never claimed as confirmed.
+Q3  Attribution names:
+      - "you" when the viewer assigned it;
+      - the real name where the existing RLS lets the viewer read it (Organization Admin);
+      - otherwise "a team member" (a Dispatcher viewing someone else's assignment).
+    No new RPC or RLS was added. B1 remains deferred.
+Q4  Normal-work folding is DEFERRED.
+Q5  Proof of Service is NOT in the sidebar. Its Overview row is its stable entry point.
+Q6  The Get started entry uses the neutral label "Website requests" (admin only) and links to
+    /operations/settings/website-requests. No integration query was added.
+
+======================================================================
+CURRENT UX RE-AUDIT   (fresh read of the code before changing it)
+======================================================================
+PROG3A is accurate after PROG2. Mismatches found and fixed in this phase:
+  M1. The onboarding layout showed "Skip setup and go to Operations" on EVERY step, including Business basics, so
+      step 1 was skippable. Now there is no exit on basics, and steps 2–5 show "Finish later — go to Operations".
+  M2. The Business basics form hard-coded defaultValue="America/New_York" instead of the organization's stored
+      timezone. It now preselects the STORED value and shows "Current timezone: <tz>".
+  M3. complete-signup's business_stage gate also covered a duplicate-request race after signup. That was
+      documented in the route itself: whichever request lost the creation race was still sent to onboarding.
+        - With the gate removed, the losing request lands in /operations.
+        - There, the fresh-organization Overview shows the stored timezone with "Review business basics", so the
+          case stays covered (owner decision Q2).
+  M4. sign-up/actions.ts (the immediate-session signup path) also redirected to /onboarding. It now goes to
+      /onboarding/basics like the two complete-signup "created" paths.
+  M5. The PROG2 Overview Tomorrow line lost its own panel: it is now either a work row or a calm line. The existing
+      test hooks (brief-tomorrow / brief-tomorrow-line) are kept on the calm line, so the PROG2 regression still
+      targets the same element.
+Everything else matched: attention derivation, Tomorrow / Recurring / Proof summaries, the checklist, the lower
+section, Trip Detail, user_profiles RLS (self + organization admin), current_driver_id, and the Settings guards.
+
+======================================================================
+COMPOSITION CORE
+======================================================================
+src/lib/operations/progressive-operations-core.ts is pure, with no runtime imports.
+  - ProgressiveOperationsSignals: the only input. It has NO field for business_stage, plan, size, vehicle count,
+    membership count or dispatcher presence.
+  - composeOperationsBrief(signals) returns one of:
+      - { kind: "fresh", showRequests, requestsUnavailable }
+      - { kind: "standard", headline, todayDetail, work[], calm[], todayShowsActiveNow, todayShowsNextDepartures }
+  - isFreshOrganization() and BRIEF_ROW_LIMIT (5, the Brief's existing list cap).
+The component (OperationsBrief) only renders the composition. Each block keeps its existing data, copy and actions.
+
+======================================================================
+SIGNAL ASSEMBLY
+======================================================================
+Built in src/app/operations/page.tsx ONLY from data the page already loaded; no new query.
+  - From the Brief: dayState, attentionCount, todayUnassignedCount, activeNowCount, nextDepartureCount.
+  - From the loaded today trips: nextTodayPickupAt, the earliest later scheduled pickup, used only for the collapsed
+    Today line.
+  - From the existing summaries: pendingRequestCount, tomorrowTripCount / NeedsPreparationCount,
+    activeRecurringCount / recurringMissingCount, proofCompletedCount / proofReviewCount, activeDriverCount.
+  - From the checklist: hasEverHadTrip (the "First trip" item) and checklistComplete.
+A failed source stays null and is never converted to 0.
+The only added read is current_driver_id, for the "I also drive" condition. It goes through the request-cached
+getOperatorLinkedDriverId, and the operations layout now uses the same cached helper, so there is still one call per
+request, as before.
+
+======================================================================
+PRIORITY ORDER
+======================================================================
+The fixed work order:
+  P0 attention
+  P1 requests
+  (no active drivers, when trips exist)
+  P2 today
+  P3 tomorrow
+  P4 recurring
+  P5 proof
+The calm group follows. There is no scoring, no dynamic ranking and no size logic. The combined dispatch-heavy facts
+give exactly this order (unit test).
+
+======================================================================
+ATTENTION
+======================================================================
+  - attentionCount > 0: Needs Attention is the FIRST section, for any size. The derivation, 5-row cap, Assign / Open
+    Trip actions and "+N more in Dispatch" link are unchanged.
+  - attentionCount = 0: no panel. The headline reads "Nothing needs attention right now."
+  - Today unavailable: the existing "Today's operations unavailable" panel.
+
+======================================================================
+DUPLICATE ATTENTION REMOVAL
+======================================================================
+The full lower Needs Attention table was removed from src/app/operations/page.tsx, along with its column definitions
+and the now-unused imports. The lower SummaryStrip, Upcoming Trips (now with id="today-trips" as the Next Departures
+overflow anchor), Active Trips and Activity Log are unchanged. The attention data model is unchanged. The Brief shows
+the first 5 items, and Dispatch is the complete surface. E2E confirms "Needs Attention" appears at most once.
+
+======================================================================
+PENDING REQUESTS
+======================================================================
+  - > 0: the existing block is placed directly after Attention (P1). The copy and Review requests →
+    /operations/requests?state=pending are unchanged.
+  - = 0: calm line "No requests awaiting review".
+  - null: "Request summary unavailable".
+
+======================================================================
+TODAY
+======================================================================
+P2 appears when Active Now or Next Departures has content:
+  - Active Now renders only with content.
+  - Next Departures renders with content, or next to a non-empty Active Now, where it keeps its existing "Nothing
+    departing soon".
+  - Next Departures is capped at 5 rows, then "View today's trips" (#today-trips).
+  - The 2-hour semantics are unchanged.
+On an active day with neither, the block collapses into the headline: "Next trip today at <time>." or "Nothing
+departing in the next 2 hours."
+No availability or duration is invented.
+
+======================================================================
+TOMORROW
+======================================================================
+  - Needs preparation > 0: the P3 work row, the existing PROG2 block, e.g. "4 trips · 2 need preparation" → Review
+    tomorrow.
+  - Otherwise: calm line "N trips · All ready" or "Nothing scheduled for tomorrow".
+  - null: "Tomorrow unavailable".
+Readiness stays derived.
+
+======================================================================
+RECURRING CARE
+======================================================================
+  - Missing > 0: the P4 work row, with the existing block and copy.
+  - Arrangements active and none missing: calm line "Recurring care is covered".
+  - 0 arrangements: omitted from the Overview. Recurring Care is ALWAYS in the sidebar.
+Recurrence logic is unchanged. The "rides" copy inside the P4 block is untouched (retained item).
+
+======================================================================
+PROOF OF SERVICE
+======================================================================
+  - Review > 0: the P5 work row, with the existing block.
+  - Completed and nothing to review: calm "Yesterday's completed trips are ready for review".
+  - None completed: calm "Nothing from yesterday to review".
+  - Every calm state keeps an Open link to /operations/proof-of-service. Proof stays out of the sidebar.
+
+======================================================================
+DRIVER SNAPSHOT
+======================================================================
+  - ≥ 2 active drivers: calm "On trip now: X of N active drivers" · View Dispatch.
+  - 1 active driver: omitted.
+  - 0 active drivers, when the organization has had trips: a work row "No active drivers — trips can't be assigned".
+      - Organization Admin: "Set up drivers" → /operations/drivers.
+      - Dispatcher: the note "An organization admin can add drivers.", with no admin-only action.
+  - 0 active drivers in a fresh organization: no row; the checklist covers it.
+  - null: "Driver snapshot unavailable".
+The old always-rendered Driver Snapshot panel was removed; its information lives in these rows.
+
+======================================================================
+CALM GROUP
+======================================================================
+One Panel of single lines, in fixed order: Tomorrow, Requests, Recurring Care (only with arrangements), Proof of
+Service, Drivers (≥ 2). Every "… unavailable" line follows, never omitted. Each line is short and factual and has its
+link. There are no zero tiles, no percentages and no invented metrics.
+
+======================================================================
+FRESH ORGANIZATION
+======================================================================
+Fresh = hasEverHadTrip === false AND checklistComplete === false. Unknown (null) is never fresh.
+The Overview shows:
+  - the existing checklist banner
+  - Get started
+  - Requests awaiting review, only when some are pending (or an unavailable line)
+It suppresses:
+  - the empty attention, Active Now and Next Departures panels
+  - Driver Snapshot, and the Recurring, Proof and Tomorrow zero states
+  - the whole lower section: SummaryStrip, Upcoming Trips, Active Trips, Activity Log
+This ends with the first trip.
+
+======================================================================
+GET STARTED
+======================================================================
+  - Create your first trip → /operations/trips/new (primary).
+  - Business basics:
+      - "Timezone: <stored tz>", shown as a fact, never "confirmed";
+      - Review business basics → /onboarding/basics, for admins only. Saving there is admin-only
+        (update_organization_settings), so a Dispatcher sees the fact without the link.
+  - "Website requests" → /operations/settings/website-requests, admin only.
+  - "I also drive" → /operations/settings/my-access (the existing self-link flow), admin only, and only when the
+    admin has no active linked driver.
+
+======================================================================
+TIMEZONE SAFETY
+======================================================================
+  - Business basics shows "Current timezone: <stored>" and preselects it (M2). It is step 1 and has no exit (M1).
+  - The fresh Overview shows the current timezone plus a review link.
+  - There is no timezone_confirmed field, migration or RPC.
+  - A persisted timezone confirmation is recorded as FUTURE hardening.
+
+======================================================================
+NAVIGATION
+======================================================================
+The permanent order is Overview · Requests · Trips · Dispatch · Tomorrow · Recurring Care · Passengers · Facilities ·
+Drivers · Fleet. Drive and Settings stay conditional exactly as before: Drive on an active linked driver (identity),
+Settings on capability.
+  - New icons: CalendarCheck (Tomorrow) and Repeat (Recurring Care).
+  - E2E: the list is identical for the fresh organization, 1 driver, 3 drivers and each business_stage value. A
+    Dispatcher sees the same permanent items and no Settings.
+
+======================================================================
+ONBOARDING SIZE RETIREMENT
+======================================================================
+  - The tenant-facing size page and setBusinessStageAction were removed.
+  - /onboarding now server-redirects to /onboarding/basics.
+  - complete-signup:
+      - both "created" branches (complete_pending_signup, and the manual form action) go to /onboarding/basics;
+      - the business_stage-null gate was removed, so an existing admin resolves to /operations and a driver to
+        /driver.
+  - sign-up/actions.ts also goes to /onboarding/basics (M4).
+  - Untouched: the business_stage column, its constraint, the DB allowlist, generated types, the Platform Admin
+    historical display and the historical Activity label.
+
+======================================================================
+REVISED ONBOARDING
+======================================================================
+  - Step 1 of 5: Business basics. Required, no exit; stored timezone shown and preselected.
+  - Step 2 of 5: First vehicle.
+  - Step 3 of 5: "Do you also drive?"
+  - Step 4 of 5: First facility.
+  - Step 5 of 5: First passenger.
+Steps 2–5 keep "Skip for now" and add "Finish later — go to Operations". Driver invitations are not part of
+onboarding.
+
+======================================================================
+ASSIGNMENT ATTRIBUTION
+======================================================================
+Trip Detail → Current Status, shown for every viewer. It is built from stored facts only: the trip's
+trip_assignments rows (assigned_by, assigned_at, ended_at, end_reason), added to the existing Trip Detail read. The
+pure deriveAssignmentAttribution (assignment-attribution-core.ts) produces:
+  - "Assigned by <who> · Sep 25, 7:42 AM", for the current or last assignment.
+  - "Reassigned by <who> · …", only when history proves it: an earlier row on the same trip ended at the moment this
+    one began, with a non-trip-ending end_reason.
+  - "Reason: <text>", only for an operator-entered end_reason. It never appears for reassigned / trip_completed /
+    trip_cancelled / no_show.
+  - assigned_by null gives "Assigned · <time>".
+  - Nothing is inferred beyond the recorded action. History is never rewritten.
+
+======================================================================
+DISPATCHER ATTRIBUTION
+======================================================================
+Names come from getVisibleAssignerNames: a session-client user_profiles read, where RLS alone decides what comes back.
+  - self: always readable → "you".
+  - an Organization Admin: can read members' profiles → the real name.
+  - a Dispatcher: gets nothing back for another member → "a team member".
+No service role, RPC, policy or privilege was added. E2E:
+  - The admin saw "Assigned by you".
+  - The Dispatcher saw "Assigned by a team member"; the admin's name was not exposed.
+  - The Dispatcher's own reassignment showed "Reassigned by you · … Reason: Driver unavailable".
+  - The admin saw "Reassigned by Dana Dispatcher" plus the reason.
+The Activity feed of assignments (B2) is deferred; list_activity_events is unchanged.
+
+======================================================================
+BUSINESS_STAGE
+======================================================================
+No tenant code path reads business_stage any more.
+  - The composition input has no such field.
+  - The unit test passes business_stage, a vehicle count and dispatcher presence as extra fields; the output is
+    identical.
+  - E2E set starting / growing / established / null on the same tenant; the Overview composition and nav were
+    identical each time.
+Retained: the column, constraint, platform-admin display, generated type, historical Activity label and DB
+allowlist.
+
+======================================================================
+AUTHORIZATION
+======================================================================
+Unchanged. Every page and action still uses its existing guard:
+  - requireOperationsAccess / requireOrganizationAdminAccess / requireOnboardingAccess
+  - requireDriverAccess
+E2E:
+  - A Dispatcher is refused /operations/settings/organization server-side, and has no Settings nav.
+  - A Driver membership is redirected from /operations.
+  - Drive appears only after a linked driver exists.
+Navigation hiding is presentation only.
+
+======================================================================
+DATABASE IMPACT
+======================================================================
+NONE: no migration, RPC, RLS, privilege or schema change.
+The only new read is user_profiles (id, display_name) through the existing RLS, on Trip Detail. The added
+trip_assignments columns are in the same embedded read that already existed.
+
+======================================================================
+PROG1 REGRESSION
+======================================================================
+.tmp-qa/p1-ops-prog1-assignment-e2e.mjs, rerun against the final build: 46/46 PASS. Covered:
+  - assignment defaults
+  - owner "(you)"
+  - driver-day context
+  - multiple-vehicle no-guess
+  - reassign preservation
+  - stale reassign rejection
+  - Trip Detail assignment
+  - zero-driver actions
+  - 1440 / 768
+
+======================================================================
+PROG2 REGRESSION
+======================================================================
+.tmp-qa/p1-ops-prog2-readiness-e2e.mjs, rerun against the final build: 56/56 PASS. Covered:
+  - New Trip Assign now: one-person, multi-resource, double-submit, partial failure
+  - Tomorrow Assign / Add vehicle
+  - multi-reason readiness
+  - recurring prefill and fallback
+  - Overview Tomorrow: "Nothing scheduled for tomorrow", "4 trips · All ready", "4 trips · 2 need preparation", and
+    Review tomorrow
+  - Driver redirects
+
+======================================================================
+BROWSER E2E   (.tmp-qa/p1-ops-prog3b-composition-e2e.mjs; local; fictional tenant made via the real /sign-up; 51/51)
+======================================================================
+The tenant "PROG3 Tenant <stamp>" was created through the real signup form, plus a fictional Dispatcher. The local
+fixture tenant was left in place (local DB only).
+  - Signup: lands on /onboarding/basics with no size question.
+      - "Step 1 of 5", with "Current timezone: America/New_York" shown.
+      - No exit on basics.
+      - business_stage stays null.
+      - /onboarding redirects to basics.
+  - Basics: saving the timezone (Chicago) leads to vehicle.
+      - Steps 2–5 show the right "Step N of 5", Skip for now and Finish later.
+      - Finish later reaches /operations.
+  - Fresh Overview:
+      - fresh composition; the checklist and Get started;
+      - "Timezone: America/Chicago", never "confirmed";
+      - actions: Create your first trip / Review business basics / Website requests (neutral) / I also drive;
+      - no zero widgets and no lower section;
+      - nav order correct.
+  - An admin with business_stage null visiting /complete-signup goes to /operations.
+  - With 1 driver: no Driver Snapshot. Attention present puts it first, and pending requests go directly after.
+  - With attention 0: no panel, "Nothing needs attention right now.", and the collapsed "Next trip today at …".
+  - A departure within 2h brings in the Today block after Requests.
+  - Tomorrow: needs preparation gives a P3 row; ready gives the calm "1 trip · All ready".
+  - Recurring: 0 arrangements means no Overview row, but the nav has Recurring Care. A gap gives P4.
+  - Proof: none from yesterday gives a calm row with its link. A review item gives P5, the last work section.
+  - With 3 drivers: "On trip now: 0 of 3 active drivers". Nav unchanged. Priority order preserved.
+  - With 0 active drivers and existing trips: the "No active drivers" row with Set up drivers (admin).
+  - business_stage starting / growing / established / null all give an identical Overview and nav.
+  - All-clear: the "All clear" headline, no work sections, only calm lines, no zero counters.
+  - Attribution: as listed under DISPATCHER ATTRIBUTION.
+  - Settings and Drive: the Dispatcher has no Settings and is refused server-side. The admin has no Drive nav until
+    linked, then it appears.
+  - 1440px and 768px: no horizontal overflow on the Overview.
+  - A Driver membership is redirected from /operations.
+
+======================================================================
+APPLICATION TESTS
+======================================================================
+npx tsc --noEmit ... PASS
+npm run lint ....... PASS (0 errors. The 91 warnings are all in untracked .tmp-qa scripts; none are in app code.)
+npm test ........... 585/585 (26 new: 17 composition + 9 attribution)
+npm run build ...... PASS
+No SQL regression was run: there is no DB or security change.
+
+======================================================================
+FILES CREATED
+======================================================================
+src/lib/operations/progressive-operations-core.ts
+src/lib/operations/progressive-operations-core.test.mjs
+src/lib/operations/assignment-attribution-core.ts
+src/lib/operations/assignment-attribution-core.test.mjs
+src/components/onboarding/BusinessBasicsForm.tsx
+  - the client form, moved out of the basics page so the page can pass the stored timezone
+docs/reports/p1-ops-prog3b-fact-signal-composition-implementation.txt
+(.tmp-qa/p1-ops-prog3b-composition-e2e.mjs -- local QA only, untracked)
+
+======================================================================
+FILES MODIFIED
+======================================================================
+src/components/operations/OperationsBrief.tsx
+  - renders the composition; Today headline; Get started; calm group; No-active-drivers row; Next Departures cap;
+    the old Driver Snapshot panel removed
+src/app/operations/page.tsx
+  - signal assembly + composition; duplicate attention table removed; fresh organization hides the lower section;
+    #today-trips anchor
+src/app/operations/layout.tsx
+  - uses the cached getOperatorLinkedDriverId
+src/components/operations/OperationsSidebar.tsx
+  - Tomorrow and Recurring Care, permanent
+src/design/icons.ts
+  - tomorrow / recurring icons
+src/app/operations/trips/[tripId]/page.tsx
+  - attribution (viewer id + visible names)
+src/components/operations/trip-detail/CurrentStatusPanel.tsx
+  - attribution line
+src/lib/operations/trip-detail.ts
+  - assignment columns; getVisibleAssignerNames
+src/lib/operations/presentation.ts
+  - formatOperationsShortDateTime
+src/app/complete-signup/route.ts
+  - gate removed; created → /onboarding/basics
+src/app/complete-signup/actions.ts, src/app/sign-up/actions.ts
+  - → /onboarding/basics
+src/app/onboarding/page.tsx
+  - now a redirect
+src/app/onboarding/actions.ts
+  - setBusinessStageAction removed
+src/app/onboarding/layout.tsx
+  - no exit on basics; "Finish later — go to Operations"
+src/app/onboarding/basics/page.tsx
+  - server page passing the stored timezone
+src/app/onboarding/{vehicle,driver,facility,passenger}/page.tsx
+  - "Step N of 5"
+
+======================================================================
+DEFERRED ITEMS
+======================================================================
+  - Normal-work folding (Q4): waiting for pilot evidence.
+  - B1: Dispatcher-visible assigner names. Needs a backend read path and a privacy decision.
+  - B2: assignment entries in Settings → Activity. Needs a list_activity_events allowlist migration.
+  - A persisted timezone-confirmation fact (Q2 future hardening).
+  - Proof of Service sidebar entry (Q5).
+  - An optional later contract/drop of organizations.business_stage.
+  - The "rides" → "trips" copy pass in the Recurring Care block.
+
+======================================================================
+OPEN ISSUES
+======================================================================
+  1. docs/reports/p1-ops-prog3a-fact-signal-composition-spec.txt (the approved source of truth) is still untracked.
+     Suggest committing it with this phase.
+  2. On an active day where every remaining scheduled trip is overdue (past pickup, not started), the collapsed line
+     reads "Nothing departing in the next 2 hours." That is factual. Lateness has no product definition yet (the
+     running-late threshold is an open decision), so no "late" wording is used.
+  3. The fresh-organization state keys only on facts (no trips yet, checklist incomplete). An organization that
+     completes the whole checklist before its first trip gets the standard composition. That is intended: it has
+     vehicles, drivers and passengers.
+  4. The local E2E fixture tenant(s) "PROG3 Tenant <stamp>" remain in the local database only.
+  5. Production smoke will need a synthetic tenant state. Dispatcher attribution in production stays MANUAL unless a
+     safe synthetic dispatcher credential exists (QA policy: no role mutation).
+
+BUSINESS SIZE QUESTION: RETIRED
+BUSINESS_STAGE DRIVES UX: NO
+HARD SIZE MODES: NO
+FRESH ORG: PASS
+TIMEZONE VISIBLE: PASS
+TIMEZONE CLAIMED CONFIRMED: NO
+ATTENTION FIRST WHEN PRESENT: PASS
+EMPTY ATTENTION PANEL: REMOVED
+DUPLICATE LOWER ATTENTION TABLE: REMOVED
+PENDING REQUEST PRIORITY: PASS
+TODAY: PASS
+TOMORROW: PASS
+RECURRING: PASS
+PROOF: PASS
+ONE DRIVER SNAPSHOT: OMITTED
+MULTI DRIVER SNAPSHOT: PASS
+NAV TOMORROW: PRESENT
+NAV RECURRING: PRESENT
+NAV SIZE-DEPENDENT: NO
+ASSIGNMENT ATTRIBUTION: PASS
+DISPATCHER OTHER-MEMBER NAME: A TEAM MEMBER
+ACTIVITY ASSIGNMENTS: DEFERRED
+NORMAL-WORK FOLDING: DEFERRED
+DATABASE MIGRATION: NONE
+RPC CHANGE: NONE
+RLS CHANGE: NONE
+PRIVILEGE CHANGE: NONE
+PROG1 REGRESSION: PASS
+PROG2 REGRESSION: PASS
+TSC: PASS
+LINT: PASS
+UNIT: 585/585
+BUILD: PASS
+READY FOR PRODUCTION RELEASE: YES
+BLOCKERS: NONE
+NEXT IF PASS:
+Owner review
+→ PROG3B production release
+DO NOT BEGIN PROG4 AUTOMATICALLY.
+STOP.

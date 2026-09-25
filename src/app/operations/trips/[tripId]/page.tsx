@@ -2,7 +2,9 @@ import Link from "next/link";
 import { WarningCircle, CheckCircle, XCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getTripDetail } from "@/lib/operations/trip-detail";
+import { getTripDetail, getVisibleAssignerNames } from "@/lib/operations/trip-detail";
+import { deriveAssignmentAttribution } from "@/lib/operations/assignment-attribution-core";
+import { getUser } from "@/lib/auth/session";
 import { getTripReadiness, type TripReadinessResult } from "@/lib/operations/trip-readiness";
 import { formatOperationsTime, formatOperationsLongDate } from "@/lib/operations/presentation";
 import { TripStatus } from "@/components/ui/TripStatus";
@@ -93,7 +95,17 @@ export default async function TripDetailPage({
     );
   }
 
-  const { trip, notes, openExceptions, events } = result;
+  const { trip, notes, openExceptions, events, assignments } = result;
+
+  // P1-OPS-PROG3B assignment attribution -- stored facts only. Names come
+  // back only where the viewer's existing user_profiles RLS allows
+  // (self; Organization Admin for members); everyone else reads as
+  // "a team member". Best-effort: a failed name read degrades to that.
+  const viewer = await getUser();
+  const visibleNames = await getVisibleAssignerNames(
+    assignments.map((a) => a.assignedBy).filter((id): id is string => id !== null),
+  ).catch(() => new Map<string, string>());
+  const attribution = deriveAssignmentAttribution(assignments, viewer?.id ?? null, visibleNames);
   const lastUpdateAt = events[0]?.occurredAt ?? trip.updatedAt;
 
   // P1-E1-S4D §16: Trip Readiness is only ever fetched/rendered for a
@@ -246,6 +258,7 @@ export default async function TripDetailPage({
             timezone={timezone}
             eligibleForAssignmentAction={!trip.isTerminal}
             hasActiveAssignment={trip.activeAssignmentId !== null}
+            attribution={attribution}
             assignmentControl={
               assignmentOptions ? (
                 <TripAssignmentButton

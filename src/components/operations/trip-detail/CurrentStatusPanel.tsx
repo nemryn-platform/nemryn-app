@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { Panel } from "@/components/ui/Panel";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { LinkButton } from "@/components/ui/LinkButton";
-import { formatOperationsTime } from "@/lib/operations/presentation";
+import { formatOperationsTime, formatOperationsShortDateTime } from "@/lib/operations/presentation";
+import type { AssignmentAttribution } from "@/lib/operations/assignment-attribution-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -18,6 +19,8 @@ export interface CurrentStatusPanelProps {
   hasActiveAssignment: boolean;
   /** P1-OPS-PROG1: the in-place Assign / Manage Assignment control (same dialog + Server Action as Dispatch) for a Trip in an assignable state. When absent, the generic Dispatch link below is shown as before. */
   assignmentControl?: ReactNode;
+  /** P1-OPS-PROG3B: who assigned the current (or last) assignment and when, from stored facts; null when never assigned. */
+  attribution?: AssignmentAttribution | null;
 }
 
 /**
@@ -47,6 +50,7 @@ export function CurrentStatusPanel({
   eligibleForAssignmentAction,
   hasActiveAssignment,
   assignmentControl,
+  attribution = null,
 }: CurrentStatusPanelProps) {
   const items = [
     ...(driverName ? [{ label: "Driver", value: driverName }] : []),
@@ -60,6 +64,17 @@ export function CurrentStatusPanel({
       <p className={cn(typography.sectionHeading, "mt-1 text-text-primary")}>{statusLabel}</p>
       <div className="mt-zw-lg border-t border-border-subtle pt-zw-lg">
         <DefinitionList items={items} />
+        {attribution && (
+          <div className="mt-zw-md" data-testid="assignment-attribution">
+            <p className={cn(typography.metadata, "text-text-secondary")}>
+              {attribution.verb}
+              {attribution.who ? ` by ${attribution.who}` : ""} · {formatOperationsShortDateTime(attribution.at, timezone)}
+            </p>
+            {attribution.reason && (
+              <p className={cn(typography.metadata, "mt-0.5 text-text-muted")}>Reason: {attribution.reason}</p>
+            )}
+          </div>
+        )}
       </div>
       {eligibleForAssignmentAction && assignmentControl && <div className="mt-zw-lg">{assignmentControl}</div>}
       {eligibleForAssignmentAction && !assignmentControl && (

@@ -58,5 +58,5 @@ export async function completeSignupManualAction(
     redirect("/");
   }
 
-  redirect("/onboarding");
+  redirect("/onboarding/basics");
 }

@@ -41,11 +41,16 @@ export default async function OnboardingLayout({ children }: { children: ReactNo
 
       <main className="mx-auto flex max-w-md flex-col gap-zw-lg px-4 py-10">{children}</main>
 
-      <div className="mx-auto max-w-md px-4 pb-10 text-center">
-        <Link href="/operations" className={cn(typography.bodySmall, "text-text-secondary underline")}>
-          Skip setup and go to Operations
-        </Link>
-      </div>
+      {/* P1-OPS-PROG3B: Business basics (step 1) is required within the guided
+          flow -- no exit there. Steps 2–5 keep their own "Skip for now" plus
+          this "Finish later" exit. */}
+      {pathname !== "/onboarding/basics" && pathname !== "/onboarding" && (
+        <div className="mx-auto max-w-md px-4 pb-10 text-center">
+          <Link href="/operations" className={cn(typography.bodySmall, "text-text-secondary underline")}>
+            Finish later — go to Operations
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

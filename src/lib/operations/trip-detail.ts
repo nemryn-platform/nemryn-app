@@ -1,4 +1,5 @@
 import "server-only";
+import type { AttributionAssignment } from "./assignment-attribution-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { operationsTripStatusLabel } from "./presentation";
 import { operationsEventLabel } from "./presentation";
@@ -86,6 +87,9 @@ type RequesterRelation = RequesterEmbed | RequesterEmbed[] | null;
 interface AssignmentEmbed {
   id: string;
   ended_at: string | null;
+  assigned_by: string | null;
+  assigned_at: string;
+  end_reason: string | null;
   drivers: NameRelation;
   vehicles: LabelRelation;
 }
@@ -183,6 +187,8 @@ export type TripDetailResult =
       events: TripDetailEvent[];
       notes: TripDetailNote[];
       openExceptions: TripDetailException[];
+      /** P1-OPS-PROG3B: every assignment row of this Trip (history included) -- facts for the attribution line. */
+      assignments: AttributionAssignment[];
     }
   | { status: "unavailable" }
   | { status: "error" };
@@ -194,7 +200,7 @@ const TRIP_COLUMNS =
   "transportation_requests!trips_request_id_organization_id_fkey(requester_name, requester_relationship, requester_phone, requester_email), " +
   "pickup_facility:facilities!trips_pickup_facility_id_organization_id_fkey(name, city, state), " +
   "destination_facility:facilities!trips_destination_facility_id_organization_id_fkey(name, city, state), " +
-  "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, " +
+  "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, assigned_by, assigned_at, end_reason, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name, phone), " +
   "vehicles!trip_assignments_vehicle_id_organization_id_fkey(id, label))";
 
@@ -314,5 +320,30 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
     createdAt: x.created_at,
   }));
 
-  return { status: "ok", trip, events, notes, openExceptions };
+  const assignments: AttributionAssignment[] = (tripRow.trip_assignments ?? []).map((a) => ({
+    id: a.id,
+    assignedBy: a.assigned_by,
+    assignedAt: a.assigned_at,
+    endedAt: a.ended_at,
+    endReason: a.end_reason,
+  }));
+
+  return { status: "ok", trip, events, notes, openExceptions, assignments };
+}
+
+/**
+ * P1-OPS-PROG3B: display names of assigners the VIEWER may already see
+ * under the existing `user_profiles` RLS (their own profile; an
+ * Organization Admin also sees their organization members'). Rows the
+ * policy withholds simply do not come back -- nothing is widened here, no
+ * service role, no new policy -- and the attribution then says "a team
+ * member".
+ */
+export async function getVisibleAssignerNames(userIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return new Map();
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.from("user_profiles").select("id, display_name").in("id", ids);
+  if (error) return new Map();
+  return new Map((data ?? []).filter((row) => row.display_name).map((row) => [row.id, row.display_name as string]));
 }

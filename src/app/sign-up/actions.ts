@@ -120,5 +120,5 @@ export async function signUpAction(_prevState: SignUpState, formData: FormData):
     return { error: AUTH_ERROR.SIGNUP_FAILED };
   }
 
-  redirect("/onboarding");
+  redirect("/onboarding/basics");
 }

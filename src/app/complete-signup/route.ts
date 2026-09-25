@@ -35,18 +35,18 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
  *      requests for one redirect chain, and the second sees the first's
  *      already-committed org). Deciding "onboarding vs. operations"
  *      purely from "did *this* request create it" is therefore not
- *      robust — instead this checks the resolved organization's own
- *      `business_stage` (still null only for a genuinely brand-new,
- *      never-onboarded org, work item §3's own field) so EITHER request
- *      in such a race correctly lands the person in onboarding, not just
- *      whichever one happened to win the creation itself.
+ *      robust. P1-OPS-PROG3B retired the business_stage size question, so
+ *      an existing Membership now always resolves to its real home
+ *      (/operations or /driver); in such a race the second request lands
+ *      in Operations, where a fresh organization's Overview shows its
+ *      current timezone with "Review business basics".
  *   2. A pending Driver invite token in their own account metadata? —
  *      redeem it. Success → /driver. Failure (revoked/stale/foreign) →
  *      /access-unavailable — deliberately NEVER routed to the operator
  *      organization-creation form (§7's own explicit "do not accidentally
  *      route Driver invitees into operator organization creation").
  *   3. Pending operator full name/business name in metadata? — complete
- *      automatically, silently, exactly once. → /onboarding.
+ *      automatically, silently, exactly once. → /onboarding/basics.
  *   4. Nothing traceable at all (the real-world case §9 exists for: an
  *      account created before this fix existed, whose signUp() call
  *      never persisted any pending metadata) — send to the explicit,
@@ -73,17 +73,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/select-organization", origin));
   }
   if (initialResolution.status !== "none") {
-    const { role, organizationId } = initialResolution.context;
-    if (role === "organization_admin") {
-      const { data: org } = await supabase
-        .from("organizations")
-        .select("business_stage")
-        .eq("id", organizationId)
-        .maybeSingle();
-      if (org && org.business_stage === null) {
-        return NextResponse.redirect(new URL("/onboarding", origin));
-      }
-    }
+    const { role } = initialResolution.context;
     return NextResponse.redirect(new URL(role === "driver" ? "/driver" : "/operations", origin));
   }
 
@@ -147,7 +137,7 @@ export async function GET(request: NextRequest) {
 
   const { data: continuation } = await supabase.rpc("complete_pending_signup");
   if (continuation?.created) {
-    return NextResponse.redirect(new URL("/onboarding", origin));
+    return NextResponse.redirect(new URL("/onboarding/basics", origin));
   }
 
   return NextResponse.redirect(new URL("/complete-signup/form", origin));

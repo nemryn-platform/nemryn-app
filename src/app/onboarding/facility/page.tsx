@@ -23,7 +23,7 @@ export default function OnboardingFacilityPage() {
   return (
     <>
       <div>
-        <p className={cn(typography.metadata, "text-text-secondary")}>Step 5 of 6</p>
+        <p className={cn(typography.metadata, "text-text-secondary")}>Step 4 of 5</p>
         <h1 className={cn(typography.sectionHeading, "mt-1 text-text-primary")}>Add your first facility</h1>
         <p className={cn(typography.bodySmall, "mt-2 text-text-secondary")}>
           A clinic, dialysis center, or other location your trips connect to.

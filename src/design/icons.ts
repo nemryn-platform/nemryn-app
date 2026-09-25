@@ -20,6 +20,8 @@ import {
   ShieldCheck,
   ClockCounterClockwise,
   UserCircle,
+  CalendarCheck,
+  Repeat,
 } from "@phosphor-icons/react/dist/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -39,6 +41,8 @@ export const navIcons: Record<string, Icon> = {
   requests: Tray,
   trips: Path,
   dispatch: NavigationArrow,
+  tomorrow: CalendarCheck,
+  recurring: Repeat,
   passengers: Users,
   facilities: Buildings,
   drivers: IdentificationCard,

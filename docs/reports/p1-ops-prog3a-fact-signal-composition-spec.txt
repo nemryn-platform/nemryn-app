@@ -1,0 +1,697 @@
+NEMRYN PLATFORM
+P1-OPS-PROG3A -- FACT-SIGNAL COMPOSITION SPECIFICATION
+Specification only. NO application change, no Supabase change, no migration, no RLS change, not pushed, not
+deployed. PROG3B implementation, PROG4, PROG5, D4, S5B, billing, route optimization, availability, duration,
+vehicle capability and drag-and-drop were NOT started.
+Written from a fresh read of the code at main = 4b2b6ae (PROG1 + PROG2 released), not from the model report alone.
+
+======================================================================
+EXECUTIVE SUMMARY
+======================================================================
+PROG3 adapts EMPHASIS and ORDER to facts the product already derives. It never adapts to a business size.
+
+Core decisions:
+  1. The Overview's section order is decided by ONE pure function, from ONE server-derived signals object, using a
+     fixed priority ladder:
+       - work that needs the operator comes first, in a fixed order;
+       - calm, informational summaries collapse into one compact group;
+       - sections whose empty state says nothing to this organization are omitted, but only where the destination
+         stays reachable elsewhere.
+  2. Navigation is STABLE, with no size rules. Tomorrow and Recurring Care become permanent sidebar items. Dispatch
+     keeps its place. Drive and Settings stay conditional on identity and capability, exactly as today.
+  3. The required size question ("How are you operating today?") is retired:
+       - signup no longer routes through it and never requires it;
+       - organizations.business_stage stays nullable and untouched;
+       - nothing reads it behaviourally.
+  4. Assignment attribution ("Assigned by … · time", "Reassigned … · Reason") appears on Trip Detail for every
+     viewer, from facts already stored.
+       - Names are shown only where current RLS already allows them.
+       - Showing other members' names to Dispatchers would need a backend read path. That is called out separately
+         and is NOT in PROG3B.
+  5. There are no hard thresholds. The only numeric caps reuse the Brief's existing 5-row list limit for
+     consistency. Normal-work "folding" is DEFERRED because no threshold can be justified without pilot evidence.
+PROG3B needs no migration, no RPC, no RLS change and no privilege change.
+
+======================================================================
+CURRENT UX AUDIT
+======================================================================
+Sidebar (OperationsSidebar.tsx)
+  - Items, in order: Overview, Requests, Trips, Dispatch, Passengers, Facilities, Drivers, Fleet.
+  - Then "Drive", only when the caller has an active linked Driver (current_driver_id).
+  - Then "Settings", only when the caller can manage settings.
+  - Not in the sidebar: Tomorrow, Recurring Care, Proof of Service. They are reached through Overview Brief links,
+    Trip/Request links and direct URLs.
+  - The header's SECTION_LABELS already knows "Tomorrow", Billing and Reports (Billing and Reports are stubs).
+Overview (/operations/page.tsx), top to bottom:
+  1. OnboardingChecklistBanner: 6 fact-derived items (business profile is always complete; vehicle, active driver,
+     facility, passenger, first trip). Hidden when complete or when loading fails.
+  2. An "Operating hours" line (when a schedule exists).
+  3. OperationsBrief:
+       - A headline state: UNAVAILABLE / quiet "Nothing scheduled today" / "All caught up" / active day.
+       - Needs Attention: ALWAYS rendered on an active day, even at 0, with an empty state. Capped at 5 rows, with
+         an overflow link to Dispatch.
+       - Active Now + Next Departures (the 2-hour window).
+       - Then ALWAYS, in fixed order, 5 compact rows: Driver Snapshot, Requests awaiting review, Tomorrow (PROG2
+         line), Recurring Care, Proof of Service. Each has its own zero and unavailable copy.
+  4. A second "today" section:
+       - SummaryStrip: trips today / active / need attention / no current issues
+       - a FULL Needs Attention table (it duplicates the Brief's attention list)
+       - Upcoming Trips, Active Trips, Activity Log
+  A fresh organization therefore sees a Brief of empty states ("No drivers set up yet", "No requests awaiting
+  review", "No recurring transportation set up", "No completed trips to review") plus zero counters and empty
+  tables.
+Attention queue (todays-operations + trip-assurance)
+  - One row per trip, in priority order: OPEN_EXCEPTION > NEEDS_ASSIGNMENT (today, scheduled, unassigned) >
+    LOCATION_STALE > LOCATION_UNAVAILABLE.
+  - These are proven facts: an operator/driver-reported exception, a missing assignment, or a location age.
+Tomorrow (PROG2)
+  - Page with inline Assign / Add vehicle.
+  - Brief line "Nothing scheduled for tomorrow" / "N trips · All ready" / "N trips · X need preparation".
+Requests: Request Hub, with a Pending filter. The Brief shows the pending count and the oldest date.
+Trips / Dispatch: Trips list; the Dispatch board is today-only (queue, grid, capacity rail).
+Recurring Care: arrangements, 14-day missing-occurrence summary, create-missing flow.
+Proof of Service: a review of YESTERDAY's completed trips (ready for review / needs review / evidence gaps).
+Team & Access
+  - Staff roles are organization_admin / dispatcher. Invites and role changes are admin-only.
+  - Drivers have their own lifecycle.
+Activity (Settings → Activity)
+  - Organization Admin only, via list_activity_events (SECURITY DEFINER).
+  - It uses a FIXED action allowlist of organization, settings, website, team, notification, platform and driver
+    self-link actions.
+  - Trip assignment audit events (driver_assigned / driver_reassigned) exist in audit_events but are NOT in that
+    allowlist, so Activity never shows who assigned a trip.
+Onboarding
+  - A new organization is routed to /onboarding (complete-signup, on the created-organization branch).
+  - Step 1 is the REQUIRED size question (Starting 1–2 / Growing 3–10 / Established 10+), which writes business_stage.
+  - Then: basics (timezone required, service area optional) → vehicle (skip) → "Do you also drive?" (skip) →
+    facility (skip) → passenger (skip) → New Trip.
+  - complete-signup also re-routes any organization_admin whose organization has business_stage = null back to
+    /onboarding.
+  - Signup itself never asks for a timezone; signup_create_organization defaults to America/New_York. The basics
+    step is therefore the ONLY guided timezone confirmation.
+PROG1 + PROG2
+  - Assignment prefill (single option / recurring history), "(you)" ordering, driver-day facts.
+  - Trip Detail / Tomorrow / Dispatch / New Trip assignment entry points; partial-success notices.
+  - None of this depends on size.
+
+======================================================================
+SIGNAL INVENTORY
+======================================================================
+Classes:
+  AVAILABLE = already in existing page data
+  DERIVABLE = derivable with existing data
+  NEW QUERY = would need a new query
+  NO DRIVE  = should not drive PROG3
+S1  Active Driver count
+    AVAILABLE: Brief driverSnapshot.totalActiveDrivers, plus the Dispatch options.
+S2  Active Vehicle count
+    DERIVABLE: the checklist counts ALL vehicles, not only active ones.
+    Used only for local PROG1 prefill. NO DRIVE for Overview composition.
+S3  Caller has a linked Driver
+    AVAILABLE: layout current_driver_id; cached getOperatorLinkedDriverId.
+S4  Caller is the only active Driver
+    DERIVABLE: S1 === 1 && S3.
+    NO DRIVE: nothing on the Overview needs it; PROG1 prefill already covers it.
+S5  Active office Membership count
+    NEW QUERY (memberships by role).
+    NO DRIVE: no composition decision needs it (see ASSIGNMENT ATTRIBUTION).
+S6  Dispatcher Membership present
+    NEW QUERY.
+    NO DRIVE: attribution is shown to everyone, so no dispatcher-conditional UI.
+S7  Today's Trip count
+    AVAILABLE: todayTrips / dayState.
+S8  Tomorrow Trip count
+    AVAILABLE: tomorrowReadiness.totalScheduledTrips.
+S9  Tomorrow needs-preparation count
+    AVAILABLE: tomorrowReadiness.needsPreparationCount.
+S10 Today's unassigned Trip count
+    AVAILABLE: unassignedCount.
+S11 Open attention count
+    AVAILABLE: attention.length.
+S12 Active recurring arrangement count
+    AVAILABLE: recurringCare.activeArrangementCount.
+S13 Recurring missing-occurrence count
+    AVAILABLE: recurringCare.missingOccurrenceCount.
+S14 Proof-of-service review count
+    AVAILABLE: proofOfService.needsReviewCount, plus completedTripCount.
+S15 Pending Request count
+    AVAILABLE: requestSummary.pendingRequestCount.
+S16 Currently active Trip count
+    AVAILABLE: activeNow.length.
+S17 Assignment attribution / assigned_by activity
+    DERIVABLE per Trip (trip_assignments.assigned_by / assigned_at).
+    NO DRIVE for composition; used for DISPLAY on Trip Detail only.
+S18 Reassignment activity
+    DERIVABLE per Trip (ended assignments + end_reason).
+    NO DRIVE; display only.
+Also AVAILABLE and used: "the organization has ever had a trip" (checklist trips count > 0) and checklist
+completeness, for the fresh-organization composition.
+business_stage: AVAILABLE, but NEVER a signal (see BUSINESS_STAGE RETIREMENT).
+No new analytics query is introduced for composition.
+
+======================================================================
+COMPOSITION INPUT
+======================================================================
+ProgressiveOperationsSignals is ONE server-derived object. It is assembled on the Overview page from data the page
+ALREADY loads, with no new query:
+  dayState                        "NO_TRIPS" | "ALL_COMPLETE" | "ACTIVE_DAY" | "UNAVAILABLE"
+      Chooses the Today headline.
+  attentionCount                  number | null
+      P0 placement. null when today's data is unavailable.
+  todayUnassignedCount            number | null
+      Copy inside Attention ("2 trips need a driver").
+  activeNowCount                  number | null
+      Whether the Today block has live content.
+  nextDepartureCount              number | null
+      Whether the Today block has upcoming content.
+  pendingRequestCount             number | null
+      P1 placement.
+  tomorrowTripCount               number | null
+      The Tomorrow line.
+  tomorrowNeedsPreparationCount   number | null
+      P3 placement.
+  activeRecurringCount            number | null
+      Recurring visibility.
+  recurringMissingCount           number | null
+      P4 placement.
+  proofCompletedCount             number | null
+      Proof visibility (yesterday's completed trips).
+  proofReviewCount                number | null
+      P5 placement.
+  activeDriverCount               number | null
+      Driver Snapshot visibility.
+  hasEverHadTrip                  boolean | null
+      Fresh-organization composition.
+  checklistComplete               boolean | null
+      Fresh-organization composition and the checklist banner (unchanged).
+Rules:
+  - null ALWAYS means "could not be loaded". That section renders a visible "unavailable" row in the calm group. It is
+    never treated as zero and never silently omitted.
+  - EXCLUDED: business_stage, plan / pricing tier, self-reported size, membership counts, dispatcher presence, vehicle
+    counts, historical averages, trailing windows.
+  - The composition function is pure (composeOperationsBrief(signals) → ordered section list). It lives in a
+    *-core.ts module with unit tests, like trip-readiness-core.
+
+======================================================================
+SIGNAL STABILITY
+======================================================================
+A. INSTANTANEOUS signals (safe for local defaults, badges and counts):
+   - single active driver / vehicle → PROG1 prefill
+   - attention / pending / preparation counts → the numbers shown inside a section
+B. STRUCTURAL signals (safe for section VISIBILITY, and they change rarely):
+   - activeDriverCount >= 2 (Driver Snapshot)
+   - activeRecurringCount > 0 (Recurring block)
+   - hasEverHadTrip (fresh-organization composition)
+   - linked Driver (Drive nav, unchanged)
+   - admin capability (Settings nav, unchanged)
+C. VOLUME / STATE signals (these change daily):
+   - attention > 0, pending > 0, tomorrow preparation > 0, recurring missing > 0, proof review > 0
+Anti-flip-flop rule (the simplest stable rule):
+  - NAVIGATION never changes with any B or C signal. Only identity and capability facts change navigation, exactly
+    as today.
+  - The Overview's SET of components never changes with C signals. Only their ORDER and their DENSITY (full row vs
+    one line in the calm group) change. Each such move is explained by the section's own visible count ("2 need
+    preparation"). So Monday/Tuesday differences are "tomorrow needs work today", not a different layout.
+  - B signals may add or remove a whole section, but only where the destination stays in navigation (Recurring Care)
+    or the information is carried elsewhere (Driver Snapshot → Active Now / Dispatch).
+  - No hysteresis, no trailing averages. Explicit current operational state is the rule. Nothing here needs
+    smoothing, because nothing structural keys off volume.
+
+======================================================================
+ONBOARDING SIZE QUESTION
+======================================================================
+Retire it. PROG3B routing change:
+  1. After a NEW organization is created, complete-signup redirects to /onboarding/basics (was /onboarding). This
+     applies to both "created" branches: complete_pending_signup and the manual complete-signup form action.
+  2. Remove the complete-signup gate that re-routes an organization_admin with business_stage = null to /onboarding.
+     An existing admin always goes to /operations (a driver goes to /driver), exactly like every other resolved
+     context.
+  3. /onboarding (the old size page) becomes a server redirect to /onboarding/basics, so bookmarks and old links keep
+     working. The setBusinessStageAction writer is removed.
+  4. organizations.business_stage stays nullable. Existing values are kept, nothing is migrated, and the column is
+     NOT dropped in PROG3. update_organization_settings still accepts the key (a DB allowlist, no change).
+Signup completion therefore requires only what it already requires to exist: an account, an organization and an
+Organization Admin membership. No size answer is ever required.
+
+======================================================================
+REVISED ONBOARDING
+======================================================================
+Reached once, right after the organization is created. Every step after step 1 has "Skip for now" and a persistent
+"Finish later — go to Operations".
+  Step 1 — Business basics
+      REQUIRED, not skippable.
+      Captures: the organization timezone (prefilled with the stored value) and an optional service area.
+      Enables: correct org-local "today" / "tomorrow", Tomorrow readiness, Dispatch day bounds and recurring dates.
+      Why required: signup never asks for a timezone and defaults to America/New_York. A wrong timezone silently
+      breaks every day-scoped screen. It is one field.
+  Step 2 — First vehicle
+      OPTIONAL, skippable.
+      Captures: an active Vehicle.
+      Enables: vehicle assignment, the PROG1 single-vehicle prefill, no "Vehicle needed" noise.
+  Step 3 — "Do you also drive?"
+      OPTIONAL, skippable ("Not now").
+      Captures: a linked Driver (link_self_as_driver, unchanged).
+      Enables: the Drive nav, the Driver PWA, "(you)" ordering, and one-person assignment prefill.
+  Step 4 — First facility
+      OPTIONAL, skippable.
+      Captures: a Facility.
+      Enables: facility picks in New Trip.
+  Step 5 — First passenger
+      OPTIONAL, skippable.
+      Captures: a Passenger.
+      Enables: New Trip without the Add-Passenger detour. It ends at New Trip (existing) or at Operations.
+Required before entering Operations: account + organization + admin membership. Step 1 is required only when it is
+reached. See OPEN QUESTIONS Q2 for an admin who abandons mid-way.
+Guided but skippable: steps 2–5.
+Afterwards the Overview checklist banner (unchanged, fact-derived) carries whatever was skipped:
+  - First vehicle
+  - Driver setup
+  - First facility
+  - First passenger
+  - First trip
+There are no speculative sales questions. Driver invitations are NOT part of onboarding; they stay in Drivers.
+Step labels become "Step N of 5".
+
+======================================================================
+NAVIGATION
+======================================================================
+Final sidebar order:
+  Overview · Requests · Trips · Dispatch · Tomorrow · Recurring Care · Passengers · Facilities · Drivers · Fleet
+  [Drive]    only when the caller has an active linked Driver     (identity fact, unchanged)
+  [Settings] only when the caller can manage settings             (capability fact, unchanged)
+ALWAYS VISIBLE: every item from Overview to Fleet, for every organization, at every size.
+CONDITIONAL IDENTITY ITEMS: Drive, Settings. These are NOT scale adaptation, and the server still enforces both
+routes.
+SECONDARY (not in the sidebar, always reachable by URL and contextual links): Proof of Service (from the Overview
+Proof row, which is never removed; see PROOF OF SERVICE), Activity (Settings), Billing and Reports (stubs; unchanged,
+not added).
+Tomorrow placement: directly AFTER Dispatch. This reads as a time gradient: Dispatch = today's board, Tomorrow = next
+day's preparation, Recurring Care = standing future work. It also keeps every existing item in its current relative
+position. Tomorrow never appears or disappears with trip count.
+Recurring Care: option A, ALWAYS visible.
+  - Conditional appearance (option B) would appear on the first arrangement and vanish when all end, which is a
+    mysterious change.
+  - Its empty page already explains what standing orders are.
+Dispatch: stays where it is, never hidden or demoted.
+  - One-driver operators get their assignment actions from Trip Detail, New Trip and Tomorrow (PROG1/PROG2).
+  - Dispatch gains value naturally as content grows.
+  - No dynamic prominence rule is needed.
+
+======================================================================
+OPERATIONS BRIEF PRIORITY MODEL
+======================================================================
+One deterministic ladder. The composition returns sections in this order; a section is placed in its WORK slot when
+its condition holds, and otherwise renders as one line in the CALM group (or is omitted where stated):
+  P0  Needs Attention             when attentionCount > 0
+  P1  Requests awaiting review    when pendingRequestCount > 0
+  P2  Today (Active Now + Next Departures), when the day has live or upcoming trips:
+        dayState = ACTIVE_DAY, or carryover active trips
+  P3  Tomorrow                    when tomorrowNeedsPreparationCount > 0
+  P4  Recurring Care              when recurringMissingCount > 0
+  P5  Proof of Service            when proofReviewCount > 0
+  P6  CALM group: one Panel of one-line summaries, in this fixed order, each with its link:
+        Tomorrow         (all ready / nothing scheduled)
+        Requests         ("No requests awaiting review")
+        Recurring Care   (covered; omitted when activeRecurringCount = 0)
+        Proof of Service (ready for review / nothing from yesterday)
+        Driver Snapshot  (only when activeDriverCount >= 2; see DRIVER SNAPSHOT)
+      plus any "… unavailable" line for a null summary
+Terminology is neutral: "Needs attention", "Waiting for review", "Needs preparation", "Needs scheduling", "Needs
+review". Nothing is called "urgent".
+Semantics check:
+  - P0 is the only tier of proven, today-scoped deviations (an exception, a missing assignment or a stale location on
+    a trip happening today).
+  - P1 is undecided inbound demand. It may be for today, which is why it sits directly under P0.
+  - P2 is time-bound monitoring of today.
+  - P3–P5 are preparation and administrative work that is not time-critical within the hour.
+The Today headline stays at the top of the Brief: "All clear" / "Nothing scheduled today" / "No new trips scheduled
+today" / unavailable, using the existing states.
+Below the Brief, the existing "today" section (tables and Activity Log) is UNCHANGED in PROG3B (see OPEN QUESTIONS
+Q1).
+
+======================================================================
+ATTENTION
+======================================================================
+  - Rule: attentionCount > 0 → Needs Attention is the FIRST Brief section (P0), for 1 vehicle or 30. There is no
+    threshold.
+  - When attentionCount = 0: the separate Needs Attention panel is NOT rendered. The Today headline carries one line,
+    "Nothing needs attention right now", so a calm day does not open with an empty warning panel.
+  - Unchanged: the 5-row cap with "+N more in Dispatch", the "N trips need a driver" line, and the Assign / Open Trip
+    actions.
+  - When attentionCount is null (today unavailable): the existing "Today's operations unavailable" state is kept.
+
+======================================================================
+PENDING REQUESTS
+======================================================================
+  - pendingRequestCount > 0 → P1, directly under Attention. The copy is unchanged: "N requests", the oldest date, and
+    "Review requests" → /operations/requests?state=pending.
+  - = 0 → one calm line, "No requests awaiting review".
+  - An open trip exception (P0) outranks a pending request: P0 is a proven problem on a trip already committed for
+    today, while a request is undecided demand.
+
+======================================================================
+NEXT DEPARTURES
+======================================================================
+  - Kept, inside the P2 Today block, beside Active Now, with the current 2-hour window.
+  - It shows at most 5 rows plus "View today's trips" (anchor to the Upcoming Trips table below). The cap reuses the
+    Brief's existing ATTENTION_ROW_LIMIT = 5, for consistency rather than as a size threshold.
+  - Its empty state ("Nothing departing soon") renders ONLY when Active Now has content. When both are empty on an
+    active day, the Today block collapses to one headline line ("Next trip at 4:15 PM" from todayTrips, or "No more
+    trips today").
+  - It is never moved below P3–P5.
+
+======================================================================
+DRIVER SNAPSHOT
+======================================================================
+Rule (structural, stable):
+  - activeDriverCount >= 2 → "On trip now: X of N active drivers" as a line in the CALM group, with View Dispatch.
+  - activeDriverCount == 1 → omitted. The single driver's live state is already in Active Now, and Dispatch and
+    Drivers stay in the nav.
+  - activeDriverCount == 0 and hasEverHadTrip → a WORK row placed after P1: "No active drivers — trips can't be
+    assigned", with "Set up drivers" (/operations/drivers). This is actionable and never hidden.
+  - activeDriverCount == 0 and a fresh organization → carried by the checklist ("Driver setup"); no separate row.
+  - null → "Driver snapshot unavailable" line in the calm group.
+No action becomes unreachable: Dispatch and Drivers are always in the nav.
+
+======================================================================
+TOMORROW
+======================================================================
+  - tomorrowNeedsPreparationCount > 0 → P3 work row: "N trips · X need preparation" → Review tomorrow.
+  - Otherwise → calm line: "N trips · All ready" or "Nothing scheduled for tomorrow" → Review tomorrow.
+  - It is always present, because tomorrow is meaningful at every size. No size threshold.
+  - null → "Tomorrow unavailable" in the calm group.
+
+======================================================================
+RECURRING CARE
+======================================================================
+  - recurringMissingCount > 0 → P4 work row, with the existing copy plus "Review recurring care".
+  - activeRecurringCount > 0 and no missing occurrences → calm line "Recurring care is covered".
+  - activeRecurringCount == 0 → omitted from the Overview. There is no empty "No recurring transportation set up"
+    block. The route stays in the nav, where the empty page explains the feature.
+  - null → "Recurring care unavailable" line.
+Copy alignment (retained open item, NOT PROG3B): the block still says "rides" in two places.
+
+======================================================================
+PROOF OF SERVICE
+======================================================================
+  - proofReviewCount > 0 → P5 work row, with the existing copy, the evidence-gap line and "Review".
+  - proofCompletedCount > 0 and no review needed → calm line "Yesterday's completed trips are ready for review" with
+    "Open".
+  - proofCompletedCount == 0 → calm line "Nothing from yesterday to review" with "Open".
+      - It is kept rather than omitted, because Proof of Service has no sidebar entry. The Overview row is its
+        stable entry point and must not disappear.
+  - null → unavailable line.
+Ordering: after Attention (P0), Requests (P1), Today (P2), Tomorrow (P3) and Recurring gaps (P4). It is
+administrative/revenue review of yesterday, not today's operation.
+
+======================================================================
+ASSIGNMENT ATTRIBUTION
+======================================================================
+Stored facts:
+  - trip_assignments.assigned_by (auth user), assigned_at, ended_at, end_reason
+  - the reassign reason is stored as end_reason on the ENDED row; the default is 'reassigned'; system values are
+    'trip_completed', 'trip_cancelled' and 'no_show'
+  - trip_events has driver_assigned / driver_reassigned with actor_user_id
+  - audit_events holds the same records
+Smallest meaningful surface: Trip Detail → Current Status, below Driver. It is shown for EVERY viewer and every
+organization; there is no hasDispatcher condition, because attribution is a fact, not a mode. Copy:
+  - "Assigned by <name> · Sep 25, 7:42 AM", for a first assignment.
+  - "Reassigned by <name> · Sep 25, 7:42 AM", when an earlier assignment was ended with a non-system end_reason.
+  - Plus "Reason: <text>", only when that end_reason is operator-entered: not 'reassigned', and not a system value.
+  - "<name>" resolves as:
+      - "you", when assigned_by = the viewer;
+      - the member's display name, when the viewer's RLS can read it (Organization Admins can read their
+        organization's user_profiles);
+      - "a team member", otherwise. This is the case for Dispatchers viewing someone else's assignment.
+  - assigned_by null (legacy / system) → "Assigned · Sep 25, 7:42 AM".
+Nothing is inferred beyond the recorded action: no "responsible dispatcher" and no blame language.
+Not in PROG3B:
+  - Operations Brief attribution: not needed.
+  - An Activity feed of assignments: that needs list_activity_events' action allowlist changed, which is a migration.
+  - Names for Dispatcher viewers: that needs a new read path. See BACKEND IMPACT.
+
+======================================================================
+BUSINESS_STAGE RETIREMENT
+======================================================================
+Every reader and writer, with the PROG3B action for each:
+  - src/app/complete-signup/route.ts: GATE reader (null → /onboarding).
+      REMOVE the gate.
+  - src/app/onboarding/page.tsx + actions.ts (setBusinessStageAction): the size question and its writer.
+      REMOVE; /onboarding → redirect to /onboarding/basics.
+  - src/app/platform/organizations/[organizationId]/page.tsx + src/lib/platform/platform.ts: Platform Admin display
+      of a historical value.
+      RETAIN (read-only; shows "Not set" for new organizations).
+  - src/lib/operations/activity-core.ts: the "Business stage" label for historical settings-change entries.
+      RETAIN (it describes past audit rows).
+  - src/components/operations/OperationsBrief.tsx: a comment only, stating it never uses business_stage.
+      RETAIN.
+  - src/lib/operations/organization-settings-core.test.mjs: asserts business_stage is not client-editable.
+      RETAIN.
+  - src/lib/supabase/database.types.ts: generated types.
+      RETAIN.
+  - DB: update_organization_settings allowlist, the platform admin RPC, the column and its check constraint.
+      UNCHANGED (no migration). A later contract/drop is optional and not in PROG3.
+After PROG3B, no code path reads business_stage to decide anything a tenant sees.
+
+======================================================================
+FRESH ORG EXPERIENCE
+======================================================================
+Fresh organization = hasEverHadTrip === false AND checklistComplete === false. Both are facts.
+Overview shows ONLY:
+  1. The checklist banner, as the primary block (unchanged component and items).
+  2. A single "Get started" panel:
+       - "Create your first trip" (/operations/trips/new).
+       - Organization Admin only: "Set up website requests" (/operations/settings/website-requests).
+       - Organization Admin only, when there is no active linked driver: "I also drive" (Settings → My Access).
+  3. Requests awaiting review, only when pendingRequestCount > 0 (an inbound request can arrive before the first
+     trip).
+Suppressed:
+  - the empty Needs Attention, Active Now and Next Departures panels
+  - the Driver Snapshot, Recurring, Proof and Tomorrow zero rows
+  - the lower "today" SummaryStrip of zeros and the empty tables and Activity Log
+This state ends permanently at the first trip. Trips are never deleted in normal operation, so it cannot flip back.
+
+======================================================================
+ONE-PERSON COMPOSITION
+======================================================================
+Facts: 1 admin, 1 linked Driver, 1 Vehicle, 3 trips today, 0 attention, 1 pending request, 4 trips tomorrow all
+ready, 0 recurring arrangements.
+  0. Checklist banner, only if items remain (e.g. facility / passenger).
+  1. Today headline: "Nothing needs attention right now". There is no Needs Attention panel.
+  2. P1 Requests awaiting review: "1 request" · Review requests.
+  3. P2 Today: Active Now + Next Departures.
+  4. Calm group:
+       - Tomorrow: "4 trips · All ready"
+       - Proof of Service line
+     No Recurring line (0 arrangements) and no Driver Snapshot (1 driver).
+  5. The existing today detail section below (unchanged).
+
+======================================================================
+SMALL-FLEET COMPOSITION
+======================================================================
+Facts: 1 admin, 3 Drivers, 3 Vehicles, 8 trips today, 2 unassigned, 2 pending, 6 tomorrow of which 2 need
+preparation, 1 recurring arrangement, 0 gaps.
+  1. P0 Needs Attention (≥ 2 items; "2 trips need a driver"; Assign → Dispatch).
+  2. P1 Requests awaiting review: "2 requests".
+  3. P2 Today: Active Now + Next Departures.
+  4. P3 Tomorrow: "6 trips · 2 need preparation" · Review tomorrow.
+  5. Calm group:
+       - Recurring: "Recurring care is covered"
+       - Proof line
+       - Driver Snapshot: "On trip now: X of 3 active drivers"
+
+======================================================================
+DISPATCH-HEAVY COMPOSITION
+======================================================================
+Facts: admin + dispatcher, 12 Drivers, 10 Vehicles, 25 today, 4 attention, 5 pending, 30 tomorrow of which 6 need
+preparation, 12 recurring arrangements with 3 missing, 4 proof reviews.
+  1. P0 Needs Attention: 4 items (all within the 5-row cap).
+  2. P1 Requests awaiting review: "5 requests".
+  3. P2 Today: Active Now + Next Departures (at most 5 rows + "View today's trips").
+  4. P3 Tomorrow: "30 trips · 6 need preparation".
+  5. P4 Recurring Care: "3 recurring trips need scheduling". The existing copy says "rides"; that is a retained item.
+  6. P5 Proof of Service: 4 need review.
+  7. Calm group: Driver Snapshot "On trip now: X of 12 active drivers".
+These are the same components as the one-person case; only the order and density differ.
+
+======================================================================
+ALL-CLEAR COMPOSITION
+======================================================================
+Facts: today ALL_COMPLETE, 0 pending, tomorrow all ready, 0 recurring gaps, 0 proof review.
+  1. Headline panel "All clear": "Every trip today is complete. Nothing is waiting for you."
+  2. Calm group, one line each:
+       - Tomorrow: "N trips · All ready"
+       - Requests: "No requests awaiting review"
+       - Recurring: "Recurring care is covered", if any arrangements exist
+       - Proof: ready / nothing from yesterday
+       - Driver Snapshot, if ≥ 2 drivers
+There are no zero counters and no empty panels. The lower today section still renders its existing completed-trip
+tables (unchanged).
+
+======================================================================
+SIGNAL -> COMPOSITION MATRIX
+======================================================================
+Columns: SIGNAL | CONDITION | UX EFFECT | MAJOR/MINOR | STABLE? | PROG3B? | WHY
+attentionCount | > 0 | Needs Attention first (P0) | MAJOR | state, re-derived each load | YES
+  Proven deviations on today's trips come first.
+attentionCount | = 0 | No panel; headline line | MINOR | state | YES
+  No empty warning panel on a calm day.
+pendingRequestCount | > 0 | P1 row | MAJOR | state | YES
+  Undecided inbound demand.
+pendingRequestCount | = 0 | Calm line | MINOR | state | YES
+  Informational.
+dayState / activeNow / nextDepartures | live or upcoming | P2 Today block | MAJOR | state | YES
+  Time-bound monitoring.
+nextDepartureCount | > 5 | Cap 5 + "View today's trips" | MINOR | state | YES
+  Reuses the existing 5-row convention.
+tomorrowNeedsPreparationCount | > 0 | P3 row | MAJOR | state | YES
+  Preparation work exists.
+tomorrow | all ready / none | Calm line | MINOR | state | YES
+  Always meaningful.
+recurringMissingCount | > 0 | P4 row | MAJOR | state | YES
+  Missing scheduling work.
+activeRecurringCount | = 0 | Recurring omitted from the Overview | MINOR | structural | YES
+  The route is in the nav; no empty analytics.
+proofReviewCount | > 0 | P5 row | MAJOR | state | YES
+  Review work exists.
+proofCompletedCount | = 0 | Calm line, kept | MINOR | state | YES
+  It is Proof's only stable entry point.
+activeDriverCount | >= 2 | Driver Snapshot in the calm group | MINOR | structural | YES
+  Informative only with several drivers.
+activeDriverCount | == 1 | Snapshot omitted | MINOR | structural | YES
+  Nothing to compare; Active Now covers it.
+activeDriverCount | == 0 and has trips | Work row "No active drivers" | MAJOR | structural | YES
+  Trips cannot be assigned.
+hasEverHadTrip + checklist | fresh | Fresh-organization composition | MAJOR | one-way | YES
+  No empty enterprise widgets.
+any summary | null | "… unavailable" line | MINOR | — | YES
+  Never shown as zero, never hidden.
+linked Driver | true | Drive nav (unchanged) | — | identity | no change
+  Identity, not scale.
+admin capability | true | Settings nav (unchanged) | — | capability | no change
+  Server-enforced.
+assigned_by / end_reason | per trip | Trip Detail attribution line | MINOR | fact | YES
+  Accountability, shown to everyone.
+hasDispatcher | any | NO EFFECT | — | — | NO
+  Attribution does not depend on it.
+activeVehicleCount | any | NO Overview effect (PROG1 prefill only) | — | — | NO
+  Local default only.
+business_stage | any | NO EFFECT | — | — | NO
+  Self-reported label.
+trip volume / size | any | NO EFFECT | — | — | NO
+  No size modes.
+
+======================================================================
+PROG3B TEST MATRIX
+======================================================================
+Unit (pure composeOperationsBrief + attribution copy):
+  U1 Every P0–P6 condition, one at a time, gives the expected order.
+  U2 Combined dispatch-heavy facts give P0, P1, P2, P3, P4, P5, calm.
+  U3 One-person, small-fleet and all-clear facts give the exact orders above.
+  U4 A null summary is never omitted and never zero; it gives an unavailable line.
+  U5 Driver Snapshot rules for 0 (with and without trips), 1 and ≥2 drivers.
+  U6 Recurring: omitted at 0 arrangements; calm when covered; P4 when missing.
+  U7 Proof: always present, in 3 states.
+  U8 The fresh-organization predicate is one-way.
+  U9 Attribution copy: first assign, reassign with reason, system end reasons (no "Reason"), assigned_by null, "you",
+     name, "a team member".
+  U10 business_stage in any input has no effect (the function does not accept it).
+Browser E2E (local, fictional tenants):
+  E1 A fresh signup routes to /onboarding/basics with no size question; /onboarding redirects to basics; step 1
+     requires a timezone; steps 2–5 are skippable; "Finish later" reaches Operations.
+  E2 An existing admin whose organization has business_stage = null goes to /operations, not onboarding.
+  E3 The fresh-organization Overview shows the checklist + Get started only, with no zero widgets.
+  E4 1-driver composition: no Driver Snapshot, no Attention panel when 0.
+  E5 Multiple-driver composition: Driver Snapshot in the calm group.
+  E6 Attention present → first section.
+  E7 Pending requests → directly under Attention.
+  E8 Tomorrow preparation → P3 row; all ready → calm line.
+  E9 Recurring missing → P4; zero arrangements → absent from the Overview but present in the nav.
+  E10 Proof review → P5; zero → calm line still linking to Proof of Service.
+  E11 Attribution on Trip Detail:
+      - an admin viewer sees the name;
+      - a dispatcher viewer sees "you" or "a team member" (local dispatcher account);
+      - the reassign reason is shown.
+  E12 All-clear state: "All clear" headline, no zero counters.
+  E13 Stable navigation: the same item list for 1-driver, multi-driver and fresh organizations; Tomorrow and
+      Recurring Care always present.
+  E14 Drive nav unchanged (linked vs not); Settings authorization unchanged (dispatcher refused server-side).
+  E15 business_stage set to each value, or null, gives an identical Overview and nav.
+  E16 Driver membership still redirected from Operations.
+  E17 1440 and 768: no horizontal overflow.
+Production smoke: the synthetic tenant only. The dispatcher attribution view is MANUAL unless a safe synthetic
+dispatcher credential exists (QA policy: no role mutation).
+
+======================================================================
+BACKEND IMPACT
+======================================================================
+PROG3B as specified: NONE. It is UI, server reads over existing RLS, and onboarding routing only.
+  - No migration.
+  - No RPC.
+  - No RLS change.
+  - No privilege change.
+Separate backend items, NOT in PROG3B and needing an owner decision:
+  B1 Dispatcher-visible assigner names. user_profiles is readable only by the user themselves and by Organization
+     Admins. Showing "Assigned by Maria" to a Dispatcher needs either a narrow SECURITY DEFINER read returning
+     display names of the caller's own organization members, or an RLS policy for co-members. That is a privacy
+     decision (who sees staff names) plus a privilege-contract addition.
+  B2 Assignment entries in Activity. This means adding driver_assigned / driver_reassigned to list_activity_events'
+     allowlist (a migration, still admin-only).
+
+======================================================================
+OPEN QUESTIONS
+======================================================================
+  Q1 The lower Overview "today" section duplicates the Brief's Needs Attention as a full table and shows zero
+     counters. Should PROG3B remove the duplicate table or keep it as the "see all" list? The spec keeps it
+     unchanged; removing it would be a layout change for the owner to approve.
+  Q2 An admin who abandons onboarding before confirming the timezone is not re-prompted: with the business_stage
+     gate gone, there is no stored "timezone confirmed" fact, and audit_events is not client-readable. Is showing the
+     organization timezone inside the checklist's "Business profile" item (linking to basics) enough, or should a
+     later phase add an explicit confirmation fact?
+  Q3 Is attribution for Dispatcher viewers acceptable as "you / a team member" until B1 is decided?
+  Q4 Normal-work folding ("12 trips on track") is DEFERRED until pilot data justifies a threshold. Confirm.
+  Q5 Should Proof of Service eventually get a sidebar entry, which would let the zero-state Overview line go?
+  Q6 "Get started → Set up website requests" is admin-only. Confirm that it should be shown even when a website
+     connection already exists: the fresh-organization state is keyed only on trips.
+
+======================================================================
+RECOMMENDED PROG3B SCOPE
+======================================================================
+  1. Onboarding:
+       - retire the size question: complete-signup "created" → /onboarding/basics;
+       - remove the business_stage gate; /onboarding → redirect to basics; remove setBusinessStageAction;
+       - "Step N of 5"; add "Finish later — go to Operations" on steps 2–5.
+  2. Navigation: insert Tomorrow and Recurring Care after Dispatch, always visible. Drive and Settings unchanged.
+  3. Operations Brief:
+       - a pure composeOperationsBrief(signals) with unit tests;
+       - Overview assembles ProgressiveOperationsSignals from already-loaded data;
+       - the P0–P6 ordering, the calm group, the Attention-panel rule, the Next Departures cap, the Driver Snapshot
+         rule, recurring omission, the Proof calm line, unavailable lines;
+       - the fresh-organization composition.
+  4. Trip Detail attribution line (copy as specified; names where RLS permits).
+  5. Tests per the PROG3B TEST MATRIX.
+NOT in PROG3B: folding, changes to the lower Overview section, B1/B2, business_stage column drop, the "rides" copy
+pass, PROG4/PROG5.
+
+BUSINESS SIZE QUESTION: RETIRE
+BUSINESS_STAGE DRIVES UX: NO
+HARD SIZE MODES: NO
+TOMORROW NAV: DEFINED
+RECURRING NAV: DEFINED
+DISPATCH NAV: DEFINED
+ATTENTION PRIORITY: DEFINED
+PENDING REQUEST PRIORITY: DEFINED
+DRIVER SNAPSHOT RULE: DEFINED
+TOMORROW EMPHASIS: DEFINED
+RECURRING EMPHASIS: DEFINED
+PROOF REVIEW EMPHASIS: DEFINED
+DISPATCHER ATTRIBUTION: DEFINED
+FRESH ORG EXPERIENCE: DEFINED
+NAVIGATION STABLE: YES
+DATABASE MIGRATION REQUIRED: NO
+RPC CHANGE REQUIRED: NO
+RLS CHANGE REQUIRED: NO
+READY FOR PROG3B: YES
+BLOCKERS: NONE (owner decisions requested: Q1–Q3; the backend items B1/B2 are optional and separate)
+DO NOT IMPLEMENT PROG3B.
+STOP.
