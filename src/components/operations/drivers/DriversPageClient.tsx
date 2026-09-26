@@ -15,11 +15,19 @@ import { InviteDriverDialog } from "./InviteDriverDialog";
 import { revokeDriverInviteAction, resendDriverInviteAction } from "@/app/operations/drivers/actions";
 import type { DriversListRow } from "@/lib/operations/drivers-list";
 import type { DriverInviteRow } from "@/lib/operations/driver-invites-list";
+import type { DriverScheduleOverview } from "@/lib/operations/availability";
+import { formatShift } from "@/lib/operations/availability-core";
+import { WorkingHoursDialog } from "./WorkingHoursDialog";
+import { WindowsDialog } from "@/components/operations/availability/WindowsDialog";
+import { saveDriverTimeOffAction, deleteDriverTimeOffAction } from "@/app/operations/drivers/actions";
 
 export interface DriversPageClientProps {
   rows: DriversListRow[];
   invites: DriverInviteRow[];
   canInvite: boolean;
+  /** P1-OPS-PROG5B: per-driver working hours + current / upcoming time off (Admin and Dispatcher manage both). */
+  availability: Record<string, DriverScheduleOverview>;
+  timezone: string;
 }
 
 /**
@@ -29,8 +37,10 @@ export interface DriversPageClientProps {
  * as before, unchanged, matching authorization-model.md §F/§J
  * ("create_driver_profile: Organization Admin... Not Dispatcher").
  */
-export function DriversPageClient({ rows, invites, canInvite }: DriversPageClientProps) {
+export function DriversPageClient({ rows, invites, canInvite, availability, timezone }: DriversPageClientProps) {
   const [inviting, setInviting] = useState(false);
+  const [hoursFor, setHoursFor] = useState<DriversListRow | null>(null);
+  const [timeOffFor, setTimeOffFor] = useState<DriversListRow | null>(null);
   const [pending, startTransition] = useTransition();
   const [resendNotice, setResendNotice] = useState<{ id: string; text: string } | null>(null);
   const router = useRouter();
@@ -66,6 +76,44 @@ export function DriversPageClient({ rows, invites, canInvite }: DriversPageClien
       key: "status",
       header: "Status",
       render: (row) => <StatusBadge label={row.status === "active" ? "Active" : "Inactive"} category={row.status === "active" ? "positive" : "neutral"} />,
+    },
+    {
+      key: "hours",
+      header: "Working hours",
+      render: (row) => {
+        const a = availability[row.id];
+        const summary = a?.configured ? a.shifts.map(formatShift) : [];
+        return (
+          <div className="flex flex-col items-start gap-1" data-testid="driver-working-hours" data-driver-id={row.id}>
+            {a?.configured ? (
+              <span className={cn(typography.metadata, "text-text-secondary")} title={summary.join("\n")}>
+                {summary.slice(0, 2).join(", ")}
+                {summary.length > 2 ? ` +${summary.length - 2} more` : ""}
+              </span>
+            ) : (
+              <span className="text-text-muted">Not set</span>
+            )}
+            <Button type="button" variant="outline" size="sm" onClick={() => setHoursFor(row)}>
+              {a?.configured ? "Edit hours" : "Set hours"}
+            </Button>
+          </div>
+        );
+      },
+    },
+    {
+      key: "timeoff",
+      header: "Time off",
+      render: (row) => {
+        const count = availability[row.id]?.timeOff.length ?? 0;
+        return (
+          <div className="flex flex-col items-start gap-1" data-testid="driver-time-off" data-driver-id={row.id}>
+            <span className={cn(typography.metadata, count ? "text-text-secondary" : "text-text-muted")}>{count ? `${count} upcoming` : "None recorded"}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setTimeOffFor(row)}>
+              Manage
+            </Button>
+          </div>
+        );
+      },
     },
   ];
 
@@ -129,6 +177,29 @@ export function DriversPageClient({ rows, invites, canInvite }: DriversPageClien
       />
 
       {inviting && <InviteDriverDialog onClose={() => setInviting(false)} />}
+      {hoursFor && (
+        <WorkingHoursDialog
+          driverId={hoursFor.id}
+          driverName={hoursFor.displayName}
+          configured={availability[hoursFor.id]?.configured ?? false}
+          shifts={availability[hoursFor.id]?.shifts ?? []}
+          timezone={timezone}
+          onClose={() => setHoursFor(null)}
+        />
+      )}
+      {timeOffFor && (
+        <WindowsDialog
+          title={`Time off · ${timeOffFor.displayName}`}
+          description="When this driver can't work. Timing only -- no reason is recorded."
+          emptyText="No time off recorded."
+          windows={availability[timeOffFor.id]?.timeOff ?? []}
+          timezone={timezone}
+          onSave={(windowId, input) => saveDriverTimeOffAction(timeOffFor.id, windowId, input)}
+          onDelete={(windowId) => deleteDriverTimeOffAction(windowId)}
+          onClose={() => setTimeOffFor(null)}
+          testId="time-off"
+        />
+      )}
     </div>
   );
 }

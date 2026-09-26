@@ -278,7 +278,7 @@ export function requestEventLabel(eventType: string): string {
 
 /**
  * `TripReadinessReasonCode` (trip-readiness-core.ts, P1-E1-S4B) → concise
- * operator language (P1-E1-S4D §8) — the exact closed 7-value vocabulary,
+ * operator language (P1-E1-S4D §8) — the exact closed vocabulary (7 + 4 PROG5B availability codes),
  * never a raw enum value, never an invented reason. Used by both Tomorrow
  * Readiness (P1-E1-S4D) and Trip Detail's own Preparation panel — one
  * mapping, not two independently-drifting copies.
@@ -289,6 +289,10 @@ const TRIP_READINESS_REASON_LABEL: Record<TripReadinessReasonCode, string> = {
   NEEDS_VEHICLE: "Vehicle needed",
   DRIVER_INACTIVE: "Assigned driver is inactive",
   VEHICLE_INACTIVE: "Assigned vehicle is inactive",
+  DRIVER_TIME_OFF: "Assigned driver has time off",
+  DRIVER_OFF_SHIFT: "Outside the driver's working hours",
+  VEHICLE_OUT_OF_SERVICE: "Assigned vehicle is out of service",
+  VEHICLE_WHEELCHAIR_MISMATCH: "Vehicle's recorded wheelchair equipment doesn't match",
   PASSENGER_INACTIVE: "Passenger is inactive",
   OPEN_EXCEPTION: "Open issue",
 };

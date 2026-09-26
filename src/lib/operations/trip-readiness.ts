@@ -1,4 +1,5 @@
 import "server-only";
+import { getTripAvailabilityOutcomes } from "./availability";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { deriveTripReadiness, type TripReadinessFacts, type TripReadinessResult } from "./trip-readiness-core";
 
@@ -34,7 +35,7 @@ interface AssignmentEmbed {
   id: string;
   ended_at: string | null;
   vehicle_id: string | null;
-  drivers: StatusRelation;
+  drivers: { id: string; status: string } | { id: string; status: string }[] | null;
   vehicles: StatusRelation;
 }
 
@@ -42,6 +43,8 @@ interface TripRow {
   id: string;
   state: string;
   scheduled_pickup_at: string | null;
+  expected_duration_minutes: number | null;
+  requires_wheelchair_access: boolean | null;
   passengers: StatusRelation;
   trip_assignments: AssignmentEmbed[] | null;
 }
@@ -52,10 +55,10 @@ function unwrapOne<T>(relation: T | T[] | null | undefined): T | null {
 }
 
 const TRIP_READINESS_COLUMNS =
-  "id, state, scheduled_pickup_at, " +
+  "id, state, scheduled_pickup_at, expected_duration_minutes, requires_wheelchair_access, " +
   "passengers!trips_passenger_id_organization_id_fkey(status), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, vehicle_id, " +
-  "drivers!trip_assignments_driver_id_organization_id_fkey(status), " +
+  "drivers!trip_assignments_driver_id_organization_id_fkey(id, status), " +
   "vehicles!trip_assignments_vehicle_id_organization_id_fkey(status))";
 
 /**
@@ -72,7 +75,7 @@ const TRIP_READINESS_COLUMNS =
  * `getRequestSummary` head-count pattern). No N+1 — every query is
  * scoped to exactly this one Trip id.
  */
-export async function getTripReadiness(tripId: string, organizationId: string): Promise<TripReadinessResult | null> {
+export async function getTripReadiness(tripId: string, organizationId: string, timezone: string): Promise<TripReadinessResult | null> {
   if (!UUID_RE.test(tripId)) {
     return null;
   }
@@ -121,6 +124,21 @@ export async function getTripReadiness(tripId: string, organizationId: string): 
     passengerStatus: passenger?.status ?? "inactive",
     openExceptionCount,
   };
+
+  // P1-OPS-PROG5B: the SAME known availability / capability reasons Tomorrow derives (one shared evaluation).
+  if (tripRow.state === "scheduled" && activeAssignment) {
+    const outcomes = await getTripAvailabilityOutcomes(organizationId, timezone, [
+      {
+        id: tripRow.id,
+        scheduledPickupAt: tripRow.scheduled_pickup_at,
+        expectedDurationMinutes: tripRow.expected_duration_minutes,
+        requiresWheelchairAccess: tripRow.requires_wheelchair_access,
+        driverId: driver?.id ?? null,
+        vehicleId: activeAssignment.vehicle_id,
+      },
+    ]);
+    facts.availabilityReasons = outcomes.get(tripRow.id)?.reasons ?? [];
+  }
 
   return deriveTripReadiness(facts);
 }

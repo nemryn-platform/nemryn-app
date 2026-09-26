@@ -2,6 +2,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getDriversList } from "@/lib/operations/drivers-list";
 import { getDriverInvitesList } from "@/lib/operations/driver-invites-list";
+import { getDriverScheduleOverviews } from "@/lib/operations/availability";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DriversPageClient } from "@/components/operations/drivers/DriversPageClient";
 
@@ -23,10 +24,13 @@ export default async function DriversListPage() {
     canInvite ? getDriverInvitesList(organization.organizationId) : Promise.resolve([]),
   ]);
 
+  // P1-OPS-PROG5B: working hours + time off for every listed driver (one batched load).
+  const availability = await getDriverScheduleOverviews(organization.organizationId, organization.organizationTimezone, rows.map((r) => r.id));
+
   return (
     <div className="flex flex-col gap-zw-lg">
       <PageHeader title="Drivers" description="Your organization's drivers and their current trip status." />
-      <DriversPageClient rows={rows} invites={invites} canInvite={canInvite} />
+      <DriversPageClient rows={rows} invites={invites} canInvite={canInvite} availability={availability} timezone={organization.organizationTimezone} />
     </div>
   );
 }

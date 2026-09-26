@@ -2,6 +2,7 @@ import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationLocalToUtc } from "./local-time";
 import { loadOverlapCandidates, type CandidateSet } from "./overlap-candidate-loader";
+import { getAvailabilityView, type AvailabilityView } from "./availability";
 import {
   deriveResourceOverlap,
   deriveTripExtent,
@@ -66,6 +67,8 @@ export interface AssignmentOverlapView {
   targetUnknownReason: "no_schedule" | "no_duration" | null;
   driver: ResourceOverlapView | null;
   vehicle: ResourceOverlapView | null;
+  /** P1-OPS-PROG5B -- availability / capability facts for the same target and resources (null when not loaded). */
+  availability?: AvailabilityView | null;
 }
 
 function viewOf(check: ResourceCheck | null, set: CandidateSet, timezone: string): ResourceOverlapView | null {
@@ -89,7 +92,7 @@ function viewOf(check: ResourceCheck | null, set: CandidateSet, timezone: string
 
 export type OverlapTargetInput =
   | { kind: "trip"; tripId: string }
-  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null };
+  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null; requiresWheelchairAccess?: boolean | null };
 
 const EMPTY_DIAGNOSTICS: CandidateSet["diagnostics"] = {
   windowRows: 0,
@@ -123,13 +126,14 @@ export async function getAssignmentOverlap(
   let tripId: string | null = null;
   let scheduledPickupAt: string | null = null;
   let expectedDurationMinutes: number | null = null;
+  let requiresWheelchairAccess: boolean | null = null;
 
   if (target.kind === "trip") {
     if (!UUID_PATTERN.test(target.tripId)) return null;
     const supabase = await createServerSupabaseClient();
     const { data, error } = await supabase
       .from("trips")
-      .select("id, scheduled_pickup_at, expected_duration_minutes")
+      .select("id, scheduled_pickup_at, expected_duration_minutes, requires_wheelchair_access")
       .eq("organization_id", organizationId)
       .eq("id", target.tripId)
       .maybeSingle();
@@ -137,6 +141,7 @@ export async function getAssignmentOverlap(
     tripId = data.id;
     scheduledPickupAt = data.scheduled_pickup_at;
     expectedDurationMinutes = data.expected_duration_minutes;
+    requiresWheelchairAccess = data.requires_wheelchair_access;
   } else {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(target.dateKey)) return null;
     if (target.pickupTime && /^\d{2}:\d{2}$/.test(target.pickupTime)) {
@@ -145,6 +150,7 @@ export async function getAssignmentOverlap(
     }
     const minutes = target.expectedDurationMinutes ?? null;
     expectedDurationMinutes = minutes !== null && isValidExpectedDuration(minutes) ? minutes : null;
+    requiresWheelchairAccess = typeof target.requiresWheelchairAccess === "boolean" ? target.requiresWheelchairAccess : null;
   }
 
   const extent = deriveTripExtent(scheduledPickupAt, expectedDurationMinutes);
@@ -159,11 +165,23 @@ export async function getAssignmentOverlap(
     nowMs,
     set.coverage,
   );
+  // P1-OPS-PROG5B: availability / capability for the SAME target + selected resources (one batched load; the PROG4
+  // driver result is passed in so "available" can never be claimed without clear commitments).
+  const availability = await getAvailabilityView(
+    organizationId,
+    timezone,
+    result.targetExtent,
+    driverId,
+    vehicleId,
+    requiresWheelchairAccess,
+    result.driver?.status ?? null,
+  );
   return {
     targetExtentLabel: formatTripExtent(result.targetExtent, timezone),
     targetUnknownReason: result.targetExtent.kind === "unknown" ? result.targetExtent.reason : null,
     driver: viewOf(result.driver, set, timezone),
     vehicle: viewOf(result.vehicle, set, timezone),
+    availability,
   };
 }
 

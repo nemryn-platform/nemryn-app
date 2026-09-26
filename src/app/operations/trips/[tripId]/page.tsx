@@ -26,6 +26,7 @@ import { ASSIGNABLE_TRIP_STATES } from "@/lib/operations/readiness-actions-core"
 import { dispatchErrorMessage, type DispatchErrorCode } from "@/lib/operations/dispatch-errors";
 import { TripReadinessPanel } from "@/components/operations/trip-detail/TripReadinessPanel";
 import { TripDurationPanel } from "@/components/operations/trip-detail/TripDurationPanel";
+import { TripWheelchairPanel } from "@/components/operations/trip-detail/TripWheelchairPanel";
 import { getAssignmentOverlap, type AssignmentOverlapView } from "@/lib/operations/trip-overlap";
 import { deriveTripExtent, formatTripExtent } from "@/lib/operations/trip-overlap-core";
 import { overlapUnavailableView } from "@/components/operations/overlap/OverlapNotes";
@@ -138,7 +139,7 @@ export default async function TripDetailPage({
   let readinessUnavailable = false;
   if (trip.state === "scheduled") {
     try {
-      readiness = await getTripReadiness(trip.id, organization.organizationId);
+      readiness = await getTripReadiness(trip.id, organization.organizationId, timezone);
     } catch {
       readinessUnavailable = true;
     }
@@ -308,6 +309,7 @@ export default async function TripDetailPage({
             plannedExtentLabel={plannedExtentLabel}
             canEdit={!trip.isTerminal}
           />
+          <TripWheelchairPanel tripId={trip.id} requiresWheelchairAccess={trip.requiresWheelchairAccess} canEdit={!trip.isTerminal} />
           <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
           <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />
           <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />

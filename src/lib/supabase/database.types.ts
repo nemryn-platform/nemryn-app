@@ -202,6 +202,108 @@ export type Database = {
           },
         ]
       }
+      driver_unavailability_windows: {
+        Row: {
+          created_at: string
+          driver_id: string
+          ends_at: string
+          id: string
+          organization_id: string
+          starts_at: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          driver_id: string
+          ends_at: string
+          id?: string
+          organization_id: string
+          starts_at: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          driver_id?: string
+          ends_at?: string
+          id?: string
+          organization_id?: string
+          starts_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "driver_unavailability_windows_driver_fkey"
+            columns: ["driver_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "drivers"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      driver_weekly_schedules: {
+        Row: {
+          configured_at: string
+          driver_id: string
+          organization_id: string
+          updated_at: string
+        }
+        Insert: {
+          configured_at?: string
+          driver_id: string
+          organization_id: string
+          updated_at?: string
+        }
+        Update: {
+          configured_at?: string
+          driver_id?: string
+          organization_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "driver_weekly_schedules_driver_fkey"
+            columns: ["driver_id", "organization_id"]
+            isOneToOne: true
+            referencedRelation: "drivers"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      driver_weekly_shifts: {
+        Row: {
+          driver_id: string
+          end_time: string
+          id: string
+          organization_id: string
+          start_time: string
+          weekday: number
+        }
+        Insert: {
+          driver_id: string
+          end_time: string
+          id?: string
+          organization_id: string
+          start_time: string
+          weekday: number
+        }
+        Update: {
+          driver_id?: string
+          end_time?: string
+          id?: string
+          organization_id?: string
+          start_time?: string
+          weekday?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "driver_weekly_shifts_schedule_fkey"
+            columns: ["driver_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "driver_weekly_schedules"
+            referencedColumns: ["driver_id", "organization_id"]
+          },
+        ]
+      }
       drivers: {
         Row: {
           created_at: string
@@ -600,6 +702,7 @@ export type Database = {
           paused_at: string | null
           pickup_description: string
           pickup_time: string
+          requires_wheelchair_access: boolean | null
           start_date: string
           status: string
           timezone: string
@@ -619,6 +722,7 @@ export type Database = {
           paused_at?: string | null
           pickup_description: string
           pickup_time: string
+          requires_wheelchair_access?: boolean | null
           start_date: string
           status?: string
           timezone: string
@@ -638,6 +742,7 @@ export type Database = {
           paused_at?: string | null
           pickup_description?: string
           pickup_time?: string
+          requires_wheelchair_access?: boolean | null
           start_date?: string
           status?: string
           timezone?: string
@@ -1283,6 +1388,7 @@ export type Database = {
           pickup_facility_id: string | null
           recurring_arrangement_id: string | null
           request_id: string | null
+          requires_wheelchair_access: boolean | null
           scheduled_pickup_at: string | null
           state: string
           updated_at: string
@@ -1307,6 +1413,7 @@ export type Database = {
           pickup_facility_id?: string | null
           recurring_arrangement_id?: string | null
           request_id?: string | null
+          requires_wheelchair_access?: boolean | null
           scheduled_pickup_at?: string | null
           state?: string
           updated_at?: string
@@ -1331,6 +1438,7 @@ export type Database = {
           pickup_facility_id?: string | null
           recurring_arrangement_id?: string | null
           request_id?: string | null
+          requires_wheelchair_access?: boolean | null
           scheduled_pickup_at?: string | null
           state?: string
           updated_at?: string
@@ -1401,30 +1509,80 @@ export type Database = {
         }
         Relationships: []
       }
+      vehicle_unavailability_windows: {
+        Row: {
+          created_at: string
+          ends_at: string
+          id: string
+          organization_id: string
+          starts_at: string
+          updated_at: string
+          vehicle_id: string
+        }
+        Insert: {
+          created_at?: string
+          ends_at: string
+          id?: string
+          organization_id: string
+          starts_at: string
+          updated_at?: string
+          vehicle_id: string
+        }
+        Update: {
+          created_at?: string
+          ends_at?: string
+          id?: string
+          organization_id?: string
+          starts_at?: string
+          updated_at?: string
+          vehicle_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vehicle_unavailability_windows_vehicle_fkey"
+            columns: ["vehicle_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       vehicles: {
         Row: {
           created_at: string
           id: string
           label: string
           organization_id: string
+          seated_capacity: number | null
           status: string
           updated_at: string
+          wheelchair_lift: boolean | null
+          wheelchair_positions: number | null
+          wheelchair_ramp: boolean | null
         }
         Insert: {
           created_at?: string
           id?: string
           label: string
           organization_id: string
+          seated_capacity?: number | null
           status?: string
           updated_at?: string
+          wheelchair_lift?: boolean | null
+          wheelchair_positions?: number | null
+          wheelchair_ramp?: boolean | null
         }
         Update: {
           created_at?: string
           id?: string
           label?: string
           organization_id?: string
+          seated_capacity?: number | null
           status?: string
           updated_at?: string
+          wheelchair_lift?: boolean | null
+          wheelchair_positions?: number | null
+          wheelchair_ramp?: boolean | null
         }
         Relationships: [
           {
@@ -1782,6 +1940,16 @@ export type Database = {
         Args: { p_event_id: string }
         Returns: Json
       }
+      clear_driver_weekly_schedule: {
+        Args: { p_driver_id: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_schedule_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_schedule_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       complete_notification_dispatch: {
         Args: {
           p_event_id: string
@@ -1835,6 +2003,7 @@ export type Database = {
           p_passenger_id: string
           p_pickup_description: string
           p_pickup_time: string
+          p_requires_wheelchair_access?: boolean
           p_start_date: string
         }
         Returns: Database["public"]["CompositeTypes"]["recurring_arrangement_result"]
@@ -1878,6 +2047,7 @@ export type Database = {
           p_pickup_description: string
           p_pickup_facility_id?: string
           p_request_id?: string
+          p_requires_wheelchair_access?: boolean
           p_scheduled_pickup_at?: string
         }
         Returns: Database["public"]["CompositeTypes"]["trip_creation_result"]
@@ -1918,12 +2088,32 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      delete_driver_unavailability: {
+        Args: { p_window_id: string }
+        Returns: Database["public"]["CompositeTypes"]["unavailability_window_result"]
+        SetofOptions: {
+          from: "*"
+          to: "unavailability_window_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       delete_unused_request_intake_integration: {
         Args: { p_integration_id: string }
         Returns: Database["public"]["CompositeTypes"]["website_connection_lifecycle_result"]
         SetofOptions: {
           from: "*"
           to: "website_connection_lifecycle_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      delete_vehicle_unavailability: {
+        Args: { p_window_id: string }
+        Returns: Database["public"]["CompositeTypes"]["unavailability_window_result"]
+        SetofOptions: {
+          from: "*"
+          to: "unavailability_window_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1964,6 +2154,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_get_own_schedule: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_own_schedule_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_own_schedule_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2527,6 +2727,36 @@ export type Database = {
         }
       }
       revoke_driver_invite: { Args: { p_invite_id: string }; Returns: boolean }
+      save_driver_unavailability: {
+        Args: {
+          p_driver_id: string
+          p_ends_at: string
+          p_starts_at: string
+          p_window_id?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["unavailability_window_result"]
+        SetofOptions: {
+          from: "*"
+          to: "unavailability_window_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      save_vehicle_unavailability: {
+        Args: {
+          p_ends_at: string
+          p_starts_at: string
+          p_vehicle_id: string
+          p_window_id?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["unavailability_window_result"]
+        SetofOptions: {
+          from: "*"
+          to: "unavailability_window_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       save_website_request_form: {
         Args: {
           p_allow_recurring: boolean
@@ -2543,6 +2773,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "website_request_form_save_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_driver_weekly_schedule: {
+        Args: { p_driver_id: string; p_shifts: Json }
+        Returns: Database["public"]["CompositeTypes"]["driver_schedule_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_schedule_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2591,6 +2831,20 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      set_recurring_wheelchair_requirement: {
+        Args: {
+          p_arrangement_id: string
+          p_organization_id: string
+          p_requires_wheelchair_access: boolean
+        }
+        Returns: Database["public"]["CompositeTypes"]["wheelchair_requirement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "wheelchair_requirement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       set_request_intake_integration_active: {
         Args: { p_active: boolean; p_integration_id: string }
         Returns: Database["public"]["CompositeTypes"]["request_intake_integration_result"]
@@ -2615,6 +2869,32 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "trip_expected_duration_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_trip_wheelchair_requirement: {
+        Args: { p_requires_wheelchair_access: boolean; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["wheelchair_requirement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "wheelchair_requirement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_vehicle_capabilities: {
+        Args: {
+          p_seated_capacity: number
+          p_vehicle_id: string
+          p_wheelchair_lift: boolean
+          p_wheelchair_positions: number
+          p_wheelchair_ramp: boolean
+        }
+        Returns: Database["public"]["CompositeTypes"]["vehicle_capabilities_result"]
+        SetofOptions: {
+          from: "*"
+          to: "vehicle_capabilities_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2818,6 +3098,14 @@ export type Database = {
         assignment_id: string | null
         recorded_at: string | null
       }
+      driver_own_schedule_result: {
+        driver_id: string | null
+        organization_id: string | null
+        timezone: string | null
+        configured: boolean | null
+        shifts: Json | null
+        upcoming_unavailability: Json | null
+      }
       driver_profile_result: {
         driver_id: string | null
         organization_id: string | null
@@ -2825,6 +3113,13 @@ export type Database = {
         display_name: string | null
         phone: string | null
         status: string | null
+      }
+      driver_schedule_result: {
+        driver_id: string | null
+        organization_id: string | null
+        configured: boolean | null
+        shift_count: number | null
+        changed: boolean | null
       }
       driver_trip_detail_result: {
         trip_id: string | null
@@ -3015,6 +3310,23 @@ export type Database = {
         current_state: string | null
         changed: boolean | null
       }
+      unavailability_window_result: {
+        window_id: string | null
+        resource_id: string | null
+        organization_id: string | null
+        starts_at: string | null
+        ends_at: string | null
+        deleted: boolean | null
+        changed: boolean | null
+      }
+      vehicle_capabilities_result: {
+        vehicle_id: string | null
+        wheelchair_ramp: boolean | null
+        wheelchair_lift: boolean | null
+        wheelchair_positions: number | null
+        seated_capacity: number | null
+        changed: boolean | null
+      }
       website_connection_lifecycle_result: {
         integration_id: string | null
         external_id: string | null
@@ -3037,6 +3349,11 @@ export type Database = {
       website_request_form_save_result: {
         form_version: number | null
         status: string | null
+        changed: boolean | null
+      }
+      wheelchair_requirement_result: {
+        entity_id: string | null
+        requires_wheelchair_access: boolean | null
         changed: boolean | null
       }
     }

@@ -280,7 +280,7 @@ begin
     and has_function_privilege('authenticated', 'public.update_organization_trip_defaults(uuid,integer)', 'EXECUTE')
     and not has_function_privilege('anon', 'public.set_trip_expected_duration(uuid,integer)', 'EXECUTE')
     and not has_function_privilege('anon', 'public.update_organization_trip_defaults(uuid,integer)', 'EXECUTE')
-    and not has_function_privilege('anon', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid,integer)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid,integer,boolean)', 'EXECUTE')
     and (select bool_and(p.proconfig::text like '%search_path=public, pg_temp%') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'public' and p.proname in ('create_trip', 'set_trip_expected_duration', 'update_organization_trip_defaults'))
     then 'PASS' else 'FAIL' end;

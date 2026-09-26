@@ -47,7 +47,12 @@ c_tables(tbl) as (values
   ('trip_notes'),
   ('trips'),
   ('user_profiles'),
-  ('vehicles')
+  ('vehicles'),
+  -- P1-OPS-PROG5 availability / capability (SELECT for Admin / Dispatcher via RLS; writes through RPCs only)
+  ('driver_weekly_schedules'),
+  ('driver_weekly_shifts'),
+  ('driver_unavailability_windows'),
+  ('vehicle_unavailability_windows')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -75,7 +80,11 @@ c_auth_tbl(tbl, priv) as (values
   ('user_profiles', 'SELECT'),
   ('user_profiles', 'UPDATE'),
   ('vehicles', 'INSERT'),
-  ('vehicles', 'SELECT')
+  ('vehicles', 'SELECT'),
+  ('driver_weekly_schedules', 'SELECT'),
+  ('driver_weekly_shifts', 'SELECT'),
+  ('driver_unavailability_windows', 'SELECT'),
+  ('vehicle_unavailability_windows', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -152,10 +161,10 @@ c_fn(sig, roles) as (values
   ('complete_pending_signup()', 'u'),
   ('complete_pending_signup_manual(text,text)', 'u'),
   ('create_driver_invite(uuid,text,text,text)', 'u'),
-  ('create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date)', 'u'),
+  ('create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date,boolean)', 'u'),
   ('create_request_intake_integration(uuid,text)', 'u'),
   ('create_staff_invite(uuid,text,text)', 'u'),
-  ('create_trip(uuid,uuid,text,text,timestamp with time zone,timestamp with time zone,uuid,uuid,text,text,uuid,integer)', 'u'),
+  ('create_trip(uuid,uuid,text,text,timestamp with time zone,timestamp with time zone,uuid,uuid,text,text,uuid,integer,boolean)', 'u'),
   ('create_trip_for_recurring_occurrence(uuid,uuid,date)', 'u'),
   ('current_driver_id(uuid)', 'u'),
   ('decline_transportation_request(uuid,uuid,text,text)', 'u'),
@@ -227,6 +236,17 @@ c_fn(sig, roles) as (values
   ('unskip_recurring_occurrence(uuid,uuid,date)', 'u'),
   ('update_organization_operating_schedule(uuid,smallint[],time without time zone,time without time zone)', 'u'),
   ('set_trip_expected_duration(uuid,integer)', 'u'),
+  -- P1-OPS-PROG5
+  ('set_driver_weekly_schedule(uuid,jsonb)', 'u'),
+  ('clear_driver_weekly_schedule(uuid)', 'u'),
+  ('save_driver_unavailability(uuid,timestamp with time zone,timestamp with time zone,uuid)', 'u'),
+  ('delete_driver_unavailability(uuid)', 'u'),
+  ('save_vehicle_unavailability(uuid,timestamp with time zone,timestamp with time zone,uuid)', 'u'),
+  ('delete_vehicle_unavailability(uuid)', 'u'),
+  ('set_vehicle_capabilities(uuid,boolean,boolean,integer,integer)', 'u'),
+  ('set_trip_wheelchair_requirement(uuid,boolean)', 'u'),
+  ('set_recurring_wheelchair_requirement(uuid,uuid,boolean)', 'u'),
+  ('driver_get_own_schedule(uuid)', 'u'),
   ('update_organization_trip_defaults(uuid,integer)', 'u'),
   ('update_organization_settings(uuid,jsonb)', 'u'),
   ('update_request_intake_integration_origin(uuid,text)', 'u')

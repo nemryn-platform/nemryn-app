@@ -5,6 +5,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationLocalToUtc } from "@/lib/operations/local-time";
+import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapNewTripError, type NewTripErrorCode } from "@/lib/operations/new-trip-errors";
 import { callAssignmentRpc } from "@/lib/operations/assignment-mutation";
 import type { DispatchErrorCode } from "@/lib/operations/dispatch-errors";
@@ -67,6 +68,8 @@ export async function createTripAction(
   // (source organization_default) or leaves it UNKNOWN; a value is an explicit trip duration (source trip).
   const durationRaw = stringField(formData, "expectedDurationMinutes");
   const expectedDurationMinutes = durationRaw === null ? null : /^\d+$/.test(durationRaw) ? Number(durationRaw) : NaN;
+  // P1-OPS-PROG5B: exactly what the operator chose (yes / no / not specified) -- never inferred server-side.
+  const requiresWheelchairAccess = triStateToBoolean(stringField(formData, "requiresWheelchairAccess"));
   const assignVehicleId = stringField(formData, "vehicleId");
 
   // Obvious client-catchable validation (work item §36) — improves
@@ -180,6 +183,7 @@ export async function createTripAction(
     p_instructions: instructions ?? undefined,
     p_request_id: requestId ?? undefined,
     p_expected_duration_minutes: expectedDurationMinutes ?? undefined,
+    p_requires_wheelchair_access: requiresWheelchairAccess ?? undefined,
   });
 
   if (error) {

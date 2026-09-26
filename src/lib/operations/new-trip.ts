@@ -79,7 +79,7 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
     supabase
       .from("transportation_requests")
       .select(
-        "id, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, assistance_notes, " +
+        "id, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, assistance_notes, service_type, " +
           "passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status)",
       )
       .eq("organization_id", organizationId)
@@ -94,6 +94,7 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
           preferred_date: string | null;
           preferred_time: string | null;
           assistance_notes: string | null;
+          service_type: string | null;
           passengers: RequestPassengerRelation;
         }[]
       >(),
@@ -137,6 +138,7 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
       preferredDate: r.preferred_date,
       preferredTime: r.preferred_time,
       assistanceNotes: r.assistance_notes,
+      serviceType: r.service_type,
     }));
 
   return { passengers, facilities, requests };

@@ -9,6 +9,7 @@ import { getUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapTripDetailError, type TripDetailErrorCode } from "@/lib/operations/trip-detail-errors";
 import { isValidExpectedDuration } from "@/lib/operations/trip-overlap-core";
+import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapTripExceptionError, type TripExceptionErrorCode, EXCEPTION_TYPE_VALUES } from "@/lib/operations/trip-exception-errors";
 
 export interface TripDetailActionState {
@@ -254,6 +255,35 @@ export async function resolveExceptionAction(
  * organization default is not re-applied). General trip editing stays out of
  * scope.
  */
+/** P1-OPS-PROG5B: set / clear the trip's wheelchair transport equipment requirement (audited RPC; non-terminal trips only). */
+export async function setTripWheelchairRequirementAction(
+  _prevState: TripDetailActionState,
+  formData: FormData,
+): Promise<TripDetailActionState> {
+  const tripId = formData.get("tripId");
+  const raw = formData.get("requiresWheelchairAccess");
+  if (typeof tripId !== "string" || tripId.length === 0) {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+  if (raw !== "yes" && raw !== "no" && raw !== "unspecified") {
+    return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+  const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
+  await requireOperationsAccess(pathname);
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("set_trip_wheelchair_requirement", {
+    p_trip_id: tripId,
+    // null clears the requirement (the generated type does not model the nullable argument).
+    p_requires_wheelchair_access: triStateToBoolean(raw) as boolean,
+  });
+  if (error) {
+    return { status: "error", errorCode: mapTripDetailError(error.code) };
+  }
+  await revalidateTripDetailRoutes(tripId);
+  revalidatePath("/operations/tomorrow");
+  return { status: "success" };
+}
+
 export async function setTripDurationAction(
   _prevState: TripDetailActionState,
   formData: FormData,

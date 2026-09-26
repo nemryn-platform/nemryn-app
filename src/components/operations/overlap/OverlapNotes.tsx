@@ -1,4 +1,5 @@
 import { overlapNotices } from "@/lib/operations/trip-overlap-core";
+import { availabilityNotices } from "@/lib/operations/availability-core";
 import type { AssignmentOverlapView } from "@/lib/operations/trip-overlap";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -25,11 +26,22 @@ export function overlapUnavailableView(hasDriver: boolean, hasVehicle: boolean):
  */
 export function OverlapNotes({ view }: { view: AssignmentOverlapView | null }) {
   if (!view) return null;
-  const notices = overlapNotices({
+  const notices: { kind: string; text: string }[] = overlapNotices({
     targetUnknownReason: view.targetUnknownReason,
     driver: view.driver,
     vehicle: view.vehicle,
   });
+  // P1-OPS-PROG5B: availability / capability notes come AFTER the PROG4 overlap notes (one copy source each).
+  const availability = view.availability;
+  const extra = availability
+    ? [
+        ...availabilityNotices({ driver: availability.driver, vehicle: availability.vehicle, organizationUsesSchedules: availability.organizationUsesSchedules }),
+        ...(availability.incomplete ? [{ kind: "cannot_check" as const, text: "Can't fully check this assignment right now." }] : []),
+      ]
+    : [];
+  for (const n of extra) {
+    if (!notices.some((existing) => existing.text === n.text)) notices.push({ kind: n.kind === "availability" ? "availability" : "availability_check", text: n.text });
+  }
   if (notices.length === 0) return null;
   const overlapTrips = [...(view.driver?.overlaps ?? []), ...(view.vehicle?.overlaps ?? [])].filter(
     (trip, index, all) => all.findIndex((t) => t.tripId === trip.tripId) === index,
@@ -40,7 +52,7 @@ export function OverlapNotes({ view }: { view: AssignmentOverlapView | null }) {
         <p
           key={notice.text}
           data-overlap-kind={notice.kind}
-          className={cn(typography.bodySmall, notice.kind === "overlap" ? "font-medium text-warning-text" : "text-text-secondary")}
+          className={cn(typography.bodySmall, notice.kind === "overlap" || notice.kind === "availability" ? "font-medium text-warning-text" : "text-text-secondary")}
         >
           {notice.text}
         </p>

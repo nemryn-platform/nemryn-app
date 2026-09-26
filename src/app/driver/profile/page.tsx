@@ -3,6 +3,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { Panel } from "@/components/ui/Panel";
 import { DriverInstallCard } from "@/components/driver/DriverInstallCard";
+import { DriverWorkingHoursCard } from "@/components/driver/DriverWorkingHoursCard";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -28,6 +29,7 @@ export default async function DriverProfilePage() {
           ]}
         />
       </Panel>
+      <DriverWorkingHoursCard organizationId={access.organization.organizationId} />
       <DriverInstallCard />
       <p className={cn(typography.metadata, "text-text-muted")}>Nemryn Driver · version {(process.env.NEXT_PUBLIC_BUILD_ID ?? "dev").slice(0, 7)}</p>
     </div>

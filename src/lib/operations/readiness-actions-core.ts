@@ -19,7 +19,7 @@ export interface TomorrowAssignFacts {
 export interface TomorrowAssignAction {
   /** Unassigned -> Assign (assign_trip); assigned without a vehicle -> Reassign (reassign_trip, current driver kept). */
   mode: "assign" | "reassign";
-  label: "Assign" | "Add vehicle";
+  label: "Assign" | "Add vehicle" | "Change driver" | "Change vehicle";
 }
 
 /**
@@ -36,6 +36,13 @@ export function deriveTomorrowAssignAction(facts: TomorrowAssignFacts): Tomorrow
   }
   if (facts.reasons.includes("NEEDS_VEHICLE") && facts.hasActiveAssignment) {
     return { mode: "reassign", label: "Add vehicle" };
+  }
+  // P1-OPS-PROG5B: a KNOWN availability / capability problem of the current assignment -> the same reassign dialog.
+  if (facts.hasActiveAssignment && (facts.reasons.includes("DRIVER_TIME_OFF") || facts.reasons.includes("DRIVER_OFF_SHIFT"))) {
+    return { mode: "reassign", label: "Change driver" };
+  }
+  if (facts.hasActiveAssignment && (facts.reasons.includes("VEHICLE_OUT_OF_SERVICE") || facts.reasons.includes("VEHICLE_WHEELCHAIR_MISMATCH"))) {
+    return { mode: "reassign", label: "Change vehicle" };
   }
   return null;
 }

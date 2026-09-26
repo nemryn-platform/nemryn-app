@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapRecurringArrangementError, type RecurringArrangementErrorCode } from "@/lib/operations/recurring-arrangement-errors";
 
 export interface CreateRecurringArrangementActionState {
@@ -70,6 +71,8 @@ export async function createRecurringArrangementAction(
     p_days_of_week: daysOfWeek,
     p_start_date: startDate,
     p_end_date: endDate ?? undefined,
+    // P1-OPS-PROG5B (Q4): exactly the operator's choice (yes / no / not specified); never inferred.
+    p_requires_wheelchair_access: triStateToBoolean(stringField(formData, "requiresWheelchairAccess")) ?? undefined,
   });
 
   if (error) {

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapRecurringArrangementError, type RecurringArrangementErrorCode } from "@/lib/operations/recurring-arrangement-errors";
 
 export interface RecurringArrangementActionState {
@@ -72,6 +73,23 @@ export async function editRecurringArrangementAction(
 
   if (error) {
     return { status: "error", errorCode: mapRecurringArrangementError(error.code) };
+  }
+
+  // P1-OPS-PROG5B (Q4): the wheelchair requirement has its own audited setter (edit_recurring_arrangement's contract is
+  // unchanged); called only when the operator actually changed it. Affects occurrence trips created afterwards only.
+  const requirement = stringField(formData, "requiresWheelchairAccess");
+  const original = stringField(formData, "requiresWheelchairAccessOriginal");
+  if ((requirement === "yes" || requirement === "no" || requirement === "unspecified") && requirement !== original) {
+    const { error: requirementError } = await supabase.rpc("set_recurring_wheelchair_requirement", {
+      p_organization_id: organization.organizationId,
+      p_arrangement_id: arrangementId,
+      // null clears it (the generated type does not model the nullable argument).
+      p_requires_wheelchair_access: triStateToBoolean(requirement) as boolean,
+    });
+    if (requirementError) {
+      await revalidateArrangementRoutes(arrangementId);
+      return { status: "error", errorCode: mapRecurringArrangementError(requirementError.code) };
+    }
   }
 
   await revalidateArrangementRoutes(arrangementId);

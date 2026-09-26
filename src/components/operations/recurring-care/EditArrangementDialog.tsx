@@ -1,6 +1,8 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { booleanToTriState, type TriState } from "@/lib/operations/capability-core";
+import { WheelchairRequirementField } from "@/components/operations/wheelchair/WheelchairRequirementField";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
@@ -21,6 +23,7 @@ export interface EditArrangementDialogProps {
   daysOfWeek: number[];
   startDate: string;
   endDate: string | null;
+  requiresWheelchairAccess: boolean | null;
   onClose: () => void;
 }
 
@@ -40,8 +43,10 @@ export function EditArrangementDialog({
   daysOfWeek,
   startDate,
   endDate,
+  requiresWheelchairAccess,
   onClose,
 }: EditArrangementDialogProps) {
+  const [wheelchair, setWheelchair] = useState<TriState>(booleanToTriState(requiresWheelchairAccess));
   const [state, formAction, pending] = useActionState(editRecurringArrangementAction, INITIAL_STATE);
   const router = useRouter();
 
@@ -66,6 +71,13 @@ export function EditArrangementDialog({
         <WeekdaySelector name="daysOfWeek" defaultValue={daysOfWeek} disabled={pending} />
         <Input label="Start date" name="startDate" type="date" required disabled={pending} defaultValue={startDate} />
         <Input label="End date" name="endDate" type="date" disabled={pending} defaultValue={endDate ?? undefined} helpText="Optional — leave blank for an open-ended arrangement." />
+        <input type="hidden" name="requiresWheelchairAccessOriginal" value={booleanToTriState(requiresWheelchairAccess)} />
+        <WheelchairRequirementField
+          value={wheelchair}
+          onChange={setWheelchair}
+          disabled={pending}
+          helpText="Applied to trips created from this arrangement from now on; existing trips keep their own value."
+        />
 
         {state.status === "error" && (
           <p role="alert" className={cn(typography.bodySmall, "text-critical-text")}>

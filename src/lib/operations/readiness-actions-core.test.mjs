@@ -43,3 +43,13 @@ test("New Trip outcome notice param", () => {
   assert.equal(createTripNoticeParam("assigned"), "assigned");
   assert.equal(createTripNoticeParam("failed"), "assignment_failed");
 });
+
+test("PROG5: known availability problems on an assigned trip -> reassign (Change driver / Change vehicle); assignment gaps keep priority", () => {
+  const base = { state: "scheduled", hasActiveAssignment: true };
+  assert.deepEqual(deriveTomorrowAssignAction({ ...base, reasons: ["DRIVER_TIME_OFF"] }), { mode: "reassign", label: "Change driver" });
+  assert.deepEqual(deriveTomorrowAssignAction({ ...base, reasons: ["DRIVER_OFF_SHIFT"] }), { mode: "reassign", label: "Change driver" });
+  assert.deepEqual(deriveTomorrowAssignAction({ ...base, reasons: ["VEHICLE_OUT_OF_SERVICE"] }), { mode: "reassign", label: "Change vehicle" });
+  assert.deepEqual(deriveTomorrowAssignAction({ ...base, reasons: ["VEHICLE_WHEELCHAIR_MISMATCH"] }), { mode: "reassign", label: "Change vehicle" });
+  assert.deepEqual(deriveTomorrowAssignAction({ ...base, reasons: ["NEEDS_VEHICLE", "DRIVER_TIME_OFF"] }), { mode: "reassign", label: "Add vehicle" });
+  assert.equal(deriveTomorrowAssignAction({ state: "passenger_onboard", hasActiveAssignment: true, reasons: ["DRIVER_TIME_OFF"] }), null);
+});

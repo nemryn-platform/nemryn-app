@@ -30,6 +30,8 @@ import type { AssignmentOptions } from "@/lib/operations/assignment-context";
 import { deriveAssignmentDefaults } from "@/lib/operations/assignment-defaults-core";
 import { createTripNoticeParam } from "@/lib/operations/readiness-actions-core";
 import { formatDurationMinutes } from "@/lib/operations/trip-overlap-core";
+import { triStateToBoolean, type TriState } from "@/lib/operations/capability-core";
+import { WheelchairRequirementField } from "@/components/operations/wheelchair/WheelchairRequirementField";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -131,6 +133,11 @@ export function NewTripForm({
 
   const [instructions, setInstructions] = useState("");
   const [assistanceNotes, setAssistanceNotes] = useState(() => preselectedRequest?.assistanceNotes ?? "");
+  // P1-OPS-PROG5B: tri-state wheelchair requirement. Only a Request whose structured service_type is
+  // 'wheelchair_transportation' PREFILLS "Yes" (the operator can change it); nothing is ever inferred from notes.
+  const [wheelchairRequirement, setWheelchairRequirement] = useState<TriState>(() =>
+    preselectedRequest?.serviceType === "wheelchair_transportation" ? "yes" : "unspecified",
+  );
 
   // P1-OPS-PROG2: "Assign now" is OFF by default -- the operator opts in.
   // Inside it, Driver/Vehicle follow the PROG1 prefill rules (only-option
@@ -155,6 +162,7 @@ export function NewTripForm({
     if (request.preferredDate) setPickupDate(request.preferredDate);
     if (request.preferredTime) setPickupTime(request.preferredTime.slice(0, 5));
     if (request.assistanceNotes) setAssistanceNotes(request.assistanceNotes);
+    if (request.serviceType === "wheelchair_transportation") setWheelchairRequirement("yes");
   }
 
   useEffect(() => {
@@ -376,6 +384,12 @@ export function NewTripForm({
             </p>
           </FormSection>
 
+          <FormSection icon={<ClipboardText className="size-5" aria-hidden />} title="Vehicle equipment">
+            <div className="sm:w-80">
+              <WheelchairRequirementField value={wheelchairRequirement} onChange={setWheelchairRequirement} disabled={pending} />
+            </div>
+          </FormSection>
+
           <FormSection icon={<MapPin className="size-5" aria-hidden />} title="Pickup">
             <Select
               label="Pickup Facility"
@@ -501,6 +515,7 @@ export function NewTripForm({
                             expectedDurationMinutes: /^\d+$/.test(expectedDuration.trim())
                               ? Number(expectedDuration.trim())
                               : defaultTripDurationMinutes,
+                            requiresWheelchairAccess: triStateToBoolean(wheelchairRequirement),
                           }
                         : null
                     }

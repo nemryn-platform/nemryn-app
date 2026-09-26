@@ -43,6 +43,8 @@ export interface NewTripRequestOption {
   preferredDate: string | null;
   preferredTime: string | null;
   assistanceNotes: string | null;
+  /** P1-OPS-PROG5B: the Request's structured service type -- only 'wheelchair_transportation' is used, to PREFILL (never decide) the trip's wheelchair requirement. */
+  serviceType: string | null;
 }
 
 /** `Emory Dialysis · Atlanta, GA` style — matches Trip Detail's own Facility annotation format (ZD-152) for visual/product consistency across screens. */

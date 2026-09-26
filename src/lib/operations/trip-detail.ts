@@ -105,6 +105,7 @@ interface TripRow {
   instructions: string | null;
   expected_duration_minutes: number | null;
   expected_duration_source: string | null;
+  requires_wheelchair_access: boolean | null;
   assistance_notes: string | null;
   cancelled_at: string | null;
   cancellation_reason: string | null;
@@ -149,6 +150,8 @@ export interface TripDetailData {
   /** P1-OPS-PROG4: planned duration in minutes (null = unknown) and where it came from. */
   expectedDurationMinutes: number | null;
   expectedDurationSource: "trip" | "organization_default" | null;
+  /** P1-OPS-PROG5B: true / false / NULL (not specified). */
+  requiresWheelchairAccess: boolean | null;
   passengerId: string | null;
   passengerName: string;
   passengerPhone: string | null;
@@ -201,7 +204,7 @@ export type TripDetailResult =
 const TRIP_COLUMNS =
   "id, organization_id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, " +
   "instructions, assistance_notes, cancelled_at, cancellation_reason, no_show_at, completed_at, created_at, updated_at, " +
-  "expected_duration_minutes, expected_duration_source, " +
+  "expected_duration_minutes, expected_duration_source, requires_wheelchair_access, " +
   "passengers!trips_passenger_id_organization_id_fkey(id, display_name, phone), " +
   "transportation_requests!trips_request_id_organization_id_fkey(requester_name, requester_relationship, requester_phone, requester_email), " +
   "pickup_facility:facilities!trips_pickup_facility_id_organization_id_fkey(name, city, state), " +
@@ -296,6 +299,7 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
       tripRow.expected_duration_source === "trip" || tripRow.expected_duration_source === "organization_default"
         ? tripRow.expected_duration_source
         : null,
+    requiresWheelchairAccess: tripRow.requires_wheelchair_access,
     passengerId: passenger?.id ?? null,
     passengerName: passenger?.display_name ?? "Unknown Passenger",
     passengerPhone: passenger?.phone ?? null,

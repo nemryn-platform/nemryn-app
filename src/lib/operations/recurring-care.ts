@@ -1,4 +1,5 @@
 import "server-only";
+import { getTripAvailabilityOutcomes } from "./availability";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { localDateKey, addDaysToDateKey, localMidnightUtc } from "./day-bounds";
 import { deriveTripReadiness, type TripReadinessFacts } from "./trip-readiness-core";
@@ -78,7 +79,7 @@ interface AssignmentEmbed {
   id: string;
   ended_at: string | null;
   vehicle_id: string | null;
-  drivers: StatusRelation;
+  drivers: { id: string; status: string } | { id: string; status: string }[] | null;
   vehicles: StatusRelation;
 }
 
@@ -88,15 +89,17 @@ interface TripRow {
   recurring_arrangement_id: string;
   state: string;
   scheduled_pickup_at: string | null;
+  expected_duration_minutes: number | null;
+  requires_wheelchair_access: boolean | null;
   passengers: StatusRelation;
   trip_assignments: AssignmentEmbed[] | null;
 }
 
 const TRIP_COLUMNS =
-  "id, organization_id, recurring_arrangement_id, state, scheduled_pickup_at, " +
+  "id, organization_id, recurring_arrangement_id, state, scheduled_pickup_at, expected_duration_minutes, requires_wheelchair_access, " +
   "passengers!trips_passenger_id_organization_id_fkey(status), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, vehicle_id, " +
-  "drivers!trip_assignments_driver_id_organization_id_fkey(status), " +
+  "drivers!trip_assignments_driver_id_organization_id_fkey(id, status), " +
   "vehicles!trip_assignments_vehicle_id_organization_id_fkey(status))";
 
 /**
@@ -322,6 +325,32 @@ async function composeAssuranceForArrangements(
     openExceptionCountByTrip.set(row.trip_id, (openExceptionCountByTrip.get(row.trip_id) ?? 0) + 1);
   }
 
+  // P1-OPS-PROG5B: the SAME known availability / capability readiness reasons as Tomorrow / Trip Detail, from ONE
+  // batched evaluation (shifts are organization-local, so the organization's timezone is read once).
+  let availabilityOutcomes = new Map<string, { reasons: import("./availability-core").AvailabilityReadinessReason[] }>();
+  const scheduledAssigned = trips.filter((t) => t.state === "scheduled" && (t.trip_assignments ?? []).length > 0);
+  if (scheduledAssigned.length > 0) {
+    const { data: orgRow, error: orgError } = await supabase.from("organizations").select("timezone").eq("id", organizationId).maybeSingle();
+    if (orgError || !orgRow) {
+      throw new Error(`Failed to load organization timezone for recurring care assurance: ${orgError?.message ?? "not found"}`);
+    }
+    availabilityOutcomes = await getTripAvailabilityOutcomes(
+      organizationId,
+      orgRow.timezone,
+      scheduledAssigned.map((t) => {
+        const assignment = (t.trip_assignments ?? [])[0] ?? null;
+        return {
+          id: t.id,
+          scheduledPickupAt: t.scheduled_pickup_at,
+          expectedDurationMinutes: t.expected_duration_minutes,
+          requiresWheelchairAccess: t.requires_wheelchair_access,
+          driverId: unwrapOne(assignment?.drivers)?.id ?? null,
+          vehicleId: assignment?.vehicle_id ?? null,
+        };
+      }),
+    );
+  }
+
   // Map every fetched Trip to its own arrangement's local service date,
   // using THAT arrangement's own timezone — never a shared assumption.
   const tripsByArrangementId = new Map<string, RecurringLinkedTripFact[]>();
@@ -346,6 +375,7 @@ async function composeAssuranceForArrangements(
         vehicleStatus: activeAssignment?.vehicle_id ? (vehicle?.status ?? null) : null,
         passengerStatus: passenger?.status ?? "inactive",
         openExceptionCount: openExceptionCountByTrip.get(row.id) ?? 0,
+        availabilityReasons: availabilityOutcomes.get(row.id)?.reasons ?? [],
       };
       readiness = deriveTripReadiness(facts);
     }

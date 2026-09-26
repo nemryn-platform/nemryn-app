@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { availabilityErrorMessage, windowInputToUtc, type WindowFormInput } from "@/lib/operations/availability";
 import { buildDriverInviteUrl } from "@/lib/app-url";
 import { sendEmail, type EmailResult } from "@/lib/email/send";
 import { buildDriverInviteEmail } from "@/lib/email/driver-invite-email";
@@ -197,4 +198,61 @@ export async function resendDriverInviteAction(inviteId: string): Promise<Resend
   if (result.status === "not_configured") return { status: "not_configured" };
   console.warn(`[driver-invite] resend for invite ${inviteId} failed: ${result.detail}`);
   return { status: "failed" };
+}
+
+// =============================================================================
+// P1-OPS-PROG5B -- working hours + time off (Organization Admin / Dispatcher; the RPCs re-check role and tenant)
+// =============================================================================
+
+export type AvailabilityActionResult = { ok: true } | { ok: false; message: string };
+
+export async function saveDriverScheduleAction(driverId: string, shifts: { weekday: number; start: string; end: string }[]): Promise<AvailabilityActionResult> {
+  await requireOperationsAccess(await getCurrentPathname("/operations/drivers"));
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("set_driver_weekly_schedule", { p_driver_id: driverId, p_shifts: shifts });
+  if (error) return { ok: false, message: availabilityErrorMessage(error.code) };
+  revalidatePath("/operations/drivers");
+  revalidatePath("/operations/dispatch");
+  revalidatePath("/operations/tomorrow");
+  return { ok: true };
+}
+
+export async function clearDriverScheduleAction(driverId: string): Promise<AvailabilityActionResult> {
+  await requireOperationsAccess(await getCurrentPathname("/operations/drivers"));
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("clear_driver_weekly_schedule", { p_driver_id: driverId });
+  if (error) return { ok: false, message: availabilityErrorMessage(error.code) };
+  revalidatePath("/operations/drivers");
+  revalidatePath("/operations/dispatch");
+  revalidatePath("/operations/tomorrow");
+  return { ok: true };
+}
+
+export async function saveDriverTimeOffAction(driverId: string, windowId: string | null, input: WindowFormInput): Promise<AvailabilityActionResult> {
+  const organization = await requireOperationsAccess(await getCurrentPathname("/operations/drivers"));
+  const range = windowInputToUtc(input, organization.organizationTimezone);
+  if (!range) return { ok: false, message: "Those times aren't valid (check the dates and times)." };
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("save_driver_unavailability", {
+    p_driver_id: driverId,
+    p_starts_at: range.startsAt,
+    p_ends_at: range.endsAt,
+    ...(windowId ? { p_window_id: windowId } : {}),
+  });
+  if (error) return { ok: false, message: availabilityErrorMessage(error.code) };
+  revalidatePath("/operations/drivers");
+  revalidatePath("/operations/dispatch");
+  revalidatePath("/operations/tomorrow");
+  return { ok: true };
+}
+
+export async function deleteDriverTimeOffAction(windowId: string): Promise<AvailabilityActionResult> {
+  await requireOperationsAccess(await getCurrentPathname("/operations/drivers"));
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("delete_driver_unavailability", { p_window_id: windowId });
+  if (error) return { ok: false, message: availabilityErrorMessage(error.code) };
+  revalidatePath("/operations/drivers");
+  revalidatePath("/operations/dispatch");
+  revalidatePath("/operations/tomorrow");
+  return { ok: true };
 }

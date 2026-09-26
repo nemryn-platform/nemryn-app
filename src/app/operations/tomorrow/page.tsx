@@ -142,6 +142,8 @@ export default async function TomorrowReadinessPage() {
     { fromMs: Date.parse(data.tomorrowStartUtc), toMs: Date.parse(data.tomorrowEndUtc) },
     items.map((item) => data.assignmentTargets[item.tripId]).filter((t): t is NonNullable<typeof t> => Boolean(t)),
   ).catch(() => ({ tripIds: new Set<string>(), coverage: "incomplete" as const }));
+  // P1-OPS-PROG5B: neutral note only (requirement "needed" + assigned vehicle's equipment not recorded) -- never a reason.
+  const wheelchairNotRecorded = new Set(data.wheelchairEquipmentNotRecorded);
   const extentText = (tripId: string) => extentLabels.get(tripId) ?? "Duration not set";
 
   const summaryItems: SummaryItem[] = [
@@ -210,6 +212,7 @@ export default async function TomorrowReadinessPage() {
                             <StatusBadge key={reason} label={tripReadinessReasonLabel(reason)} category="warning" />
                           ))}
                           {overlapping.has(item.tripId) && <StatusBadge label="Overlaps another trip" category="neutral" />}
+                          {wheelchairNotRecorded.has(item.tripId) && <StatusBadge label="Wheelchair equipment not recorded" category="neutral" />}
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-2">
@@ -255,6 +258,7 @@ export default async function TomorrowReadinessPage() {
                         </span>
                       </Link>
                       {overlapping.has(item.tripId) && <StatusBadge label="Overlaps another trip" category="neutral" />}
+                          {wheelchairNotRecorded.has(item.tripId) && <StatusBadge label="Wheelchair equipment not recorded" category="neutral" />}
                       <span className={cn(typography.metadata, "shrink-0 text-success-text")}>Ready</span>
                     </li>
                   ))}

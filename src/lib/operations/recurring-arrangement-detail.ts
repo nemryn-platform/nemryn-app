@@ -30,6 +30,8 @@ export interface RecurringArrangementDetailFacts {
   pausedAt: string | null;
   endedAt: string | null;
   endedReason: string | null;
+  /** P1-OPS-PROG5B (Q4): true / false / NULL (not specified); snapshotted onto occurrence trips at creation. */
+  requiresWheelchairAccess: boolean | null;
 }
 
 export type RecurringArrangementDetailResult =
@@ -63,12 +65,13 @@ interface ArrangementDetailDbRow {
   paused_at: string | null;
   ended_at: string | null;
   ended_reason: string | null;
+  requires_wheelchair_access: boolean | null;
 }
 
 const DETAIL_COLUMNS =
   "id, organization_id, passenger_id, passengers!recurring_arrangements_passenger_id_organization_id_fkey(display_name), " +
   "pickup_description, destination_description, pickup_time, days_of_week, start_date, end_date, timezone, status, " +
-  "paused_at, ended_at, ended_reason";
+  "paused_at, ended_at, ended_reason, requires_wheelchair_access";
 
 export async function getRecurringArrangementDetail(
   organizationId: string,
@@ -115,6 +118,7 @@ export async function getRecurringArrangementDetail(
         daysOfWeek: data.days_of_week,
         startDate: data.start_date,
         endDate: data.end_date,
+        requiresWheelchairAccess: data.requires_wheelchair_access,
         timezone: data.timezone,
         status: data.status as RecurringArrangementDetailFacts["status"],
         pausedAt: data.paused_at,

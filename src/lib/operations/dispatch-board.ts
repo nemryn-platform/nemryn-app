@@ -4,7 +4,9 @@ import { organizationDayBoundsUtc } from "./day-bounds";
 import { operationsTripStatusLabel } from "./presentation";
 import { getLatestLocationsByTrip, type DispatchTripLocation } from "./live-location";
 import { getOverlapCandidates } from "./trip-overlap";
-import { deriveResourceOverlap, deriveTripExtent, type ResourceCheckStatus } from "./trip-overlap-core";
+import { deriveResourceOverlap, deriveTripExtent, TERMINAL_STATES, type ResourceCheckStatus } from "./trip-overlap-core";
+import { driverAvailabilityFor, factSpanForTrips, loadAvailabilityFacts, TIME_TOOLS, vehicleAvailabilityFor } from "./availability";
+import { availabilityFlags, deriveDriverDayFacts, deriveDriverNowStatus, expandShiftInstances, type DriverNowStatus } from "./availability-core";
 
 /**
  * Server-side data access boundary for the Dispatch Board (P1-E3-S5, work
@@ -26,7 +28,7 @@ import { deriveResourceOverlap, deriveTripExtent, type ResourceCheckStatus } fro
  */
 
 const TRIP_COLUMNS =
-  "id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, recurring_arrangement_id, expected_duration_minutes, " +
+  "id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, recurring_arrangement_id, expected_duration_minutes, requires_wheelchair_access, " +
   "passengers!trips_passenger_id_organization_id_fkey(display_name), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name), " +
@@ -78,6 +80,7 @@ interface TripRow {
   destination_description: string;
   recurring_arrangement_id: string | null;
   expected_duration_minutes: number | null;
+  requires_wheelchair_access: boolean | null;
   passengers: NameRelation;
   trip_assignments: TripAssignmentEmbed[] | null;
 }
@@ -119,6 +122,10 @@ export interface DispatchTrip {
   };
   /** P1-OPS-PROG4 — still non-terminal although its known planned end has passed (a fact, not a lateness claim). */
   pastPlannedEnd: boolean;
+  /** P1-OPS-PROG5B — the trip's wheelchair transport equipment requirement (NULL = not specified). */
+  requiresWheelchairAccess: boolean | null;
+  /** P1-OPS-PROG5B — factual availability / capability flags for THIS trip's current driver / vehicle (availability-core). */
+  availabilityFlags: string[];
   /** P1-E3-S8 — a real open TripException exists for this Trip. Restrained use only (work item §31): a small indicator on the grid block, never a second full location-style panel. */
   hasOpenException: boolean;
 }
@@ -162,6 +169,8 @@ function mapTripRow(
     expectedDurationMinutes: row.expected_duration_minutes,
     overlap: { driver: null, vehicle: null, unknownTimeCommitment: false },
     pastPlannedEnd: false,
+    requiresWheelchairAccess: row.requires_wheelchair_access,
+    availabilityFlags: [],
     hasOpenException: openExceptionTripIds.has(row.id),
   };
 }
@@ -179,6 +188,11 @@ export interface DispatchVehicleOption {
 export interface DispatchDriverRow {
   driver: DispatchDriverOption;
   trips: DispatchTrip[];
+  /**
+   * P1-OPS-PROG5B — Today: the canonical NOW status (mutually exclusive, "Available" only under full proof).
+   * Tomorrow: row FACTS only (working hours + time off touching the day) -- never an exclusive status.
+   */
+  availability: { nowStatus: DriverNowStatus | null; day: { scheduleConfigured: boolean; hours: string[]; timeOff: string[] } | null };
 }
 
 export type DispatchDay = "today" | "tomorrow";
@@ -319,10 +333,60 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
     label: v.label,
   }));
 
-  const driverRows: DispatchDriverRow[] = driverOptions.map((driver) => ({
-    driver,
-    trips: assignedTrips.filter((trip) => trip.driverId === driver.id),
-  }));
+  // P1-OPS-PROG5B — availability / capability facts from ONE batched load for the board span; the NOW status reuses the
+  // SAME PROG4 candidate set (commitments + coverage) -- never a second commitment model.
+  const span = factSpanForTrips(startUtc.getTime(), endUtc.getTime());
+  const facts = await loadAvailabilityFacts(organizationId, span.fromMs, span.toMs);
+  for (const trip of assignedTrips) {
+    const extent = deriveTripExtent(trip.scheduledPickupAt, trip.expectedDurationMinutes);
+    const driverFacts = trip.driverId ? driverAvailabilityFor(facts, timezone, trip.driverId, extent, trip.overlap.driver) : null;
+    const vehicleFacts = trip.vehicleId ? vehicleAvailabilityFor(facts, trip.vehicleId, extent, trip.requiresWheelchairAccess) : null;
+    trip.availabilityFlags = availabilityFlags(driverFacts, vehicleFacts);
+  }
+  const coverage = candidateSet.coverage === "complete" && facts.coverage === "complete" ? "complete" : "incomplete";
+  const timeFormat = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone });
+  const dayStartMs = startUtc.getTime();
+  const dayEndMs = endUtc.getTime();
+  const rangeLabel = (a: number, b: number) =>
+    a <= dayStartMs && b >= dayEndMs
+      ? "All day"
+      : a <= dayStartMs
+        ? `Until ${timeFormat.format(b)}`
+        : b >= dayEndMs
+          ? `From ${timeFormat.format(a)}`
+          : `${timeFormat.format(a)} – ${timeFormat.format(b)}`;
+
+  const driverRows: DispatchDriverRow[] = driverOptions.map((driver) => {
+    const rowTrips = assignedTrips.filter((trip) => trip.driverId === driver.id);
+    const configured = facts.configured.has(driver.id);
+    const shifts = facts.shiftsByDriver.get(driver.id) ?? [];
+    const windows = facts.driverWindows.get(driver.id) ?? [];
+    if (day === "today") {
+      const instances = configured ? expandShiftInstances(shifts, timezone, nowMs - 86_400_000, nowMs + 86_400_000, TIME_TOOLS) : [];
+      const commitments = candidateSet.candidates
+        .filter((c) => c.activeDriverId === driver.id && !TERMINAL_STATES.has(c.state))
+        .map((c) => {
+          const e = deriveTripExtent(c.scheduledPickupAt, c.expectedDurationMinutes);
+          return { startMs: e.startMs, endMs: e.kind === "known" ? e.endMs : null };
+        });
+      const nowStatus = deriveDriverNowStatus({ nowMs, onTrip: rowTrips.some((t) => t.isActiveState), configured, instances, windows, commitments, coverage });
+      return { driver, trips: rowTrips, availability: { nowStatus, day: null } };
+    }
+    const instances = configured ? expandShiftInstances(shifts, timezone, dayStartMs, dayEndMs, TIME_TOOLS) : [];
+    const dayFacts = deriveDriverDayFacts(configured, instances, windows, dayStartMs, dayEndMs);
+    return {
+      driver,
+      trips: rowTrips,
+      availability: {
+        nowStatus: null,
+        day: {
+          scheduleConfigured: configured,
+          hours: dayFacts.shifts.map((s) => rangeLabel(s.startMs, s.endMs)),
+          timeOff: dayFacts.timeOff.map((w) => rangeLabel(w.startsAt, w.endsAt)),
+        },
+      },
+    };
+  });
 
   return {
     day,

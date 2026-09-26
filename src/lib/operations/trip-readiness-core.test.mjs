@@ -225,3 +225,30 @@ test("deriveTripReadiness — no unsupported reason code ever appears in any res
     }
   }
 });
+
+// ---------------------------------------------------------------------
+// P1-OPS-PROG5B -- known availability / capability reasons
+// ---------------------------------------------------------------------
+
+test("PROG5: known availability reasons make the trip NEEDS_PREPARATION, in REASON_ORDER after VEHICLE_INACTIVE", () => {
+  const r = deriveTripReadiness(makeFacts({
+    vehicleStatus: "inactive",
+    passengerStatus: "inactive",
+    availabilityReasons: ["VEHICLE_WHEELCHAIR_MISMATCH", "DRIVER_OFF_SHIFT", "VEHICLE_OUT_OF_SERVICE", "DRIVER_TIME_OFF"],
+  }));
+  assert.equal(r.state, "NEEDS_PREPARATION");
+  assert.deepEqual(r.reasons, ["VEHICLE_INACTIVE", "DRIVER_TIME_OFF", "DRIVER_OFF_SHIFT", "VEHICLE_OUT_OF_SERVICE", "VEHICLE_WHEELCHAIR_MISMATCH", "PASSENGER_INACTIVE"]);
+});
+
+test("PROG5: no availability facts (every pre-PROG5 trip) -> identical result (backward compatibility)", () => {
+  for (const facts of [makeFacts(), makeFacts({ assignedVehicleId: null, vehicleStatus: null }), makeFacts({ openExceptionCount: 1 })]) {
+    assert.deepEqual(deriveTripReadiness({ ...facts, availabilityReasons: [] }), deriveTripReadiness(facts));
+  }
+  assert.equal(deriveTripReadiness(makeFacts({ availabilityReasons: [] })).state, "READY");
+});
+
+test("PROG5: availability reasons never apply without an active assignment, nor outside 'scheduled'", () => {
+  const unassigned = deriveTripReadiness(makeFacts({ hasActiveAssignment: false, assignedVehicleId: null, driverStatus: null, vehicleStatus: null, availabilityReasons: ["DRIVER_TIME_OFF"] }));
+  assert.deepEqual(unassigned.reasons, ["NEEDS_DRIVER"]);
+  assert.equal(deriveTripReadiness(makeFacts({ state: "completed", availabilityReasons: ["DRIVER_TIME_OFF"] })).state, "NOT_APPLICABLE");
+});

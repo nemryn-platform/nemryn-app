@@ -1,0 +1,570 @@
+NEMRYN PLATFORM
+P1-OPS-PROG5B -- AVAILABILITY + VEHICLE CAPABILITY FOUNDATION -- LOCAL IMPLEMENTATION
+The FINAL Progressive Operations implementation phase.
+Local only: NOT committed, NOT pushed, NOT deployed. The migration was applied to the LOCAL Supabase only.
+No production database command was run in this phase. No Vercel or DNS change. No PROG6.
+
+======================================================================
+1. STARTING STATE
+======================================================================
+  - Branch main. HEAD = origin/main = 368a9234459acbdef3721e2d0d60c57a7a58a00e (the PROG4B release closeout; the
+    production application is 7eacc70).
+  - Clean tracked tree. Untracked: the PROG5A spec, older unrelated reports, and local .tmp-qa.
+  - The linked Supabase project is production (wyocbivzgrbekuyqdfts). This phase used only --local commands:
+    `migration up --local`, `db reset --local`, `gen types --local`, docker psql, and
+    `verify-db-privileges.sh local`.
+  - Local migration head at the start: 20260925100000.
+
+======================================================================
+2. PROG5A AMENDMENT SUMMARY + FINAL OWNER DECISIONS Q1–Q9
+======================================================================
+docs/reports/p1-ops-prog5a-availability-capability-spec.txt now opens with §0A (the final decisions). The conflicting
+sections were edited, and §30 is marked RESOLVED.
+Q1  Vehicle capability (equipment) writes: Organization Admin ONLY. The Dispatcher reads capability and manages driver
+    schedules, driver time off and vehicle out-of-service windows.
+Q2  "This driver's working hours aren't set." appears only once the organization has configured at least one driver
+    schedule.
+Q3  Minimal read-only Driver PWA card "My working hours" on /driver/profile.
+Q4  CHANGED: recurring_arrangements.requires_wheelchair_access. The arrangement's current value is SNAPSHOTTED onto
+    each generated trip, and later arrangement changes never rewrite existing trips.
+Q5  A single current weekly schedule. No effective-dated versions.
+Q6  NO shift shading on Dispatch.
+Q7  Audit events are stored and NOT added to Settings → Activity.
+Q8  Retention expectation documented only. No purge or scheduler.
+Q9  Per-driver editor only. No bulk hours.
+Also amended:
+  - The service-role invariant is narrowed to "PROG5 introduces no new service-role path; service-role credentials
+    are never exposed to clients."
+  - The new tables have no actor columns: audit_events.actor_user_id is the attribution record.
+  - Weekly overlap is validated on the week-as-ring.
+  - The DST certain core may be empty.
+  - The Tomorrow rail shows row FACTS only.
+  - Fleet permission alignment.
+
+======================================================================
+3. SCHEMA (one additive migration: supabase/migrations/20260926100000_availability_capability.sql)
+======================================================================
+New tables (RLS enabled; composite tenant FKs with ON DELETE CASCADE; no reason / note / actor columns):
+  driver_weekly_schedules (driver_id PK, organization_id, configured_at, updated_at)
+    No row = SCHEDULE NOT SET. A row = CONFIGURED.
+  driver_weekly_shifts (id, organization_id, driver_id, weekday 1..7, start_time, end_time)
+    CHECK start <> end; minute precision.
+    FK to the schedule row, so shifts cascade when a schedule is cleared.
+  driver_unavailability_windows (id, organization_id, driver_id, starts_at, ends_at, created_at, updated_at)
+    CHECK ends > starts and ≤ 366 days.
+  vehicle_unavailability_windows (the same shape, with vehicle_id)
+New nullable columns (NULL = unknown / not specified; no backfill):
+  vehicles:
+    wheelchair_ramp, wheelchair_lift (boolean)
+    wheelchair_positions smallint (0..20)
+    seated_capacity smallint (0..60)
+  trips.requires_wheelchair_access boolean
+  recurring_arrangements.requires_wheelchair_access boolean
+Indexes:
+  - (organization_id, driver_id) on shifts;
+  - (organization_id, starts_at, id) and (organization_id, resource_id, starts_at) on both window tables.
+The migration is expand-only. Existing data is untouched. Validated from scratch by `supabase db reset --local`
+(70/70 migrations applied).
+
+======================================================================
+4. RPCs (all SECURITY DEFINER, SET search_path = public, pg_temp; REVOKE ALL FROM PUBLIC; GRANT EXECUTE TO authenticated)
+======================================================================
+All take a row lock, return an idempotent `changed` flag, and are audited. Error codes: ZW002 = foreign tenant, wrong
+role or not found; ZW006 = invalid input; ZW004 = terminal or ended.
+  set_driver_weekly_schedule(uuid, jsonb)                Admin / Dispatcher. 1..28 shifts. Atomic replace.
+                                                         Week-ring overlap check. Marks CONFIGURED.
+  clear_driver_weekly_schedule(uuid)                     Admin / Dispatcher. Returns to NOT SET (shifts cascade).
+  save_driver_unavailability(uuid, tz, tz, uuid = NULL)  Admin / Dispatcher. Create or update.
+  delete_driver_unavailability(uuid)                     Admin / Dispatcher.
+  save_vehicle_unavailability(uuid, tz, tz, uuid = NULL) Admin / Dispatcher. Create or update.
+  delete_vehicle_unavailability(uuid)                    Admin / Dispatcher.
+  set_vehicle_capabilities(uuid, bool, bool, int, int)   Organization ADMIN ONLY (Q1). Atomic setter of the four facts.
+  set_trip_wheelchair_requirement(uuid, boolean)         Admin / Dispatcher. Non-terminal trips. NULL clears.
+  set_recurring_wheelchair_requirement(uuid, uuid, bool) Admin / Dispatcher (same roles as
+                                                         edit_recurring_arrangement). Non-ended arrangements. Affects
+                                                         only occurrences created afterwards.
+  driver_get_own_schedule(uuid)                          Driver OWN data only, through current_driver_id(auth.uid()).
+                                                         No driver_id parameter. Returns timezone, configured flag,
+                                                         own shifts, and own windows in the next 14 days.
+  create_trip(… 12 existing …, p_requires_wheelchair_access boolean DEFAULT NULL)
+    Drop and create in the same transaction; one overload (13 arguments). The value is stored exactly as supplied and
+    recorded in the trip_created audit row.
+  create_recurring_arrangement(… 8 existing …, p_requires_wheelchair_access boolean DEFAULT NULL)
+    Drop and create; one overload (9 arguments).
+  create_trip_for_recurring_occurrence (identity unchanged)
+    Now calls create_trip with NAMED arguments and passes p_requires_wheelchair_access => the arrangement's current
+    value (the SNAPSHOT). The idempotency branch still returns an existing occurrence unchanged, so an arrangement
+    change never rewrites an existing trip.
+Why the recurring requirement has its own setter:
+  - edit_recurring_arrangement passes every field. A new defaulted parameter would let an old caller silently reset the
+    requirement to NULL.
+  - So edit keeps its contract unchanged, and the requirement has its own audited setter.
+  - The edit dialog calls the setter only when the value actually changed, and only after the edit succeeds.
+
+======================================================================
+5. COMPATIBILITY
+======================================================================
+Proven by SQL (supabase/tests/availability_capability_tests.sql):
+  - Legacy positional 5-argument create_trip and the 12-argument named call both resolve, with a NULL requirement.
+  - Legacy 8-argument named create_recurring_arrangement resolves (NULL).
+  - Occurrence generator: arrangement NULL → trip NULL, true → true, false → false.
+  - After an arrangement change, the existing occurrence is unchanged, the re-call is idempotent (created = false),
+    and the next occurrence snapshots the new value.
+  - Old arrangements stay NULL.
+  - Exactly one overload each for create_trip and create_recurring_arrangement.
+The old application is compatible with the new schema: named-argument callers work, and every new column is nullable
+and ignored by old code.
+
+======================================================================
+6. RLS / PRIVILEGE CONTRACT / SERVICE ROLE / PRIVACY
+======================================================================
+RLS:
+  - New tables: SELECT TO authenticated USING has_org_role(org, [organization_admin, dispatcher]).
+  - No INSERT / UPDATE / DELETE policy and no write grant (check 21, "no DELETE policy", still holds). Writes happen
+    through the RPCs only.
+  - Drivers have no direct table access; their own read goes through driver_get_own_schedule.
+  - Foreign tenants get nothing.
+  - The new vehicles / trips / recurring_arrangements columns have NO column UPDATE grant. Their only writers are the
+    RPCs.
+Privilege contract (supabase/tests/privilege_contract_tests.sql; still 29 checks):
+  - Added: the 4 new tables and their SELECT grants.
+  - Added: the 10 new function identities.
+  - Updated: the create_trip identity (13 arguments) and the create_recurring_arrangement identity (9 arguments).
+  - Local result: violations = 0 of 29 (after the reset).
+Service role: PROG5 introduces no new service-role path. Every PROG5 read and write uses the session client
+(RLS / RPC).
+Privacy:
+  - There is no reason, category, note or free-text column anywhere; SQL P-3 asserts no text, jsonb or *_by column.
+  - Audit before / after data holds only weekday / time pairs, window timestamps, capability scalars and the
+    requirement boolean (SQL S-9).
+  - Retention: windows persist until deleted. Q8 is documented; no purge is built.
+
+======================================================================
+7. DRIVER SCHEDULES, DST AND THE WEEK RING
+======================================================================
+Shift model:
+  - Organization-local `time` + ISO weekday. Never stored as UTC.
+  - end < start means overnight; end 00:00 means midnight; start = end is rejected.
+Week-ring overlap (in the setter):
+  - Each shift occupies [s, s + d) on a 10080-minute ring.
+  - Pairs are compared, including ± one week, so a Sunday 22:00–02:00 shift versus Monday 01:00–05:00 is REJECTED.
+  - Touching boundaries are allowed (Sunday 22:00–02:00 plus Monday 02:00–06:00 is accepted).
+  - SQL S-2 / S-5 cover this.
+DST (src/lib/operations/local-time-core.ts):
+  - resolveLocalBoundary returns { earliest, latest }:
+      - spring-forward gap → the first instant after the gap;
+      - fall-back ambiguity → the first and second occurrences.
+  - Each shift instance has a certain core [start.latest, end.earliest) and a possible extent
+    [start.earliest, end.latest).
+  - The core may be EMPTY and is never inverted: mergeSpans drops empty spans.
+  - Anything in the possible-but-not-certain band is partly_unknown / NOT_FULLY_CHECKABLE.
+  - Unit tests: spring (a 02:30 boundary resolves to 07:00Z; a 01:00–04:00 shift lasts 2 real hours); fall
+    (01:30 → 05:30Z / 06:30Z); the empty-core case; midnight end; overnight; Sunday → Monday.
+  - organizationLocalToUtc's contract is unchanged. Its helpers moved, unchanged, into the runtime-import-free
+    local-time-core.ts; local-time.ts keeps its server-only marker and re-exports them.
+
+======================================================================
+8. TIME OFF, VEHICLE OUT-OF-SERVICE, CAPABILITIES AND REQUIREMENTS
+======================================================================
+Time off:
+  - Half-open [starts_at, ends_at), unioned, a factual time even when the schedule is NOT SET, and it overrides shifts.
+  - The UI converts organization-local "all day" or from–to input server-side (windowInputToUtc). A DST-gap or
+    ambiguous input is refused, never guessed.
+Vehicle out-of-service:
+  - The same model. Advisory only. vehicles.status (the inactive hard invariant in assign_trip) is unchanged.
+Capabilities:
+  - Four nullable facts; NULL = "Not recorded"; false is never inferred.
+  - UI: "Equipment on this vehicle", with no ADA, certification or approval wording (checked in E2E and unit tests).
+Trip requirement:
+  - New Trip has a tri-state control, "Wheelchair transport equipment needed?" (Yes / No / Not specified).
+  - A Request whose structured service_type = wheelchair_transportation PREFILLS Yes, and the operator can override it.
+  - No other service type, and no notes text, is interpreted. There is no SQL inference.
+  - Trip Detail has a "Wheelchair transport equipment" panel with an Edit dialog (non-terminal trips only).
+Recurring requirement:
+  - The same tri-state control on New Arrangement and on Edit Arrangement. The detail page shows "Wheelchair
+    transport equipment: … · applied to trips created from now on".
+  - Request → arrangement prefill: NO such flow exists in the product today (recurring creation takes no Request), so
+    there was nothing to attach a prefill to. None was built.
+
+======================================================================
+9. DERIVATIONS (pure; one model for every surface)
+======================================================================
+capability-core.ts:
+  - requirement false → NOT_APPLICABLE; NULL → REQUIREMENT_UNKNOWN.
+  - requirement true:
+      - CAPABLE (positions ≥ 1 AND (ramp OR lift));
+      - KNOWN_MISMATCH (positions = 0 OR (ramp = false AND lift = false));
+      - otherwise NOT_CHECKABLE.
+  - Unknown is never a mismatch. Nothing ranks or recommends.
+availability-core.ts (runtime-import-free; time helpers injected via TimeTools):
+  - Target trip:
+      shift: schedule_not_set / covered / outside_start / outside_end / on_shift_at_pickup / partly_unknown /
+             unknown_target
+      time off and out-of-service: clear / overlaps / not_checkable / unknown_target
+      capability: as above
+  - availableForTrip is true ONLY when all of these hold:
+      - the schedule is configured;
+      - the extent is known and covered;
+      - there is no time off;
+      - the PROG4 driver check is clear.
+    The PROG4 check already implies a complete candidate set and no pickup-less or missing-duration commitment.
+  - NOW status, in precedence: ON_TRIP > TIME_OFF > OFF_SHIFT > COMMITTED > NOT_FULLY_CHECKABLE > SCHEDULE_NOT_SET >
+    AVAILABLE.
+      - Commitments come from the SAME PROG4 candidate set.
+      - Any of the following gives NOT_FULLY_CHECKABLE:
+          - an incomplete candidate or fact set (R1);
+          - a pickup-less commitment (R2);
+          - a still-open-past-end commitment (Q7);
+          - a missing-duration commitment that could cover now;
+          - a DST band.
+      - AVAILABLE means free RIGHT NOW only.
+  - Readiness reasons are KNOWN facts only: DRIVER_TIME_OFF, DRIVER_OFF_SHIFT (outside_start / outside_end),
+    VEHICLE_OUT_OF_SERVICE, VEHICLE_WHEELCHAIR_MISMATCH.
+  - One copy source for the notes (availabilityNotices) and the Dispatch flags (availabilityFlags).
+  - No second commitment model: PROG4's deriveTripExtent, candidate sets and resource checks are consumed as-is.
+
+======================================================================
+10. SURFACES
+======================================================================
+Assignment (dialog + New Trip "Assign now"):
+  - The existing assignmentOverlapAction / getAssignmentOverlap now also returns `availability` (one batched fact load,
+    no extra client round trip).
+  - OverlapNotes renders the PROG4 notes FIRST, then the availability notes: time off, outside / ends after working
+    hours, on shift at pickup, DST, hours not set (Q2), out of service, wheelchair mismatch / not recorded.
+  - Notes are resource-specific.
+  - Assign / Reassign / Create Trip stay enabled. assign_trip / reassign_trip are unchanged. No auto-selection,
+    sorting or scoring.
+Trip Detail:
+  - The current-assignment notes come from the same source.
+  - The requirement panel, and readiness through the same shared evaluation.
+Tomorrow readiness:
+  - The 4 new reasons are appended to REASON_ORDER after VEHICLE_INACTIVE, with labels:
+      "Assigned driver has time off"
+      "Outside the driver's working hours"
+      "Assigned vehicle is out of service"
+      "Vehicle's recorded wheelchair equipment doesn't match"
+  - Actions: "Change driver" / "Change vehicle", which open the existing reassign dialog.
+  - A neutral "Wheelchair equipment not recorded" badge appears only for a trip that needs it where the equipment is
+    unknown. It is never a reason.
+  - The SAME batched evaluation feeds Tomorrow, Trip Detail and Recurring Care occurrence readiness.
+Dispatch:
+  - No redesign, no drag-and-drop, NO shading.
+  - Today: each driver row header and capacity pill shows the canonical NOW status. The summary lists non-zero
+    mutually exclusive counts, with no percentage.
+  - Tomorrow: row FACTS only ("Working hours: …", "Time off: …", "Schedule not set"). There is no exclusive status and
+    never "Available". The summary reads "Schedules set N · Schedules not set N · Time off recorded tomorrow N".
+  - Block flags appear only for that trip's own facts (Driver time off, Outside working hours, Vehicle out of service,
+    Wheelchair equipment doesn't match / not recorded). There is no flag merely because a schedule is not set.
+  - The existing overlap flags are unchanged.
+Drivers page:
+  - A "Working hours" column: "Not set" / summary, with a Set / Edit hours dialog (split ranges; overnight hint; Clear
+    working hours).
+  - A "Time off" column with a Manage dialog (add / edit / remove; all-day or from–to).
+  - Admin and Dispatcher can use both. Drivers cannot reach the page.
+Fleet page:
+  - An "Equipment" column: the Admin edits; the Dispatcher views read-only with "Only an organization admin can
+    change recorded equipment".
+  - An "Out of service" column with a Manage dialog (Admin and Dispatcher).
+Driver PWA:
+  - Only the /driver/profile "My working hours" card: own shifts, own time off in the next 14 days, the timezone, and
+    "Ask your dispatcher to change them."
+  - driver_get_trip_detail, the trip list and history are unchanged. No fleet or capability data.
+
+======================================================================
+11. FLEET PERMISSION-ALIGNMENT CORRECTION (pre-existing mismatch)
+======================================================================
+The mismatch:
+  - createVehicleAction / updateVehicleAction used requireOperationsAccess (Admin OR Dispatcher).
+  - vehicles RLS allows INSERT / UPDATE for the Organization Admin only.
+  - So a Dispatcher's attempt failed at the database.
+The narrow correction:
+  - Both actions now use requireOrganizationAdminAccess.
+  - FleetPageClient hides "Add Vehicle" and the row-click edit for Dispatchers.
+  - Database authority is unchanged (not broadened).
+  - Dispatchers keep read access, read-only equipment and out-of-service management (through the PROG5 RPCs).
+  - E2E: C2 / C3 / C4 / D1.
+
+======================================================================
+12. AUDIT
+======================================================================
+Actions written:
+  driver_schedule_set, driver_schedule_cleared,
+  driver_unavailability_added / _changed / _removed,
+  vehicle_unavailability_added / _changed / _removed,
+  vehicle_capabilities_updated,
+  trip_wheelchair_requirement_updated,
+  recurring_arrangement_wheelchair_requirement_updated (entity_type recurring_arrangement, matching the existing
+    recurring audit model),
+  plus requires_wheelchair_access in trip_created and recurring_arrangement_created after_data.
+Not added to Settings → Activity (Q7).
+
+======================================================================
+13. QUERY BATCHING / PAGINATION / COMPLETENESS
+======================================================================
+  - src/lib/operations/availability.ts has one organization-scoped fact load per surface:
+      - schedules, shifts, windows intersecting the span, and capabilities;
+      - optionally scoped to the selected driver / vehicle for the assignment read.
+  - Every family is keyset-paginated with the PROG4 R1 pager (page 500, ceiling 20 pages; windows keyed on
+    (starts_at, id), the others on id).
+  - Coverage "incomplete" means:
+      - no window fact is ever "clear" (it becomes not_checkable);
+      - NOW status is NOT_FULLY_CHECKABLE;
+      - availableForTrip is false;
+      - there is one warning log line.
+  - Nothing is silently truncated. There are no N+1 queries: Dispatch and Tomorrow use one batch per scope.
+  - Indexes match the (organization_id, starts_at, id) keyset pattern.
+
+======================================================================
+14. BACKWARD COMPATIBILITY, ONE VEHICLE, GROWING FLEET
+======================================================================
+  - With no PROG5 data, nothing changes except "Schedule not set" in the Today rail, which replaces the empty pill:
+      - no new readiness reasons;
+      - no notes (Q2 gating);
+      - no flags;
+      - capability and requirement unknown.
+  - Proven in E2E:
+      - A1: Org A before any PROG5 data (1 = 1 under the pre-PROG5 rule).
+      - A2 / H7: Org B, which never uses PROG5 (1 = 1 before and after PROG5 activity in Org A).
+      - Unit tests: identical derivation with empty availability reasons.
+  - One vehicle: every setting is optional, there is no setup wall, and create / assign work exactly as before.
+  - 3 / 10 / 30+ drivers: the same screens. Density grows with facts only (more rows, non-zero counts, flags, known
+    reasons). No business_stage branching.
+
+======================================================================
+15. TEST RESULTS
+======================================================================
+SQL:
+  - supabase/tests/availability_capability_tests.sql: 25/25 PASS. The whole suite rolls back and is rerunnable
+    (verified with two consecutive runs). It covers:
+      - explicit NOT SET;
+      - split / overnight / midnight / Sunday → Monday wrap;
+      - rejects: ring overlap, same-day overlap, Fri → Sat, start = end, bad weekday / time, empty, non-array,
+        more than 28 shifts;
+      - clear; driver and foreign denial; audit contents;
+      - time off create / update / idempotent / bounds / cross-driver / foreign;
+      - vehicle windows (vehicles.status untouched);
+      - capabilities (Admin only; Dispatcher, Driver and foreign → ZW002; bounds; NULL stays unknown; no backfill);
+      - trip requirement set / clear / terminal / foreign;
+      - recurring set / clear / ended / foreign;
+      - occurrence snapshot true / false / NULL and no rewrite;
+      - legacy callers; direct writes denied (11 statements as the ADMIN session);
+      - RLS reads (Admin / Dispatcher yes, Driver nothing, Org B nothing);
+      - driver own-read boundary (own only, Org B driver / non-driver → ZW002, anon → 42501);
+      - function privileges; single overloads; privacy columns.
+  - All 50 SQL suites were run on a freshly reset database.
+      - PROG5-affected suites are clean: availability 25/25, trip_expected_duration 26/26, create_trip_privilege 5/5,
+        create_trip 20/20, rls_adversarial 33/33, security_definer_exposure 20/20, client_privilege_surface 21/21,
+        function_privilege 7/7, privilege contract 0/29.
+      - Pre-existing, unrelated failures were PROVEN identical without PROG5. An A/B run temporarily moved the PROG5
+        migration out, reset to the pre-PROG5 head (20260925100000, 69 migrations), and ran the identical suites in
+        the identical order: every non-PROG5 suite had IDENTICAL PASS / FAIL counts. The only differences were the
+        two suites that now pin the new 13-argument create_trip signature, which is expected.
+      - The pre-existing failures:
+          notifications_activity ACT-1 / PAGE-1
+            Order-dependent: earlier non-transactional suites add rows.
+          recurring_trip_creation RTC-04 and recurring_arrangement_mutation SKIP-05 / SKIP-08/09
+            Clock-dependent. RTC-04 uses UTC current_date − 1 = 2026-09-25, which was still "today" in New York at
+            run time (≈01:00 UTC), so those checks fail between about 00:00 and 04:00 UTC.
+          request_decision_expand_compat
+            Written for the pre-contract EXPAND window; the legacy overloads were intentionally removed by
+            20260924091000.
+          website_requests_form A1 / A2 / F5 / P7 and website_request_form_publication PU4a
+            Order-dependent in a shared database.
+          website_intake_acquisition
+            The "FAIL" hit is a PASS line whose text contains "FAILS" (a grep artifact).
+  - PROG5B introduced none of these and did not change them.
+Unit:
+  - availability-core.test.mjs: 16 tests.
+  - capability-core.test.mjs: 6 tests.
+  - trip-readiness-core: +3 tests. readiness-actions-core: +1 test.
+  - Full suite (npm test): 671/671 (645 → 671).
+Browser E2E (.tmp-qa/p1-ops-prog5b-availability-e2e.mjs; local, untracked): 74/74 PASS, first run, clean-up verified.
+It covers:
+  - A backward compatibility (Org A / Org B; no false "Available").
+  - B Admin: split schedule; time off add / edit / delete (audited).
+  - C Dispatcher: schedule; no Add Vehicle; equipment read-only; out-of-service allowed. Driver cannot edit.
+  - D Admin equipment edit (unknown fields stay unknown); no certification wording.
+  - E New Trip: tri-state; wheelchair Request prefills Yes; override No is stored; a dialysis Request with "Uses a
+    wheelchair" notes does NOT infer; Trip Detail panel.
+  - F Recurring: create Yes; the occurrence snapshots true; the edit to No does not rewrite the occurrence.
+  - G Assignment:
+      - off-shift, ends-after, unknown-duration partial, time off, unrelated resource clean;
+      - hours-not-set (Q2); out of service; wheelchair mismatch / unknown / capable;
+      - Assign enabled; assignment succeeds; PROG4 overlap note first.
+  - H Tomorrow: the four known reasons with labels and actions; schedule-not-set Ready; capability-unknown Ready plus a
+    neutral note; Org B counts identical; Trip Detail matches.
+  - I Dispatch:
+      - Today: Time off / Schedule not set / Available (a fully proven 24/7 schedule);
+      - Tomorrow row facts; no "Available"; labelled summary;
+      - flags; no flag for not-set; no shading; no alarm words;
+      - 1440 / 768 with no overflow for Dispatch, Drivers, Fleet and the dialog.
+  - J Driver PWA: own shifts and own time off only; no fleet / capability / other-driver data; 390 px with no
+    overflow; the Operations redirect is intact. Fleet equipment at 390 px has no overflow.
+
+======================================================================
+16. REGRESSION (final code, sequential, local)
+======================================================================
+Expectations are unchanged:
+  PROG1 E2E ............ 46/46 PASS
+  PROG2 E2E ............ 56/56 PASS
+  PROG3B E2E ........... 51/51 PASS
+  PROG4B E2E ........... 45/45 PASS
+  R2 browser E2E ....... 20/20 PASS
+  R1 integration ....... 19/19 PASS
+  R2 integration ....... 16/16 PASS
+  PROG5B E2E ........... 74/74 PASS
+Harness note (local tooling only):
+  - The older regression runner compares a 4-line Org A snapshot, while the post-reset snapshot has a 5th
+    "prog5 rows" line. So it printed a false "Org A dirty" after each suite, and the restore it triggered was a no-op.
+  - A direct 5-line check showed Org A identical to its pre-run snapshot after every run. No Chrome was left behind.
+
+======================================================================
+17. APPLICATION GATE
+======================================================================
+  TypeScript (npx tsc --noEmit) .... PASS
+  Lint (npm run lint) .............. PASS (0 errors; 0 findings in src; 95 warnings, all in untracked .tmp-qa)
+  Unit (npm test) .................. 671/671
+  Build (npm run build) ............ PASS
+  Privilege contract (local) ....... 0 violations / 29 checks
+
+======================================================================
+18. FILES
+======================================================================
+Created:
+  supabase/migrations/20260926100000_availability_capability.sql
+  supabase/tests/availability_capability_tests.sql
+  src/lib/operations/local-time-core.ts
+  src/lib/operations/availability-core.ts (+ availability-core.test.mjs)
+  src/lib/operations/capability-core.ts (+ capability-core.test.mjs)
+  src/lib/operations/availability.ts
+  src/components/operations/availability/WindowsDialog.tsx
+  src/components/operations/drivers/WorkingHoursDialog.tsx
+  src/components/operations/fleet/EquipmentDialog.tsx
+  src/components/operations/trip-detail/TripWheelchairPanel.tsx
+  src/components/operations/wheelchair/WheelchairRequirementField.tsx
+  src/components/driver/DriverWorkingHoursCard.tsx
+  docs/reports/p1-ops-prog5b-availability-capability-implementation.txt
+  (local QA only, untracked: .tmp-qa/p1-ops-prog5b-availability-e2e.mjs)
+Modified (41 tracked files, +1098 / −234):
+  Application (src/app):
+    driver/profile/page.tsx
+    operations/drivers/{actions, page}.ts(x)
+    operations/fleet/{actions, page}.ts(x)
+    operations/recurring-care/{[arrangementId]/actions, [arrangementId]/page, new/actions}.ts(x)
+    operations/tomorrow/page.tsx
+    operations/trips/{[tripId]/actions, [tripId]/page, new/actions}.ts(x)
+  Components (src/components/operations):
+    dispatch/{AssignmentGrid, DriverCapacityPanel}.tsx
+    drivers/DriversPageClient.tsx
+    fleet/FleetPageClient.tsx
+    new-trip/NewTripForm.tsx
+    overlap/OverlapNotes.tsx
+    recurring-care/{ArrangementLifecycleControls, EditArrangementDialog, NewRecurringArrangementForm}.tsx
+  Libraries (src/lib/operations):
+    assignment-context, dispatch-board, local-time, new-trip-options, new-trip, presentation, readiness-actions-core
+    (+ test), recurring-arrangement-detail, recurring-care, tomorrow-readiness, trip-detail, trip-overlap,
+    trip-readiness-core (+ test), trip-readiness
+  Generated types: src/lib/supabase/database.types.ts (+317 lines, additions only, regenerated from LOCAL).
+  SQL tests:
+    supabase/tests/privilege_contract_tests.sql (contract lists)
+    supabase/tests/{create_trip_privilege_tests, trip_expected_duration_tests}.sql (13-argument create_trip identity
+      pins only)
+  Spec: docs/reports/p1-ops-prog5a-availability-capability-spec.txt (amended; untracked).
+
+======================================================================
+19. MIGRATION STATE / PRODUCTION
+======================================================================
+  - Local: 20260926100000 applied. The local head is 20260926100000 (70 migrations; validated from scratch by
+    db reset --local).
+  - The local fictional Org A is identical to its snapshot.
+  - Production is UNTOUCHED:
+      - no db push, no migration;
+      - no push, no deploy;
+      - no Vercel, DNS or tenant change.
+    The production head remains 20260925100000; the production application remains 7eacc70.
+
+======================================================================
+20. OPEN ISSUES
+======================================================================
+  1. The unrelated pre-existing SQL-suite failures (order- and clock-dependent, and one historical EXPAND-window
+     suite) are proven identical without PROG5. They are recommended for a separate test-hygiene item. They are not
+     changed here.
+  2. Nullable RPC arguments are passed with a documented cast where the generated types model them as non-nullable
+     (same as PROG4).
+  3. The recurring edit dialog saves the arrangement fields and the wheelchair requirement in two audited calls (edit,
+     then the setter only if changed). If the setter failed after a successful edit, the operator sees the error and
+     the edit stands. This was chosen to keep edit_recurring_arrangement's contract unchanged.
+  4. Q4 Request → arrangement prefill: there is no such flow in the product. Nothing was built.
+  5. Tomorrow deliberately shows no per-row "schedule not set" note: unknowns are not readiness facts. The Dispatch
+     Tomorrow rail shows them as row facts.
+  6. Supabase CLI 2.109.0 (2.118.0 available). Its pg-delta step errored after the PROG4 production push. Consider
+     updating before the PROG5 release.
+
+======================================================================
+21. DEFERRED (post-Progressive-Operations backlog)
+======================================================================
+effective-dated schedules; bulk hours; Activity entries for the new audit actions; a retention purge; driver
+self-service; seated-capacity warnings (trips have no party size); stretcher / other capabilities; the Request →
+arrangement flow; running-late; drag-and-drop; routing / optimization; automated dispatch; payroll / HR /
+hours-of-service; maintenance systems.
+
+======================================================================
+22. EXACT PROG5 PRODUCTION-RELEASE BOUNDARY
+======================================================================
+One implementation commit containing:
+  - the migration;
+  - the SQL tests (the new suite, the contract lists and the two signature pins);
+  - the generated types;
+  - all src changes above;
+  - the amended PROG5A spec and this report.
+Excluded: .tmp-qa, logs, scratch and credentials.
+Release order (the PROG4 pattern):
+  1. Immutable commit (do not push yet).
+  2. Read-only preflight: production max_rows ≥ 500 (the window families use the same pager).
+  3. `supabase projects list` shows Nemryn / wyocbivzgrbekuyqdfts.
+  4. Migration delta: the only pending migration is 20260926100000.
+  5. `supabase db push` of that migration only.
+  6. `scripts/verify-db-privileges.sh production` → 0/29, plus object verification:
+       - the 4 tables, with RLS and SELECT-only;
+       - the new columns, with no UPDATE grant;
+       - single overloads (create_trip 13 arguments, create_recurring_arrangement 9 arguments);
+       - search_path pinned; no PUBLIC or anon execute;
+       - Driver RPCs unchanged, plus driver_get_own_schedule.
+  7. Push main → Vercel. Verify the deployed SHA.
+  8. Siloan-only smoke with the hardened harness:
+       - Admin schedule, time off, equipment, out-of-service;
+       - requirement on New Trip, Request and Recurring (snapshot);
+       - assignment notes; Tomorrow reasons; Dispatch Today / Tomorrow;
+       - Driver PWA card and redirect;
+       - backward compatibility: Siloan counts unchanged before any PROG5 data;
+       - Dispatcher checks MANUAL (no synthetic Dispatcher credential; no role mutation).
+  9. Label-based cleanup verification; post-smoke 0/29 and migration head.
+Rollback: application-only. The schema is additive and nullable. Old create_trip / create_recurring_arrangement
+callers stay compatible by named arguments. Do not drop tables to roll back the UI.
+
+======================================================================
+23. PROGRESSIVE OPERATIONS CLOSEOUT READINESS
+======================================================================
+Every PROG5A §33 capability exists locally and is tested:
+  - progressive assignment (PROG1);
+  - Tomorrow action / readiness (PROG2, now with known availability reasons);
+  - fact-driven Overview (PROG3B);
+  - trip time extent and honest overlap (PROG4B / R1 / R2);
+  - driver weekly schedule and time off;
+  - vehicle time-bounded unavailability;
+  - minimal vehicle capability facts;
+  - capability-aware warnings;
+  - a factual capacity / availability state.
+Progressive Operations can be CLOSED once PROG5 passes its production release gate. No PROG6 is planned.
+
+PROG5B LOCAL IMPLEMENTATION: PASS
+
+PRODUCTION MIGRATION APPLIED: NO
+
+PRODUCTION DEPLOYED: NO
+
+READY FOR PROG5 PRODUCTION RELEASE REVIEW: YES
+
+PROGRESSIVE OPERATIONS CLOSEOUT READY: YES
+
+PROG6 PLANNED: NO

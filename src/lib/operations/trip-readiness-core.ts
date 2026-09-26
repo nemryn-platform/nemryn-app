@@ -71,7 +71,12 @@ export type TripReadinessReasonCode =
   | "DRIVER_INACTIVE"
   | "VEHICLE_INACTIVE"
   | "PASSENGER_INACTIVE"
-  | "OPEN_EXCEPTION";
+  | "OPEN_EXCEPTION"
+  // P1-OPS-PROG5B -- KNOWN availability / capability problems only (never an unknown fact).
+  | "DRIVER_TIME_OFF"
+  | "DRIVER_OFF_SHIFT"
+  | "VEHICLE_OUT_OF_SERVICE"
+  | "VEHICLE_WHEELCHAIR_MISMATCH";
 
 /**
  * Stable, deterministic output order (S4B §4's own explicit
@@ -92,6 +97,10 @@ const REASON_ORDER: TripReadinessReasonCode[] = [
   "NEEDS_VEHICLE",
   "DRIVER_INACTIVE",
   "VEHICLE_INACTIVE",
+  "DRIVER_TIME_OFF",
+  "DRIVER_OFF_SHIFT",
+  "VEHICLE_OUT_OF_SERVICE",
+  "VEHICLE_WHEELCHAIR_MISMATCH",
   "PASSENGER_INACTIVE",
   "OPEN_EXCEPTION",
 ];
@@ -117,6 +126,12 @@ export interface TripReadinessFacts {
   vehicleStatus: string | null;
   /** The Trip's own linked Passenger's CURRENT `passengers.status` — never null (`trips.passenger_id` is NOT NULL by schema, every Trip always has a Passenger). */
   passengerStatus: string;
+  /**
+   * P1-OPS-PROG5B -- KNOWN availability / capability problems for the ACTIVE assignment (availability-core's
+   * availabilityReadinessReasons). Omitted / empty = none known. Unknown facts (schedule not set, capability not
+   * recorded, requirement unknown, duration unknown) never appear here.
+   */
+  availabilityReasons?: readonly ("DRIVER_TIME_OFF" | "DRIVER_OFF_SHIFT" | "VEHICLE_OUT_OF_SERVICE" | "VEHICLE_WHEELCHAIR_MISMATCH")[];
   /** Count of real, currently OPEN `trip_exceptions` rows — the SAME authoritative definition `trip-assurance.ts` uses, never re-derived independently. */
   openExceptionCount: number;
 }
@@ -194,6 +209,11 @@ export function deriveTripReadiness(facts: TripReadinessFacts): TripReadinessRes
   // `openExceptionCount > 0` check; never a second definition.
   if (facts.openExceptionCount > 0) {
     applicable.add("OPEN_EXCEPTION");
+  }
+
+  // P1-OPS-PROG5B -- known availability / capability problems of the active assignment.
+  if (facts.hasActiveAssignment) {
+    for (const code of facts.availabilityReasons ?? []) applicable.add(code);
   }
 
   const reasons = REASON_ORDER.filter((code) => applicable.has(code));

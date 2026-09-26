@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
@@ -13,6 +13,8 @@ import { recurringArrangementErrorMessage } from "@/lib/operations/recurring-arr
 import type { NewTripPassengerOption } from "@/lib/operations/new-trip-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
+import type { TriState } from "@/lib/operations/capability-core";
+import { WheelchairRequirementField } from "@/components/operations/wheelchair/WheelchairRequirementField";
 
 const INITIAL_STATE: CreateRecurringArrangementActionState = { status: "idle" };
 
@@ -33,6 +35,7 @@ export interface NewRecurringArrangementFormProps {
  */
 export function NewRecurringArrangementForm({ passengers }: NewRecurringArrangementFormProps) {
   const [state, formAction, pending] = useActionState(createRecurringArrangementAction, INITIAL_STATE);
+  const [wheelchair, setWheelchair] = useState<TriState>("unspecified");
   const router = useRouter();
 
   useEffect(() => {
@@ -85,6 +88,13 @@ export function NewRecurringArrangementForm({ passengers }: NewRecurringArrangem
             type="date"
             disabled={pending}
             helpText="Optional — leave blank for an open-ended standing commitment."
+          />
+
+          <WheelchairRequirementField
+            value={wheelchair}
+            onChange={setWheelchair}
+            disabled={pending}
+            helpText="Applied to each trip created from this arrangement. Used to check the assigned vehicle's recorded equipment."
           />
 
           {state.status === "error" && (

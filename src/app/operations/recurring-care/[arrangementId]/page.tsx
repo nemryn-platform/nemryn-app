@@ -92,8 +92,14 @@ export default async function RecurringArrangementDetailPage({ params }: { param
           daysOfWeek={arrangement.daysOfWeek}
           startDate={arrangement.startDate}
           endDate={arrangement.endDate}
+          requiresWheelchairAccess={arrangement.requiresWheelchairAccess}
         />
       </div>
+      <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="arrangement-wheelchair">
+        Wheelchair transport equipment:{" "}
+        {arrangement.requiresWheelchairAccess === true ? "Needed" : arrangement.requiresWheelchairAccess === false ? "Not needed" : "Not specified"}
+        <span className="text-text-muted"> · applied to trips created from now on</span>
+      </p>
 
       {arrangement.status === "ended" && arrangement.endedReason && (
         <div className="flex items-start gap-3 rounded-md border border-border-subtle bg-surface-secondary px-zw-lg py-zw-md">

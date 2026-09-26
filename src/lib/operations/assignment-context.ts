@@ -93,7 +93,7 @@ function toFact(row: DriverTripRow): DriverTripFact {
  */
 export type DriverDayTarget =
   | { kind: "trip"; tripId: string }
-  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null };
+  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null; requiresWheelchairAccess?: boolean | null };
 
 export async function getDriverDayContext(
   organizationId: string,

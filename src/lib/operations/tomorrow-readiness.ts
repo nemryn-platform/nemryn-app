@@ -1,6 +1,7 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationDayBoundsUtc } from "./day-bounds";
+import { getTripAvailabilityOutcomes } from "./availability";
 import { deriveTripReadiness, type TripReadinessFacts } from "./trip-readiness-core";
 import { aggregateTomorrowReadiness, type TomorrowReadinessAggregate, type TomorrowReadinessCandidate } from "./tomorrow-readiness-core";
 
@@ -28,6 +29,11 @@ export interface TomorrowReadinessData extends TomorrowReadinessAggregate {
    * itself is still derived only by `deriveTripReadiness`.
    */
   assignmentTargets: Record<string, TomorrowAssignmentTarget>;
+  /**
+   * P1-OPS-PROG5B: trips whose requirement is "needed" but whose assigned vehicle's wheelchair equipment is NOT
+   * RECORDED -- a neutral row note only, never a readiness reason.
+   */
+  wheelchairEquipmentNotRecorded: string[];
 }
 
 export interface TomorrowAssignmentTarget {
@@ -76,7 +82,7 @@ export interface TomorrowAssignmentTarget {
  */
 
 const TOMORROW_CANDIDATE_COLUMNS =
-  "id, state, scheduled_pickup_at, pickup_description, destination_description, recurring_arrangement_id, expected_duration_minutes, " +
+  "id, state, scheduled_pickup_at, pickup_description, destination_description, recurring_arrangement_id, expected_duration_minutes, requires_wheelchair_access, " +
   "passengers!trips_passenger_id_organization_id_fkey(display_name, status), " +
   "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, vehicle_id, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name, status), " +
@@ -112,6 +118,7 @@ interface TripRow {
   destination_description: string;
   recurring_arrangement_id: string | null;
   expected_duration_minutes: number | null;
+  requires_wheelchair_access: boolean | null;
   passengers: PassengerRelation;
   trip_assignments: AssignmentEmbed[] | null;
 }
@@ -239,6 +246,23 @@ export async function getTomorrowReadiness(
     openExceptionCountByTrip.set(row.trip_id, (openExceptionCountByTrip.get(row.trip_id) ?? 0) + 1);
   }
 
+  // P1-OPS-PROG5B: KNOWN availability / capability problems for every assigned trip, from ONE batched fact load.
+  const availabilityOutcomes = await getTripAvailabilityOutcomes(
+    organizationId,
+    timezone,
+    (tripRows ?? []).map((row) => {
+      const assignment = (row.trip_assignments ?? [])[0] ?? null;
+      return {
+        id: row.id,
+        scheduledPickupAt: row.scheduled_pickup_at,
+        expectedDurationMinutes: row.expected_duration_minutes,
+        requiresWheelchairAccess: row.requires_wheelchair_access,
+        driverId: assignment ? (unwrapOne(assignment.drivers)?.id ?? null) : null,
+        vehicleId: assignment?.vehicle_id ?? null,
+      };
+    }),
+  );
+
   const assignmentTargets: Record<string, TomorrowAssignmentTarget> = {};
   const candidates: TomorrowReadinessCandidate[] = (tripRows ?? []).map((row) => {
     // The embedded relation is already filtered to `ended_at IS NULL`
@@ -268,6 +292,7 @@ export async function getTomorrowReadiness(
       // discipline exactly).
       passengerStatus: passenger?.status ?? "inactive",
       openExceptionCount: openExceptionCountByTrip.get(row.id) ?? 0,
+      availabilityReasons: availabilityOutcomes.get(row.id)?.reasons ?? [],
     };
 
     assignmentTargets[row.id] = {
@@ -302,5 +327,6 @@ export async function getTomorrowReadiness(
     tomorrowStartUtc: startIso,
     tomorrowEndUtc: endIso,
     assignmentTargets,
+    wheelchairEquipmentNotRecorded: [...availabilityOutcomes].filter(([, o]) => o.capability === "NOT_CHECKABLE").map(([id]) => id),
   };
 }

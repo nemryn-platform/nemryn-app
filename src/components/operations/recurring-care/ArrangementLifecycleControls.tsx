@@ -17,6 +17,7 @@ export interface ArrangementLifecycleControlsProps {
   daysOfWeek: number[];
   startDate: string;
   endDate: string | null;
+  requiresWheelchairAccess: boolean | null;
 }
 
 type ActiveDialog = "edit" | "pause" | "resume" | "end" | null;
@@ -40,6 +41,7 @@ export function ArrangementLifecycleControls({
   daysOfWeek,
   startDate,
   endDate,
+  requiresWheelchairAccess,
 }: ArrangementLifecycleControlsProps) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
 
@@ -77,6 +79,7 @@ export function ArrangementLifecycleControls({
           daysOfWeek={daysOfWeek}
           startDate={startDate}
           endDate={endDate}
+          requiresWheelchairAccess={requiresWheelchairAccess}
           onClose={() => setActiveDialog(null)}
         />
       )}

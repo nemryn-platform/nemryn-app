@@ -13,6 +13,7 @@ import {
   EXTENT_ROW_MIN_HEIGHT_PX,
 } from "@/lib/operations/dispatch-grid";
 import { assignLanes, deriveAxisHours, deriveTripExtent, formatTripExtent } from "@/lib/operations/trip-overlap-core";
+import { DRIVER_NOW_STATUS_LABEL } from "@/lib/operations/availability-core";
 import type { DispatchDriverRow, DispatchTrip } from "@/lib/operations/dispatch-board";
 import {
   classifyLocationFreshness,
@@ -142,6 +143,20 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
                   <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={row.driver.displayName}>
                     {row.driver.displayName}
                   </p>
+                  {/* P1-OPS-PROG5B: Today = canonical NOW status; Tomorrow = working-hours / time-off facts (never "available tomorrow"). */}
+                  {(() => {
+                    const a = row.availability;
+                    const text = a.nowStatus
+                      ? DRIVER_NOW_STATUS_LABEL[a.nowStatus]
+                      : a.day
+                        ? [a.day.scheduleConfigured ? (a.day.hours.length ? a.day.hours.join(", ") : "No working hours") : "Schedule not set", ...a.day.timeOff.map((t) => `Time off ${t}`)].join(" · ")
+                        : null;
+                    return text ? (
+                      <p className={cn(typography.metadata, "truncate text-text-secondary")} title={text} data-testid="row-availability">
+                        {text}
+                      </p>
+                    ) : null;
+                  })()}
                   {row.trips[0]?.vehicleLabel && (
                     <p className={cn(typography.metadata, "truncate text-text-muted")} title={row.trips[0].vehicleLabel}>
                       {row.trips[0].vehicleLabel}
@@ -190,6 +205,7 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
                       overlaps ? "Overlaps another trip" : null,
                       notFullyCheckable ? "Can't fully check" : null,
                       trip.pastPlannedEnd ? "Past planned end" : null,
+                      ...trip.availabilityFlags,
                       g.continuesAfter ? "→ next day" : null,
                       g.clippedStart ? "← earlier" : null,
                     ].filter(Boolean) as string[];
@@ -202,6 +218,7 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
                         data-extent={g.known ? "known" : "unknown"}
                         data-lane={lane}
                         data-overlap={overlaps ? "1" : "0"}
+                        data-availability={trip.availabilityFlags.join("|")}
                         data-unknown-time={trip.overlap.unknownTimeCommitment ? "1" : "0"}
                         onClick={() => onReassign(trip)}
                         className={cn(
