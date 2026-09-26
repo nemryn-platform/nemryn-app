@@ -1,0 +1,343 @@
+NEMRYN PLATFORM
+P1-OPS-PROG4B -- PRODUCTION RELEASE + VERIFICATION GATE
+Scope: PROG4A (spec), PROG4B (Trip Time Extent + Honest Overlap Warnings), R1 (candidate completeness hardening) and R2
+(scheduleless active-assignment completeness). This phase covered release, migration and verification only. No new
+functionality was added. PROG5 was not started.
+
+======================================================================
+1. STARTING REPOSITORY STATE
+======================================================================
+  - Branch main. HEAD = origin/main = c625689098945c20e83fdd69067c6322584fd85e. Nothing was staged.
+  - The working tree held exactly the reviewed candidate:
+      - 27 modified tracked files;
+      - 11 new code / test / migration files;
+      - 4 PROG4 reports.
+  - Also present: known untracked local QA material (.tmp-qa) and older, unrelated untracked reports. Both were
+    excluded and left untouched.
+  - Scope scan of the candidate found no problems:
+      - no service-role usage or secret in application code (the SQL tests mention service_role only in the
+        pre-existing privilege assertions);
+      - no running-late or drag-and-drop code;
+      - no Driver PWA file;
+      - no RLS policy or direct column grant in the migration.
+
+======================================================================
+2. REVIEWED IMPLEMENTATION COMMIT + BOUNDARY
+======================================================================
+  - Commit: 7eacc702a7edc3715ce96f721fa165f625fc6e8d "feat(operations): add trip extent and overlap warnings"
+    (author Nemryn <nemryn.app@gmail.com>; Co-Authored-By trailer).
+  - 42 files, +4999 / −112:
+      - application code and tests under src/;
+      - supabase/migrations/20260925100000_trip_expected_duration.sql (the only new migration);
+      - supabase/tests: trip_expected_duration_tests.sql, plus the updated privilege_contract_tests.sql and
+        create_trip_privilege_tests.sql;
+      - src/lib/supabase/database.types.ts;
+      - reports: the PROG4A spec (amended), the PROG4B implementation, R1 and R2.
+  - Excluded: .tmp-qa, logs, screenshots, browser profiles, scratch, credentials, environment files and unrelated
+    reports.
+  - Migration integrity:
+      - sha256 4c7c1877b1e1ea9899d8e5c5a716c9af1f429c8f9762d2a65b9a3ea74a6909c8;
+      - last modified 07:51, before the PROG4B report (15:35) and R1 (20:29), so R1 and R2 did not change it.
+  - The commit was created BEFORE any production command and was not amended afterwards.
+
+======================================================================
+3. LOCAL FINAL REGRESSION (run sequentially, before the commit)
+======================================================================
+  npx tsc --noEmit ...................... PASS
+  npm run lint .......................... PASS (0 errors; 0 findings in src; 94 warnings, all in untracked .tmp-qa)
+  npm test .............................. 645/645
+  npm run build ......................... PASS
+  PROG1 browser E2E ..................... 46/46
+  PROG2 browser E2E ..................... 56/56
+  PROG3B browser E2E .................... 51/51
+  PROG4B browser E2E .................... 45/45
+  R2 browser E2E ........................ 20/20
+  R1 real candidate integration ......... 19/19
+  R2 real scheduleless integration ...... 16/16
+  trip_expected_duration_tests.sql ...... 26/26 PASS, 0 FAIL / ERROR
+  verify-db-privileges.sh local ......... 0 violations / 29 checks
+  Every run passed first time. There were no aborts, and no Org A restore was needed.
+
+======================================================================
+4. PRODUCTION PREFLIGHTS
+======================================================================
+max_rows:
+  - Observed production PostgREST max_rows = 1000.
+  - It was read with a read-only Supabase Management API GET /v1/projects/wyocbivzgrbekuyqdfts/postgrest (HTTP 200),
+    using the Supabase CLI's existing credential. The owner approved the macOS keychain prompt.
+  - 1000 ≥ OVERLAP_CANDIDATE_PAGE_SIZE (500): PASS.
+  - Nothing was changed.
+Project identity:
+  - `supabase projects list`: name Nemryn, ref wyocbivzgrbekuyqdfts, status ACTIVE_HEALTHY, linked = true: PASS.
+Migration delta (read-only, `supabase migration list --linked`):
+  - Every local migration up to 20260924091000 matched the remote. The remote head was 20260924091000.
+  - There were no remote-only migrations.
+  - The ONLY pending migration was 20260925100000.
+  - `db push --dry-run` confirmed it would push exactly 20260925100000_trip_expected_duration.sql. (The first dry
+    run hit a transient network reset on the CLI login-role call; the retry succeeded.)
+
+======================================================================
+5. PRODUCTION MIGRATION
+======================================================================
+  - `supabase db push --linked` applied 20260925100000_trip_expected_duration.sql.
+  - After the migration, the CLI printed an error from its own pg-delta component (a missing local certificate file,
+    …/.temp/pgdelta/pgdelta-target-ca.crt) before "Finished supabase db push".
+  - This was a CLI-side step after the migration. It is not a migration failure. Verification:
+      - production migration history now records 20260925100000 (local = remote);
+      - every object check below passed.
+  - No ad-hoc production SQL was used to change the schema, and no other migration was applied.
+  - Production migration head after the push: 20260925100000.
+
+======================================================================
+6. POST-MIGRATION SECURITY GATE (before deploy)
+======================================================================
+  - scripts/verify-db-privileges.sh production: violations = 0 of 29 checks.
+  - Read-only object verification:
+      - trips.expected_duration_minutes (integer, nullable), trips.expected_duration_source (text, nullable) and
+        organizations.default_trip_duration_minutes (integer, nullable) exist.
+      - Constraints exist: trips_expected_duration_minutes_range, trips_expected_duration_source_valid,
+        trips_expected_duration_source_coherent, organizations_default_trip_duration_minutes_range.
+      - create_trip: exactly 1 overload, the reviewed 12-argument form with trailing p_expected_duration_minutes
+        integer.
+      - create_trip, set_trip_expected_duration and update_organization_trip_defaults:
+          - SECURITY DEFINER;
+          - search_path pinned (public, pg_temp);
+          - PUBLIC EXECUTE = false, anon EXECUTE = false, authenticated EXECUTE = true.
+      - Column UPDATE privilege on the three new columns is held only by the owner (postgres). No client role has a
+        direct UPDATE.
+      - The 11 driver_* RPCs are intact (SECURITY DEFINER, authenticated EXECUTE). Contract checks 13, 14 and 17
+        confirm no RPC contract change beyond the reviewed ones.
+  - Gate: PASS.
+
+======================================================================
+7. PUSH + VERCEL
+======================================================================
+Git:
+  - `git push origin main`: c625689..7eacc70, fast-forward, no force.
+  - After fetch: local HEAD == origin/main == 7eacc702a7edc3715ce96f721fa165f625fc6e8d.
+Vercel (existing GitHub → Vercel path; no project, DNS or env change):
+  - Production deployment 6670756429, environment Production, sha 7eacc702a7edc3715ce96f721fa165f625fc6e8d, state
+    success (2026-09-25T21:47Z). The Vercel commit status is success.
+  - https://app.nemryn.com/sign-in → HTTP 200 (server: Vercel).
+  - The smoke's release-marker checks below confirm the domain serves this build: the "Default trip duration"
+    Settings panel and the Dispatch Today/Tomorrow switch exist only in 7eacc70.
+Deployed SHA: 7eacc702a7edc3715ce96f721fa165f625fc6e8d.
+
+======================================================================
+8. PRODUCTION SMOKE -- synthetic tenant "Siloan Medical Centre" ONLY
+======================================================================
+Scope:
+  - Siloan only (7096ad03-…, a synthetic QA tenant). Zenward and every other operator were untouched.
+  - Credentials: the existing Siloan admin and Siloan driver. No new production credential. No Membership role change.
+  - Every fixture was labelled "PROG4B QA".
+Attempt history:
+  - Run 1: 31 PASS, 2 FAIL.
+      - Its R2 fixture step tried to call create_trip from the browser with the project's public key. Separate
+        read-only probes proved that the app ships no Supabase key to browsers: it calls Supabase from the server
+        only. This was a harness defect.
+      - The second FAIL was a consequential exception.
+      - Its finally-cleanup completed: 0 fixtures, default restored.
+  - Run 2: started by me before the owner asked to pause; stopped by the owner's instruction.
+      - Stopped during setup (SIGKILL; a blocking synchronous database call ignored SIGTERM). It left 1 QA passenger
+        and 4 QA drivers.
+      - These were removed. A read-only verification showed 0 QA rows, and the default and real data unchanged.
+      - The privilege contract stayed 0/29, and the head stayed 20260925100000.
+  - Run 3: the owner-approved single rerun with the hardened harness:
+      - timestamped START / END per section;
+      - timeouts on every database call, sign-in, navigation, browser wait and fetch;
+      - label-based cleanup in finally AND on SIGINT / SIGTERM;
+      - a completion marker on both paths;
+      - a verified clean start.
+    It completed in about 10.5 minutes with no stall.
+  - Result: 60 PASS, 1 FAIL. Marker: "PROG4B-PROD-SMOKE-COMPLETE: FAIL (passes=60 fails=1 …)".
+The single FAIL -- "auth: Siloan admin sign-in -> Operations" -- is a proven harness assertion defect, NOT a product
+failure:
+  - The rewritten sign-in helper returned the FIRST path after leaving /sign-in.
+  - A separate read-only probe of the same sign-in recorded:
+      /sign-in (0 s) → / (3.0 s) → /operations (4.8 s)
+  - So the helper returned the intermediate "/" instead of the final "/operations".
+  - Sign-in itself works:
+      - it lands on /operations;
+      - the next 11 authenticated Operations pages all loaded with HTTP 200 and their content;
+      - the Run 1 helper (a fixed 5 s wait) passed the same check.
+  - The harness was NOT changed or rerun after Run 3 (the owner approved one rerun). The FAIL is reported here as
+    recorded.
+
+Run 3 results by required area (all PASS unless noted):
+Basic application smoke:
+  - Admin authentication: the harness FAIL above; the product was verified as described.
+  - Operations Overview, Requests, Trips, Dispatch Today, Dispatch Tomorrow, Tomorrow, Recurring Care, Drivers, Fleet,
+    Settings → Operations and the Proof of Service entry path:
+      - navigation 200;
+      - 0 failed same-origin resources;
+      - no error-boundary text.
+  - The release build is live (Settings panel and Dispatch day switch). /sign-in returns HTTP 200.
+Organization default:
+  - The snapshot was null, shown as "Not set".
+  - A temporary QA value of 45 was saved through Settings and shown.
+  - Existing Siloan trips were unchanged (hash identical; no bulk update).
+  - It was restored to null through Settings and verified.
+Default snapshot:
+  - New Trip with an empty duration field → 45 / organization_default.
+Explicit duration:
+  - New Trip with 90 → 90 / trip. Trip Detail shows "1 h 30 min" and "Planned 8:30 AM – 10:00 AM".
+  - Clearing it (Edit duration → empty) → NULL / NULL. The default was not re-applied.
+Known driver overlap:
+  - "This driver has another trip during this time.", with the other trip's "10:00 AM – 11:00 AM".
+  - Assign stays enabled; no alarm or score wording.
+  - The confirmed assignment succeeds (no blocking, no auto-reassignment).
+Known vehicle overlap:
+  - "This vehicle has another trip during this time." The driver is not flagged.
+  - Assign stays enabled, and the assignment succeeds.
+Unknown duration:
+  - "Can't check 1 of this driver's trips: duration not set."
+  - No overlap claim, and no clear claim.
+Q7:
+  - The fixture was a realistic scheduled, assigned trip whose planned end had passed (no lifecycle forcing).
+  - The dialog shows "Can't fully check this driver: an assigned trip has passed its planned end and is still open."
+    It shows no overlap claim and no late / running-late / behind-schedule wording.
+  - Dispatch Today keeps the block at its PLANNED width (60 min = 64 px, not stretched to now) with "Past planned end".
+R2 pickup-less active assignment (the REQUIRED check), using the Siloan admin's REAL session:
+  - The harness signed in through supabase-js signInWithPassword with the existing admin credential. The JWT role was
+    authenticated.
+  - create_trip was called through PostgREST (no pickup time) → a trip with scheduled_pickup_at NULL. Its audit row
+    records the Siloan admin as the actor.
+  - assign_trip was called through PostgREST → an active assignment to QA Driver E + QA Van 2.
+  - No service role, no impersonation, no SQL shortcut. The session was then signed out with scope local.
+  - Another scheduled trip with the same driver shows "Can't check 1 of this driver's assigned trips: pickup time not
+    set."
+  - Assign stays enabled, and the assignment succeeds.
+  - Unrelated-resource control: QA Driver B gets no pickup-time note.
+  - Vehicle equivalent: QA Van 2 with an unrelated driver shows "Can't check 1 of this vehicle's assigned trips:
+    pickup time not set." The driver is not flagged.
+  - Dispatch: the pickup-less trip is NOT fabricated onto the timeline. Driver E's scheduled block shows
+    "Can't fully check" (data-unknown-time = 1).
+  - The fixture was removed.
+R1 candidate completeness:
+  - No large production dataset was manufactured.
+  - Confirmed by the deployed SHA (7eacc70 contains the R1 / R2 loader) and the max_rows preflight (1000 ≥ 500).
+  - The >1000-row proof remains the local real-PostgREST integration (19/19).
+Dispatch Tomorrow:
+  - The 60-min block is 64 px.
+  - Known-overlap blocks are flagged and sit in separate lanes.
+  - An unknown duration shows the 128 px "Duration not set" chip.
+  - There is a readiness cross-link and no alarm wording.
+Dispatch Today: the default scope loads.
+Tomorrow readiness:
+  - Loads independently.
+  - A known overlap gets the neutral "Overlaps another trip" badge, and the prepared trip stays "Ready".
+  - The needs-preparation count equals the fact-derived count (7 vs 7). Overlap is not a readiness reason.
+  - No pickup-time text is shown. The "Open in Dispatch" cross-link works.
+Driver PWA:
+  - The Siloan driver sees their own QA trip.
+  - It shows no duration, planned end, overlap, another driver's trips or candidate-check text.
+  - /operations, /operations/dispatch and /operations/settings/operations all redirect to /driver.
+Authorization:
+  - Organization Admin: Settings → Operations is available.
+  - Driver: Operations is denied / redirected.
+  - Dispatcher: MANUAL / NOT EXECUTED (see §9).
+
+======================================================================
+9. MANUAL / NOT EXECUTED
+======================================================================
+  - Production Dispatcher checks: MANUAL / NOT EXECUTED. No synthetic Siloan Dispatcher credential exists, and QA
+    policy forbids changing a Membership role to create one. Covered by local E2E (the Dispatcher is refused Settings)
+    and SQL AUTH-1 (the Dispatcher is denied the organization default).
+  - The large-dataset (>1000 rows) paging proof: intentionally local and integration-only, per the brief.
+
+======================================================================
+10. FIXTURE CLEANUP EVIDENCE (after Run 3; re-verified independently afterwards)
+======================================================================
+  - PROG4B QA passengers 0, drivers 0, vehicles 0, trips 0, assignments 0, requests 0.
+  - 0 pickup-less active assignments in Siloan.
+  - Organization default null (the pre-smoke value). business_stage "starting" (untouched).
+  - Real Siloan drivers (Dr Gbolahan, Nemryn QA Driver, Paul Amachree: all active), vehicle (Ford Transit 12:
+    active), and 15 trips with 0 durations: identical to before the smoke. The harness's drivers / vehicles / trips /
+    assignments snapshot hash matched.
+  - Retained by design, as in the PROG3B release: the append-only audit_events rows written by the reviewed RPCs
+    during the smoke (trip_created, trip_expected_duration_updated, organization_trip_defaults_updated, assignments).
+  - No browser or test process remains.
+
+======================================================================
+11. POST-SMOKE SECURITY CONFIRMATION
+======================================================================
+  - Production privilege contract: 0 violations / 29 checks (re-run after the smoke).
+  - Production migration head: 20260925100000.
+  - No RLS, RPC or privilege change beyond the reviewed migration.
+  - No service-role client in the application.
+  - No real tenant modified.
+
+======================================================================
+12. DATABASE / SECURITY IMPACT
+======================================================================
+  - Additive schema only: three nullable columns and four CHECK constraints.
+  - create_trip was replaced with the 12-argument form (named-argument compatible with the old callers).
+  - Two new audited, role-checked SECURITY DEFINER RPCs.
+  - No RLS change, no new column grant, no service-role path.
+  - The Driver RPCs are unchanged.
+Operational notes from this release (none is a product change):
+  1. The read-only Management API api-keys call (?reveal=false), used to obtain the PUBLIC publishable key for the
+     R2 real-session client, still returned the LEGACY service_role key in plaintext. Only the new-style secret key
+     was redacted. That key was held briefly in process memory and was never printed, stored or used. The public key's
+     scratch copy was deleted after the smoke.
+  2. A one-off read-only session check used supabase-js signOut() with its default "global" scope. This revoked any
+     other active sessions of the synthetic Siloan admin QA account. The smoke harness itself uses scope "local".
+  3. `supabase db push` printed a CLI-side pg-delta certificate error after the migration. The migration applied and
+     was verified. Consider updating the Supabase CLI (installed 2.109.0; 2.118.0 is available).
+
+======================================================================
+13. OPEN ISSUES
+======================================================================
+  - The Run 3 sign-in assertion is a harness defect: it should wait for the final post-redirect path. It lives in the
+    local, untracked .tmp-qa harness only. It was not fixed after the approved single rerun.
+  - The production Dispatcher checks stay MANUAL until a synthetic Dispatcher credential is provisioned through
+    normal onboarding (never by role mutation).
+  - The local browser harness is sensitive to workstation memory pressure (R1 report §13). It is local tooling only.
+
+======================================================================
+14. DEFERRED ITEMS (unchanged; not implemented)
+======================================================================
+running-late; bulk duration defaults; per-arrangement or facility duration; appointment-arrival warnings; general trip
+editing; an Activity UI for the new audit actions; Driver duration exposure; drag-and-drop; driver shifts and time off;
+vehicle out-of-service and capability; real availability; routing, traffic, deadhead, nearest driver, route
+optimization and automated dispatch; PROG5.
+
+======================================================================
+15. ROLLBACK POINT
+======================================================================
+Application: revert 7eacc702a7edc3715ce96f721fa165f625fc6e8d, or promote the previous Vercel production deployment
+(6654914878, c625689).
+Database: normally NO rollback is needed:
+  - the columns are nullable and additive;
+  - the old application ignores them;
+  - old create_trip calls remain compatible by named arguments;
+  - the organization default is null unless set;
+  - R1 and R2 add no schema.
+Do not drop columns to roll back the UI. A genuine database security defect would be assessed separately.
+
+======================================================================
+16. FINAL RELEASE DISPOSITION
+======================================================================
+Every release gate passed:
+  - the local gate;
+  - the immutable commit;
+  - max_rows 1000;
+  - project identity;
+  - a single-migration delta;
+  - the migration applied;
+  - the post-migration security gate at 0/29;
+  - the push;
+  - the Vercel deployment of 7eacc70;
+  - every required production smoke area, including R2 through the real admin session;
+  - cleanup;
+  - the post-smoke security confirmation.
+The single recorded smoke FAIL is a separately proven harness assertion defect. Authentication itself was verified by
+the probe and by the 11 authenticated pages that followed. On that evidence the release is recorded as PASS, and the
+owner may overrule this.
+
+PROG4B PRODUCTION RELEASE: PASS
+PRODUCTION MIGRATION HEAD: 20260925100000
+PRODUCTION PRIVILEGE CONTRACT: 0 violations / 29 checks
+DEPLOYED COMMIT: 7eacc702a7edc3715ce96f721fa165f625fc6e8d
+READY FOR OWNER REVIEW OF NEXT PHASE: YES
+PROG5 STARTED: NO
