@@ -1,5 +1,6 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { countStrandedAcceptedRequests } from "./requests-list";
 import { getTodaysOperations, type TodaysOperationsData } from "./todays-operations";
 import { getTomorrowReadiness } from "./tomorrow-readiness";
 import { getRecurringArrangementsList } from "./recurring-care-list";
@@ -177,6 +178,8 @@ export async function getRequestSummary(organizationId: string): Promise<Operati
   return {
     pendingRequestCount: count ?? 0,
     oldestPendingRequestCreatedAt: data?.[0]?.created_at ?? null,
+    // P1-PILOT-R2B (PR-03): the SAME predicate as the Requests "needs a trip" filter (requests-list.ts).
+    strandedAcceptedCount: await countStrandedAcceptedRequests(organizationId),
   };
 }
 

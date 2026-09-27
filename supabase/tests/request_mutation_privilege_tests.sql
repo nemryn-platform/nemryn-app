@@ -152,11 +152,12 @@ begin
   select string_agg(column_name, ',' order by column_name) into v_update_cols
   from information_schema.column_privileges
   where table_schema = 'public' and table_name = 'transportation_requests' and grantee = 'authenticated' and privilege_type = 'UPDATE';
-  if v_update_cols = 'additional_notes,assistance_notes,destination_description,pickup_description,preferred_date,preferred_time,requester_email,requester_name,requester_phone,requester_relationship,return_trip_needed,source'
-     and v_update_cols not like '%state%' and v_update_cols not like '%passenger_id%' then
-    raise notice 'REQ-PRIV state-and-passenger-id-not-directly-updatable: PASS (UPDATE grant is exactly the safe descriptive set: %)', v_update_cols;
+  -- P1-PILOT-R2B (SEC-HYGIENE-2, owner decision D-2): the unused descriptive-column UPDATE grant was deliberately
+  -- revoked. Expected: NO direct UPDATE of any column (state / passenger_id included) -- every Request mutation is an RPC.
+  if v_update_cols is null and not has_table_privilege('authenticated', 'public.transportation_requests', 'UPDATE') then
+    raise notice 'REQ-PRIV no-direct-update: PASS (authenticated holds no UPDATE privilege on transportation_requests)';
   else
-    raise notice 'REQ-PRIV state-and-passenger-id-not-directly-updatable: FAIL (update_cols=%)', v_update_cols;
+    raise notice 'REQ-PRIV no-direct-update: FAIL (update_cols=%)', v_update_cols;
   end if;
 end $$;
 

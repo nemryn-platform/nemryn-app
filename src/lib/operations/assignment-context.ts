@@ -93,7 +93,15 @@ function toFact(row: DriverTripRow): DriverTripFact {
  */
 export type DriverDayTarget =
   | { kind: "trip"; tripId: string }
-  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null; requiresWheelchairAccess?: boolean | null };
+  | {
+      kind: "date";
+      dateKey: string;
+      pickupTime?: string | null;
+      expectedDurationMinutes?: number | null;
+      requiresWheelchairAccess?: boolean | null;
+      /** P1-PILOT-R2B Edit Trip: the trip being corrected -- evaluated at the PROPOSED date / time, never against itself. */
+      tripId?: string | null;
+    };
 
 export async function getDriverDayContext(
   organizationId: string,
@@ -124,6 +132,7 @@ export async function getDriverDayContext(
     }
   } else {
     if (!DATE_KEY_PATTERN.test(target.dateKey)) return { status: "unavailable" };
+    if (target.tripId && UUID_PATTERN.test(target.tripId)) excludeTripId = target.tripId;
     const startUtc = localMidnightUtc(target.dateKey, timezone);
     bounds = { startUtc, endUtc: localMidnightUtc(addDaysToDateKey(target.dateKey, 1), timezone) };
     dayLabel = formatOperationsLongDate(startUtc, timezone);

@@ -12,6 +12,7 @@ import { DriverInstruction } from "@/components/driver/DriverInstruction";
 import { DriverLifecycleAction } from "@/components/driver/DriverLifecycleAction";
 import { DriverLocationTracker } from "@/components/driver/DriverLocationTracker";
 import { DriverReportIssueButton } from "@/components/driver/DriverReportIssueButton";
+import { DriverRefreshOnFocus } from "@/components/driver/DriverRefreshOnFocus";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import {
@@ -98,6 +99,7 @@ export default async function DriverTripDetailPage({ params }: { params: Promise
 
   return (
     <div className="flex flex-col gap-4 pb-4">
+      <DriverRefreshOnFocus />
       <Panel>
         <div className="flex items-start justify-between gap-3">
           <h2 className={cn(typography.sectionHeading, "text-text-primary")}>{passengerName}</h2>

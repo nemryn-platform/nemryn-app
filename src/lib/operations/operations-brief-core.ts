@@ -68,6 +68,11 @@ export interface OperationsBriefDriverSnapshot {
 export interface OperationsBriefRequestSummary {
   pendingRequestCount: number;
   oldestPendingRequestCreatedAt: string | null;
+  /**
+   * P1-PILOT-R2B (PR-03): accepted Requests that still need a Trip (request-fulfilment-core: accepted AND no
+   * non-cancelled linked Trip). `null` = that count could not be loaded -- then no line is shown (never a fabricated 0).
+   */
+  strandedAcceptedCount: number | null;
 }
 
 /**

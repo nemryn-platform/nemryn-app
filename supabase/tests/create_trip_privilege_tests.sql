@@ -48,10 +48,12 @@ begin
   select string_agg(column_name, ',' order by column_name) into v_update_cols
   from information_schema.column_privileges
   where table_schema = 'public' and table_name = 'trips' and grantee = 'authenticated' and privilege_type = 'UPDATE';
-  if v_select_ok and v_update_cols = 'appointment_at,assistance_notes,destination_description,destination_facility_id,instructions,pickup_description,pickup_facility_id,scheduled_pickup_at' then
-    raise notice 'CREATE-TRIP-PRIV select-and-update-untouched: PASS (SELECT still granted; UPDATE still exactly the P1-E2-S1 planning-column set, unchanged)';
+  -- P1-PILOT-R2B (PR-15): the P1-E2-S1 planning-column UPDATE grant was deliberately revoked -- Trip details are now
+  -- corrected only through the audited update_trip_details RPC. Expected: SELECT kept, NO direct UPDATE (column or table).
+  if v_select_ok and v_update_cols is null and not has_table_privilege('authenticated', 'public.trips', 'UPDATE') then
+    raise notice 'CREATE-TRIP-PRIV select-kept-update-revoked: PASS (SELECT still granted; no direct UPDATE on trips)';
   else
-    raise notice 'CREATE-TRIP-PRIV select-and-update-untouched: FAIL (select=%, update_cols=%)', v_select_ok, v_update_cols;
+    raise notice 'CREATE-TRIP-PRIV select-kept-update-revoked: FAIL (select=%, update_cols=%)', v_select_ok, v_update_cols;
   end if;
 end $$;
 

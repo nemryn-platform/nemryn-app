@@ -16,6 +16,43 @@ export interface RequestsListFilters {
   search?: string;
   state?: RequestsListStateFilter;
   page?: number;
+  /**
+   * P1-PILOT-R2B (PR-03): with state "accepted", only Requests that still need a Trip -- the SAME predicate as the
+   * Overview stranded count (see applyNeedsTripFilter / request-fulfilment-core). Ignored for every other state.
+   */
+  needsTrip?: boolean;
+}
+
+/** `?needs=trip` is honoured only on the Accepted view (anything else is ignored, never trusted into a query). */
+export function parseRequestsNeedsTrip(value: unknown, state: RequestsListStateFilter): boolean {
+  return value === "trip" && state === "accepted";
+}
+
+/**
+ * P1-PILOT-R2B (PR-03): the ONE database form of request-fulfilment-core's "stranded" predicate for R2B
+ *   state = 'accepted' AND no linked Trip whose state <> 'cancelled'   (hasLinkedArrangement is false until R3)
+ * as a PostgREST anti-join on the aliased `active_trips` embed (which callers must select). Verified against direct
+ * SQL: no Trip and cancelled-only Trips match; scheduled / completed / no_show / cancelled+active do not.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyNeedsTripFilter<Q extends { eq: any; neq: any; is: any }>(query: Q): Q {
+  return query.eq("state", "accepted").neq("active_trips.state", "cancelled").is("active_trips", null);
+}
+
+/** Overview (PR-03): how many accepted Requests of the organization still need a Trip. Null = the count failed. */
+export async function countStrandedAcceptedRequests(organizationId: string): Promise<number | null> {
+  const supabase = await createServerSupabaseClient();
+  const { count, error } = await applyNeedsTripFilter(
+    supabase
+      .from("transportation_requests")
+      .select("id, active_trips:trips(id)", { count: "exact", head: true })
+      .eq("organization_id", organizationId),
+  );
+  if (error || count === null) {
+    logRequestsListFailure("stranded_count", error);
+    return null;
+  }
+  return count;
 }
 
 export interface RequestsListRow {
@@ -27,6 +64,8 @@ export interface RequestsListRow {
   passengerActive: boolean;
   /** Whether at least one Trip exists for this Request (P1-OPS-R1 readiness: "Trip created" vs "Ready to schedule"). */
   hasLinkedTrips: boolean;
+  /** P1-PILOT-R2B: whether at least one linked Trip is NOT cancelled (fulfilment). */
+  hasActiveTrips: boolean;
   pickupDescription: string;
   destinationDescription: string;
   preferredDate: string | null;
@@ -99,6 +138,8 @@ interface RequestRow {
   passengers: { display_name: string; status: string } | { display_name: string; status: string }[] | null;
   /** At most one row (limited on the referenced table) — existence only, for readiness. */
   trips: { id: string }[] | null;
+  /** P1-PILOT-R2B: at most one NON-cancelled linked Trip -- existence only (fulfilment / needs-a-trip). */
+  active_trips: { id: string }[] | null;
 }
 
 function unwrapPassenger(value: RequestRow["passengers"]): { display_name: string; status: string } | null {
@@ -177,13 +218,17 @@ export async function getRequestsList(organizationId: string, filters: RequestsL
   let query = supabase
     .from("transportation_requests")
     .select(
-      "id, requester_name, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, state, created_at, updated_at, passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status), trips(id)",
+      "id, requester_name, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, state, created_at, updated_at, passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status), trips(id), active_trips:trips(id)",
       { count: "exact" },
     )
     .eq("organization_id", organizationId)
-    .limit(1, { referencedTable: "trips" });
+    .limit(1, { referencedTable: "trips" })
+    .neq("active_trips.state", "cancelled")
+    .limit(1, { referencedTable: "active_trips" });
 
-  if (state !== "all") {
+  if (state === "accepted" && filters.needsTrip) {
+    query = applyNeedsTripFilter(query);
+  } else if (state !== "all") {
     query = query.eq("state", state);
   }
 
@@ -261,6 +306,7 @@ export async function getRequestsList(organizationId: string, filters: RequestsL
       passengerName: passenger?.display_name ?? null,
       passengerActive: passenger?.status === "active",
       hasLinkedTrips: (row.trips ?? []).length > 0,
+      hasActiveTrips: (row.active_trips ?? []).length > 0,
       pickupDescription: row.pickup_description,
       destinationDescription: row.destination_description,
       preferredDate: row.preferred_date,

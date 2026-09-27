@@ -923,26 +923,59 @@ exception when others then
 end $$;
 reset role;
 
--- RA-35. Existing legitimate Trip mutation (a column that IS in the narrow
--- grant list) remains usable — this migration must not have accidentally
--- narrowed or broken the pre-existing Trip update grant.
+-- RA-35. P1-PILOT-R2B (PR-15) -- deliberate expectation change: the pre-existing direct Trip planning-column UPDATE
+-- grant was revoked; Trip details are corrected ONLY through the audited update_trip_details RPC. So: a direct
+-- authenticated UPDATE of trips.instructions is DENIED (42501), and the same correction through update_trip_details
+-- succeeds and writes one audit_events row + one trip_details_updated trip_events row. The seed Trip is restored and
+-- the rows this test wrote are removed afterwards (as postgres).
 do $$
-declare v_before text;
-declare v_after text;
+declare v_trip public.trips;
+declare v_res public.trip_details_update_result;
+declare v_denied boolean := false;
 begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1';
-  select instructions into v_before from public.trips where id = '80000000-0000-0000-0000-0000000000a1';
-  update public.trips set instructions = 'S1B regression check' where id = '80000000-0000-0000-0000-0000000000a1';
-  select instructions into v_after from public.trips where id = '80000000-0000-0000-0000-0000000000a1';
-  if v_after = 'S1B regression check' then
-    raise notice 'TEST RA-35: PASS (existing legitimate Trip field update still works)';
+  begin
+    update public.trips set instructions = 'R2B direct write' where id = '80000000-0000-0000-0000-0000000000a1';
+  exception when insufficient_privilege then
+    v_denied := true;
+  end;
+  select * into v_trip from public.trips where id = '80000000-0000-0000-0000-0000000000a1';
+  v_res := public.update_trip_details(v_trip.id, v_trip.updated_at, v_trip.scheduled_pickup_at, v_trip.appointment_at,
+    v_trip.pickup_description, v_trip.pickup_facility_id, v_trip.destination_description, v_trip.destination_facility_id,
+    'R2B audited correction', v_trip.assistance_notes);
+  if v_denied and v_res.changed and v_res.changed_fields = array['instructions'] then
+    raise notice 'TEST RA-35: PASS (direct Trip UPDATE denied; update_trip_details applied the correction)';
   else
-    raise notice 'TEST RA-35: FAIL (expected update to apply, before=% after=%)', v_before, v_after;
+    raise notice 'TEST RA-35: FAIL (denied=% changed=% fields=%)', v_denied, v_res.changed, v_res.changed_fields;
   end if;
 end $$;
 reset role;
+-- RA-35b. The audited path wrote exactly one audit_events row (changed field only) and one trip_details_updated event
+-- (field names only). audit_events has no client grant (Admin reads go through list_activity_events), so this is
+-- checked as postgres.
+do $$
+declare v_audits int; declare v_events int; declare v_keys text;
+begin
+  select count(*), max((select string_agg(k, ',' order by k) from jsonb_object_keys(before_data) k))
+    into v_audits, v_keys
+  from public.audit_events where entity_id = '80000000-0000-0000-0000-0000000000a1' and action = 'trip_details_updated';
+  select count(*) into v_events from public.trip_events
+  where trip_id = '80000000-0000-0000-0000-0000000000a1' and event_type = 'trip_details_updated'
+    and metadata->'changed_fields' = '["instructions"]'::jsonb and not (metadata ? 'instructions');
+  if v_audits = 1 and v_keys = 'instructions' and v_events = 1 then
+    raise notice 'TEST RA-35b: PASS (one audit row with only the changed field; one trip_details_updated event, names only)';
+  else
+    raise notice 'TEST RA-35b: FAIL (audits=% keys=% events=%)', v_audits, v_keys, v_events;
+  end if;
+end $$;
 do $$
 begin
-  update public.trips set instructions = null where id = '80000000-0000-0000-0000-0000000000a1';
+  update public.trips set instructions = (
+    select before_data->>'instructions' from public.audit_events
+    where entity_id = '80000000-0000-0000-0000-0000000000a1' and action = 'trip_details_updated' order by occurred_at limit 1)
+  where id = '80000000-0000-0000-0000-0000000000a1'
+    and exists (select 1 from public.audit_events where entity_id = '80000000-0000-0000-0000-0000000000a1' and action = 'trip_details_updated');
+  delete from public.trip_events where trip_id = '80000000-0000-0000-0000-0000000000a1' and event_type = 'trip_details_updated';
+  delete from public.audit_events where entity_id = '80000000-0000-0000-0000-0000000000a1' and action = 'trip_details_updated';
 end $$;

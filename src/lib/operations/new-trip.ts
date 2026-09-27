@@ -40,6 +40,38 @@ function unwrapOne<T>(relation: T | T[] | null | undefined): T | null {
   return Array.isArray(relation) ? (relation[0] ?? null) : relation;
 }
 
+type ServerSupabase = Awaited<ReturnType<typeof createServerSupabaseClient>>;
+
+/** The one active-facility option query (New Trip and P1-PILOT-R2B Edit Trip share it). */
+function activeFacilitiesQuery(supabase: ServerSupabase, organizationId: string) {
+  return supabase
+    .from("facilities")
+    .select("id, name, address_line1, address_line2, city, state, postal_code")
+    .eq("organization_id", organizationId)
+    .eq("status", "active")
+    .order("name", { ascending: true });
+}
+
+function toFacilityOption(f: {
+  id: string;
+  name: string;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+}): NewTripFacilityOption {
+  return { id: f.id, name: f.name, addressLine1: f.address_line1, addressLine2: f.address_line2, city: f.city, state: f.state, postalCode: f.postal_code };
+}
+
+/** P1-PILOT-R2B: active facility options for the Edit Trip dialog (same query / shape as New Trip). */
+export async function getActiveFacilityOptions(organizationId: string): Promise<NewTripFacilityOption[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await activeFacilitiesQuery(supabase, organizationId);
+  if (error) throw new Error(`Failed to load facility options: ${error.message}`);
+  return (data ?? []).map(toFacilityOption);
+}
+
 export async function getNewTripFormData(organizationId: string): Promise<NewTripFormData> {
   const supabase = await createServerSupabaseClient();
 
@@ -50,12 +82,7 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
       .eq("organization_id", organizationId)
       .eq("status", "active")
       .order("display_name", { ascending: true }),
-    supabase
-      .from("facilities")
-      .select("id, name, address_line1, address_line2, city, state, postal_code")
-      .eq("organization_id", organizationId)
-      .eq("status", "active")
-      .order("name", { ascending: true }),
+    activeFacilitiesQuery(supabase, organizationId),
     // Eligible candidates only (P1-E3-S7 §14, tightened by P1-E1-S2F-B1
     // §5, narrowed by P1-OPS-R1): state accepted — the exact state create_trip's
     // own p_request_id validation accepts — AND passenger_id IS NOT
@@ -116,15 +143,7 @@ export async function getNewTripFormData(organizationId: string): Promise<NewTri
     phone: p.phone,
   }));
 
-  const facilities: NewTripFacilityOption[] = (facilitiesResult.data ?? []).map((f) => ({
-    id: f.id,
-    name: f.name,
-    addressLine1: f.address_line1,
-    addressLine2: f.address_line2,
-    city: f.city,
-    state: f.state,
-    postalCode: f.postal_code,
-  }));
+  const facilities: NewTripFacilityOption[] = (facilitiesResult.data ?? []).map(toFacilityOption);
 
   const requests: NewTripRequestOption[] = (requestsResult.data ?? [])
     .map((r) => ({ ...r, passenger: unwrapOne(r.passengers) }))

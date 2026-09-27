@@ -9,7 +9,6 @@ import { Combobox } from "@/components/ui/Combobox";
 import { Avatar } from "@/components/ui/Avatar";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
-import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { AttentionState } from "@/components/ui/AttentionState";
@@ -18,8 +17,6 @@ import { AddPassengerDialog } from "./AddPassengerDialog";
 import { createTripAction, type CreateTripActionState } from "@/app/operations/trips/new/actions";
 import { newTripErrorMessage } from "@/lib/operations/new-trip-errors";
 import {
-  formatFacilityAddress,
-  formatFacilityOptionLabel,
   formatRequestOptionLabel,
   type NewTripFacilityOption,
   type NewTripPassengerOption,
@@ -32,6 +29,7 @@ import { createTripNoticeParam } from "@/lib/operations/readiness-actions-core";
 import { formatDurationMinutes } from "@/lib/operations/trip-overlap-core";
 import { triStateToBoolean, type TriState } from "@/lib/operations/capability-core";
 import { WheelchairRequirementField } from "@/components/operations/wheelchair/WheelchairRequirementField";
+import { TripNotesFields, TripPlaceFields, TripScheduleFields, facilityAddressFor } from "@/components/operations/trip-fields/TripDetailFields";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -194,14 +192,14 @@ export function NewTripForm({
 
   function handlePickupFacilityChange(id: string) {
     setPickupFacilityId(id);
-    const facility = facilities.find((f) => f.id === id);
-    if (facility) setPickupDescription(formatFacilityAddress(facility));
+    const address = facilityAddressFor(facilities, id);
+    if (address) setPickupDescription(address);
   }
 
   function handleDestinationFacilityChange(id: string) {
     setDestinationFacilityId(id);
-    const facility = facilities.find((f) => f.id === id);
-    if (facility) setDestinationDescription(formatFacilityAddress(facility));
+    const address = facilityAddressFor(facilities, id);
+    if (address) setDestinationDescription(address);
   }
 
   // P1-E1-S2F-B1 §9: manual Request selection preserves the EXISTING
@@ -229,17 +227,7 @@ export function NewTripForm({
     label: p.displayName,
     secondaryLabel: p.phone ?? undefined,
   }));
-  const facilitySelectOptions = facilities.map((f) => ({ value: f.id, label: formatFacilityOptionLabel(f) }));
   const requestSelectOptions = requests.map((r) => ({ value: r.id, label: formatRequestOptionLabel(r) }));
-
-  // Non-blocking, informational only — purely a same-timezone wall-clock
-  // string comparison (no UTC conversion, no DST resolution attempted
-  // here); the Server Action re-checks the actual converted instants, and
-  // create_trip re-checks again regardless (work item §24).
-  const appointmentBeforePickup =
-    pickupDate && pickupTime && appointmentDate && appointmentTime
-      ? `${appointmentDate}T${appointmentTime}` < `${pickupDate}T${pickupTime}`
-      : false;
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -340,23 +328,17 @@ export function NewTripForm({
           </FormSection>
 
           <FormSection icon={<Calendar className="size-5" aria-hidden />} title="Trip Schedule">
-            <p className={cn(typography.metadata, "text-text-muted")}>
-              All times are in the organization&apos;s timezone ({organizationTimezone}).
-            </p>
-            <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
-              <Input label="Pickup Date" name="pickupDate" type="date" required value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} />
-              <Input label="Pickup Time" name="pickupTime" type="time" required value={pickupTime} onChange={(e) => setPickupTime(e.target.value)} />
-              <Input label="Appointment Date" name="appointmentDate" type="date" helpText="Optional" value={appointmentDate} onChange={(e) => setAppointmentDate(e.target.value)} />
-              <Input
-                label="Appointment Time"
-                name="appointmentTime"
-                type="time"
-                helpText="Optional"
-                error={appointmentBeforePickup ? "Appointment is before pickup — double-check this." : undefined}
-                value={appointmentTime}
-                onChange={(e) => setAppointmentTime(e.target.value)}
-              />
-            </div>
+            <TripScheduleFields
+              organizationTimezone={organizationTimezone}
+              pickupDate={pickupDate}
+              pickupTime={pickupTime}
+              appointmentDate={appointmentDate}
+              appointmentTime={appointmentTime}
+              onPickupDateChange={setPickupDate}
+              onPickupTimeChange={setPickupTime}
+              onAppointmentDateChange={setAppointmentDate}
+              onAppointmentTimeChange={setAppointmentTime}
+            />
           </FormSection>
 
           <FormSection icon={<Clock className="size-5" aria-hidden />} title="Expected duration">
@@ -391,63 +373,33 @@ export function NewTripForm({
           </FormSection>
 
           <FormSection icon={<MapPin className="size-5" aria-hidden />} title="Pickup">
-            <Select
-              label="Pickup Facility"
-              name="pickupFacilityId"
-              placeholder="No facility — manual address"
-              helpText="Optional. Selecting a facility fills in its address below — you can still edit it."
-              options={facilitySelectOptions}
-              value={pickupFacilityId}
-              onChange={(e) => handlePickupFacilityChange(e.target.value)}
-            />
-            <Textarea
-              label="Pickup Address"
-              name="pickupDescription"
-              required
-              rows={2}
-              placeholder="e.g. 123 Main St, Atlanta, GA"
-              value={pickupDescription}
-              onChange={(e) => setPickupDescription(e.target.value)}
+            <TripPlaceFields
+              kind="pickup"
+              facilities={facilities}
+              facilityId={pickupFacilityId}
+              description={pickupDescription}
+              onFacilityChange={handlePickupFacilityChange}
+              onDescriptionChange={setPickupDescription}
             />
           </FormSection>
 
           <FormSection icon={<Flag className="size-5" aria-hidden />} title="Destination">
-            <Select
-              label="Destination Facility"
-              name="destinationFacilityId"
-              placeholder="No facility — manual address"
-              helpText="Optional. Selecting a facility fills in its address below — you can still edit it."
-              options={facilitySelectOptions}
-              value={destinationFacilityId}
-              onChange={(e) => handleDestinationFacilityChange(e.target.value)}
-            />
-            <Textarea
-              label="Destination Address"
-              name="destinationDescription"
-              required
-              rows={2}
-              placeholder="e.g. Emory Dialysis, 456 Clifton Rd, Atlanta, GA"
-              value={destinationDescription}
-              onChange={(e) => setDestinationDescription(e.target.value)}
+            <TripPlaceFields
+              kind="destination"
+              facilities={facilities}
+              facilityId={destinationFacilityId}
+              description={destinationDescription}
+              onFacilityChange={handleDestinationFacilityChange}
+              onDescriptionChange={setDestinationDescription}
             />
           </FormSection>
 
           <FormSection icon={<NotePencil className="size-5" aria-hidden />} title="Instructions & Assistance">
-            <Textarea
-              label="Instructions"
-              name="instructions"
-              helpText="Optional. Shown to the Driver for this trip — e.g. gate codes, entrance notes."
-              placeholder="e.g. Call passenger on arrival, use the side entrance."
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
-            />
-            <Textarea
-              label="Assistance Requirements"
-              name="assistanceNotes"
-              helpText="Optional. This trip's own execution snapshot — not the passenger's saved profile notes."
-              placeholder="e.g. Wheelchair accessible vehicle required."
-              value={assistanceNotes}
-              onChange={(e) => setAssistanceNotes(e.target.value)}
+            <TripNotesFields
+              instructions={instructions}
+              assistanceNotes={assistanceNotes}
+              onInstructionsChange={setInstructions}
+              onAssistanceNotesChange={setAssistanceNotes}
             />
           </FormSection>
         </div>

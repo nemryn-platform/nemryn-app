@@ -3056,6 +3056,27 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      update_trip_details: {
+        Args: {
+          p_appointment_at: string
+          p_assistance_notes: string
+          p_destination_description: string
+          p_destination_facility_id: string
+          p_expected_updated_at: string
+          p_instructions: string
+          p_pickup_description: string
+          p_pickup_facility_id: string
+          p_scheduled_pickup_at: string
+          p_trip_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_details_update_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_details_update_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       [_ in never]: never
@@ -3282,6 +3303,12 @@ export type Database = {
         organization_id: string | null
         state: string | null
         created: boolean | null
+      }
+      trip_details_update_result: {
+        trip_id: string | null
+        changed: boolean | null
+        changed_fields: string[] | null
+        updated_at: string | null
       }
       trip_exception_result: {
         exception_id: string | null

@@ -163,3 +163,13 @@ test("business_stage / size inputs have no effect (not part of the signal contra
     assert.deepEqual(composeOperationsBrief({ ...signals({ pendingRequestCount: 1 }), business_stage: stage, vehicleCount: 40, hasDispatcher: true }), base);
   }
 });
+
+test("P1-PILOT-R2B (PR-03): accepted requests still needing a trip surface the Requests section; unknown / zero do not", () => {
+  assert.deepEqual(composeOperationsBrief(signals({ strandedRequestCount: 1 })).work, ["requests"]);
+  assert.deepEqual(composeOperationsBrief(signals({ pendingRequestCount: 1, strandedRequestCount: 2 })).work, ["requests"]);
+  assert.deepEqual(composeOperationsBrief(signals({ strandedRequestCount: 0 })).work, []);
+  assert.deepEqual(composeOperationsBrief(signals({ strandedRequestCount: null })).work, [], "an unknown count is never a work signal");
+  const fresh = composeOperationsBrief(signals({ hasEverHadTrip: false, checklistComplete: false, strandedRequestCount: 1 }));
+  assert.equal(fresh.kind, "fresh");
+  assert.equal(fresh.showRequests, true);
+});

@@ -116,6 +116,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   exception_flagged: "Exception flagged",
   exception_resolved: "Exception resolved",
   request_converted_to_trip: "Request converted to trip",
+  trip_details_updated: "Trip details corrected",
 };
 
 export function operationsEventLabel(eventType: string): string {
@@ -198,13 +199,14 @@ export function requestReadinessLabel(readiness: RequestReadiness): string {
   if (readiness === "needs_passenger") return "Passenger needed";
   if (readiness === "ready") return "Ready to schedule";
   if (readiness === "trip_created") return "Trip created";
+  if (readiness === "trip_cancelled") return "Trip cancelled — needs a trip";
   return "Not convertible";
 }
 
 /** Maps to an existing semantic TEXT color token only (never a new color) — used as a plain `text-*` class, not a badge background. */
 export function requestReadinessTextClass(readiness: RequestReadiness): string {
   if (readiness === "ready") return "text-success-text";
-  if (readiness === "needs_passenger") return "text-warning-text";
+  if (readiness === "needs_passenger" || readiness === "trip_cancelled") return "text-warning-text";
   return "text-text-muted";
 }
 

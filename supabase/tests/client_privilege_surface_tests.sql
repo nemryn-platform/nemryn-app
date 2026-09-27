@@ -296,16 +296,13 @@ begin
   end if;
 end $$;
 
--- TEST 14. Intended narrow Trip UPDATE columns remain exactly as before
--- (column-level, not table-level) — the same 8-column set established by
--- prior phases: appointment_at, assistance_notes, destination_description,
--- destination_facility_id, instructions, pickup_description,
--- pickup_facility_id, scheduled_pickup_at. recurring_arrangement_id/state/
--- passenger_id/organization_id/request_id/cancellation_reason/
--- cancelled_at/completed_at/no_show_at/created_at/updated_at/id remain
--- NOT UPDATE-granted.
+-- TEST 14. P1-PILOT-R2B (PR-15) -- deliberate expectation change: the former 8-column Trip planning UPDATE grant
+-- (appointment_at, assistance_notes, destination_description, destination_facility_id, instructions,
+-- pickup_description, pickup_facility_id, scheduled_pickup_at) was revoked; Trip details are corrected only through the
+-- audited update_trip_details RPC. Expected now: NO column-level and NO table-level UPDATE on trips for authenticated
+-- (recurring_arrangement_id / state / passenger_id / organization_id / request_id / lifecycle timestamps were never
+-- UPDATE-granted and still are not).
 do $$
-declare v_expected text[] := array['appointment_at','assistance_notes','destination_description','destination_facility_id','instructions','pickup_description','pickup_facility_id','scheduled_pickup_at'];
 declare v_actual text[];
 declare v_table_level boolean;
 begin
@@ -315,8 +312,8 @@ begin
 
   v_table_level := has_table_privilege('authenticated', 'public.trips', 'UPDATE');
 
-  if v_actual = (select array_agg(x order by x) from unnest(v_expected) as x) and not v_table_level then
-    raise notice 'TEST CLIENT-PRIV-14: PASS (trips UPDATE remains column-scoped to exactly the intended 8 columns, no table-level UPDATE): %', v_actual;
+  if v_actual is null and not v_table_level then
+    raise notice 'TEST CLIENT-PRIV-14: PASS (authenticated holds no UPDATE on trips -- column or table level; corrections go through update_trip_details)';
   else
     raise notice 'TEST CLIENT-PRIV-14: FAIL (columns=%, table_level_update=%)', v_actual, v_table_level;
   end if;

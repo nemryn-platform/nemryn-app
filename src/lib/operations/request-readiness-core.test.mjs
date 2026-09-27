@@ -91,3 +91,14 @@ test("actions — declined/cancelled are terminal: no action at all (O/P)", () =
     assert.ok(Object.values(a).every((v) => v === false), state);
   }
 });
+
+test("P1-PILOT-R2B: accepted whose linked Trips are ALL cancelled -> trip_cancelled (needs a trip again)", () => {
+  assert.equal(deriveRequestReadiness({ ...linked, state: "accepted", hasLinkedTrips: true, hasActiveTrips: false }), "trip_cancelled");
+  assert.equal(deriveRequestReadiness({ ...linked, state: "accepted", hasLinkedTrips: true, hasActiveTrips: true }), "trip_created");
+  assert.equal(deriveRequestReadiness({ ...linked, state: "accepted", hasLinkedTrips: true }), "trip_created", "omitted = pre-R2B meaning");
+  assert.equal(deriveRequestReadiness({ ...linked, state: "declined", hasLinkedTrips: true, hasActiveTrips: false }), "not_convertible");
+  // Creating the replacement Trip stays available (DB rules unchanged: linking frozen once any Trip exists).
+  const a = deriveRequestActions({ ...linked, state: "accepted", hasLinkedTrips: true, hasActiveTrips: false });
+  assert.equal(a.canCreateAnotherTrip, true);
+  assert.equal(a.canLinkPassenger, false);
+});

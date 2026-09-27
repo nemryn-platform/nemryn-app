@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { WarningCircle, ListChecks } from "@phosphor-icons/react/dist/ssr";
 import { requireDriverAccess } from "@/lib/auth/authorization";
+import { DriverRefreshOnFocus } from "@/components/driver/DriverRefreshOnFocus";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -121,6 +122,7 @@ export default async function DriverTripsPage() {
 
   return (
     <div className="flex flex-col gap-6 pb-4">
+      <DriverRefreshOnFocus />
       <h2 className={cn(typography.pageTitleOperational, "text-brand-care-navy")}>Trips</h2>
 
       {isEmpty ? (

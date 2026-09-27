@@ -7,6 +7,7 @@ import type { RequestAcquisition } from "@/lib/operations/request-acquisition-co
 import { getLogRequestFormData } from "@/lib/operations/log-request";
 import { requestStatusLabel, requestStatusCategory, requestReadinessLabel, requestReadinessTextClass, formatOperationsLongDate } from "@/lib/operations/presentation";
 import { deriveRequestActions, deriveRequestReadiness } from "@/lib/operations/request-readiness-core";
+import { hasActiveTrip } from "@/lib/operations/request-fulfilment-core";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -114,6 +115,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
     passengerId: request.passenger?.id ?? null,
     passengerActive: request.passenger?.status === "active",
     hasLinkedTrips,
+    hasActiveTrips: hasActiveTrip(request.linkedTrips.map((t) => t.state)),
   };
   const actions = deriveRequestActions(readinessInput);
   const passengerNeedsResolution =

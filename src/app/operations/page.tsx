@@ -174,6 +174,7 @@ export default async function OperationsOverviewPage() {
     nextDepartureCount: brief.nextDepartures?.length ?? null,
     nextTodayPickupAt,
     pendingRequestCount: requestSummary?.pendingRequestCount ?? null,
+    strandedRequestCount: requestSummary?.strandedAcceptedCount ?? null,
     tomorrowTripCount: tomorrowReadiness?.totalScheduledTrips ?? null,
     tomorrowNeedsPreparationCount: tomorrowReadiness?.needsPreparationCount ?? null,
     activeRecurringCount: recurringCare?.activeArrangementCount ?? null,

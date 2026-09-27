@@ -73,7 +73,18 @@ POST /rest/v1/rpc/create_trip
 
 ### Direct table access is retired (ZD-101)
 
-As of this phase, `authenticated` has **no** direct INSERT grant on `trips` at all — `create_trip` is the only creation path. The existing planning-column UPDATE grant (from P1-E2-S1) and SELECT are completely unchanged.
+As of this phase, `authenticated` has **no** direct INSERT grant on `trips` at all — `create_trip` is the only creation path.
+
+**P1-PILOT-R2B:** the P1-E2-S1 planning-column UPDATE grant (8 columns) and the `trips_update_org_operations` policy are revoked / dropped. `authenticated` now has **no** direct UPDATE on `trips` of any kind (SELECT unchanged); a Trip's own planning details are corrected only through `update_trip_details` below. In the same migration the unused descriptive-column UPDATE grant on `transportation_requests` (12 columns) and `transportation_requests_update_org_operations` were removed (SEC-HYGIENE-2) — every Request mutation is an RPC (log / accept / decline / cancel / link Passenger / create_trip).
+
+### `update_trip_details(p_trip_id uuid, p_expected_updated_at timestamptz, p_scheduled_pickup_at timestamptz, p_appointment_at timestamptz, p_pickup_description text, p_pickup_facility_id uuid, p_destination_description text, p_destination_facility_id uuid, p_instructions text, p_assistance_notes text) returns trip_details_update_result`
+
+P1-PILOT-R2B (PR-01). Organization Admin / Dispatcher of the Trip's organization (else ZW002, no oracle). Full replacement of the 8 owned fields; never touches passenger, request / recurring links, state, duration, wheelchair requirement, lifecycle timestamps or assignments.
+
+- **Concurrency:** `p_expected_updated_at` must equal `trips.updated_at` (ZW003 otherwise — another edit, a driver lifecycle step or a duration / wheelchair change bumps it).
+- **Validation (create_trip's rules, ZW006):** descriptions trimmed, required, ≤ 2000; optional text trimmed, blank → NULL; appointment ≥ pickup (when either timing field changes); facilities same organization + active when CHANGED (an unchanged, later-inactive facility is tolerated); a set pickup can not be cleared; a recurring occurrence keeps its arrangement-local service date.
+- **Lifecycle matrix (ZW004):** `scheduled` all fields; `en_route_to_pickup` all fields but the pickup keeps its organization-local date; `arrived_at_pickup` appointment / destination / instructions / assistance; `passenger_onboard` + `en_route_to_destination` appointment / destination / instructions; `arrived_at_destination` and terminal states nothing.
+- **Writes (effective change only):** the changed columns; one `trip_events` row `trip_details_updated` (metadata: changed field NAMES + trip_state, never values); one `audit_events` row `trip_details_updated` (before / after of the changed fields only + trip_state; Admin-readable). A no-op returns `changed=false` and writes nothing (no updated_at bump).
 
 ---
 

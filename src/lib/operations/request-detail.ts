@@ -1,6 +1,7 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { deriveRequestReadiness, type RequestReadiness } from "./request-readiness-core";
+import { hasActiveTrip } from "./request-fulfilment-core";
 import { acquisitionFromRpcRow, type RequestAcquisition } from "./request-acquisition-core";
 import { requestReasonLabel } from "./request-decision-reasons";
 
@@ -202,6 +203,7 @@ export async function getRequestDetail(requestId: string, organizationId: string
     passengerId: row.passenger_id,
     passengerActive,
     hasLinkedTrips: (tripsData ?? []).length > 0,
+    hasActiveTrips: hasActiveTrip((tripsData ?? []).map((t) => t.state)),
   });
 
   const linkedTrips: RequestDetailLinkedTrip[] = (tripsData ?? []).map((t) => ({

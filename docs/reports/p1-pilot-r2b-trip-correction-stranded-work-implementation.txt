@@ -1,0 +1,456 @@
+NEMRYN PLATFORM
+P1-PILOT-R2B -- TRIP CORRECTION + STRANDED-WORK VISIBILITY -- LOCAL IMPLEMENTATION
+Date: 2026-09-27. LOCAL ONLY: not committed, not pushed, not deployed.
+The migration was applied to the local Supabase only; no production database command was run.
+R2C (dispatcher recovery), PR-04 (Request -> Recurring Care) and PR-12 were NOT implemented. No PROG6.
+
+======================================================================
+1. STARTING STATE
+======================================================================
+  - Branch main; HEAD = origin/main = e154a7c ("docs(operations): close Progressive Operations"); 0 tracked
+    modifications.
+  - Production (unchanged by this phase):
+      application feature release ee40052933e73aeec1d320a5a350996983d3e0f8 (docs closeout e154a7c also deployed);
+      migration head 20260926100000; privilege contract 0/29.
+  - Local migration head at start: 20260926100000.
+  - Spec: docs/reports/p1-pilot-r2a-trip-correction-recovery-spec.txt (untracked; amended in this phase).
+
+======================================================================
+2. R2A AMENDMENTS + OWNER DECISIONS D-1..D-6
+======================================================================
+Section 33 was appended to the R2A spec and supersedes earlier sections where they differ.
+  D-1 APPROVED.
+      audit_events stores before / after of the CHANGED owned fields only, including changed descriptions,
+      instructions and assistance notes. Admin-readable only; no passenger or requester data. trip_events carries
+      field NAMES only.
+  D-2 CHANGED: SEC-HYGIENE-2 is folded into R2B. The transportation_requests descriptive UPDATE grant (12 columns) is
+      revoked in the same migration, and the now-inert UPDATE policy dropped. The zero-consumer condition was
+      re-verified at implementation time (section 12). No Edit Request feature.
+  D-3 PR-12 payer / proof requirements remain a discovery gate (section 22). Nothing implemented.
+  D-4 (R3) An ended arrangement that fulfilled a recurring Request does not re-strand it. Recorded only.
+  D-5 Lifecycle matrix approved with the en-route amendment:
+      the pickup TIME may change, but its ORGANIZATION-LOCAL service DATE may not (a lifecycle restriction, ZW004).
+  D-6 Recovery states and note bounds approved for R2C only. NOT implemented.
+
+======================================================================
+3. MIGRATION (one): supabase/migrations/20260927100000_trip_details_correction.sql
+======================================================================
+  1. trip_events_event_type_check extended (drop / add) with 'trip_details_updated'. Additive; existing rows valid.
+  2. Composite type trip_details_update_result (trip_id, changed, changed_fields text[], updated_at).
+  3. update_trip_details(...):
+       SECURITY DEFINER; search_path = public, pg_temp; REVOKE ALL FROM PUBLIC; EXECUTE to authenticated only.
+  4. REVOKE UPDATE (8 planning columns) + REVOKE UPDATE ON public.trips FROM authenticated;
+     DROP POLICY trips_update_org_operations.
+  5. REVOKE UPDATE (12 descriptive columns) + REVOKE UPDATE ON public.transportation_requests FROM authenticated;
+     DROP POLICY transportation_requests_update_org_operations.
+  No other schema change, no service-role path, no R2C object, no recurring change.
+  The migration was validated from scratch twice (`supabase db reset --local`: 71/71 migrations).
+  Local head = 20260927100000.
+  Implementation note: the first local apply had a plpgsql defect (`text[] || 'literal'` parsed as an array literal ->
+  "malformed array literal"). It was caught by the SQL tests, fixed to array_append, and re-validated from scratch.
+  Never shipped.
+
+======================================================================
+4. update_trip_details
+======================================================================
+  Signature (as reviewed):
+    (p_trip_id uuid, p_expected_updated_at timestamptz, p_scheduled_pickup_at timestamptz, p_appointment_at timestamptz,
+     p_pickup_description text, p_pickup_facility_id uuid, p_destination_description text,
+     p_destination_facility_id uuid, p_instructions text, p_assistance_notes text) returns trip_details_update_result
+  Authorization:
+    - has_org_role(org of the TRIP ROW, [organization_admin, dispatcher]) -- active membership AND active
+      organization. Otherwise ZW002, with no existence oracle (Driver, foreign tenant, inactive membership, suspended
+      organization, Platform Admin without membership, not found).
+    - No auth.uid() -> ZW001. anon: no EXECUTE.
+  Owned fields (full replacement): scheduled_pickup_at, appointment_at, pickup_description, pickup_facility_id,
+    destination_description, destination_facility_id, instructions, assistance_notes.
+  Never touched: passenger_id, request_id, recurring_arrangement_id, organization_id, state, duration (still
+    set_trip_expected_duration), wheelchair (still set_trip_wheelchair_requirement), lifecycle timestamps, assignments.
+  Order: row lock FOR UPDATE -> concurrency token -> validation -> changed set -> no-op exit -> timing / facility /
+    recurring rules -> lifecycle matrix -> en-route date rule -> UPDATE only the changed columns -> one event + one
+    audit row.
+
+======================================================================
+5. FINAL LIFECYCLE FIELD MATRIX (enforced in SQL; mirrored in trip-edit-core for the UI)
+======================================================================
+  scheduled                      all 8 fields (pickup DATE and TIME may change)
+  en_route_to_pickup             all 8 fields; pickup keeps its organization-local DATE (time only)
+  arrived_at_pickup              appointment, destination (+ facility), instructions, assistance notes
+  passenger_onboard              appointment, destination (+ facility), instructions
+  en_route_to_destination        appointment, destination (+ facility), instructions
+  arrived_at_destination         none
+  completed / cancelled / no_show  none
+  A changed field that is locked -> ZW004. A no-op on any state (terminal included) returns changed=false and writes
+  nothing.
+
+======================================================================
+6. SERVICE-DATE RULES
+======================================================================
+  En-route (D-5):
+    - A changed pickup whose (instant AT TIME ZONE organization timezone)::date differs from the current one -> ZW004.
+    - A first pickup on a pickup-less trip has no date to keep and is allowed.
+  Recurring occurrence (every state):
+    - (instant AT TIME ZONE arrangement timezone)::date must stay equal -> otherwise ZW006.
+    - This is the same expression create_trip_for_recurring_occurrence and recurring-care use for occurrence
+      identity, so an occurrence can never be moved to another occurrence date and the original date can never
+      re-appear as "missing".
+  DST:
+    - The database comparison uses the real IANA timezone (no manual offsets).
+    - The UI / action layer converts input with organizationLocalToUtc (nonexistent / ambiguous local times refused,
+      never guessed) and pre-checks with localDateKeyOf (Intl, DST-honest).
+    - A unit test pins the fall-back day: 00:30 EDT and 23:30 EST are the same local date.
+
+======================================================================
+7. VALIDATION (create_trip's rules; ZW006)
+======================================================================
+  - Descriptions: trimmed, required, <= 2000.
+  - Instructions / assistance notes: trimmed, blank -> NULL. create_trip applies no length bound to these, and none
+    was invented.
+  - Appointment >= pickup (checked when either timing field changes).
+  - Facility same organization + active when CHANGED; an unchanged, later-inactive facility is tolerated.
+  - A set pickup can not be cleared.
+
+======================================================================
+8. CONCURRENCY
+======================================================================
+  - p_expected_updated_at must equal trips.updated_at under the row lock; otherwise ZW003.
+  - Any other edit, a driver lifecycle step, or a duration / wheelchair change bumps updated_at.
+  - UI:
+      - message: "This trip changed since you opened it. Refresh and review the latest details."
+      - the typed values stay visible;
+      - Refresh reloads server truth and closes the dialog; reopening shows the latest values (E2E D2-D4).
+  - A replayed save carries the old token -> ZW003.
+  - No-op: no UPDATE, no updated_at bump, no audit, no event.
+
+======================================================================
+9. AUDIT / TRIP EVENTS
+======================================================================
+  audit_events (per effective edit, exactly one row):
+    action trip_details_updated, entity_type trip, actor auth.uid(); before_data / after_data = changed fields only;
+    after_data.trip_state.
+  trip_events (per effective edit, exactly one row):
+    trip_details_updated, actor auth.uid(); metadata = { changed_fields: [names], trip_state }, never values.
+    It is not a lifecycle event and is not part of the Proof-of-Service chain.
+  Trip Detail:
+    - a quiet line "Details corrected by you / a team member · <date, time> · <field labels>" (the existing
+      attribution convention);
+    - the Trip Detail event label map gains "Trip details corrected".
+
+======================================================================
+10. EDIT TRIP UX
+======================================================================
+  - The disabled "Edit Trip" is replaced:
+      - enabled for Admin / Dispatcher whenever at least one field is editable (Trip Detail is operations-only);
+      - still rendered but disabled at arrived_at_destination / terminal, with a plain title.
+  - Field reuse: src/components/operations/trip-fields/TripDetailFields.tsx is extracted from New Trip and used by BOTH
+    New Trip and Edit Trip. It provides the schedule, pickup / destination (facility picker + address fill) and notes
+    groups, with identical names, labels and help. New Trip was refactored onto it, and its E2E / regressions still
+    pass.
+  - Dialog:
+      - prefilled in organization-local time;
+      - locked fields stay visible but read-only, with a short reason ("Locked — the driver has arrived at pickup.",
+        "Assistance is locked — the passenger is on board.", "A recurring trip keeps its date.", "The pickup date can't
+        change once the driver is on the way.");
+      - banners: "The driver may already be on the way to pickup." and "The passenger is on board. Changes are
+        recorded as in-trip corrections.";
+      - Save / Cancel / loading;
+      - on success, "Trip updated." (or the driver hint, section 11) with the changed field labels;
+      - on a no-op, "No changes to save.";
+      - calm error copy (trip-edit-errors.ts), with no database terminology.
+  - 390 px: no page overflow (E2E G1).
+
+======================================================================
+11. DRIVER REFRESH + OVERLAP / AVAILABILITY PREVIEW + ASSIGNMENT RETENTION
+======================================================================
+  Driver:
+    - DriverRefreshOnFocus is mounted on /driver, /driver/trips and /driver/trips/[id].
+    - It calls router.refresh() on visibility -> visible and on window focus, debounced to one refresh per return.
+    - No polling, no push, no new RPC fields.
+    - E2E D8: the corrected instructions appear on focus.
+  Operator hint:
+    - After an effective edit of an actively assigned trip in en_route_to_pickup or later: "Saved. The driver may
+      already be on the way. Contact them to confirm the change." plus the existing tel: Contact Driver link.
+  Preview:
+    - The dialog calls the EXISTING assignmentOverlapAction -> getAssignmentOverlap (PROG4 extent / overlap + PROG5
+      availability / capability) for the current driver / vehicle at the PROPOSED date / time.
+    - The only change to that engine: the "date" target accepts an optional tripId, used purely so the trip is never
+      its own candidate (deriveResourceOverlap already skips the target id).
+    - PROG4 notes stay first; everything is advisory; Save stays enabled (E2E B1-B9).
+  Retention:
+    - The edit never touches trip_assignments (SQL TD-15; E2E B3 / B10).
+    - New overlap / off-shift / time-off / out-of-service facts surface through the existing derived surfaces
+      (Trip Detail, Dispatch data-overlap / flags, Tomorrow reasons). Nothing derived is stored.
+
+======================================================================
+12. PR-15 TRIPS REVOKE + SEC-HYGIENE-2 REQUESTS REVOKE
+======================================================================
+  Zero consumers, re-verified at implementation time:
+    - all 27 src references to .from("trips") / .from("transportation_requests") are SELECTs;
+    - no .update / .upsert / .insert / .delete against either table;
+    - no SECURITY INVOKER function writes either table (pg_proc scan = 0).
+  After the migration:
+    - authenticated holds NO UPDATE (column or table level) on trips or transportation_requests (SQL TD-18 / TD-19;
+      E2E F5);
+    - SELECT policies unchanged.
+  Tests that pinned the revoked grants -- deliberately updated, documented in each test:
+    - privilege_contract_tests (20 column entries removed, update_trip_details added);
+    - create_trip_privilege_tests "CREATE-TRIP-PRIV select-kept-update-revoked";
+    - request_mutation_privilege_tests "REQ-PRIV no-direct-update";
+    - recurring_arrangement_foundation_tests RA-35 (direct UPDATE denied + RPC applies) + RA-35b (one audit, changed
+      field only; one event, names only);
+    - client_privilege_surface_tests CLIENT-PRIV-14.
+  CLIENT-PRIV-14 was NOT in the R2A inventory. It was found by this phase's full SQL-collection run: it failed
+  exactly as expected on the revoked grant. Recorded honestly as an R2A inventory gap.
+  docs/data/mutation-api.md updated.
+
+======================================================================
+13. PRIVILEGE CONTRACT
+======================================================================
+  - Local: 0 violations / 29 checks (after migration and after both resets).
+  - Contract identity added:
+      update_trip_details(uuid,timestamp with time zone,timestamp with time zone,timestamp with time zone,text,uuid,
+      text,uuid,text,text)
+    The check count is unchanged at 29.
+
+======================================================================
+14. REQUEST RPC REGRESSION (no direct UPDATE grant)
+======================================================================
+  - SQL TD-20, as authenticated: log -> link Passenger -> accept -> create_trip from the Request -> decline -> cancel.
+    All succeed.
+  - Browser (E2E F1-F4): Link Passenger, Accept Request, Decline Request (reason), Cancel Request (reason) through the
+    Request Hub UI all succeed.
+  - E2E E3: New Trip from a Request creates the linked trip.
+
+======================================================================
+15. REQUEST FULFILMENT CORE + READINESS
+======================================================================
+  src/lib/operations/request-fulfilment-core.ts (pure):
+    - fulfilled = hasActiveTrip OR hasLinkedArrangement;
+    - active = a linked trip whose state <> 'cancelled';
+    - completed / no_show are historical fulfilment and never re-strand;
+    - cancelled-only does NOT fulfil;
+    - stranded = accepted AND not fulfilled;
+    - hasLinkedArrangement is false in R2B, and the R3 hook needs no caller change.
+  Request readiness:
+    - trip_created now means at least one non-cancelled trip;
+    - NEW trip_cancelled "Trip cancelled — needs a trip" (warning text tone) for accepted requests whose linked trips
+      are all cancelled;
+    - omitting hasActiveTrips keeps the pre-R2B meaning;
+    - pending / declined / cancelled unchanged;
+    - the DB rules for linking and cancelling are unchanged ("Create another trip" stays available).
+  Wired into: the Requests list (active_trips embed), Request Detail (loader + page).
+
+======================================================================
+16. OVERVIEW STRANDED COUNT + ACCEPTED needs=trip FILTER
+======================================================================
+  One predicate: requests-list.ts applyNeedsTripFilter =
+    state = 'accepted' AND a PostgREST anti-join on an aliased embed `active_trips:trips(id)` filtered
+    state <> cancelled, "is null".
+  - Verified against direct SQL before use. Fixtures: none / cancelled-only / scheduled / completed /
+    cancelled + scheduled. Rows and head count both returned exactly the 2 expected (none, cancelled-only). The
+    fixtures were removed.
+  - No SECURITY INVOKER fallback was needed. No service role.
+  Overview:
+    - countStrandedAcceptedRequests (same predicate) feeds OperationsBriefRequestSummary.strandedAcceptedCount.
+    - The Requests block shows "1 accepted request still needs a trip" / "N accepted requests still need a trip",
+      linking to /operations/requests?state=accepted&needs=trip.
+    - Zero -> nothing. An unknown count (failed read) -> nothing, and never a work signal.
+    - progressive-operations-core treats stranded > 0 as a Requests work signal (fresh and standard compositions).
+    - No score, severity or aging.
+  Requests page:
+    - needs=trip is honoured only on Accepted, with a plain "Showing accepted requests that still need a trip. Show
+      all accepted" note;
+    - the pagination / search links keep it.
+  Agreement: E2E E1 / E2. Overview count = the needs=trip list = direct SQL truth (2), with the completed and
+    no_show requests excluded.
+
+======================================================================
+17. FUTURE R3 COMPATIBILITY
+======================================================================
+  R3 sets hasLinkedArrangement (and extends the anti-join with the arrangement link) without redesigning Overview,
+  the filter or readiness.
+  D-4 is recorded: an arrangement that fulfilled the request and later ended does not re-strand it.
+  No recurring schema change in R2B.
+
+======================================================================
+18. TEST RESULTS
+======================================================================
+  SQL:
+    - NEW supabase/tests/trip_details_update_tests.sql: 22/22 PASS. Fully transactional and rerunnable (two
+      consecutive runs, nothing left). It covers:
+        - scheduled all-field; no-op (whitespace);
+        - stale token; stale after a real driver_start_to_pickup;
+        - en-route same-date time + pickup / destination / instructions / assistance, and date change ZW004;
+        - arrived_at_pickup; onboard + en_route_to_destination; arrived_at_destination + completed / cancelled /
+          no_show locked;
+        - validation (blank / oversized, appointment < pickup, foreign facility, inactive changed, inactive unchanged
+          tolerated, clearing pickup);
+        - first pickup; recurring same-date OK / other date ZW006 / occurrence still matched;
+        - request-linked date change with links intact; assignment unchanged;
+        - Admin / Dispatcher allowed; Driver / foreign / inactive membership / no membership / Platform Admin /
+          suspended org ZW002; ZW001;
+        - function privileges + single overload + pinned search_path; anon denied;
+        - direct trips + requests UPDATE denied (Organization Admin);
+        - Request RPC workflow; changed-fields-only audit + names-only event;
+        - event vocabulary (no R2C type pre-created).
+    - Updated suites: recurring_arrangement_foundation 51/51, create_trip_privilege 5/5,
+      request_mutation_privilege 23/23 (0 real FAIL -- the suite's closing "review PASS/FAIL" notice is a grep
+      artifact), client_privilege_surface 21/21, privilege contract 0/29.
+    - Full collection (51 suites) on a fresh reset, compared suite-by-suite with the post-PROG5 run:
+        - every R2B-affected suite GREEN;
+        - pre-existing hygiene failures UNCHANGED in kind: notifications_activity ACT-1 / PAGE-1,
+          request_decision_expand_compat (historical EXPAND window), website_requests_form A1 / A2 / F5 / P7,
+          website_request_form_publication PU4a (order-dependent).
+        - The clock-dependent recurring checks (SKIP-05 / 08 / 09, RTC-04) PASSED this run (time-of-day dependent, as
+          documented).
+        - website_intake_acquisition's former "FAIL" was the "FAILS" grep artifact (not counted with the stricter
+          pattern).
+      NOT claimed: "all SQL tests pass".
+  Unit: npm test 683/683 (671 -> 683). New:
+    - trip-edit-core.test.mjs: matrix per state, banners / labels, changedFields normalization, en-route same-date,
+      recurring date, DST fall-back;
+    - request-fulfilment-core.test.mjs: no trip / active / completed / no_show / cancelled-only / R3 hook /
+      non-accepted / Overview copy;
+    - request-readiness-core: trip_cancelled;
+    - progressive-operations-core: the stranded work signal.
+  Browser E2E (.tmp-qa/p1-pilot-r2b-trip-correction-e2e.mjs, local): 49/49 PASS, cleanup verified.
+    Covers: scheduled date / time edit + org-local prefill + Tomorrow membership + no-op + attribution + audit;
+    Dispatch position + overlap before / after save + overlap removed; hours / time-off / out-of-service preview;
+    en-route banner / date lock / same-day time / server refusal of a forced date change / operator hint;
+    arrived-at-pickup + onboard locks; terminal disabled; two-session stale + Refresh; Dispatcher edit; Driver denied;
+    Driver PWA focus refresh; the complete stranded-request flow; the Request Hub UI without grants; 390 px.
+    The first run was 47 PASS / 2 FAIL. Both were SCRIPT defects, proven from the log and fixed without changing
+    expectations:
+      - E2 collected the "/operations/requests/new" link as an id;
+      - C4 waited on text that also appears in the locked-date note, so it read before the server replied.
+  Regressions (sequential, local, expectations unchanged):
+    PROG1 46/46, PROG2 56/56, PROG3B 51/51, PROG4B 45/45, R2 E2E 20/20, PROG5B 74/74, R1 integration 19/19,
+    R2 integration 16/16.
+    Local Org A is identical afterwards: 9 trips (= the fresh-seed count), seed drivers / vans active, 0 PROG5 rows.
+  Application gate:
+    TypeScript PASS; lint 0 errors (100 warnings, all in untracked .tmp-qa; 0 in src); unit 683/683; build PASS.
+
+======================================================================
+19. FILES
+======================================================================
+  Created:
+    supabase/migrations/20260927100000_trip_details_correction.sql
+    supabase/tests/trip_details_update_tests.sql
+    src/lib/operations/trip-edit-core.ts (+ .test.mjs)
+    src/lib/operations/trip-edit-errors.ts
+    src/lib/operations/request-fulfilment-core.ts (+ .test.mjs)
+    src/components/operations/trip-fields/TripDetailFields.tsx
+    src/components/operations/trip-detail/EditTripDialog.tsx
+    src/components/driver/DriverRefreshOnFocus.tsx
+    docs/reports/p1-pilot-r2b-trip-correction-stranded-work-implementation.txt
+    (local QA only, untracked: .tmp-qa/p1-pilot-r2b-trip-correction-e2e.mjs)
+  Modified (32 tracked files, +565 / -169):
+    src/app/driver/{page, trips/page, trips/[tripId]/page}.tsx
+    src/app/operations/page.tsx
+    src/app/operations/requests/{page, [requestId]/page}.tsx
+    src/app/operations/trips/[tripId]/{actions.ts, page.tsx}
+    src/components/operations/{OperationsBrief, new-trip/NewTripForm, requests/RequestsTable,
+      trip-detail/TripDetailActionBar}.tsx
+    src/lib/operations/{assignment-context, new-trip, operations-brief-core, operations-brief, presentation,
+      progressive-operations-core (+test), request-detail, request-readiness-core (+test), requests-list, trip-detail,
+      trip-overlap}.ts
+    src/lib/supabase/database.types.ts (additions only: the RPC + result type, regenerated from local)
+    supabase/tests/{privilege_contract, create_trip_privilege, request_mutation_privilege,
+      recurring_arrangement_foundation, client_privilege_surface}_tests.sql
+    docs/data/mutation-api.md
+  Also: docs/reports/p1-pilot-r2a-trip-correction-recovery-spec.txt (amended, untracked);
+    docs/reports/p1-pilot-readiness-r1-operational-mvp-audit.txt (untracked).
+
+======================================================================
+20. MIGRATION STATE / PRODUCTION
+======================================================================
+  - Local head 20260927100000 (71 migrations).
+  - Production UNTOUCHED: no db push, no git push, no deploy, no Vercel / DNS change, no tenant mutation.
+    The Supabase CLI remains linked to Nemryn / wyocbivzgrbekuyqdfts, but no --linked command was run in this phase.
+  - Production remains application ee40052 (+ docs e154a7c) with migration head 20260926100000.
+
+======================================================================
+21. OPEN ISSUES
+======================================================================
+  1. R2A inventory gap: CLIENT-PRIV-14 also pinned the trips grant. It was found by the full SQL run, updated
+     deliberately, and recorded here.
+  2. The edit dialog's date input is read-only for en-route / recurring trips. The server independently refuses a
+     forced date change (E2E C4); both layers enforce the rule.
+  3. Nullable RPC arguments are cast in the Server Action because the generated types model them as non-nullable
+     (the same documented pattern as PROG4 / PROG5).
+  4. Pre-existing SQL test-hygiene failures (section 18) remain, unchanged.
+  5. Workstation-to-production database connectivity was unstable in the PROG5 release. Plan the R2B release
+     verification from a stable network or CI (see the PROG5 release report).
+
+======================================================================
+22. PR-12 DISCOVERY GATE
+======================================================================
+  Pilot go-live still requires confirmation of the pilot payer / broker's evidence requirements (signature / photo /
+  mileage / other). If any is mandated, PR-12 becomes P0 before live go-live. It does NOT block R2B development or its
+  release.
+
+======================================================================
+23. EXACT R2B PRODUCTION-RELEASE BOUNDARY
+======================================================================
+  One implementation commit:
+    - the migration;
+    - the new + updated SQL tests;
+    - the generated types;
+    - all src changes in section 19;
+    - docs/data/mutation-api.md;
+    - the amended R2A spec (+ this report and, if the owner wishes, the R1 audit).
+  Excluded: .tmp-qa, logs, scratch, credentials.
+  Release order (established pattern):
+    1. immutable commit;
+    2. project identity (supabase projects list = Nemryn / wyocbivzgrbekuyqdfts);
+    3. dry-run delta = exactly 20260927100000;
+    4. db push;
+    5. contract 0/29 + object verification:
+         - update_trip_details (definer, pinned, no PUBLIC / anon);
+         - no authenticated UPDATE on trips / transportation_requests;
+         - both UPDATE policies absent;
+         - the trip_events CHECK includes trip_details_updated;
+    6. push main -> Vercel; verify the deployed SHA;
+    7. short UI-first production verification in the synthetic tenant or pilot tenant, per the owner;
+    8. cleanup;
+    9. report.
+  Rollback:
+    - application: revert or promote the previous deployment; the schema is additive + a revoke.
+    - No previous application version uses the revoked grants, so do NOT re-grant.
+    - A defective RPC can be REVOKEd from authenticated without dropping it.
+
+======================================================================
+24. REMAINING BLOCKERS / GAPS; R2C READINESS
+======================================================================
+  After R2B:
+    - P0 pilot blockers: NONE from the readiness audit (PR-01 addressed locally; effective once released).
+    - Conditional: PR-12 (payer discovery).
+  Remaining P1:
+    - PR-02 (dispatcher recovery -> R2C);
+    - PR-04 (Request -> Recurring Care -> R3 candidate).
+    - PR-03 is addressed.
+  R2C readiness:
+    - The spec is complete (R2A sections 16-20, 27, 29; D-6 approved).
+    - The trip_events vocabulary pattern is established.
+    - Nothing in R2B pre-creates R2C objects (SQL TD-22).
+  READY for R2C implementation review.
+
+P1-PILOT-R2B LOCAL IMPLEMENTATION: PASS
+
+P0 PILOT BLOCKER PR-01: ADDRESSED
+
+TRIPS DIRECT UPDATE SURFACE: REVOKED
+
+REQUESTS DIRECT UPDATE SURFACE: REVOKED
+
+PRODUCTION MIGRATION APPLIED: NO
+
+PRODUCTION DEPLOYED: NO
+
+READY FOR R2B PRODUCTION RELEASE REVIEW: YES
+
+READY FOR R2C IMPLEMENTATION REVIEW: YES
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+PROG6 PLANNED: NO

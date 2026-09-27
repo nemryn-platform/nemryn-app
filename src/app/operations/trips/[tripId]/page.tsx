@@ -10,6 +10,8 @@ import { formatOperationsTime, formatOperationsLongDate } from "@/lib/operations
 import { TripStatus } from "@/components/ui/TripStatus";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TripDetailActionBar } from "@/components/operations/trip-detail/TripDetailActionBar";
+import { canEditTrip, tripEditFieldLabels } from "@/lib/operations/trip-edit-core";
+import { getActiveFacilityOptions } from "@/lib/operations/new-trip";
 import { TripInfoStrip } from "@/components/operations/trip-detail/TripInfoStrip";
 import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePanel";
 import { PassengerInfoPanel } from "@/components/operations/trip-detail/PassengerInfoPanel";
@@ -127,6 +129,12 @@ export default async function TripDetailPage({
   }
   const lastUpdateAt = events[0]?.occurredAt ?? trip.updatedAt;
 
+  // P1-PILOT-R2B (PR-01): Edit Trip needs the active facility options (same query as New Trip); a failed read hides the
+  // edit flow rather than offering an incomplete form. The last correction is attributed with the existing convention
+  // (you / a team member) -- field labels only, never values.
+  const editFacilities = canEditTrip(trip.state) ? await getActiveFacilityOptions(organization.organizationId).catch(() => null) : null;
+  const correction = trip.lastCorrection;
+
   // P1-E1-S4D §16: Trip Readiness is only ever fetched/rendered for a
   // Trip currently in state='scheduled' — deriveTripReadiness itself
   // already returns NOT_APPLICABLE for every other state, but this Trip
@@ -203,6 +211,13 @@ export default async function TripDetailPage({
               {formatOperationsLongDate(new Date(trip.scheduledPickupAt), timezone)}
             </p>
           )}
+          {correction && (
+            <p className={cn(typography.metadata, "mt-1 text-text-muted")} data-testid="trip-last-correction">
+              Details corrected by {correction.actorUserId && correction.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
+              {formatOperationsLongDate(new Date(correction.occurredAt), timezone)}, {formatOperationsTime(correction.occurredAt, timezone)}
+              {correction.fields.length > 0 && <> · {tripEditFieldLabels(correction.fields).join(", ")}</>}
+            </p>
+          )}
         </div>
         <TripDetailActionBar
           tripId={trip.id}
@@ -210,6 +225,32 @@ export default async function TripDetailPage({
           driverPhone={trip.driverPhone}
           eligibleForCancel={trip.eligibleForCancel}
           eligibleForNoShow={trip.eligibleForNoShow}
+          edit={
+            editFacilities && canEditTrip(trip.state)
+              ? {
+                  trip: {
+                    id: trip.id,
+                    state: trip.state,
+                    updatedAt: trip.updatedAt,
+                    scheduledPickupAt: trip.scheduledPickupAt,
+                    appointmentAt: trip.appointmentAt,
+                    pickupDescription: trip.pickupDescription,
+                    pickupFacilityId: trip.pickupFacilityId,
+                    destinationDescription: trip.destinationDescription,
+                    destinationFacilityId: trip.destinationFacilityId,
+                    instructions: trip.instructions,
+                    assistanceNotes: trip.assistanceNotes,
+                    recurringArrangementId: trip.recurringArrangementId,
+                    driverId: trip.driverId,
+                    vehicleId: trip.vehicleId,
+                    expectedDurationMinutes: trip.expectedDurationMinutes,
+                    requiresWheelchairAccess: trip.requiresWheelchairAccess,
+                  },
+                  facilities: editFacilities,
+                  organizationTimezone: timezone,
+                }
+              : null
+          }
         />
       </div>
 

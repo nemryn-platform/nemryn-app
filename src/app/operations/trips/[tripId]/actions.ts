@@ -11,6 +11,10 @@ import { mapTripDetailError, type TripDetailErrorCode } from "@/lib/operations/t
 import { isValidExpectedDuration } from "@/lib/operations/trip-overlap-core";
 import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapTripExceptionError, type TripExceptionErrorCode, EXCEPTION_TYPE_VALUES } from "@/lib/operations/trip-exception-errors";
+import { mapTripEditError, type TripEditErrorCode } from "@/lib/operations/trip-edit-errors";
+import { checkServiceDate } from "@/lib/operations/trip-edit-core";
+import { organizationLocalToUtc } from "@/lib/operations/local-time";
+import { localDateKeyOf } from "@/lib/operations/local-time-core";
 
 export interface TripDetailActionState {
   status: "idle" | "success" | "error";
@@ -315,4 +319,114 @@ export async function setTripDurationAction(
   await revalidateTripDetailRoutes(tripId);
   revalidatePath("/operations/tomorrow");
   return { status: "success" };
+}
+
+/**
+ * P1-PILOT-R2B (PR-01) -- correct a Trip's own planning details through the audited update_trip_details RPC ONLY
+ * (authenticated has no direct UPDATE on trips). Organization-local date / time are converted with the same
+ * DST-honest organizationLocalToUtc New Trip uses (nonexistent / ambiguous -> refused, never guessed). The service-date
+ * rules are pre-checked here with the shared pure core purely for a precise message; the RPC re-checks everything.
+ * Never touches assignment, duration, wheelchair requirement, passenger, request or recurring links.
+ */
+export interface TripEditInput {
+  tripId: string;
+  expectedUpdatedAt: string;
+  pickupDate: string;
+  pickupTime: string;
+  appointmentDate: string;
+  appointmentTime: string;
+  pickupDescription: string;
+  pickupFacilityId: string;
+  destinationDescription: string;
+  destinationFacilityId: string;
+  instructions: string;
+  assistanceNotes: string;
+}
+
+export type TripEditResult =
+  | { ok: true; changed: boolean; changedFields: string[]; driverMayBeTravelling: boolean }
+  | { ok: false; code: TripEditErrorCode };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function updateTripDetailsAction(input: TripEditInput): Promise<TripEditResult> {
+  if (!input || typeof input.tripId !== "string" || !UUID_RE.test(input.tripId) || typeof input.expectedUpdatedAt !== "string") {
+    return { ok: false, code: "INVALID_INPUT" };
+  }
+  const pathname = await getCurrentPathname(`/operations/trips/${input.tripId}`);
+  const organization = await requireOperationsAccess(pathname);
+  const supabase = await createServerSupabaseClient();
+
+  const { data: trip, error: tripError } = await supabase
+    .from("trips")
+    .select("id, state, scheduled_pickup_at, request_id, recurring_arrangement_id, recurring_arrangements!trips_recurring_arrangement_id_org_fkey(timezone), trip_assignments!trip_assignments_trip_id_organization_id_fkey(ended_at)")
+    .eq("id", input.tripId)
+    .eq("organization_id", organization.organizationId)
+    .maybeSingle();
+  if (tripError) return { ok: false, code: "UNKNOWN" };
+  if (!trip) return { ok: false, code: "NOT_FOUND" };
+
+  const toUtc = (date: string, time: string): { ok: true; iso: string | null } | { ok: false; code: TripEditErrorCode } => {
+    const d = (date ?? "").trim();
+    const t = (time ?? "").trim();
+    if (!d && !t) return { ok: true, iso: null };
+    if (!d || !t) return { ok: false, code: "INVALID_INPUT" };
+    const conversion = organizationLocalToUtc({ date: d, time: t }, organization.organizationTimezone);
+    if (conversion.status === "invalid") return { ok: false, code: "INVALID_INPUT" };
+    if (conversion.status !== "ok") return { ok: false, code: "SCHEDULE_UNRESOLVABLE" };
+    return { ok: true, iso: conversion.utc.toISOString() };
+  };
+  const pickup = toUtc(input.pickupDate, input.pickupTime);
+  if (!pickup.ok) return { ok: false, code: pickup.code };
+  const appointment = toUtc(input.appointmentDate, input.appointmentTime);
+  if (!appointment.ok) return { ok: false, code: appointment.code };
+
+  const recurringRelation = trip.recurring_arrangements as { timezone: string } | { timezone: string }[] | null;
+  const recurringTimezone = Array.isArray(recurringRelation) ? (recurringRelation[0]?.timezone ?? null) : (recurringRelation?.timezone ?? null);
+  const dateCheck = checkServiceDate({
+    state: trip.state,
+    currentPickupAt: trip.scheduled_pickup_at,
+    proposedPickupAt: pickup.iso,
+    organizationTimezone: organization.organizationTimezone,
+    recurringTimezone: trip.recurring_arrangement_id ? recurringTimezone : null,
+    localDateKeyOf,
+  });
+  if (dateCheck === "recurring_date_change") return { ok: false, code: "RECURRING_DATE" };
+  if (dateCheck === "en_route_date_change") return { ok: false, code: "EN_ROUTE_DATE" };
+
+  const facility = (value: string) => (typeof value === "string" && UUID_RE.test(value) ? value : null);
+  const { data, error } = await supabase.rpc("update_trip_details", {
+    p_trip_id: input.tripId,
+    p_expected_updated_at: input.expectedUpdatedAt,
+    // Nullable RPC arguments are modelled as non-nullable by the generated types (same documented cast as PROG4/5).
+    p_scheduled_pickup_at: pickup.iso as string,
+    p_appointment_at: appointment.iso as string,
+    p_pickup_description: input.pickupDescription ?? "",
+    p_pickup_facility_id: facility(input.pickupFacilityId) as string,
+    p_destination_description: input.destinationDescription ?? "",
+    p_destination_facility_id: facility(input.destinationFacilityId) as string,
+    p_instructions: (input.instructions ?? "") as string,
+    p_assistance_notes: (input.assistanceNotes ?? "") as string,
+  });
+  if (error) return { ok: false, code: mapTripEditError(error.code) };
+
+  const changed = data?.changed === true;
+  if (changed) {
+    await revalidateTripDetailRoutes(input.tripId);
+    revalidatePath("/operations/tomorrow");
+    if (trip.recurring_arrangement_id) {
+      revalidatePath("/operations/recurring-care");
+      revalidatePath(`/operations/recurring-care/${trip.recurring_arrangement_id}`);
+    }
+    if (trip.request_id) revalidatePath(`/operations/requests/${trip.request_id}`);
+    revalidatePath("/driver", "layout");
+  }
+  const assignments = (trip.trip_assignments ?? []) as { ended_at: string | null }[];
+  const activelyAssigned = assignments.some((a) => a.ended_at === null);
+  return {
+    ok: true,
+    changed,
+    changedFields: data?.changed_fields ?? [],
+    driverMayBeTravelling: changed && activelyAssigned && trip.state !== "scheduled",
+  };
 }

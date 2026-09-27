@@ -7,6 +7,7 @@ import { LinkButton } from "@/components/ui/LinkButton";
 import { deriveTomorrowSummaryLine } from "@/lib/operations/readiness-actions-core";
 import { formatOperationsTime, formatOperationsLongDate, formatServiceDateLabel, assuranceStatusCategory } from "@/lib/operations/presentation";
 import type { OperationsBriefData } from "@/lib/operations/operations-brief-core";
+import { strandedRequestsLine, STRANDED_REQUESTS_HREF } from "@/lib/operations/request-fulfilment-core";
 import {
   BRIEF_ROW_LIMIT,
   type BriefCalmLine,
@@ -518,8 +519,10 @@ function RequestsAwaitingReviewBlock({
     );
   }
 
-  const { pendingRequestCount, oldestPendingRequestCreatedAt } = summary;
+  const { pendingRequestCount, oldestPendingRequestCreatedAt, strandedAcceptedCount } = summary;
   const hasPending = pendingRequestCount > 0;
+  // P1-PILOT-R2B (PR-03): a plain fact line, no score / aging / severity; zero or unknown -> nothing.
+  const strandedLine = strandedRequestsLine(strandedAcceptedCount ?? 0);
 
   return (
     <Panel className="flex flex-wrap items-center justify-between gap-3">
@@ -531,6 +534,13 @@ function RequestsAwaitingReviewBlock({
         {hasPending && oldestPendingRequestCreatedAt && (
           <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
             Oldest request received {formatOperationsLongDate(new Date(oldestPendingRequestCreatedAt), timezone)}
+          </p>
+        )}
+        {strandedLine && (
+          <p className={cn(typography.bodySmall, "mt-1")} data-testid="brief-stranded-requests">
+            <Link href={STRANDED_REQUESTS_HREF} className="text-text-link hover:underline">
+              {strandedLine}
+            </Link>
           </p>
         )}
       </div>

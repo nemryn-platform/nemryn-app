@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CalendarCheck, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireDriverAccess } from "@/lib/auth/authorization";
+import { DriverRefreshOnFocus } from "@/components/driver/DriverRefreshOnFocus";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -107,6 +108,7 @@ export default async function DriverTodayPage() {
 
   return (
     <div className="flex flex-col gap-6 pb-4">
+      <DriverRefreshOnFocus />
       <div>
         <div className="flex items-center justify-between gap-3">
           <h2 className={cn(typography.pageTitleOperational, "text-brand-care-navy")}>Today</h2>

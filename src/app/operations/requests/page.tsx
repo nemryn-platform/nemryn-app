@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Plus } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getRequestsList, REQUESTS_LIST_PAGE_SIZE, parseRequestsListStateFilter } from "@/lib/operations/requests-list";
+import { getRequestsList, REQUESTS_LIST_PAGE_SIZE, parseRequestsListStateFilter, parseRequestsNeedsTrip } from "@/lib/operations/requests-list";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Button } from "@/components/ui/Button";
@@ -37,6 +37,9 @@ export default async function RequestHubPage({
 
   const search = typeof params.q === "string" ? params.q : "";
   const state = parseRequestsListStateFilter(params.state);
+  // P1-PILOT-R2B (PR-03): `needs=trip` narrows the Accepted view to Requests that still need a Trip -- the SAME
+  // predicate as the Overview line that links here. Ignored on every other view.
+  const needsTrip = parseRequestsNeedsTrip(params.needs, state);
   // Math.max(1, ...) mirrors getRequestsList's own internal clamp
   // (`Math.max(1, filters.page ?? 1)`) exactly, so this value is always
   // genuinely what the query will use — never a raw, unclamped
@@ -56,12 +59,13 @@ export default async function RequestHubPage({
     const qp = new URLSearchParams();
     if (search) qp.set("q", search);
     if (state !== "pending") qp.set("state", state);
+    if (needsTrip) qp.set("needs", "trip");
     if (targetPage > 1) qp.set("page", String(targetPage));
     const qs = qp.toString();
     return qs ? `/operations/requests?${qs}` : "/operations/requests";
   };
 
-  const result = await getRequestsList(organization.organizationId, { search, state, page });
+  const result = await getRequestsList(organization.organizationId, { search, state, page, needsTrip });
 
   // P1-E1-S2D-R1: a query failure must render a visibly different,
   // restrained operational error state — never an apparently-valid
@@ -106,7 +110,7 @@ export default async function RequestHubPage({
   // report) — a search term, or any status view OTHER than the true
   // default (Pending, no search), counts as a deliberate narrowing a
   // person applied, not the organization's own baseline state.
-  const hasActiveFilters = search !== "" || state !== "pending";
+  const hasActiveFilters = search !== "" || state !== "pending" || needsTrip;
 
   const totalPages = Math.max(1, Math.ceil(result.totalCount / REQUESTS_LIST_PAGE_SIZE));
 
@@ -129,8 +133,18 @@ export default async function RequestHubPage({
 
       <RequestStatusTabs active={state} search={search} />
 
+      {needsTrip && (
+        <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="requests-needs-trip-filter">
+          Showing accepted requests that still need a trip.{" "}
+          <Link href={search ? `/operations/requests?state=accepted&q=${encodeURIComponent(search)}` : "/operations/requests?state=accepted"} className="text-text-link hover:underline">
+            Show all accepted
+          </Link>
+        </p>
+      )}
+
       <form method="get" className="max-w-md">
         {state !== "pending" && <input type="hidden" name="state" value={state} />}
+        {needsTrip && <input type="hidden" name="needs" value="trip" />}
         <SearchInput name="q" label="Search requests" placeholder="Search by name or phone" defaultValue={search} />
         <Button type="submit" className="sr-only">
           Search

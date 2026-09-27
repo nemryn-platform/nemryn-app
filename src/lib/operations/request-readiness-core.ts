@@ -27,8 +27,10 @@ export type RequestReadiness =
   | "needs_passenger"
   /** Accepted + active linked Passenger + no Trip yet — Create Trip is available. */
   | "ready"
-  /** Accepted and at least one Trip already exists. */
+  /** Accepted and at least one NON-cancelled Trip exists (request-fulfilment-core: fulfilled). */
   | "trip_created"
+  /** P1-PILOT-R2B: accepted, Trips were created, but every one of them is cancelled -- the ride still needs a Trip. */
+  | "trip_cancelled"
   /** Declined / cancelled — terminal. */
   | "not_convertible";
 
@@ -39,8 +41,13 @@ export interface RequestReadinessInput {
   passengerId: string | null;
   /** The linked Passenger's own `status === 'active'` — never inferred from passengerId alone (a linked-but-inactive Passenger is NOT ready). Ignored when passengerId is null. */
   passengerActive: boolean;
-  /** Whether at least one Trip exists for this Request (Request → Trip is 1:N). */
+  /** Whether at least one Trip exists for this Request (Request → Trip is 1:N), cancelled ones included. */
   hasLinkedTrips: boolean;
+  /**
+   * P1-PILOT-R2B: whether at least one linked Trip is NOT cancelled (request-fulfilment-core `hasActiveTrip`).
+   * Omitted = same as hasLinkedTrips (callers that cannot distinguish keep the pre-R2B meaning).
+   */
+  hasActiveTrips?: boolean;
 }
 
 export function deriveRequestReadiness(input: RequestReadinessInput): RequestReadiness {
@@ -48,7 +55,7 @@ export function deriveRequestReadiness(input: RequestReadinessInput): RequestRea
     return "not_convertible";
   }
   if (input.hasLinkedTrips) {
-    return "trip_created";
+    return (input.hasActiveTrips ?? true) ? "trip_created" : "trip_cancelled";
   }
   const passengerResolved = input.passengerId !== null && input.passengerActive;
   if (input.state === "accepted") {

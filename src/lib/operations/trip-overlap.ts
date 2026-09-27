@@ -92,7 +92,15 @@ function viewOf(check: ResourceCheck | null, set: CandidateSet, timezone: string
 
 export type OverlapTargetInput =
   | { kind: "trip"; tripId: string }
-  | { kind: "date"; dateKey: string; pickupTime?: string | null; expectedDurationMinutes?: number | null; requiresWheelchairAccess?: boolean | null };
+  | {
+      kind: "date";
+      dateKey: string;
+      pickupTime?: string | null;
+      expectedDurationMinutes?: number | null;
+      requiresWheelchairAccess?: boolean | null;
+      /** P1-PILOT-R2B Edit Trip: the trip being corrected -- its PROPOSED schedule is checked, and it is never its own candidate. */
+      tripId?: string | null;
+    };
 
 const EMPTY_DIAGNOSTICS: CandidateSet["diagnostics"] = {
   windowRows: 0,
@@ -151,6 +159,8 @@ export async function getAssignmentOverlap(
     const minutes = target.expectedDurationMinutes ?? null;
     expectedDurationMinutes = minutes !== null && isValidExpectedDuration(minutes) ? minutes : null;
     requiresWheelchairAccess = typeof target.requiresWheelchairAccess === "boolean" ? target.requiresWheelchairAccess : null;
+    // Self-exclusion only (deriveResourceOverlap skips the target's own id); the proposed values above are what's checked.
+    if (target.tripId && UUID_PATTERN.test(target.tripId)) tripId = target.tripId;
   }
 
   const extent = deriveTripExtent(scheduledPickupAt, expectedDurationMinutes);

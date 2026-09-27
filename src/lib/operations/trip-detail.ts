@@ -106,6 +106,11 @@ interface TripRow {
   expected_duration_minutes: number | null;
   expected_duration_source: string | null;
   requires_wheelchair_access: boolean | null;
+  pickup_facility_id: string | null;
+  destination_facility_id: string | null;
+  request_id: string | null;
+  recurring_arrangement_id: string | null;
+  recurring_arrangements: { timezone: string } | { timezone: string }[] | null;
   assistance_notes: string | null;
   cancelled_at: string | null;
   cancellation_reason: string | null;
@@ -118,6 +123,17 @@ interface TripRow {
   pickup_facility: FacilityRelation;
   destination_facility: FacilityRelation;
   trip_assignments: AssignmentEmbed[] | null;
+}
+
+/** Latest trip_details_updated event (events arrive newest-first); metadata.changed_fields holds field names only. */
+function lastCorrectionOf(
+  events: { event_type: string; occurred_at: string; actor_user_id: string | null; metadata: unknown }[],
+): TripDetailData["lastCorrection"] {
+  const e = events.find((x) => x.event_type === "trip_details_updated");
+  if (!e) return null;
+  const raw = (e.metadata as { changed_fields?: unknown } | null)?.changed_fields;
+  const fields = Array.isArray(raw) ? raw.filter((f): f is string => typeof f === "string") : [];
+  return { actorUserId: e.actor_user_id, occurredAt: e.occurred_at, fields };
 }
 
 function unwrapOne<T>(relation: T | T[] | null | undefined): T | null {
@@ -152,6 +168,15 @@ export interface TripDetailData {
   expectedDurationSource: "trip" | "organization_default" | null;
   /** P1-OPS-PROG5B: true / false / NULL (not specified). */
   requiresWheelchairAccess: boolean | null;
+  /** P1-PILOT-R2B: the owned correction inputs (Edit Trip prefill) + the links an edit must preserve. */
+  pickupFacilityId: string | null;
+  destinationFacilityId: string | null;
+  requestId: string | null;
+  recurringArrangementId: string | null;
+  /** The recurring arrangement's own timezone (occurrence-date rule); null for non-recurring trips. */
+  recurringTimezone: string | null;
+  /** The most recent `trip_details_updated` event (who / when / which fields) -- field NAMES only, never values. */
+  lastCorrection: { actorUserId: string | null; occurredAt: string; fields: string[] } | null;
   passengerId: string | null;
   passengerName: string;
   passengerPhone: string | null;
@@ -205,6 +230,8 @@ const TRIP_COLUMNS =
   "id, organization_id, state, scheduled_pickup_at, appointment_at, pickup_description, destination_description, " +
   "instructions, assistance_notes, cancelled_at, cancellation_reason, no_show_at, completed_at, created_at, updated_at, " +
   "expected_duration_minutes, expected_duration_source, requires_wheelchair_access, " +
+  "pickup_facility_id, destination_facility_id, request_id, recurring_arrangement_id, " +
+  "recurring_arrangements!trips_recurring_arrangement_id_org_fkey(timezone), " +
   "passengers!trips_passenger_id_organization_id_fkey(id, display_name, phone), " +
   "transportation_requests!trips_request_id_organization_id_fkey(requester_name, requester_relationship, requester_phone, requester_email), " +
   "pickup_facility:facilities!trips_pickup_facility_id_organization_id_fkey(name, city, state), " +
@@ -241,7 +268,7 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
   const [eventsResult, notesResult, exceptionsResult] = await Promise.all([
     supabase
       .from("trip_events")
-      .select("id, event_type, occurred_at")
+      .select("id, event_type, occurred_at, actor_user_id, metadata")
       .eq("trip_id", tripId)
       .eq("organization_id", organizationId)
       .order("occurred_at", { ascending: false }),
@@ -300,6 +327,12 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
         ? tripRow.expected_duration_source
         : null,
     requiresWheelchairAccess: tripRow.requires_wheelchair_access,
+    pickupFacilityId: tripRow.pickup_facility_id,
+    destinationFacilityId: tripRow.destination_facility_id,
+    requestId: tripRow.request_id,
+    recurringArrangementId: tripRow.recurring_arrangement_id,
+    recurringTimezone: unwrapOne(tripRow.recurring_arrangements)?.timezone ?? null,
+    lastCorrection: lastCorrectionOf(eventsResult.data ?? []),
     passengerId: passenger?.id ?? null,
     passengerName: passenger?.display_name ?? "Unknown Passenger",
     passengerPhone: passenger?.phone ?? null,

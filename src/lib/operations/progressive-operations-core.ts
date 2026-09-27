@@ -25,6 +25,8 @@ export interface ProgressiveOperationsSignals {
   /** The next scheduled pickup later today (beyond the Next Departures content), if any -- for the collapsed Today line. */
   nextTodayPickupAt: string | null;
   pendingRequestCount: number | null;
+  /** P1-PILOT-R2B (PR-03): accepted Requests that still need a Trip; null = unknown (never shown, never a work signal). */
+  strandedRequestCount?: number | null;
   tomorrowTripCount: number | null;
   tomorrowNeedsPreparationCount: number | null;
   activeRecurringCount: number | null;
@@ -92,7 +94,7 @@ export function composeOperationsBrief(signals: ProgressiveOperationsSignals): B
   if (isFreshOrganization(signals)) {
     return {
       kind: "fresh",
-      showRequests: gt0(signals.pendingRequestCount),
+      showRequests: gt0(signals.pendingRequestCount) || gt0(signals.strandedRequestCount ?? null),
       requestsUnavailable: signals.pendingRequestCount === null,
     };
   }
@@ -105,7 +107,7 @@ export function composeOperationsBrief(signals: ProgressiveOperationsSignals): B
 
   const work: BriefWorkSection[] = [];
   if (attention) work.push("attention");
-  if (gt0(signals.pendingRequestCount)) work.push("requests");
+  if (gt0(signals.pendingRequestCount) || gt0(signals.strandedRequestCount ?? null)) work.push("requests");
   if (signals.activeDriverCount === 0 && signals.hasEverHadTrip === true) work.push("noActiveDrivers");
   if (todayLive) work.push("today");
   if (gt0(signals.tomorrowNeedsPreparationCount)) work.push("tomorrow");

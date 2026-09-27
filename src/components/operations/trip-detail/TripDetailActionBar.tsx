@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/Button";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { CancelTripDialog } from "./CancelTripDialog";
 import { NoShowDialog } from "./NoShowDialog";
+import { EditTripDialog, type EditableTrip } from "./EditTripDialog";
+import type { NewTripFacilityOption } from "@/lib/operations/new-trip-options";
+import { tripEditFieldLabels } from "@/lib/operations/trip-edit-core";
+import { typography } from "@/design/typography";
+import { cn } from "@/lib/cn";
 
 export interface TripDetailActionBarProps {
   tripId: string;
@@ -13,6 +18,11 @@ export interface TripDetailActionBarProps {
   driverPhone: string | null;
   eligibleForCancel: boolean;
   eligibleForNoShow: boolean;
+  /**
+   * P1-PILOT-R2B: Edit Trip. `null` = no edit flow (the viewer can't edit, or no detail is editable at this stage --
+   * arrived at destination / terminal).
+   */
+  edit: { trip: EditableTrip; facilities: NewTripFacilityOption[]; organizationTimezone: string } | null;
 }
 
 /**
@@ -35,15 +45,23 @@ export function TripDetailActionBar({
   driverPhone,
   eligibleForCancel,
   eligibleForNoShow,
+  edit,
 }: TripDetailActionBarProps) {
-  const [activeDialog, setActiveDialog] = useState<"cancel" | "noshow" | null>(null);
+  const [activeDialog, setActiveDialog] = useState<"cancel" | "noshow" | "edit" | null>(null);
+  const [saved, setSaved] = useState<{ fields: string[]; driverMayBeTravelling: boolean } | null>(null);
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" disabled title="Editing a trip's own details is not available yet.">
-          Edit Trip
-        </Button>
+        {edit ? (
+          <Button variant="outline" onClick={() => setActiveDialog("edit")} data-testid="edit-trip-button">
+            Edit Trip
+          </Button>
+        ) : (
+          <Button variant="outline" disabled title="This trip's details can't be changed at its current stage." data-testid="edit-trip-button">
+            Edit Trip
+          </Button>
+        )}
         {eligibleForNoShow && (
           <Button variant="outline" onClick={() => setActiveDialog("noshow")}>
             Record No-Show
@@ -63,6 +81,32 @@ export function TripDetailActionBar({
 
       {activeDialog === "cancel" && (
         <CancelTripDialog tripId={tripId} passengerName={passengerName} onClose={() => setActiveDialog(null)} />
+      )}
+      {saved && (
+        <p role="status" data-testid="edit-trip-saved" className={cn(typography.bodySmall, "w-full text-text-secondary")}>
+          {saved.driverMayBeTravelling ? "Saved. The driver may already be on the way. Contact them to confirm the change." : "Trip updated."}{" "}
+          <span className="text-text-muted">({tripEditFieldLabels(saved.fields).join(", ")})</span>
+          {saved.driverMayBeTravelling && driverPhone && (
+            <>
+              {" "}
+              <a href={`tel:${driverPhone}`} className="text-text-link hover:underline">
+                Contact Driver
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      {activeDialog === "edit" && edit && (
+        <EditTripDialog
+          trip={edit.trip}
+          facilities={edit.facilities}
+          organizationTimezone={edit.organizationTimezone}
+          onClose={() => setActiveDialog(null)}
+          onSaved={(result) => {
+            setSaved({ fields: result.changedFields, driverMayBeTravelling: result.driverMayBeTravelling });
+            setActiveDialog(null);
+          }}
+        />
       )}
       {activeDialog === "noshow" && (
         <NoShowDialog tripId={tripId} passengerName={passengerName} onClose={() => setActiveDialog(null)} />
