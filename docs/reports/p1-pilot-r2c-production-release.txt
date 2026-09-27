@@ -1,0 +1,210 @@
+NEMRYN PLATFORM
+P1-PILOT-R2C -- DISPATCHER TRIP-COMPLETION RECOVERY (PR-02) -- PRODUCTION RELEASE
+Date: 2026-09-27.
+Release SHA: 22693db6be09d9f151859efe4c31747dddd4fd6d ("feat(pilot): add dispatcher trip completion recovery").
+Not amended. This report is NOT committed.
+Implementation record: docs/reports/p1-pilot-r2c-dispatcher-completion-recovery-implementation.txt (in 22693db).
+PR-04 and PR-12 were NOT implemented. No PROG6.
+
+======================================================================
+1. STARTING BASELINE
+======================================================================
+  - Production application 436340bb0bf166e9c17fb7ff7ad67667d878d372 (R2B), migration head 20260927100000, privilege
+    contract 0 / 29.
+  - R2B docs closeout 3797f0146ee3adae4c2a42136415a08a19308b42 ("docs(pilot): record R2B production release"),
+    pushed by the owner as the nemryn account; verified origin/main == 3797f01 before the R2C commit. (Vercel built it
+    as deployment 6698818345 -- docs only.)
+
+======================================================================
+2. APPROVED DRIVER COPY REFINEMENT
+======================================================================
+  src/lib/driver/errors.ts (the centralized Driver error copy), ZW001 / UNAUTHORIZED:
+    was  "This action is no longer available for this trip. It may have been reassigned."
+    now  "This action is no longer available for this trip. It may have been reassigned or completed."
+  Unchanged: _driver_execute_trip_transition, the ZW001 / ZW003 behaviour, assignment closure, the recovery RPC, the
+  migration, Proof semantics. Pinned by src/lib/driver/errors.test.mjs (new, 1 test) and R2C E2E F2 (exact copy,
+  captured with a DOM observer because the page refreshes right after the message).
+
+======================================================================
+3. FINAL LOCAL GATE
+======================================================================
+  Full R2C gate (implementation record section 16): record_completion SQL 31/31; full SQL collection (52 suites, fresh
+  reset) -- R2C / lifecycle / Proof-adjacent suites green, pre-existing hygiene failures unchanged; unit 710/710;
+  R2C E2E 47/47; regressions R2B E2E 49/49, PROG1 46/46, PROG2 56/56, PROG3B 51/51, PROG4B 45/45, R1 integration
+  19/19, R2 integration 16/16, R2 E2E 20/20, PROG5B 74/74; local contract 0/29.
+  Narrow gate after the copy refinement (copy-only, so no other suite rerun):
+    npx tsc --noEmit        PASS
+    npm run lint            0 errors (100 warnings, all in untracked .tmp-qa; 0 in src)
+    npm test                711 / 711 (+1 copy test)
+    npm run build           PASS
+    record_completion SQL   31 / 31
+    R2C E2E                 47 / 47 (F2 asserts the new copy)
+    R2B E2E                 49 / 49
+    PROG5B E2E              74 / 74
+    local contract          0 violations / 29 checks
+    No stale Chrome after any suite.
+
+======================================================================
+4. IMMUTABLE COMMIT
+======================================================================
+  22693db6be09d9f151859efe4c31747dddd4fd6d -- 24 files (+1772 / -21), parent 3797f01:
+    migration 20260927110000_trip_completion_recovery.sql; record_completion_tests.sql; privilege_contract +
+    trip_details_update (TD-22) test updates; regenerated database.types.ts; R2C application code (Server Action,
+    Trip Detail, action bar, RecordCompletionDialog, trip-completion core / errors, trip-detail loader); Proof changes
+    (core, evidence, loaders, page, presentation); the Driver copy refinement + its test; unit tests;
+    docs/data/mutation-api.md; the R2C implementation report.
+  Excluded: .tmp-qa, logs, screenshots, scratch, credentials, environment files.
+
+======================================================================
+5. PRODUCTION PRIVILEGE CONTRACT -- BEFORE / AFTER
+======================================================================
+  A. PRE-R2C database + PRE-R2C contract (3797f01:supabase/tests/privilege_contract_tests.sql, extracted to a scratch
+     file; working tree untouched; read-only):
+       0 violations / 29 checks -- PASS.
+       PRE-R2C PRODUCTION PRIVILEGE BASELINE: 0/29 PASS
+  B. PRE-R2C database + POST-R2C contract (22693db) -- EXPECTED DELTA:
+       1 / 29, check 14 ONLY: "every contract function exists -> record_trip_completion_by_operations(uuid,text,
+       timestamp with time zone,text)". Nothing else differed.
+  C. POST-R2C database + POST-R2C contract (22693db), immediately after the migration:
+       0 violations / 29 checks -- PASS.
+  A -> B -> C proves the security delta is exactly the one new authenticated-only function.
+  (This time the true pre-release baseline was taken BEFORE the delta check, avoiding the R2B sequencing stop.)
+
+======================================================================
+6. PROJECT IDENTITY / MIGRATION
+======================================================================
+  - supabase projects list: Nemryn / wyocbivzgrbekuyqdfts, linked = true, ACTIVE_HEALTHY; supabase/.temp/project-ref
+    matches.
+  - Production head before: 20260927100000 (71 applied). Pending: exactly 20260927110000.
+  - Dry-run delta: exactly 20260927110000_trip_completion_recovery.sql.
+  - supabase db push --linked: "Applying migration 20260927110000_trip_completion_recovery.sql ... Finished". The
+    CLI's local pg-delta catalog-cache warning (seen in R2B) is non-fatal and unrelated to the applied migration.
+  - No ad-hoc production SQL write, no unrelated migration, no destructive cleanup.
+  - Production migration head after: 20260927110000 (72 applied, 0 pending).
+
+======================================================================
+7. PRODUCTION RPC / VOCABULARY / TABLE-PRIVILEGE VERIFICATION (read-only, linked)
+======================================================================
+  record_trip_completion_by_operations:
+    signature        record_trip_completion_by_operations(uuid, text, timestamptz, text); 1 overload
+    returns          trip_transition_result
+    SECURITY DEFINER true
+    proconfig        search_path=public, pg_temp
+    PUBLIC EXECUTE   false
+    anon EXECUTE     false
+    authenticated    EXECUTE true
+  trip_events_event_type_check: includes completion_recorded_by_operations = true (trip_details_updated still
+    present = true).
+  authenticated table privileges:
+    UPDATE on trips (table or any column)                    false  (R2B revoke intact)
+    UPDATE on transportation_requests (table or any column)  false  (R2B revoke intact)
+    UPDATE on trip_assignments                               false
+    INSERT on trip_events                                    false
+    INSERT on audit_events                                   false
+    UPDATE / ALL policies on trips or transportation_requests: none
+  update_trip_details (R2B) intact: 1 overload, SECURITY DEFINER.
+
+======================================================================
+8. PUSH / VERCEL / DEPLOYED SHA
+======================================================================
+  - Pushed the exact commit with the active nemryn identity: 3797f01..22693db -> main (fast-forward; no force, no
+    amend).
+  - Verified after fetch: local HEAD == origin/main == 22693db6be09d9f151859efe4c31747dddd4fd6d.
+  - Existing GitHub -> Vercel path (no Vercel project, DNS or environment-variable change):
+      Production deployment 6698850119, sha 22693db6be09d9f151859efe4c31747dddd4fd6d, state success
+      (2026-09-27T22:36:00Z); Vercel commit status success ("Deployment has completed").
+      Previous production deployments: 6698818345 (3797f01, docs), 6693681636 (436340b).
+  - https://app.nemryn.com/sign-in -> HTTP 200 (server: Vercel).
+  - Deployed SHA: 22693db.
+  - Interim state (migration applied, 3797f01 still serving until the deploy): safe -- the migration is additive (one
+    CHECK value + one new function); no older code path references either.
+
+======================================================================
+9. BASIC PRODUCTION UI VERIFICATION (READ-ONLY)
+======================================================================
+  Script: .tmp-qa/p1-pilot-r2c-prod-readonly-ui.mjs (untracked). Synthetic QA tenant Siloan Medical Centre, its
+  existing Organization Admin session; credentials from the git-ignored file, never logged. Navigation / reads only.
+  Result: 12 PASS / 0 FAIL.
+    - Admin sign-in -> /operations; Operations Overview, Trips, Proof of Service (last 7 days), Trip Detail: each loads,
+      no error page, no uncaught client error / unhandled rejection.
+    - Trip Detail on a non-eligible Siloan Trip: "Record completion" correctly NOT offered (Edit Trip control present).
+    - Delivery evidence: the deployed Trip Detail client bundle contains the R2C dialog
+      ("Use this when the driver can't complete the trip in Nemryn.").
+    - 390 px Proof of Service: no page overflow.
+  Eligible-Trip dialog check: a read-only query found NO Siloan Trip in passenger_onboard / en_route_to_destination /
+    arrived_at_destination. None was created (owner policy). "Record completion" visibility + dialog contents are
+    LOCAL-VERIFIED / PRODUCTION NOT FORCED (R2C E2E A1-A3, B1-B10, E1).
+  Non-mutation proof (read-only, linked): completion_recorded_by_operations events = 0; trip_completion_recorded_by_
+    operations audits = 0.
+
+======================================================================
+10. MUTATION VERIFICATION -- OWNER-ACCEPTED FROM LOCAL EVIDENCE
+======================================================================
+  NO production mutation smoke was executed; no production Trip was completed for evidence.
+  Owner-accepted local evidence: record_completion SQL 31/31; R2C E2E 47/47; unit 710/710 (711 after the copy test);
+  R2B E2E 49/49; PROG5B 74/74; all established regressions green; local privilege contract 0/29.
+
+======================================================================
+11. RESIDUAL VERIFICATION RISK
+======================================================================
+  - The production write path of record_trip_completion_by_operations (state token, closure, event, audit, Proof
+    NEEDS_REVIEW) has not been exercised in production. Mitigation: the identical migration was proven locally (SQL +
+    E2E through the real UI); production object / grant / search_path / overload / vocabulary checks match; contract
+    0 / 29.
+  - The "Record completion" button and dialog were not rendered in production (no eligible synthetic Trip); the code
+    is present in the deployed bundle and its visibility rule is unit- and E2E-verified.
+  - The first real use will be an exceptional operator action; it is always shown as NEEDS_REVIEW in Proof of
+    Service and fully audited (actor + note in audit_events), so any misuse is visible and reviewable.
+  - Workstation tooling (PR-18): the Supabase CLI is 2.109.0 (2.118.0 available).
+
+======================================================================
+12. DISPOSITIONS
+======================================================================
+  PR-02  Dispatcher recovery for an in-progress trip after pickup (P1)   RELEASED.
+  Proof-of-Service recovery distinction (COMPLETION_RECORDED_BY_OPERATIONS, recovery chain rule; normal Driver
+    chains unchanged)                                                    RELEASED.
+  Driver copy "reassigned or completed"                                  RELEASED.
+
+======================================================================
+13. REMAINING GAPS / PR-04 / PR-12
+======================================================================
+  Remaining P0 pilot blockers: 0 (conditional on PR-12).
+  Remaining P1 pilot gaps: 1 -- PR-04 (recurring-intent Requests have no path to Recurring Care; R3 candidate).
+  PR-04 status: NOT started; specified in R2A section 21; ready for an owner decision.
+  PR-12 payer discovery gate: still OPEN -- pilot go-live requires the payer / broker's evidence requirements
+    (signature / photo / mileage / other). If any is mandated, PR-12 becomes P0 before live go-live.
+
+======================================================================
+14. ROLLBACK POINT
+======================================================================
+  Application: revert 22693db, or promote the previous production deployment (6698818345 = 3797f01, the same
+    application as 436340b / 6693681636).
+  Database: rollback normally unnecessary -- the migration is additive (one CHECK vocabulary value, one RPC). If the
+    recovery RPC shows a defect: REVOKE EXECUTE on record_trip_completion_by_operations from authenticated while
+    investigating. Do not remove legitimate recovered-trip data: recovered Trips remain completed factual records
+    (Proof shows them NEEDS_REVIEW).
+
+======================================================================
+FINAL GATE
+======================================================================
+P1-PILOT-R2C PRODUCTION RELEASE: PASS
+
+PRODUCTION MIGRATION HEAD: 20260927110000
+
+PRODUCTION PRIVILEGE CONTRACT: 0 violations / 29 checks (post-R2C contract, 22693db)
+
+DEPLOYED COMMIT: 22693db6be09d9f151859efe4c31747dddd4fd6d
+
+PR-02 DISPATCHER RECOVERY: RELEASED
+
+PROOF RECOVERY DISTINCTION: RELEASED
+
+REMAINING P0 PILOT BLOCKERS: 0
+
+REMAINING P1 PILOT GAPS: 1
+
+READY FOR PR-04 DECISION: YES
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+PROG6 PLANNED: NO
