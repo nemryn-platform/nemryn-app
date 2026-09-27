@@ -7,6 +7,7 @@ import { LinkButton } from "@/components/ui/LinkButton";
 import { CancelTripDialog } from "./CancelTripDialog";
 import { NoShowDialog } from "./NoShowDialog";
 import { EditTripDialog, type EditableTrip } from "./EditTripDialog";
+import { RecordCompletionDialog } from "./RecordCompletionDialog";
 import type { NewTripFacilityOption } from "@/lib/operations/new-trip-options";
 import { tripEditFieldLabels } from "@/lib/operations/trip-edit-core";
 import { typography } from "@/design/typography";
@@ -23,6 +24,12 @@ export interface TripDetailActionBarProps {
    * arrived at destination / terminal).
    */
   edit: { trip: EditableTrip; facilities: NewTripFacilityOption[]; organizationTimezone: string } | null;
+  /**
+   * P1-PILOT-R2C: Record completion -- the exceptional recovery when the Driver can't complete the Trip in Nemryn.
+   * `null` unless the Trip is passenger_onboard / en_route_to_destination / arrived_at_destination (this page is
+   * Organization Admin / Dispatcher only).
+   */
+  recordCompletion: { tripState: string; organizationTimezone: string } | null;
 }
 
 /**
@@ -46,8 +53,9 @@ export function TripDetailActionBar({
   eligibleForCancel,
   eligibleForNoShow,
   edit,
+  recordCompletion,
 }: TripDetailActionBarProps) {
-  const [activeDialog, setActiveDialog] = useState<"cancel" | "noshow" | "edit" | null>(null);
+  const [activeDialog, setActiveDialog] = useState<"cancel" | "noshow" | "edit" | "complete" | null>(null);
   const [saved, setSaved] = useState<{ fields: string[]; driverMayBeTravelling: boolean } | null>(null);
 
   return (
@@ -70,6 +78,11 @@ export function TripDetailActionBar({
         {eligibleForCancel && (
           <Button variant="outline" onClick={() => setActiveDialog("cancel")}>
             Cancel Trip
+          </Button>
+        )}
+        {recordCompletion && (
+          <Button variant="text" onClick={() => setActiveDialog("complete")} data-testid="record-completion-button">
+            Record completion
           </Button>
         )}
         {driverPhone && (
@@ -106,6 +119,14 @@ export function TripDetailActionBar({
             setSaved({ fields: result.changedFields, driverMayBeTravelling: result.driverMayBeTravelling });
             setActiveDialog(null);
           }}
+        />
+      )}
+      {activeDialog === "complete" && recordCompletion && (
+        <RecordCompletionDialog
+          tripId={tripId}
+          tripState={recordCompletion.tripState}
+          organizationTimezone={recordCompletion.organizationTimezone}
+          onClose={() => setActiveDialog(null)}
         />
       )}
       {activeDialog === "noshow" && (

@@ -12,6 +12,8 @@ import { isValidExpectedDuration } from "@/lib/operations/trip-overlap-core";
 import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapTripExceptionError, type TripExceptionErrorCode, EXCEPTION_TYPE_VALUES } from "@/lib/operations/trip-exception-errors";
 import { mapTripEditError, type TripEditErrorCode } from "@/lib/operations/trip-edit-errors";
+import { mapTripCompletionError, type TripCompletionErrorCode } from "@/lib/operations/trip-completion-errors";
+import { canRecordCompletion, checkCompletionTime, checkRecoveryNote, LIFECYCLE_PROGRESS_EVENT_TYPES } from "@/lib/operations/trip-completion-core";
 import { checkServiceDate } from "@/lib/operations/trip-edit-core";
 import { organizationLocalToUtc } from "@/lib/operations/local-time";
 import { localDateKeyOf } from "@/lib/operations/local-time-core";
@@ -429,4 +431,81 @@ export async function updateTripDetailsAction(input: TripEditInput): Promise<Tri
     changedFields: data?.changed_fields ?? [],
     driverMayBeTravelling: changed && activelyAssigned && trip.state !== "scheduled",
   };
+}
+
+/**
+ * P1-PILOT-R2C (PR-02) -- record a completion the Driver could not record in Nemryn, through the audited
+ * record_trip_completion_by_operations RPC ONLY. The operator states the completion time (organization-local, converted
+ * with the same DST-honest organizationLocalToUtc as Edit Trip -- never inferred server-side) and a required note. The
+ * pre-checks below only choose a precise, field-specific message; the RPC re-checks everything (authorization, state
+ * token, eligibility, active assignment, note, time bounds) and is the authority.
+ */
+export interface RecordCompletionInput {
+  tripId: string;
+  expectedState: string;
+  completedDate: string;
+  completedTime: string;
+  note: string;
+}
+
+export type RecordCompletionResult = { ok: true } | { ok: false; code: TripCompletionErrorCode };
+
+export async function recordTripCompletionAction(input: RecordCompletionInput): Promise<RecordCompletionResult> {
+  if (!input || typeof input.tripId !== "string" || !UUID_RE.test(input.tripId) || typeof input.expectedState !== "string") {
+    return { ok: false, code: "INVALID_INPUT" };
+  }
+  const pathname = await getCurrentPathname(`/operations/trips/${input.tripId}`);
+  const organization = await requireOperationsAccess(pathname);
+
+  const note = checkRecoveryNote(input.note);
+  if (!note.ok) return { ok: false, code: note.problem };
+  const date = (input.completedDate ?? "").trim();
+  const time = (input.completedTime ?? "").trim();
+  if (!date || !time) return { ok: false, code: "TIME_REQUIRED" };
+  const conversion = organizationLocalToUtc({ date, time }, organization.organizationTimezone);
+  if (conversion.status === "invalid") return { ok: false, code: "TIME_REQUIRED" };
+  if (conversion.status !== "ok") return { ok: false, code: "TIME_UNRESOLVABLE" };
+  const completedAt = conversion.utc.toISOString();
+
+  const supabase = await createServerSupabaseClient();
+  const { data: trip, error: tripError } = await supabase
+    .from("trips")
+    .select("id, state, request_id, recurring_arrangement_id, trip_assignments!trip_assignments_trip_id_organization_id_fkey(ended_at)")
+    .eq("id", input.tripId)
+    .eq("organization_id", organization.organizationId)
+    .maybeSingle();
+  if (tripError) return { ok: false, code: "UNKNOWN" };
+  if (!trip) return { ok: false, code: "NOT_FOUND" };
+  if (trip.state !== input.expectedState) return { ok: false, code: "STALE" };
+  if (!canRecordCompletion(trip.state)) return { ok: false, code: "NOT_ELIGIBLE" };
+  const assignments = (trip.trip_assignments ?? []) as { ended_at: string | null }[];
+  if (!assignments.some((a) => a.ended_at === null)) return { ok: false, code: "NO_ACTIVE_ASSIGNMENT" };
+
+  const { data: lastEvent } = await supabase
+    .from("trip_events")
+    .select("occurred_at")
+    .eq("trip_id", input.tripId)
+    .eq("organization_id", organization.organizationId)
+    .in("event_type", LIFECYCLE_PROGRESS_EVENT_TYPES as unknown as string[])
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const timeCheck = checkCompletionTime(completedAt, Date.now(), lastEvent?.occurred_at ?? null);
+  if (timeCheck !== "ok") return { ok: false, code: timeCheck };
+
+  const { error } = await supabase.rpc("record_trip_completion_by_operations", {
+    p_trip_id: input.tripId,
+    p_expected_current_state: input.expectedState,
+    p_completed_at: completedAt,
+    p_note: note.note,
+  });
+  if (error) return { ok: false, code: mapTripCompletionError(error.code) };
+
+  await revalidateTripDetailRoutes(input.tripId);
+  revalidatePath("/operations/trips");
+  revalidatePath("/operations/proof-of-service");
+  if (trip.recurring_arrangement_id) revalidatePath(`/operations/recurring-care/${trip.recurring_arrangement_id}`);
+  if (trip.request_id) revalidatePath(`/operations/requests/${trip.request_id}`);
+  revalidatePath("/driver", "layout");
+  return { ok: true };
 }

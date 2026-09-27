@@ -3,7 +3,7 @@ import { WarningCircle, ClipboardText } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getProofOfServiceReview, PROOF_OF_SERVICE_PAGE_SIZE, type ProofOfServiceReviewResult, type ProofOfServiceReviewRow } from "@/lib/operations/trip-proof-of-service";
-import { formatOperationsTime, proofOfServiceStateLabel, proofOfServiceStateCategory, proofOfServiceReasonLabel, proofOfServiceWindowLabel } from "@/lib/operations/presentation";
+import { formatOperationsTime, proofOfServiceStateLabel, proofOfServiceStateCategory, proofOfServiceReasonLabel, proofOfServiceWindowLabel, driverRecordedMilestonesLine } from "@/lib/operations/presentation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
@@ -115,6 +115,12 @@ export default async function ProofOfServicePage({
                 <li key={reason}>· {proofOfServiceReasonLabel(reason)}</li>
               ))}
             </ul>
+          )}
+          {/* P1-PILOT-R2C: a completion Operations recorded is never shown as a full Driver chain -- only what the Driver really recorded. */}
+          {row.completionRecordedByOperations && (
+            <p className={cn(typography.metadata, "text-text-muted")} data-testid="proof-driver-milestones">
+              {driverRecordedMilestonesLine(row.driverRecordedMilestones)}
+            </p>
           )}
         </div>
       ),

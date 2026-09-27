@@ -3,13 +3,26 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationDayBoundsUtc, localDateKey, addDaysToDateKey, localMidnightUtc } from "./day-bounds";
 import { deriveTripProofOfService, type TripProofOfServiceFacts, type TripProofOfServiceResult } from "./trip-proof-of-service-core";
 import {
-  evaluateLifecycleEventChain,
+  evaluateProofOfServiceEvents,
   extractLifecycleEventTimestamps,
   classifyCompletionAssignmentCardinality,
-  REQUIRED_LIFECYCLE_EVENT_TYPES,
+  driverRecordedMilestones,
+  COMPLETION_RECORDED_BY_OPERATIONS_EVENT_TYPE,
+  PROOF_OF_SERVICE_EVENT_TYPES,
   type LifecycleEventFact,
   type RequiredLifecycleEventType,
 } from "./trip-proof-of-service-evidence";
+
+/** `trip_events` row -> LifecycleEventFact. Only the recovery event's two structural metadata facts are read (P1-PILOT-R2C); the recovery note is never in `trip_events`. */
+function toLifecycleEventFact(row: { event_type: string; occurred_at: string; metadata: unknown }): LifecycleEventFact {
+  const fact: LifecycleEventFact = { eventType: row.event_type, occurredAt: row.occurred_at };
+  if (row.event_type === COMPLETION_RECORDED_BY_OPERATIONS_EVENT_TYPE) {
+    const m = (row.metadata ?? {}) as { previous_state?: unknown; recorded_completed_at?: unknown };
+    fact.previousState = typeof m.previous_state === "string" ? m.previous_state : null;
+    fact.recordedCompletedAt = typeof m.recorded_completed_at === "string" ? m.recorded_completed_at : null;
+  }
+  return fact;
+}
 
 /**
  * Server-side data-access boundary for Proof-of-Service Assurance
@@ -67,7 +80,7 @@ export const PROOF_OF_SERVICE_PAGE_SIZE = 25;
 /** Matches `supabase/config.toml`'s own configured `max_rows = 1000` — PostgREST silently caps ANY query's returned rows at this value regardless of what `.range()` requests, so the whole-window Trip fetch is explicitly paginated at this exact size rather than assuming a single unbounded `.select()` would return everything. */
 const WHOLE_WINDOW_TRIP_PAGE_SIZE = 1000;
 
-/** Conservative headroom for the evidence queries (assignments/events/exceptions), chunked by Trip id: `trip_events` can return up to the 6 `REQUIRED_LIFECYCLE_EVENT_TYPES` rows per Trip, so 150 × 6 = 900 stays safely under the 1000-row `max_rows` cap even before accounting for any anomalous duplicate-event data — and the truncation guard below still catches it if a chunk somehow exceeds that anyway, rather than trusting the arithmetic alone. */
+/** Conservative headroom for the evidence queries (assignments/events/exceptions), chunked by Trip id: `trip_events` can return up to 6 `PROOF_OF_SERVICE_EVENT_TYPES` rows per legitimately completed Trip (6 Driver events, or — P1-PILOT-R2C — at most 5 Driver events + 1 recovery event), so 150 × 6 = 900 stays safely under the 1000-row `max_rows` cap even before accounting for any anomalous duplicate-event data — and the truncation guard below still catches it if a chunk somehow exceeds that anyway, rather than trusting the arithmetic alone. */
 const WHOLE_WINDOW_ID_CHUNK_SIZE = 150;
 
 /**
@@ -219,10 +232,10 @@ export async function getYesterdayProofOfServiceResults(
         .in("trip_id", chunk),
       supabase
         .from("trip_events")
-        .select("trip_id, event_type, occurred_at", { count: "exact" })
+        .select("trip_id, event_type, occurred_at, metadata", { count: "exact" })
         .eq("organization_id", organizationId)
         .in("trip_id", chunk)
-        .in("event_type", REQUIRED_LIFECYCLE_EVENT_TYPES as unknown as string[]),
+        .in("event_type", PROOF_OF_SERVICE_EVENT_TYPES as string[]),
       supabase
         .from("trip_exceptions")
         .select("trip_id", { count: "exact" })
@@ -261,7 +274,7 @@ export async function getYesterdayProofOfServiceResults(
       }
     }
     for (const row of eventRows) {
-      const fact: LifecycleEventFact = { eventType: row.event_type, occurredAt: row.occurred_at };
+      const fact = toLifecycleEventFact(row);
       const existing = eventsByTrip.get(row.trip_id);
       if (existing) {
         existing.push(fact);
@@ -278,6 +291,7 @@ export async function getYesterdayProofOfServiceResults(
     const events = eventsByTrip.get(trip.id) ?? [];
     const assignments = assignmentsByTrip.get(trip.id) ?? [];
     const cardinality = classifyCompletionAssignmentCardinality(assignments.length);
+    const evidence = evaluateProofOfServiceEvents(events, trip.completedAt);
 
     const facts: TripProofOfServiceFacts = {
       tripState: "completed",
@@ -285,7 +299,8 @@ export async function getYesterdayProofOfServiceResults(
       hasPickupDescription: trip.hasPickup,
       hasDestinationDescription: trip.hasDestination,
       completedAt: trip.completedAt,
-      hasCompleteLifecycleEventChain: evaluateLifecycleEventChain(events, trip.completedAt),
+      hasCompleteLifecycleEventChain: evidence.hasCompleteLifecycleEventChain,
+      completionRecordedByOperations: evidence.completionRecordedByOperations,
       hasCompletionAssignment: cardinality === "one",
       completionAssignmentVehicleId: cardinality === "one" ? assignments[0].vehicleId : null,
       openExceptionCount: exceptionCountByTrip.get(trip.id) ?? 0,
@@ -325,6 +340,10 @@ export interface ProofOfServiceReviewRow {
   performingDriver: ProofOfServiceDriver | null;
   performingVehicle: ProofOfServiceVehicle | null;
   lifecycleEvents: ProofOfServiceLifecycleTimestamps;
+  /** P1-PILOT-R2C: the completion was recorded by Operations (never presented as a Driver-recorded chain). */
+  completionRecordedByOperations: boolean;
+  /** The Driver milestones that actually exist, in order (presentation only; never a fabricated full chain). */
+  driverRecordedMilestones: RequiredLifecycleEventType[];
   result: TripProofOfServiceResult;
 }
 
@@ -454,7 +473,8 @@ function isNonBlank(value: string | null | undefined): boolean {
  *      that in the query itself would silently hide a >1 anomaly (S1C
  *      §11's own explicit "do not mask corrupted historical data").
  *   3. The `trip_events` query, scoped to the same Trip ids AND
- *      pre-filtered to exactly the 6 `REQUIRED_LIFECYCLE_EVENT_TYPES`
+ *      pre-filtered to the 6 `REQUIRED_LIFECYCLE_EVENT_TYPES` plus the
+ *      P1-PILOT-R2C recovery event (`PROOF_OF_SERVICE_EVENT_TYPES`)
  *      (S1C §14) — cheaper than fetching every event type, and the pure
  *      `evaluateLifecycleEventChain`/`extractLifecycleEventTimestamps`
  *      helpers remain independently correct even if an unrelated type
@@ -562,10 +582,10 @@ export async function getProofOfServiceReview(
   // -------------------------------------------------------------------
   const { data: eventRows, error: eventsError } = await supabase
     .from("trip_events")
-    .select("trip_id, event_type, occurred_at")
+    .select("trip_id, event_type, occurred_at, metadata")
     .eq("organization_id", organizationId)
     .in("trip_id", tripIds)
-    .in("event_type", REQUIRED_LIFECYCLE_EVENT_TYPES as unknown as string[]);
+    .in("event_type", PROOF_OF_SERVICE_EVENT_TYPES as string[]);
 
   if (eventsError) {
     throw new Error(`Failed to load lifecycle events for proof-of-service review: ${eventsError.message}`);
@@ -573,7 +593,7 @@ export async function getProofOfServiceReview(
 
   const eventsByTrip = new Map<string, LifecycleEventFact[]>();
   for (const row of eventRows ?? []) {
-    const fact: LifecycleEventFact = { eventType: row.event_type, occurredAt: row.occurred_at };
+    const fact = toLifecycleEventFact(row);
     const existing = eventsByTrip.get(row.trip_id);
     if (existing) {
       existing.push(fact);
@@ -613,6 +633,7 @@ export async function getProofOfServiceReview(
     const completionAssignment = cardinality === "one" ? completionAssignments[0] : null;
     const driver = completionAssignment ? unwrapOne(completionAssignment.drivers) : null;
     const vehicle = completionAssignment ? unwrapOne(completionAssignment.vehicles) : null;
+    const evidence = evaluateProofOfServiceEvents(events, row.completed_at);
 
     const facts: TripProofOfServiceFacts = {
       // This module only ever queries `state = 'completed'` rows, so this
@@ -624,7 +645,8 @@ export async function getProofOfServiceReview(
       hasPickupDescription: isNonBlank(row.pickup_description),
       hasDestinationDescription: isNonBlank(row.destination_description),
       completedAt: row.completed_at,
-      hasCompleteLifecycleEventChain: evaluateLifecycleEventChain(events, row.completed_at),
+      hasCompleteLifecycleEventChain: evidence.hasCompleteLifecycleEventChain,
+      completionRecordedByOperations: evidence.completionRecordedByOperations,
       hasCompletionAssignment: cardinality === "one",
       completionAssignmentVehicleId: cardinality === "one" ? completionAssignment!.vehicle_id : null,
       openExceptionCount: openExceptionCountByTrip.get(row.id) ?? 0,
@@ -642,6 +664,8 @@ export async function getProofOfServiceReview(
       performingDriver: driver ? { id: driver.id, displayName: driver.display_name } : null,
       performingVehicle: vehicle ? { id: vehicle.id, label: vehicle.label } : null,
       lifecycleEvents: extractLifecycleEventTimestamps(events),
+      completionRecordedByOperations: evidence.completionRecordedByOperations,
+      driverRecordedMilestones: driverRecordedMilestones(events),
       result: deriveTripProofOfService(facts),
     };
   });

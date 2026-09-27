@@ -11,6 +11,7 @@ import { TripStatus } from "@/components/ui/TripStatus";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TripDetailActionBar } from "@/components/operations/trip-detail/TripDetailActionBar";
 import { canEditTrip, tripEditFieldLabels } from "@/lib/operations/trip-edit-core";
+import { canRecordCompletion } from "@/lib/operations/trip-completion-core";
 import { getActiveFacilityOptions } from "@/lib/operations/new-trip";
 import { TripInfoStrip } from "@/components/operations/trip-detail/TripInfoStrip";
 import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePanel";
@@ -251,6 +252,7 @@ export default async function TripDetailPage({
                 }
               : null
           }
+          recordCompletion={canRecordCompletion(trip.state) ? { tripState: trip.state, organizationTimezone: timezone } : null}
         />
       </div>
 
@@ -272,6 +274,13 @@ export default async function TripDetailPage({
               {trip.state === "cancelled" && `Cancelled ${formatOperationsTime(trip.cancelledAt, timezone)}`}
               {trip.state === "no_show" && `No-show recorded ${formatOperationsTime(trip.noShowAt, timezone)}`}
             </p>
+            {trip.state === "completed" && trip.completionRecord && (
+              <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")} data-testid="trip-completion-record">
+                Completion recorded by operations · by {trip.completionRecord.actorUserId && trip.completionRecord.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
+                {formatOperationsLongDate(new Date(trip.completionRecord.recordedAt), timezone)}, {formatOperationsTime(trip.completionRecord.recordedAt, timezone)}
+                {trip.completionRecord.completedAt && <> · Completion time recorded: {formatOperationsTime(trip.completionRecord.completedAt, timezone)}</>}
+              </p>
+            )}
             {trip.state === "cancelled" && trip.cancellationReason && (
               <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Reason: {trip.cancellationReason}</p>
             )}

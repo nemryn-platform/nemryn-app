@@ -20,6 +20,7 @@ function makeFacts(overrides = {}) {
     hasDestinationDescription: true,
     completedAt: "2026-11-01T15:32:00.000Z",
     hasCompleteLifecycleEventChain: true,
+    completionRecordedByOperations: false,
     hasCompletionAssignment: true,
     completionAssignmentVehicleId: "vehicle-1",
     openExceptionCount: 0,

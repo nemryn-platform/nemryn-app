@@ -226,6 +226,7 @@ c_fn(sig, roles) as (values
   ('set_vehicle_capabilities(uuid,boolean,boolean,integer,integer)', 'u'),
   ('set_trip_wheelchair_requirement(uuid,boolean)', 'u'),
   ('update_trip_details(uuid,timestamp with time zone,timestamp with time zone,timestamp with time zone,text,uuid,text,uuid,text,text)', 'u'),
+  ('record_trip_completion_by_operations(uuid,text,timestamp with time zone,text)', 'u'),
   ('set_recurring_wheelchair_requirement(uuid,uuid,boolean)', 'u'),
   ('driver_get_own_schedule(uuid)', 'u'),
   ('update_organization_trip_defaults(uuid,integer)', 'u'),

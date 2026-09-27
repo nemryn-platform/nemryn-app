@@ -92,8 +92,15 @@ export type TripProofOfServiceState = "READY_FOR_REVIEW" | "NEEDS_REVIEW" | "NOT
  * §18), because a completed Trip missing any of them did not arise from
  * an ordinary, expected operational gap the way "no Vehicle was assigned"
  * or "an exception was never resolved" can.
+ *
+ * P1-PILOT-R2C adds exactly one reason, COMPLETION_RECORDED_BY_OPERATIONS (R2A spec section 20), ordered directly
+ * after EVIDENCE_INTEGRITY_GAP.
  */
-export type TripProofOfServiceReasonCode = "EVIDENCE_INTEGRITY_GAP" | "MISSING_VEHICLE" | "OPEN_EXCEPTION";
+export type TripProofOfServiceReasonCode =
+  | "EVIDENCE_INTEGRITY_GAP"
+  | "COMPLETION_RECORDED_BY_OPERATIONS"
+  | "MISSING_VEHICLE"
+  | "OPEN_EXCEPTION";
 
 /**
  * Stable, deterministic output order (S1B §17, locked): integrity problem
@@ -104,7 +111,12 @@ export type TripProofOfServiceReasonCode = "EVIDENCE_INTEGRITY_GAP" | "MISSING_V
  * convention exactly — every applicable reason is always returned, this
  * array only fixes the order they appear in.
  */
-const REASON_ORDER: TripProofOfServiceReasonCode[] = ["EVIDENCE_INTEGRITY_GAP", "MISSING_VEHICLE", "OPEN_EXCEPTION"];
+const REASON_ORDER: TripProofOfServiceReasonCode[] = [
+  "EVIDENCE_INTEGRITY_GAP",
+  "COMPLETION_RECORDED_BY_OPERATIONS",
+  "MISSING_VEHICLE",
+  "OPEN_EXCEPTION",
+];
 
 const COMPLETED_STATE = "completed";
 
@@ -128,6 +140,8 @@ export interface TripProofOfServiceFacts {
   completedAt: string | null;
   /** Whether the authoritative `trip_events` chain for this Trip includes every one of the 6 forward transition events (`en_route_to_pickup` through `trip_completed`) with server-set `occurred_at` values — caller-computed, never re-derived here (this module performs no TripEvent query of any kind). */
   hasCompleteLifecycleEventChain: boolean;
+  /** P1-PILOT-R2C (PR-02): Operations recorded the completion (`completion_recorded_by_operations`) because the Driver could not complete it in Nemryn. When true, `hasCompleteLifecycleEventChain` is the caller's RECOVERY chain rule (the Driver events that really happened up to the recovery, never the full 6-event chain -- see `trip-proof-of-service-evidence.ts`). A recovered Trip always needs review: it is never READY_FOR_REVIEW automatically. */
+  completionRecordedByOperations: boolean;
   /** Whether a `trip_assignments` row exists for this Trip with `end_reason = 'trip_completed'` — the ONE authoritative source for "who performed this completed Trip" (S1A HISTORICAL ASSIGNMENT ANALYSIS). Never the current active assignment (there is none, post-completion), never the most-recent-by-timestamp assignment, never inferred from `trip_events.actor_user_id` alone. */
   hasCompletionAssignment: boolean;
   /** The `vehicle_id` on that SAME completion assignment row — null both when no Vehicle was ever assigned to it AND when `hasCompletionAssignment` is false; callers must check `hasCompletionAssignment` first to distinguish "no completion assignment exists at all" (an integrity gap) from "a completion assignment exists but carries no Vehicle" (an ordinary, expected `MISSING_VEHICLE` condition — S1B §6, the assignment model legitimately permits Driver-only assignment). */
@@ -178,6 +192,13 @@ export function deriveTripProofOfService(facts: TripProofOfServiceFacts): TripPr
 
   if (hasIntegrityGap) {
     applicable.add("EVIDENCE_INTEGRITY_GAP");
+  }
+
+  // COMPLETION_RECORDED_BY_OPERATIONS (P1-PILOT-R2C): the completion is an operator's record, not a Driver-recorded
+  // chain -- always surfaced, so the Trip is NEEDS_REVIEW even when every other fact is in place. Combines with every
+  // other reason (a broken partial chain adds EVIDENCE_INTEGRITY_GAP; MISSING_VEHICLE / OPEN_EXCEPTION as usual).
+  if (facts.completionRecordedByOperations) {
+    applicable.add("COMPLETION_RECORDED_BY_OPERATIONS");
   }
 
   // MISSING_VEHICLE — S1B §6/§20 (the locked Vehicle decision): only

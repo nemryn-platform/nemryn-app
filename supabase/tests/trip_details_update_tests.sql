@@ -454,12 +454,15 @@ begin
 end $$;
 
 -- ----------------------------------------------------------------------------------------------- TD-22 event vocabulary
+-- P1-PILOT-R2C -- deliberate expectation change: R2B pinned "no R2C type pre-created"; the R2C migration now adds
+-- completion_recorded_by_operations (tested in record_completion_tests.sql). Still pinned: trip_details_updated present,
+-- lifecycle types intact.
 do $$
 begin
   if pg_get_constraintdef((select oid from pg_constraint where conname = 'trip_events_event_type_check')) like '%trip_details_updated%'
      and pg_get_constraintdef((select oid from pg_constraint where conname = 'trip_events_event_type_check')) like '%trip_completed%'
-     and pg_get_constraintdef((select oid from pg_constraint where conname = 'trip_events_event_type_check')) not like '%completion_recorded_by_operations%' then
-    raise notice 'TEST TD-22: PASS (trip_events vocabulary: trip_details_updated added; lifecycle types intact; no R2C type pre-created)';
+     and pg_get_constraintdef((select oid from pg_constraint where conname = 'trip_events_event_type_check')) like '%completion_recorded_by_operations%' then
+    raise notice 'TEST TD-22: PASS (trip_events vocabulary: trip_details_updated present; lifecycle types intact; R2C completion_recorded_by_operations added by its own migration)';
   else
     raise notice 'TEST TD-22: FAIL';
   end if;

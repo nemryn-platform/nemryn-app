@@ -38,10 +38,28 @@ export type RequiredLifecycleEventType = (typeof REQUIRED_LIFECYCLE_EVENT_TYPES)
 
 const REQUIRED_EVENT_TYPE_SET: ReadonlySet<string> = new Set(REQUIRED_LIFECYCLE_EVENT_TYPES);
 
-/** One raw `trip_events` row's minimal shape — never the full row (no `actor_user_id`, no `metadata`; this module only ever needs `event_type` + `occurred_at`). */
+/**
+ * P1-PILOT-R2C: the one Operations provenance event for a completion recorded because the Driver could not complete
+ * the Trip in Nemryn (`record_trip_completion_by_operations`). It is NOT a Driver lifecycle event and never counts as
+ * one of the 6 required types above.
+ */
+export const COMPLETION_RECORDED_BY_OPERATIONS_EVENT_TYPE = "completion_recorded_by_operations";
+
+/** Every `trip_events` type the Proof-of-Service loaders read: the 6 Driver lifecycle types + the recovery event. */
+export const PROOF_OF_SERVICE_EVENT_TYPES: readonly string[] = [...REQUIRED_LIFECYCLE_EVENT_TYPES, COMPLETION_RECORDED_BY_OPERATIONS_EVENT_TYPE];
+
+/**
+ * One raw `trip_events` row's minimal shape — never the full row (no `actor_user_id`; `event_type` + `occurred_at`,
+ * plus, for the recovery event ONLY, the two structural metadata facts its RPC writes). No note is ever carried: the
+ * recovery note lives only in `audit_events.reason` and is never in `trip_events` at all.
+ */
 export interface LifecycleEventFact {
   eventType: string;
   occurredAt: string;
+  /** Recovery event only: `metadata.previous_state` (the state Operations completed the Trip from). */
+  previousState?: string | null;
+  /** Recovery event only: `metadata.recorded_completed_at` (the operator-stated completion time). */
+  recordedCompletedAt?: string | null;
 }
 
 /**
@@ -177,4 +195,90 @@ export function classifyCompletionAssignmentCardinality(matchingRowCount: number
   if (matchingRowCount === 0) return "none";
   if (matchingRowCount === 1) return "one";
   return "multiple";
+}
+
+// =============================================================================
+// P1-PILOT-R2C (PR-02) -- completion recorded by Operations.
+// =============================================================================
+
+/** The Driver lifecycle events that must really exist before a recovery from each eligible state (the RPC's own set). */
+const RECOVERY_PRIOR_DRIVER_EVENTS: Record<string, readonly RequiredLifecycleEventType[]> = {
+  passenger_onboard: ["en_route_to_pickup", "arrived_at_pickup", "passenger_onboard"],
+  en_route_to_destination: ["en_route_to_pickup", "arrived_at_pickup", "passenger_onboard", "en_route_to_destination"],
+  arrived_at_destination: [
+    "en_route_to_pickup",
+    "arrived_at_pickup",
+    "passenger_onboard",
+    "en_route_to_destination",
+    "arrived_at_destination",
+  ],
+};
+
+/**
+ * The recovery chain rule (R2A spec section 20), replacing the 6-event rule ONLY for a Trip whose completion was
+ * recorded by Operations. The missing Driver steps are never expected (they must not be fabricated), so the rule is:
+ *
+ *   1. exactly ONE `completion_recorded_by_operations` event;
+ *   2. `trip_completed` is ABSENT (a Driver completion and an Operations completion can not both be true);
+ *   3. the recovery's `previous_state` is one of the three eligible states, and exactly the Driver events up to it
+ *      exist -- each exactly once -- and NONE after it;
+ *   4. those Driver events are in state-machine order (non-decreasing) and all at or before the recovery event;
+ *   5. the recorded completion time equals `completedAt` and is not before the last Driver event (the RPC's own
+ *      no-time-travel rule).
+ *
+ * Any violation fails closed (the caller surfaces EVIDENCE_INTEGRITY_GAP).
+ */
+export function evaluateRecoveredLifecycleEventChain(events: LifecycleEventFact[], completedAt: string | null): boolean {
+  if (completedAt === null) return false;
+
+  const recoveries = events.filter((e) => e.eventType === COMPLETION_RECORDED_BY_OPERATIONS_EVENT_TYPE);
+  if (recoveries.length !== 1) return false;
+  const recovery = recoveries[0];
+
+  const byType = new Map<string, LifecycleEventFact[]>();
+  for (const event of events) {
+    if (!REQUIRED_EVENT_TYPE_SET.has(event.eventType)) continue;
+    byType.set(event.eventType, [...(byType.get(event.eventType) ?? []), event]);
+  }
+  if (byType.has("trip_completed")) return false;
+
+  const prior = recovery.previousState ? RECOVERY_PRIOR_DRIVER_EVENTS[recovery.previousState] : undefined;
+  if (!prior) return false;
+  for (const type of REQUIRED_LIFECYCLE_EVENT_TYPES) {
+    const count = byType.get(type)?.length ?? 0;
+    if (count !== (prior.includes(type) ? 1 : 0)) return false;
+  }
+
+  const priorTimes = prior.map((type) => Date.parse(byType.get(type)![0].occurredAt));
+  for (let i = 1; i < priorTimes.length; i++) {
+    if (priorTimes[i] < priorTimes[i - 1]) return false;
+  }
+  const lastDriverAt = priorTimes[priorTimes.length - 1];
+  if (lastDriverAt > Date.parse(recovery.occurredAt)) return false;
+
+  if (!recovery.recordedCompletedAt || Date.parse(recovery.recordedCompletedAt) !== Date.parse(completedAt)) return false;
+  if (Date.parse(completedAt) < lastDriverAt) return false;
+
+  return true;
+}
+
+/**
+ * The two Proof-of-Service facts derived from one Trip's events. A Trip with no recovery event is evaluated EXACTLY as
+ * before (the unchanged 6-event rule). Any recovery event -- even a duplicated one -- marks the completion as recorded
+ * by Operations, and the recovery rule above decides the chain (duplicates fail it).
+ */
+export function evaluateProofOfServiceEvents(
+  events: LifecycleEventFact[],
+  completedAt: string | null,
+): { completionRecordedByOperations: boolean; hasCompleteLifecycleEventChain: boolean } {
+  const recovered = events.some((e) => e.eventType === COMPLETION_RECORDED_BY_OPERATIONS_EVENT_TYPE);
+  return recovered
+    ? { completionRecordedByOperations: true, hasCompleteLifecycleEventChain: evaluateRecoveredLifecycleEventChain(events, completedAt) }
+    : { completionRecordedByOperations: false, hasCompleteLifecycleEventChain: evaluateLifecycleEventChain(events, completedAt) };
+}
+
+/** Driver milestones that actually exist (Driver lifecycle types before completion, in state-machine order) -- for presentation only. */
+export function driverRecordedMilestones(events: LifecycleEventFact[]): RequiredLifecycleEventType[] {
+  const present = new Set(events.map((e) => e.eventType));
+  return REQUIRED_LIFECYCLE_EVENT_TYPES.filter((type) => type !== "trip_completed" && present.has(type));
 }

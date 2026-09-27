@@ -1,0 +1,332 @@
+NEMRYN PLATFORM
+P1-PILOT-R2C -- DISPATCHER TRIP-COMPLETION RECOVERY (PR-02) -- LOCAL IMPLEMENTATION
+Date: 2026-09-27. LOCAL ONLY: not committed, not pushed, not deployed.
+The migration was applied to the local Supabase only; no production database command was run in this phase.
+PR-04, PR-12, Progressive Operations and PROG6 were NOT touched. No general lifecycle editing was added.
+
+======================================================================
+1. STARTING STATE
+======================================================================
+  - Production (unchanged by this phase): application 436340bb0bf166e9c17fb7ff7ad67667d878d372, migration head
+    20260927100000, privilege contract 0 / 29.
+  - Local: main at 436340b, clean tracked tree; local migration head 20260927100000.
+  - Authoritative records: R2A spec (sections 16-20, 27, 29, D-6), the R2B implementation report, the R2B production
+    release report.
+
+======================================================================
+2. R2B RELEASE-RECORD CLOSEOUT
+======================================================================
+  - docs/reports/p1-pilot-r2b-production-release.txt reviewed against the recorded evidence (SHA 436340b, deployment
+    6693681636, migration head 20260927100000, before / after contracts 0/29 -> 2/29 expected -> 0/29, UI 20/20,
+    0 trip_details_updated events): accurate.
+  - Committed ALONE as 3797f01 "docs(pilot): record R2B production release" (1 file; no R2C code).
+  - Push: REFUSED by GitHub (HTTP 403 "denied to monitriq" -- this workstation's active GitHub credential is not the
+    nemryn account; switching accounts requires the owner). origin/main is still 436340b.
+    ACTION FOR THE OWNER: push 3797f01 to origin/main as the nemryn account (docs-only; fast-forward).
+  - R2C was built on top of 3797f01 (the new canonical baseline once pushed).
+
+======================================================================
+3. MIGRATION (one): supabase/migrations/20260927110000_trip_completion_recovery.sql
+======================================================================
+  1. trip_events_event_type_check extended (drop / add) with 'completion_recorded_by_operations'. Additive.
+  2. record_trip_completion_by_operations(...) + REVOKE ALL FROM PUBLIC + GRANT EXECUTE TO authenticated.
+  Nothing else: no column (no completion_source), no table, no generic state setter, no timestamp tool, no grant
+  change on any table. The contract change is one line in supabase/tests/privilege_contract_tests.sql.
+
+======================================================================
+4. RPC
+======================================================================
+  record_trip_completion_by_operations(p_trip_id uuid, p_expected_current_state text, p_completed_at timestamptz,
+                                       p_note text) returns public.trip_transition_result
+    (trip_id, previous_state, current_state, changed -- the existing result type).
+  SECURITY DEFINER; search_path = public, pg_temp; PUBLIC / anon no EXECUTE; authenticated EXECUTE; single overload.
+  Order of checks (all inside one transaction):
+    1. auth.uid() null -> ZW001.
+    2. Trip row locked FOR UPDATE; not found OR caller lacks has_org_role(trip org, [organization_admin, dispatcher])
+       -> ZW002 (identical for every denial -- no existence oracle).
+    3. state <> p_expected_current_state (or null expected) -> ZW003 stale_state.
+    4. state not in (passenger_onboard, en_route_to_destination, arrived_at_destination) -> ZW004.
+    5. active assignment locked FOR UPDATE; none -> ZW006 (integrity problem; never created or reconstructed).
+    6. note trimmed, 10..500 -> else ZW006.
+    7. p_completed_at null, or > now() + 5 minutes, or < max(occurred_at) of the existing lifecycle events
+       (en_route_to_pickup .. arrived_at_destination) -> ZW006. Never inferred server-side.
+
+======================================================================
+5. AUTHORIZATION
+======================================================================
+  Allowed: Organization Admin, Dispatcher of the Trip's organization.
+  Denied (ZW002): any Driver including the assigned Driver; foreign tenant; inactive membership; suspended
+  organization; no membership; Platform Admin without membership; nonexistent Trip. Anon: permission denied.
+  The Trip Detail page is already Organization Admin / Dispatcher only (requireOperationsAccess; Drivers are
+  redirected to /driver); the Server Action re-derives access on every call.
+
+======================================================================
+6. ELIGIBLE / INELIGIBLE STATES
+======================================================================
+  Eligible: passenger_onboard, en_route_to_destination, arrived_at_destination (owner decision D-6).
+  Ineligible: scheduled, en_route_to_pickup, arrived_at_pickup (reassign / no-show / cancel remain their paths) and
+  completed, cancelled, no_show (terminal). No idempotent no-op: a completed Trip is ZW004 (or ZW003 with a stale
+  expected state).
+
+======================================================================
+7. ACTIVE-ASSIGNMENT RULE / ASSIGNMENT CLOSURE
+======================================================================
+  - Required. Missing -> ZW006, Trip untouched, nothing created (SQL C22).
+  - On success the active row is closed IN PLACE: ended_at = now(), end_reason = 'trip_completed' -- the same
+    end_reason the Driver's own completion writes (the assigned Driver did perform the ride). Earlier rows (e.g.
+    'reassigned') are untouched; nothing deleted or re-pointed (SQL C26).
+  - Consequence: every existing reader keyed on end_reason = 'trip_completed' (Proof completion assignment,
+    recurring "who drove last time" hints, driver history) treats the recovered Trip truthfully without change.
+
+======================================================================
+8. COMPLETION TIME / REQUIRED NOTE
+======================================================================
+  Time: operator-stated, organization-local in the UI (default = current org-local time), converted with the same
+  DST-honest organizationLocalToUtc as Edit Trip (nonexistent / ambiguous -> refused). DB bounds: <= now + 5 min;
+  >= latest existing lifecycle event; required.
+  Note: required, trimmed, 10..500 characters. UI helper: "Say how completion was confirmed. Don't include health
+  information." No keyword scanning. Stored ONLY in audit_events.reason.
+
+======================================================================
+9. AUDIT MODEL / TRIP-EVENTS MODEL
+======================================================================
+  audit_events (Organization Admin readable only): action trip_completion_recorded_by_operations; entity trip;
+    actor = the operator; before_data {state}; after_data {state: completed, completed_at}; reason = the trimmed note.
+  trip_events: exactly ONE completion_recorded_by_operations; actor_user_id = the operator; occurred_at = now()
+    (when it was recorded); metadata = {previous_state, recorded_completed_at, note_present: true} -- exactly these
+    three keys, never the note (SQL C1 checks the key set; E2E C4 checks the text).
+
+======================================================================
+10. NO-FABRICATION SEMANTICS
+======================================================================
+  Never written: trip_completed; any skipped en_route_to_destination / arrived_at_destination; any edit or delete of
+  an existing event or timestamp. Recovery from passenger_onboard leaves exactly en_route_to_pickup,
+  arrived_at_pickup, passenger_onboard + completion_recorded_by_operations (SQL C25; E2E C3). Historical
+  incompleteness is preserved rather than filled in.
+
+======================================================================
+11. CONCURRENCY / RACES
+======================================================================
+  Case A -- Driver completes first: the operator's call with the old expected state -> ZW003; with "completed" ->
+    ZW004. One trip_completed, no recovery event, one closure, completed_at unchanged (SQL C23).
+  Case B -- Operations completes first: the Driver's pending tap is REJECTED, nothing written twice: no
+    trip_completed, no new milestone, one recovery event, one closure, completed_at unchanged (SQL C24; E2E F2/F3).
+    DEVIATION FROM THE SPEC'S EXPECTED CODE (recorded, not hidden): the Driver's rejection code is ZW001, not ZW003.
+    _driver_execute_trip_transition (unchanged since P1-E2) checks the caller's ACTIVE assignment before the state,
+    and recovery closed that assignment -- exactly the existing behaviour after an Operations cancel. The Driver sees
+    the calm ZW001 copy and the page refreshes to the existing "isn't accessible -- it may have been reassigned,
+    completed ..." state. OWNER DECISION (final polish): keep ZW001 and the Driver RPC unchanged; the centralized
+    Driver copy (src/lib/driver/errors.ts) now reads "This action is no longer available for this trip. It may have
+    been reassigned or completed." (was "... It may have been reassigned."). Pinned by src/lib/driver/errors.test.mjs
+    and E2E F2 (exact copy).
+  Two operators (E2E E4/E5): the second gets "This trip changed. Refresh and review the latest status."; one event,
+    one audit, one closure.
+
+======================================================================
+12. TRIP DETAIL UI / RECOVERY DIALOG / TIMELINE
+======================================================================
+  - "Record completion": a restrained secondary action (text-variant button after Cancel Trip), rendered only for the
+    three eligible states (canRecordCompletion). Not rendered for scheduled / en_route_to_pickup / arrived_at_pickup /
+    terminal (E2E A1-A3); Dispatcher and Admin see it (E1); Drivers cannot reach the page (F6).
+  - Dialog (RecordCompletionDialog.tsx): title "Record completion"; "Use this when the driver can't complete the
+    trip in Nemryn."; Completion date + time (default current org-local, E2E B3); Recovery note with the helper copy;
+    one line saying the driver's recorded steps stay as they are; Cancel / Record completion; loading state; the
+    Trip's current state is the concurrency token.
+  - Errors: stale "This trip changed. Refresh and review the latest status." (+ Refresh); illegal "This trip can no
+    longer be completed this way."; field-specific calm copy for note required / too short / too long, time
+    required / in the future / before the driver's last recorded step / DST-unresolvable; no database code exposed
+    (unit + E2E B8).
+  - Timeline: Trip Detail has no separate activity-timeline panel (a documented P1-E3-S6 design decision), so -- as
+    R2B did for "Details corrected by ..." -- the completed banner carries the line
+      "Completion recorded by operations · by you / a team member · <date, time recorded> · Completion time
+       recorded: <time>"
+    (attribution convention unchanged). The event label is "Completion recorded by operations" wherever trip_events
+    are labelled (Overview activity). Never "Trip completed by driver"; the note is never shown (E2E C5/C6).
+
+======================================================================
+13. PROOF-OF-SERVICE MODEL
+======================================================================
+  Core (trip-proof-of-service-core.ts): new reason COMPLETION_RECORDED_BY_OPERATIONS, ordered after
+    EVIDENCE_INTEGRITY_GAP; new fact completionRecordedByOperations; when true the Trip is always NEEDS_REVIEW.
+  Evidence (trip-proof-of-service-evidence.ts):
+    - normal Trips (no recovery event): the 6-event rule, UNCHANGED (existing tests untouched, still green);
+    - recovered Trips: evaluateRecoveredLifecycleEventChain -- exactly one recovery event; trip_completed absent;
+      previous_state eligible; exactly the Driver events up to it, each once, none after it; ordered; all <= the
+      recovery event; recorded_completed_at = trips.completed_at and >= the last Driver event. Any violation ->
+      EVIDENCE_INTEGRITY_GAP (fail closed). MISSING_VEHICLE / OPEN_EXCEPTION / the completion-assignment rule combine
+      unchanged.
+  Loaders (trip-proof-of-service.ts): read the recovery event + its two structural metadata facts only; the row
+    carries completionRecordedByOperations + driverRecordedMilestones.
+  Presentation: reason "Completion recorded by operations"; a line "Driver recorded: started to pickup, arrived at
+    pickup, passenger on board" (only milestones that exist). Operator attribution / time are shown on Trip Detail
+    (the existing attribution surface); the Proof list shows no note (E2E C8/C9).
+
+======================================================================
+14. DRIVER PWA / OVERVIEW / DISPATCH
+======================================================================
+  Driver PWA: no recovery action added. A stale tap is refused calmly (section 11); on refresh the Trip is no longer
+    an active trip (driver_get_trip_detail requires an active assignment -- the same as any completion) and
+    /driver/history shows it "Completed" (E2E F4). No note reaches the Driver (F5).
+  Overview / Trips / Dispatch / Proof / Trip Detail: the Trip is genuinely completed with no active assignment, so the
+    existing readers update with no recovery-specific state (E2E C7, C10, C11; D2: Overview "completed trips need
+    review" for yesterday +1).
+
+======================================================================
+15. SECURITY / PRIVILEGE CONTRACT
+======================================================================
+  - Contract: + record_trip_completion_by_operations(uuid,text,timestamp with time zone,text) authenticated-only.
+    Local 0 violations / 29 checks (after the migration, after the full SQL collection, after a fresh reset).
+  - No table privilege change: authenticated still has no direct UPDATE on trips (R2B revoke intact), no UPDATE on
+    trip_assignments, no INSERT on trip_events / audit_events (SQL C28).
+  - Function security verified (SQL C27).
+
+======================================================================
+16. TEST RESULTS
+======================================================================
+  SQL -- supabase/tests/record_completion_tests.sql: 31 / 31 PASS (C1-C28 + C15b no-oracle / no-auth, C19b note
+    boundaries 10 / 500, CLEANUP after ROLLBACK). Transactional; rerun twice, 31 / 31 both times.
+    Fixture Trips are driven through the REAL Driver RPCs, so every chain is genuine.
+    First run 29 / 31: both were script defects, fixed without changing any product expectation --
+      C19b did not re-set the JWT subject after the fixture helper cleared it (the call ran unauthenticated -> ZW001);
+      C24 used a completion time before the fixture's same-transaction events (the RPC rightly answered ZW006).
+  SQL -- updated suites:
+    trip_details_update 22 / 22 -- TD-22 changed DELIBERATELY: it pinned "no R2C type pre-created"; it now pins the
+      R2C type as present (lifecycle + trip_details_updated types still pinned).
+    privilege_contract: one function added.
+  SQL -- full collection (52 suites) on a fresh local reset (72 migrations applied cleanly):
+    every R2C-affected / lifecycle / Proof-adjacent suite GREEN -- record_completion 31/31, trip_details_update 22/22,
+    mutation_lifecycle 24/24, exception_mutation_boundary 21/21, trip_exception 17/17, recurring_arrangement_
+    foundation 51/51, recurring_occurrence_exception 19/19, client_privilege_surface 21/21, create_trip_privilege 5/5,
+    request_mutation 39/39, request_mutation_privilege 23/23, request_mutation_atomicity 4/4.
+    Pre-existing hygiene failures UNCHANGED (same check ids as the R2B record): notifications_activity ACT-1 / PAGE-1;
+    request_decision_expand_compat (historical EXPAND window); website_requests_form A1 / A2 / F5 / P7;
+    website_request_form_publication PU4a. NOT claimed: "all SQL tests pass".
+  Unit: npm test 710 / 710 (683 -> 710):
+    proof-of-service-recovery.test.mjs (22): normal chain unchanged READY; each eligible recovery coherent ->
+      NEEDS_REVIEW / COMPLETION_RECORDED_BY_OPERATIONS; broken partial chain, event after previous_state, duplicate
+      Driver event, out-of-order, trip_completed also present, duplicate recovery events, recovery before a prior
+      Driver event, bad previous_state, recorded time mismatch / missing / before last step, null completedAt -> +
+      EVIDENCE_INTEGRITY_GAP; + MISSING_VEHICLE; + OPEN_EXCEPTION; all four in order; no completion assignment;
+      non-completed NOT_APPLICABLE; labels; milestones; no note leakage.
+    trip-completion-core.test.mjs (5): eligibility, note, time bounds, completionRecordOf, error copy.
+    trip-proof-of-service-core.test.mjs: the fixture gained completionRecordedByOperations: false (no expectation
+      changed).
+  Browser E2E (.tmp-qa/p1-pilot-r2c-completion-recovery-e2e.mjs, local): 47 / 47 PASS on the first run, cleanup
+    verified. Visibility per state / role; dialog copy; default org-local time; note required / short; future time;
+    before-last-step; no DB codes; Cancel writes nothing; success from passenger_onboard (Trip completed, one closure,
+    one event, one audit with the note, no fabricated milestones, note not in trip_events); Trip Detail line "by
+    you"; Proof "Needs review · Completion recorded by operations" + "Driver recorded: ..." ; Trips / Dispatch
+    readers; yesterday recovery at the stated org-local time -> Overview need-review +1; Dispatcher recovery;
+    two-operator race; "by a team member" attribution; Driver stale tap refused calmly, no duplicate, history shows
+    Completed, no note in the PWA; Driver cannot reach Operations; 390 px no overflow.
+  Regressions (sequential, local, expectations unchanged; no stale Chrome after any suite; Org A intact after each --
+    9 trips, 0 PROG5 rows, seed drivers active):
+    R2B E2E 49/49, PROG1 46/46, PROG2 56/56, PROG3B 51/51 (NY 12:31, normal daytime path), PROG4B 45/45,
+    R1 integration 19/19, R2 integration 16/16, R2 E2E 20/20, PROG5B 74/74.
+  Application gate: TypeScript PASS; lint 0 errors (100 warnings, all in untracked .tmp-qa; 0 in src); unit 710/710;
+    build PASS; local privilege contract 0 / 29.
+  FINAL POLISH (owner-approved Driver copy only; no database / RPC / Proof change) -- narrow gate rerun:
+    TypeScript PASS; lint 0 errors (0 in src); unit 711 / 711 (+1: src/lib/driver/errors.test.mjs); build PASS;
+    record_completion 31 / 31; R2C E2E 47 / 47 (F2 now asserts the exact copy "... reassigned or completed.");
+    R2B E2E 49 / 49; PROG5B 74 / 74; local privilege contract 0 / 29; no stale Chrome.
+
+======================================================================
+17. FILES
+======================================================================
+  Created:
+    supabase/migrations/20260927110000_trip_completion_recovery.sql
+    supabase/tests/record_completion_tests.sql
+    src/lib/operations/trip-completion-core.ts (+ .test.mjs)
+    src/lib/operations/trip-completion-errors.ts
+    src/lib/operations/proof-of-service-recovery.test.mjs
+    src/components/operations/trip-detail/RecordCompletionDialog.tsx
+    docs/reports/p1-pilot-r2c-dispatcher-completion-recovery-implementation.txt
+    (local QA only, untracked: .tmp-qa/p1-pilot-r2c-completion-recovery-e2e.mjs)
+  Modified (15 tracked files incl. src/lib/driver/errors.ts -- the approved copy; + src/lib/driver/errors.test.mjs):
+    src/app/operations/trips/[tripId]/{actions.ts, page.tsx}
+    src/app/operations/proof-of-service/page.tsx
+    src/components/operations/trip-detail/TripDetailActionBar.tsx
+    src/lib/operations/{presentation, trip-detail, trip-proof-of-service, trip-proof-of-service-core,
+      trip-proof-of-service-evidence}.ts
+    src/lib/operations/trip-proof-of-service-core.test.mjs (fixture field only)
+    src/lib/supabase/database.types.ts (additions only: the RPC, regenerated from local)
+    supabase/tests/{privilege_contract, trip_details_update}_tests.sql
+    docs/data/mutation-api.md
+
+======================================================================
+18. MIGRATION STATE / PRODUCTION
+======================================================================
+  - Local head 20260927110000 (72 migrations).
+  - Production UNTOUCHED in this phase: no db push, no git push of R2C, no deploy, no Vercel / DNS change, no tenant
+    mutation, no linked query. Production remains 436340b / 20260927100000 / 0 of 29.
+
+======================================================================
+19. OPEN ISSUES
+======================================================================
+  1. Driver race code (section 11): RESOLVED by owner decision -- ZW001 kept (Driver RPC unchanged); the centralized
+     Driver copy now says "It may have been reassigned or completed."
+  2. The R2B docs closeout 3797f01 is committed but NOT pushed (GitHub credential mismatch); owner push required.
+  3. Pre-existing SQL test-hygiene failures (section 16) remain, unchanged.
+  4. Proof list attribution is the reason + Driver-milestones line; operator identity / recorded time are on Trip
+     Detail (the existing attribution surface with its RLS-limited names).
+  5. PR-18 tooling: GitHub credential and the Supabase CLI (2.109.0; 2.118.0 available) remain workstation risks for
+     the release.
+
+======================================================================
+20. REMAINING GAPS / PR-04 / PR-12
+======================================================================
+  Remaining P0 pilot blockers: 0 (conditional on PR-12).
+  Remaining P1 pilot gaps: 1 -- PR-04 (recurring-intent Requests have no path to Recurring Care; R3 candidate).
+    PR-02 is ADDRESSED locally (effective once released); PR-01 / PR-03 were released in R2B.
+  PR-04 status: NOT started (spec R2A section 21).
+  PR-12 discovery gate: still OPEN -- pilot go-live requires the payer / broker's evidence requirements (signature /
+    photo / mileage / other); if any is mandated, PR-12 becomes P0 before live go-live. Recovered completions are
+    always NEEDS_REVIEW, which is compatible with any stricter future evidence rule.
+
+======================================================================
+21. EXACT R2C PRODUCTION-RELEASE BOUNDARY
+======================================================================
+  Prerequisite: 3797f01 (R2B docs closeout) pushed to origin/main.
+  One implementation commit:
+    - the migration 20260927110000_trip_completion_recovery.sql;
+    - supabase/tests/record_completion_tests.sql + the updated privilege_contract / trip_details_update suites;
+    - the regenerated database.types.ts;
+    - all src changes in section 17 (incl. the new tests);
+    - docs/data/mutation-api.md;
+    - this report.
+  Excluded: .tmp-qa, logs, scratch, credentials.
+  Release order (established pattern):
+    1. immutable commit;
+    2. pre-R2C production contract (from 3797f01 / 436340b) = 0/29; expected mismatch with the R2C contract = 1/29
+       (check 14 only: the new function missing);
+    3. project identity Nemryn / wyocbivzgrbekuyqdfts; production head 20260927100000;
+    4. dry-run delta = exactly 20260927110000;
+    5. db push;
+    6. R2C contract 0/29 + object verification (definer, pinned, single overload, no PUBLIC / anon, authenticated
+       EXECUTE; CHECK includes completion_recorded_by_operations; no trips / trip_assignments UPDATE, no trip_events /
+       audit_events INSERT for authenticated);
+    7. push main -> Vercel; verify the deployed SHA;
+    8. read-only production UI verification (Record completion visible only on an eligible trip if one exists; no
+       real Trip completed for evidence unless the owner designates a synthetic one);
+    9. report.
+  Rollback: revert the application or promote deployment 6693681636; the schema is additive (one CHECK value + one
+    function). A defective RPC can be REVOKEd from authenticated without dropping it. Recovered Trips remain valid
+    completed Trips (Proof shows them NEEDS_REVIEW).
+
+P1-PILOT-R2C LOCAL IMPLEMENTATION: PASS
+
+PR-02 DISPATCHER RECOVERY: ADDRESSED
+
+PRODUCTION MIGRATION APPLIED: NO
+
+PRODUCTION DEPLOYED: NO
+
+READY FOR R2C PRODUCTION RELEASE REVIEW: YES
+
+REMAINING P0 PILOT BLOCKERS: 0
+
+REMAINING P1 PILOT GAPS: 1
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+PROG6 PLANNED: NO

@@ -117,6 +117,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   exception_resolved: "Exception resolved",
   request_converted_to_trip: "Request converted to trip",
   trip_details_updated: "Trip details corrected",
+  completion_recorded_by_operations: "Completion recorded by operations",
 };
 
 export function operationsEventLabel(eventType: string): string {
@@ -478,10 +479,29 @@ const PROOF_OF_SERVICE_REASON_LABEL: Record<TripProofOfServiceReasonCode, string
   MISSING_VEHICLE: "Vehicle not recorded",
   OPEN_EXCEPTION: "Open issue",
   EVIDENCE_INTEGRITY_GAP: "Service evidence incomplete",
+  COMPLETION_RECORDED_BY_OPERATIONS: "Completion recorded by operations",
 };
 
 export function proofOfServiceReasonLabel(code: TripProofOfServiceReasonCode): string {
   return PROOF_OF_SERVICE_REASON_LABEL[code];
+}
+
+/** P1-PILOT-R2C: plain wording for the Driver milestones that actually exist on a recovered Trip. */
+const DRIVER_MILESTONE_LABEL: Record<string, string> = {
+  en_route_to_pickup: "started to pickup",
+  arrived_at_pickup: "arrived at pickup",
+  passenger_onboard: "passenger on board",
+  en_route_to_destination: "started to destination",
+  arrived_at_destination: "arrived at destination",
+};
+
+/**
+ * "Driver recorded: started to pickup, arrived at pickup, passenger on board" -- only the milestones really present,
+ * never a full Driver chain for a completion Operations recorded. "Driver recorded: no milestones" when none exist.
+ */
+export function driverRecordedMilestonesLine(milestones: readonly string[]): string {
+  const labels = milestones.map((m) => DRIVER_MILESTONE_LABEL[m]).filter((l): l is string => Boolean(l));
+  return `Driver recorded: ${labels.length > 0 ? labels.join(", ") : "no milestones"}`;
 }
 
 const PROOF_OF_SERVICE_WINDOW_LABEL: Record<ProofOfServiceReviewWindow, string> = {

@@ -130,6 +130,16 @@ Legal only from `en_route_to_pickup` or `arrived_at_pickup` → `no_show` (lifec
 
 **Writes:** `trips.state`/`no_show_at`; one `trip_events` row (`no_show_recorded`, `metadata.reason`); one `audit_events` row (`no_show_recorded`, `reason`, before/after state).
 
+### `record_trip_completion_by_operations(p_trip_id uuid, p_expected_current_state text, p_completed_at timestamptz, p_note text) returns trip_transition_result`
+
+**P1-PILOT-R2C (PR-02).** The exceptional recovery when the Driver cannot complete a Trip in Nemryn after pickup (phone died, app unavailable) and Operations has confirmed completion by another channel. Not a generic state setter, never impersonates the Driver, never writes a Driver lifecycle event.
+
+- **Authorization:** Organization Admin / Dispatcher of the Trip's organization; everyone else (the assigned Driver included, foreign tenant, inactive membership, suspended organization, Platform Admin without membership, nonexistent Trip) is the identical `ZW002`. No auth → `ZW001`.
+- **Checks (row-locked):** `state = p_expected_current_state` (`ZW003`); state ∈ `passenger_onboard` / `en_route_to_destination` / `arrived_at_destination` (`ZW004` otherwise, terminal included — no idempotent no-op); an active assignment must exist (`ZW006` — an integrity problem, never reconstructed); `p_note` trimmed 10–500 characters (`ZW006`); `p_completed_at` required (never inferred), ≤ now + 5 minutes and ≥ the latest existing lifecycle event (`ZW006`).
+- **Writes (one transaction):** `trips.state = 'completed'`, `completed_at = p_completed_at`; the active `trip_assignments` row `ended_at = now()`, `end_reason = 'trip_completed'` (closed, never deleted); ONE `trip_events` row `completion_recorded_by_operations` (actor = the operator, `occurred_at = now()`, `metadata = { previous_state, recorded_completed_at, note_present: true }` — never the note); ONE `audit_events` row `trip_completion_recorded_by_operations` (before `{state}`, after `{state, completed_at}`, `reason` = the note, Organization Admin readable only).
+- **Never written:** `trip_completed`, or any skipped `en_route_to_destination` / `arrived_at_destination`. Proof of Service evaluates such a Trip with the recovery chain rule and always shows it as NEEDS_REVIEW (`COMPLETION_RECORDED_BY_OPERATIONS`).
+- **Races:** the Driver completes first → this call is `ZW003` (old expected state) / `ZW004`. Operations completes first → the Driver's pending tap is rejected with `ZW001` (its active assignment was closed — the Driver path checks the active assignment before the state, exactly as after an Operations cancel); nothing is written twice.
+
 ---
 
 ## Assignment

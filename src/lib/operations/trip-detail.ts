@@ -3,6 +3,7 @@ import type { AttributionAssignment } from "./assignment-attribution-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { operationsTripStatusLabel } from "./presentation";
 import { operationsEventLabel } from "./presentation";
+import { completionRecordOf, type CompletionRecord } from "./trip-completion-core";
 
 /**
  * Server-side data access boundary for Operations Trip Detail (P1-E3-S6,
@@ -177,6 +178,8 @@ export interface TripDetailData {
   recurringTimezone: string | null;
   /** The most recent `trip_details_updated` event (who / when / which fields) -- field NAMES only, never values. */
   lastCorrection: { actorUserId: string | null; occurredAt: string; fields: string[] } | null;
+  /** P1-PILOT-R2C: the completion Operations recorded (who / when recorded / stated completion time) -- never the note. */
+  completionRecord: CompletionRecord | null;
   passengerId: string | null;
   passengerName: string;
   passengerPhone: string | null;
@@ -333,6 +336,7 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
     recurringArrangementId: tripRow.recurring_arrangement_id,
     recurringTimezone: unwrapOne(tripRow.recurring_arrangements)?.timezone ?? null,
     lastCorrection: lastCorrectionOf(eventsResult.data ?? []),
+    completionRecord: completionRecordOf(eventsResult.data ?? []),
     passengerId: passenger?.id ?? null,
     passengerName: passenger?.display_name ?? "Unknown Passenger",
     passengerPhone: passenger?.phone ?? null,

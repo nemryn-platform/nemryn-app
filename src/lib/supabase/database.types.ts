@@ -2662,6 +2662,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      record_trip_completion_by_operations: {
+        Args: {
+          p_completed_at: string
+          p_expected_current_state: string
+          p_note: string
+          p_trip_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       redeem_driver_invite: {
         Args: { p_token: string }
         Returns: Database["public"]["CompositeTypes"]["driver_invite_redemption_result"]
