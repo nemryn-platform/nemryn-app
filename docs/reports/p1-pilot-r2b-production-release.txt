@@ -1,0 +1,231 @@
+NEMRYN PLATFORM
+P1-PILOT-R2B -- TRIP CORRECTION + STRANDED-WORK VISIBILITY -- PRODUCTION RELEASE
+Date: 2026-09-27.
+Release SHA: 436340bb0bf166e9c17fb7ff7ad67667d878d372 ("feat(operations): add trip correction and stranded-work
+visibility"). Not amended. This report is NOT committed.
+Implementation record: docs/reports/p1-pilot-r2b-trip-correction-stranded-work-implementation.txt.
+R2C, PR-04 and PR-12 were NOT implemented. No PROG6.
+
+======================================================================
+1. STARTING STATE
+======================================================================
+  - Production: application e154a7c (feature ee40052), migration head 20260926100000.
+  - Local: main at e154a7c + the reviewed R2B candidate (32 tracked files, +565 / -169; git diff sha256
+    425fbc4d8f27cec9cf2e4ebb5394007894d63624f22b3f34198d7cd7da8dd883), 12 new files.
+  - An earlier gate attempt had stopped: PROG5B was not proven green under heavy machine load, and PROG3B took its
+    known time-of-day fallback path (E8 / E12).
+
+======================================================================
+2. RESUMED LOCAL GATE
+======================================================================
+  Pre-flight (re-verified):
+    - git diff = the reviewed candidate (same stats, same hash before and after the gate); no tracked R2B work lost.
+    - The workstation had rebooted; Docker was restarted and the EXISTING ZenWard local containers were started on
+      their existing volume (no reset).
+    - Local migration head 20260927100000.
+    - Local Org A clean: 9 trips (fresh-seed count), 0 fixture trips / passengers, Fictional Driver A1 / A2 and Van
+      A1 / A2 active, org default duration null, 0 PROG5 rows.
+    - Local privilege contract 0 / 29.
+    - No stale Chrome / CDP processes before or after each suite. Machine: swap 0, memory 85-90 % free, load ~7-10
+      (Docker VM + post-boot Spotlight only). Only the ZenWard Supabase stack and `next start -p 3100` ran.
+    - The existing .next build post-dated every source file (it is the candidate build).
+
+  PROG5B / PROG3B regression issue -- RESOLVED:
+    - PROG5B (.tmp-qa/p1-ops-prog5b-availability-e2e.mjs), alone: 74 / 74 PASS on the FIRST run, expectations
+      unchanged. Org A identical afterwards. -> PROG5B regression GREEN.
+    - PROG3B (.tmp-qa/p1-ops-prog3b-composition-e2e.mjs), alone, normal New York daytime path (08:48 / 08:52 EDT;
+      "now + 150 min" on the same NY date):
+        run 1: 49 PASS + 1 harness exception, 0 assertion failures. E8, E8b, E12 all PASSED. The exception was
+          ENOENT writing a screenshot to a hard-coded scratch directory of an earlier session that the reboot had
+          wiped. The directory was recreated (empty); the script and its expectations were NOT modified.
+        run 2 (clean): 51 / 51 PASS. -> PROG3B regression GREEN.
+      The earlier E8 / E12 result is therefore recorded as a KNOWN CLOCK-DEPENDENT TEST-HARNESS CONDITION, not an
+      R2B regression.
+    - PROG3B leaves its own local fixture tenants ("PROG3 Tenant <stamp>") in place by design; Org A is unaffected.
+
+  Final local gate (after both suites were green; no code or fixture changed, so no other suite was rerun):
+    npx tsc --noEmit        PASS
+    npm run lint            0 errors (100 warnings, all in untracked .tmp-qa; 0 in src)
+    npm test                683 / 683
+    npm run build           PASS
+    verify-db-privileges    local 0 violations / 29 checks
+  Earlier-established local evidence (implementation record section 18): trip_details_update SQL 22 / 22; R2B E2E
+  49 / 49; PROG1 46 / 46, PROG2 56 / 56, PROG4B 45 / 45, R2 E2E 20 / 20, R1 integration 19 / 19, R2 integration 16 / 16.
+
+======================================================================
+3. IMMUTABLE COMMIT
+======================================================================
+  436340b -- 44 files: the 32 reviewed tracked files, 8 new src files, the migration, the new SQL suite, the amended
+  R2A spec and the R2B implementation report. Excluded: .tmp-qa, logs, scratch, credentials, and the optional R1
+  readiness audit (not requested by the owner).
+
+======================================================================
+4. PRODUCTION PRIVILEGE CONTRACT -- BEFORE / AFTER
+======================================================================
+  A. PRE-R2B database + PRE-R2B contract (e154a7c:supabase/tests/privilege_contract_tests.sql, extracted to a
+     scratch file; working tree untouched; read-only):
+       0 violations / 29 checks -- PASS.
+       PRE-R2B PRODUCTION PRIVILEGE BASELINE: 0/29 PASS
+  B. PRE-R2B database + POST-R2B contract (436340b) -- EXPECTED MISMATCH:
+       2 / 29, checks 09 and 14 ONLY:
+         09 authenticated COLUMN privileges == contract -> EXTRA transportation_requests.* UPDATE (the descriptive
+            columns R2B revokes; trips columns likewise, output truncated);
+         14 every contract function exists -> update_trip_details(uuid, timestamptz, timestamptz, timestamptz, text,
+            uuid, text, uuid, text, text) missing.
+       This is exactly the contract diff e154a7c -> 436340b (20 column grants removed, one function added). All
+       other 27 checks passed. The release stopped here for an owner decision; the owner approved baseline A.
+  C. POST-R2B database + POST-R2B contract (436340b), immediately after the migration:
+       0 violations / 29 checks -- PASS.
+  Together A -> C prove the security delta: the only change is the intended revoke + the new RPC.
+
+======================================================================
+5. PROJECT IDENTITY / MIGRATION
+======================================================================
+  - supabase projects list: Nemryn / wyocbivzgrbekuyqdfts, linked = true; supabase/.temp/project-ref matches.
+  - Production head before: 20260926100000 (70 applied).
+  - Dry-run delta: exactly 20260927100000_trip_details_correction.sql. Nothing else pending.
+  - supabase db push --linked: "Applying migration 20260927100000_trip_details_correction.sql ... Finished".
+    The CLI printed a non-fatal local warning ("failed to cache migrations catalog": pg-delta could not read a local
+    CA file for its catalog cache). It does not affect the applied migration; verified by sections 4C and 6.
+  - No ad-hoc production SQL write, no unrelated migration, no destructive cleanup.
+  - Production migration head after: 20260927100000 (71 applied, 0 pending).
+
+======================================================================
+6. PRODUCTION OBJECT / SECURITY VERIFICATION (read-only, linked)
+======================================================================
+  update_trip_details:
+    signature       update_trip_details(uuid, timestamptz, timestamptz, timestamptz, text, uuid, text, uuid, text,
+                    text) -- the reviewed signature; 1 overload
+    returns         trip_details_update_result (composite type exists)
+    SECURITY DEFINER true
+    proconfig       search_path=public, pg_temp
+    PUBLIC EXECUTE  false
+    anon EXECUTE    false
+    authenticated   EXECUTE true
+  Trips direct UPDATE (PR-15):
+    has_table_privilege(authenticated, trips, UPDATE) false; has_any_column_privilege(..., UPDATE) false;
+    column UPDATE grants: none.                                                           -> REVOKED
+  Requests direct UPDATE (SEC-HYGIENE-2):
+    has_table_privilege(authenticated, transportation_requests, UPDATE) false; any column UPDATE false;
+    column UPDATE grants: none.                                                           -> REVOKED
+  Policies:
+    trips_update_org_operations                     absent
+    transportation_requests_update_org_operations   absent
+    any UPDATE / ALL policy on trips or transportation_requests: none
+  trip_events_event_type_check includes 'trip_details_updated': true.
+
+======================================================================
+7. PUSH / VERCEL / DEPLOYED SHA
+======================================================================
+  - First push attempt from this workstation: HTTP 403 "denied to monitriq" (the active GitHub credential was another
+    account). Nothing was pushed. The owner pushed 436340b as the nemryn account (no force, no amend).
+  - Verified after fetch: local HEAD == origin/main == 436340bb0bf166e9c17fb7ff7ad67667d878d372.
+  - Existing GitHub -> Vercel path (no Vercel project, DNS or environment-variable change):
+      Production deployment 6693681636, environment Production, sha 436340bb0bf166e9c17fb7ff7ad67667d878d372,
+      state success (2026-09-27T14:50:16Z); Vercel commit status success ("Deployment has completed").
+      Previous production deployments: 6684015583 (e154a7c), 6675841122 (ee40052).
+  - https://app.nemryn.com/sign-in -> HTTP 200 (server: Vercel).
+  - Deployed SHA: 436340b.
+  - Interim state (migration applied, old application e154a7c still serving until the deploy): verified safe --
+    e154a7c has no direct .update() on trips or transportation_requests (only facilities, fleet, passengers), so the
+    revokes broke nothing in between.
+
+======================================================================
+8. BASIC PRODUCTION UI VERIFICATION (READ-ONLY)
+======================================================================
+  Script: .tmp-qa/p1-pilot-r2b-prod-readonly-ui.mjs (untracked). Synthetic QA tenant Siloan Medical Centre, its
+  existing Organization Admin session; credentials from the git-ignored file, never logged. Navigation and reads only:
+  no Save, no form submit, no lifecycle action, no fixture, no SQL write.
+  Result: 20 PASS / 0 FAIL.
+    - Admin sign-in -> /operations.
+    - Operations Overview, Requests, /operations/requests?state=accepted&needs=trip, Dispatch, Tomorrow, Trips:
+      each loads on its own URL, no error page, no uncaught client error / unhandled rejection (collected from page
+      start).
+    - Overview shows the new stranded-work line: "2 accepted requests still need a trip".
+    - needs=trip filter preserved in the URL; 390 px: no page overflow.
+    - Trip Detail (efe9e219-0c3c-429f-8bbf-5e7e55ed1120, a scheduled / non-terminal Siloan trip): Edit Trip ENABLED
+      (it was a disabled placeholder before R2B); opening it shows the edit form with pickup date / time prefilled
+      (2026-09-18 08:00); closed with Cancel; no runtime error.
+    - The first run reported 19 / 1: the one failure was a defect in this new script's own assertion (it required the
+      OPTIONAL appointment date / time to be non-empty). The assertion was corrected to the required pickup date /
+      time and the whole read-only run repeated: 20 / 0.
+  Non-mutation proof (read-only, linked): trip_events with event_type 'trip_details_updated' = 0 in production.
+
+======================================================================
+9. MUTATION VERIFICATION -- OWNER-ACCEPTED FROM LOCAL EVIDENCE
+======================================================================
+  NO production mutation smoke was executed (owner instruction: no further Siloan smoke; no real-data mutation).
+  The owner accepted the comprehensive R2B mutation-path evidence from the local release gate:
+    - trip_details_update SQL 22 / 22;
+    - R2B browser E2E 49 / 49;
+    - unit 683 / 683;
+    - PROG5B 74 / 74;
+    - PROG3B 51 / 51;
+    - all other established regressions green (PROG1, PROG2, PROG4B, R2 E2E, R1 / R2 integration);
+    - local privilege contract 0 / 29.
+
+======================================================================
+10. RESIDUAL VERIFICATION RISK
+======================================================================
+  - The production write path of update_trip_details (save, stale token, en-route date lock, audit rows) has not been
+    exercised in production. Mitigation: identical migration + contract proven locally; production object / grant /
+    search_path / overload checks match; contract 0 / 29.
+  - The stranded-work signal was observed with real synthetic data (2 accepted Requests), not with a manufactured
+    cancel-all-trips case in production.
+  - The Driver PWA focus refresh was not exercised in production (local E2E only).
+  - Workstation tooling (PR-18) remains a factor: GitHub credential mismatch this release; the Supabase CLI is
+    2.109.0 (2.118.0 available).
+  Rollback: revert 436340b or promote deployment 6684015583; the schema is additive + a revoke; do NOT re-grant the
+  revoked UPDATE privileges (no application version uses them); a defective RPC can be REVOKEd from authenticated
+  without dropping it.
+
+======================================================================
+11. DISPOSITIONS
+======================================================================
+  PR-01  Trip details cannot be edited after creation (P0)          CLOSED -- released and verified in production.
+  PR-03  Accepted Requests without a Trip not surfaced (P1)          RELEASED -- Overview line + needs=trip view live.
+  PR-15  Direct trips column UPDATE grants bypass audit (P2)         CLOSED -- revoked; policy dropped; contract 0/29.
+  SEC-HYGIENE-2  transportation_requests descriptive UPDATE grant    CLOSED -- revoked; policy dropped; contract 0/29.
+
+======================================================================
+12. REMAINING GAPS / R2C / PR-12
+======================================================================
+  Remaining P0 pilot blockers: 0 (conditional on PR-12 below).
+  Remaining P1 gaps:
+    - PR-02 dispatcher recovery for an in-progress trip after pickup -> R2C;
+    - PR-04 recurring-intent Requests have no path to Recurring Care -> R3 candidate.
+  P2 / P3 unchanged: PR-05..PR-14, PR-16..PR-18.
+  R2C readiness: READY for implementation review (spec R2A sections 16-20, 27, 29; D-6 approved; the trip_events
+    vocabulary pattern is established; nothing in R2B pre-creates R2C objects). R2C was NOT started.
+  PR-12 payer discovery gate: still OPEN. Pilot go-live requires confirmation of the pilot payer / broker's evidence
+    requirements (signature / photo / mileage / other). If any is mandated, PR-12 becomes P0 before live go-live.
+    It did not block R2B.
+
+======================================================================
+FINAL GATE
+======================================================================
+P1-PILOT-R2B PRODUCTION RELEASE: PASS
+
+PRODUCTION MIGRATION HEAD: 20260927100000
+
+PRODUCTION PRIVILEGE CONTRACT: 0 violations / 29 checks (post-R2B contract, 436340b)
+
+DEPLOYED COMMIT: 436340bb0bf166e9c17fb7ff7ad67667d878d372
+
+P0 PILOT BLOCKER PR-01: CLOSED
+
+PR-03 STRANDED REQUEST VISIBILITY: RELEASED
+
+TRIPS DIRECT UPDATE SURFACE: REVOKED
+
+REQUESTS DIRECT UPDATE SURFACE: REVOKED
+
+PRODUCTION MUTATION SMOKE: OWNER-ACCEPTED FROM LOCAL EVIDENCE
+
+REMAINING P0 PILOT BLOCKERS: 0
+
+READY FOR R2C IMPLEMENTATION: YES
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+PROG6 PLANNED: NO
