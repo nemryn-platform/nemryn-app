@@ -15,13 +15,21 @@
  * sufficient, exactly like request-lifecycle-errors.ts's own reasoning
  * for decline/cancel_transportation_request.
  */
-export type RecurringArrangementErrorCode = "UNAUTHORIZED" | "NOT_FOUND" | "ILLEGAL_STATE" | "INVALID_INPUT" | "UNKNOWN";
+export type RecurringArrangementErrorCode =
+  | "UNAUTHORIZED"
+  | "NOT_FOUND"
+  | "ILLEGAL_STATE"
+  | "INVALID_INPUT"
+  /** P1-PILOT-R3: the originating Request is no longer accepted / its Passenger changed or became inactive. */
+  | "REQUEST_NOT_READY"
+  | "UNKNOWN";
 
 const RECURRING_ARRANGEMENT_ERROR_MESSAGE: Record<RecurringArrangementErrorCode, string> = {
   UNAUTHORIZED: "Your session is no longer valid. Sign in again.",
   NOT_FOUND: "This recurring arrangement is no longer available.",
   ILLEGAL_STATE: "This arrangement has changed and can no longer be updated this way.",
   INVALID_INPUT: "Please check the information provided and try again.",
+  REQUEST_NOT_READY: "This request is no longer ready for recurring care.",
   UNKNOWN: "Something went wrong. Try again.",
 };
 

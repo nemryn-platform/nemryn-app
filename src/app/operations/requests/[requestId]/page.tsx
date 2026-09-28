@@ -18,6 +18,8 @@ import { RequestPassengerPanel } from "@/components/operations/requests/RequestP
 import { RequestRequesterPanel } from "@/components/operations/requests/RequestRequesterPanel";
 import { RequestDetailsPanel } from "@/components/operations/requests/RequestDetailsPanel";
 import { RequestLinkedTripsPanel } from "@/components/operations/requests/RequestLinkedTripsPanel";
+import { RequestLinkedArrangementsPanel } from "@/components/operations/requests/RequestLinkedArrangementsPanel";
+import { hasRecurringIntent } from "@/lib/operations/request-recurring-prefill-core";
 import { RequestActivityPanel } from "@/components/operations/requests/RequestActivityPanel";
 import { RequestAcquisitionPanel } from "@/components/operations/requests/RequestAcquisitionPanel";
 import type { NewTripPassengerOption } from "@/lib/operations/new-trip-options";
@@ -116,6 +118,8 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
     passengerActive: request.passenger?.status === "active",
     hasLinkedTrips,
     hasActiveTrips: hasActiveTrip(request.linkedTrips.map((t) => t.state)),
+    hasLinkedArrangement: request.linkedArrangements.length > 0,
+    hasRecurringIntent: hasRecurringIntent(request),
   };
   const actions = deriveRequestActions(readinessInput);
   const passengerNeedsResolution =
@@ -158,6 +162,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   const identity = request.passenger?.displayName ?? request.requesterName;
   const readiness = deriveRequestReadiness(readinessInput);
   const createTripHref = `/operations/trips/new?${new URLSearchParams({ requestId: request.id }).toString()}`;
+  const createRecurringHref = `/operations/recurring-care/new?${new URLSearchParams({ requestId: request.id }).toString()}`;
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -182,9 +187,20 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             {identity} · Logged {formatOperationsLongDate(new Date(request.createdAt), timezone)}
           </p>
         </div>
-        <RequestActionBar requestId={request.id} actions={actions} createTripHref={createTripHref} />
+        <RequestActionBar
+          requestId={request.id}
+          actions={actions}
+          createTripHref={createTripHref}
+          createRecurringHref={createRecurringHref}
+          hasLinkedArrangement={request.linkedArrangements.length > 0}
+        />
       </div>
 
+      {actions.cancelBlockedByArrangement && (
+        <p className={cn(typography.bodySmall, "text-text-muted")}>
+          This request already has recurring care. Manage the standing order from the recurring arrangement.
+        </p>
+      )}
       {actions.cancelBlockedByTrips && (
         <p className={cn(typography.bodySmall, "text-text-muted")}>
           This request already has transportation scheduled. Manage cancellation from the linked trip.
@@ -224,6 +240,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             preferredTime={request.preferredTime}
             returnTripNeeded={request.returnTripNeeded}
           />
+          <RequestLinkedArrangementsPanel arrangements={request.linkedArrangements} />
           <RequestLinkedTripsPanel linkedTrips={request.linkedTrips} timezone={timezone} />
         </div>
 

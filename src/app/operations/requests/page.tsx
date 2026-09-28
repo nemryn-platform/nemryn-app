@@ -135,7 +135,7 @@ export default async function RequestHubPage({
 
       {needsTrip && (
         <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="requests-needs-trip-filter">
-          Showing accepted requests that still need a trip.{" "}
+          Showing accepted requests that still need a trip or recurring arrangement.{" "}
           <Link href={search ? `/operations/requests?state=accepted&q=${encodeURIComponent(search)}` : "/operations/requests?state=accepted"} className="text-text-link hover:underline">
             Show all accepted
           </Link>

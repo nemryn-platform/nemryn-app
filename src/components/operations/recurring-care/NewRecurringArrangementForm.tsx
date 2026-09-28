@@ -15,11 +15,20 @@ import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import type { TriState } from "@/lib/operations/capability-core";
 import { WheelchairRequirementField } from "@/components/operations/wheelchair/WheelchairRequirementField";
+import { AttentionState } from "@/components/ui/AttentionState";
+import { LinkButton } from "@/components/ui/LinkButton";
+import { formatWallClockTime } from "@/lib/operations/presentation";
+import { RETURN_TRIP_HINT_TITLE, RETURN_TRIP_HINT_BODY, type RecurringPrefill } from "@/lib/operations/request-recurring-prefill-core";
 
 const INITIAL_STATE: CreateRecurringArrangementActionState = { status: "idle" };
 
 export interface NewRecurringArrangementFormProps {
   passengers: NewTripPassengerOption[];
+  /**
+   * P1-PILOT-R3 (PR-04): created from an accepted Request. Structured facts only (request-recurring-prefill-core);
+   * the Passenger is the Request's linked Passenger (fixed); pickup time starts EMPTY.
+   */
+  fromRequest?: { prefill: RecurringPrefill; passengerName: string };
 }
 
 /**
@@ -33,9 +42,10 @@ export interface NewRecurringArrangementFormProps {
  * detail page (mirrors NewTripForm's identical success-navigation
  * pattern — the action itself never calls `redirect()`).
  */
-export function NewRecurringArrangementForm({ passengers }: NewRecurringArrangementFormProps) {
+export function NewRecurringArrangementForm({ passengers, fromRequest }: NewRecurringArrangementFormProps) {
   const [state, formAction, pending] = useActionState(createRecurringArrangementAction, INITIAL_STATE);
-  const [wheelchair, setWheelchair] = useState<TriState>("unspecified");
+  const prefill = fromRequest?.prefill ?? null;
+  const [wheelchair, setWheelchair] = useState<TriState>(prefill?.wheelchair === "yes" ? "yes" : "unspecified");
   const router = useRouter();
 
   useEffect(() => {
@@ -55,9 +65,33 @@ export function NewRecurringArrangementForm({ passengers }: NewRecurringArrangem
         ]}
       />
 
+      {prefill && (
+        <p className={cn(typography.bodySmall, "max-w-2xl text-text-secondary")} data-testid="recurring-from-request">
+          Prefilled from an accepted request. Check each detail and choose the pickup time.{" "}
+          <LinkButton href={`/operations/requests/${prefill.requestId}`} variant="text" size="sm">
+            View request
+          </LinkButton>
+        </p>
+      )}
+      {prefill?.returnTripExpected && (
+        <div className="max-w-2xl" data-testid="recurring-return-hint">
+          <AttentionState level="info" title={RETURN_TRIP_HINT_TITLE} description={RETURN_TRIP_HINT_BODY} />
+        </div>
+      )}
+
       <Panel className="max-w-2xl">
         <form action={formAction} className="flex flex-col gap-zw-md">
-          {passengers.length === 0 ? (
+          {prefill ? (
+            <div>
+              <input type="hidden" name="requestId" value={prefill.requestId} />
+              <input type="hidden" name="passengerId" value={prefill.passengerId} />
+              <p className={cn(typography.label, "text-text-primary")}>Passenger</p>
+              <p className={cn(typography.body, "mt-1 text-text-secondary")} data-testid="recurring-request-passenger">
+                {fromRequest?.passengerName}
+              </p>
+              <p className={cn(typography.metadata, "mt-0.5 text-text-muted")}>The passenger linked to the request.</p>
+            </div>
+          ) : passengers.length === 0 ? (
             <p className={cn(typography.bodySmall, "text-text-secondary")}>
               No active passengers are available yet. Add a passenger before creating a recurring arrangement.
             </p>
@@ -72,21 +106,37 @@ export function NewRecurringArrangementForm({ passengers }: NewRecurringArrangem
             />
           )}
 
-          <Input label="Pickup" name="pickupDescription" required disabled={pending} placeholder="e.g. Home" />
-          <Input label="Destination" name="destinationDescription" required disabled={pending} placeholder="e.g. Cascade Dialysis Center" />
+          <Input label="Pickup" name="pickupDescription" required disabled={pending} placeholder="e.g. Home" defaultValue={prefill?.pickupDescription} />
+          <Input
+            label="Destination"
+            name="destinationDescription"
+            required
+            disabled={pending}
+            placeholder="e.g. Cascade Dialysis Center"
+            defaultValue={prefill?.destinationDescription}
+          />
 
           <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
-            <Input label="Pickup time" name="pickupTime" type="time" required disabled={pending} />
-            <Input label="Start date" name="startDate" type="date" required disabled={pending} />
+            {/* P1-PILOT-R3 (D-R3-4): never prefilled -- the request's APPOINTMENT time is context only, not a pickup time. */}
+            <Input
+              label="Pickup time"
+              name="pickupTime"
+              type="time"
+              required
+              disabled={pending}
+              helpText={prefill?.appointmentTime ? `Requested appointment time: ${formatWallClockTime(prefill.appointmentTime)}` : undefined}
+            />
+            <Input label="Start date" name="startDate" type="date" required disabled={pending} defaultValue={prefill?.startDate || undefined} />
           </div>
 
-          <WeekdaySelector name="daysOfWeek" />
+          <WeekdaySelector name="daysOfWeek" defaultValue={prefill?.daysOfWeek} />
 
           <Input
             label="End date"
             name="endDate"
             type="date"
             disabled={pending}
+            defaultValue={prefill?.endDate || undefined}
             helpText="Optional — leave blank for an open-ended standing commitment."
           />
 
@@ -104,7 +154,7 @@ export function NewRecurringArrangementForm({ passengers }: NewRecurringArrangem
           )}
 
           <div className="flex justify-end gap-2 pt-zw-sm">
-            <Button type="submit" variant="primary" loading={pending} disabled={pending || passengers.length === 0}>
+            <Button type="submit" variant="primary" loading={pending} disabled={pending || (!prefill && passengers.length === 0)}>
               {pending ? "Creating…" : "Create arrangement"}
             </Button>
           </div>

@@ -141,7 +141,7 @@ c_fn(sig, roles) as (values
   ('complete_pending_signup()', 'u'),
   ('complete_pending_signup_manual(text,text)', 'u'),
   ('create_driver_invite(uuid,text,text,text)', 'u'),
-  ('create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date,boolean)', 'u'),
+  ('create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date,boolean,uuid)', 'u'),
   ('create_request_intake_integration(uuid,text)', 'u'),
   ('create_staff_invite(uuid,text,text)', 'u'),
   ('create_trip(uuid,uuid,text,text,timestamp with time zone,timestamp with time zone,uuid,uuid,text,text,uuid,integer,boolean)', 'u'),

@@ -702,6 +702,7 @@ export type Database = {
           paused_at: string | null
           pickup_description: string
           pickup_time: string
+          request_id: string | null
           requires_wheelchair_access: boolean | null
           start_date: string
           status: string
@@ -722,6 +723,7 @@ export type Database = {
           paused_at?: string | null
           pickup_description: string
           pickup_time: string
+          request_id?: string | null
           requires_wheelchair_access?: boolean | null
           start_date: string
           status?: string
@@ -742,6 +744,7 @@ export type Database = {
           paused_at?: string | null
           pickup_description?: string
           pickup_time?: string
+          request_id?: string | null
           requires_wheelchair_access?: boolean | null
           start_date?: string
           status?: string
@@ -761,6 +764,13 @@ export type Database = {
             columns: ["passenger_id", "organization_id"]
             isOneToOne: false
             referencedRelation: "passengers"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "recurring_arrangements_request_id_organization_id_fkey"
+            columns: ["request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
             referencedColumns: ["id", "organization_id"]
           },
         ]
@@ -2003,6 +2013,7 @@ export type Database = {
           p_passenger_id: string
           p_pickup_description: string
           p_pickup_time: string
+          p_request_id?: string
           p_requires_wheelchair_access?: boolean
           p_start_date: string
         }

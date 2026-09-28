@@ -97,6 +97,18 @@ export interface RequestDetailLinkedTrip {
   passengerName: string | null;
 }
 
+/** P1-PILOT-R3: a recurring arrangement created from this Request (any status -- ended is simply history). */
+export interface RequestDetailLinkedArrangement {
+  id: string;
+  status: string;
+  daysOfWeek: number[];
+  pickupTime: string;
+  startDate: string;
+  endDate: string | null;
+  pickupDescription: string;
+  destinationDescription: string;
+}
+
 export interface RequestDetailData {
   id: string;
   state: string;
@@ -126,6 +138,8 @@ export interface RequestDetailData {
   /** Reuses request-readiness-core.ts unmodified (P1-E1-S2E §10) — never re-derived here. Computed from the REAL linked Passenger's own current `status`, never merely `passenger_id !== null`. */
   readiness: RequestReadiness;
   linkedTrips: RequestDetailLinkedTrip[];
+  /** P1-PILOT-R3 (PR-04): recurring arrangements created from this Request, oldest first (may be several -- D-R3-2). */
+  linkedArrangements: RequestDetailLinkedArrangement[];
 }
 
 export type RequestDetailResult = { status: "ok"; request: RequestDetailData } | { status: "unavailable" } | { status: "error" };
@@ -195,6 +209,28 @@ export async function getRequestDetail(requestId: string, organizationId: string
     return { status: "error" };
   }
 
+  // P1-PILOT-R3: linked recurring arrangements -- authoritative like Linked Trips (a failure fails the load rather than
+  // silently showing the Request as unfulfilled). Any status counts as fulfilment (D-R3-1).
+  const { data: arrangementsData, error: arrangementsError } = await supabase
+    .from("recurring_arrangements")
+    .select("id, status, days_of_week, pickup_time, start_date, end_date, pickup_description, destination_description")
+    .eq("request_id", requestId)
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: true });
+  if (arrangementsError) {
+    return { status: "error" };
+  }
+  const linkedArrangements: RequestDetailLinkedArrangement[] = (arrangementsData ?? []).map((a) => ({
+    id: a.id,
+    status: a.status,
+    daysOfWeek: a.days_of_week,
+    pickupTime: a.pickup_time,
+    startDate: a.start_date,
+    endDate: a.end_date,
+    pickupDescription: a.pickup_description,
+    destinationDescription: a.destination_description,
+  }));
+
   const passenger = unwrapOne(row.passengers);
   const passengerActive = passenger?.status === "active";
 
@@ -204,6 +240,7 @@ export async function getRequestDetail(requestId: string, organizationId: string
     passengerActive,
     hasLinkedTrips: (tripsData ?? []).length > 0,
     hasActiveTrips: hasActiveTrip((tripsData ?? []).map((t) => t.state)),
+    hasLinkedArrangement: linkedArrangements.length > 0,
   });
 
   const linkedTrips: RequestDetailLinkedTrip[] = (tripsData ?? []).map((t) => ({
@@ -255,6 +292,7 @@ export async function getRequestDetail(requestId: string, organizationId: string
       : null,
     readiness,
     linkedTrips,
+    linkedArrangements,
   };
 
   return { status: "ok", request };

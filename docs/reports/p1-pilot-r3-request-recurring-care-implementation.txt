@@ -1,0 +1,371 @@
+NEMRYN PLATFORM
+P1-PILOT-R3 -- REQUEST -> RECURRING CARE (PR-04, THE FINAL P1 PILOT GAP) -- LOCAL IMPLEMENTATION
+Date: 2026-09-27 / 28. LOCAL ONLY: not committed, not pushed, not deployed.
+The migration was applied to the local Supabase only; no production database command was run in this phase.
+PR-12, automatic occurrence generation, billing / payer / claims, Progressive Operations and PROG6 were NOT touched.
+
+======================================================================
+1. STARTING BASELINE / R2C CLOSEOUT
+======================================================================
+  - Production: application 22693db6be09d9f151859efe4c31747dddd4fd6d (R2C), migration head 20260927110000, privilege
+    contract 0 / 29.
+  - R2C release record: docs/reports/p1-pilot-r2c-production-release.txt reviewed against the live state (production
+    deployment 6698850119 = 22693db; refs in sync) -- accurate. Committed ALONE and pushed (active nemryn identity):
+      aaff7dd8e36247a36e63303d9171b7cf27a630b5 "docs(pilot): record R2C production release" (1 file).
+    origin/main == aaff7dd before any R3 work. R3 is built on aaff7dd.
+  - Local migration head at start 20260927110000.
+
+======================================================================
+2. CURRENT-STATE AUDIT (post-R2C, verified in code and the local database -- not from the old spec)
+======================================================================
+  transportation_requests: passenger_id NULL-able (composite FK to passengers); state pending | accepted | declined |
+    cancelled; return_trip_needed text NOT NULL ('yes' | 'no' | 'not_sure'); service_type (closed list incl.
+    'wheelchair_transportation'); structured recurring fields recurring_days_of_week smallint[] (canonical),
+    recurring_start_date, recurring_end_date, recurring_appointment_time time, recurring_return_trip_expected boolean;
+    CHECK: days and start are NULL together. UNIQUE (id, organization_id). RLS SELECT for Admin / Dispatcher only;
+    no authenticated UPDATE (R2B revoke).
+  recurring_arrangements: passenger / org composite FKs (default NO ACTION); pickup / destination descriptions,
+    pickup_time time NOT NULL, days_of_week, start / end, timezone snapshot, status active | paused | ended,
+    requires_wheelchair_access (PROG5); no facility columns; no free-text notes column. RLS SELECT Admin / Dispatcher;
+    no authenticated INSERT / UPDATE.
+  Composite FK pattern: trips.request_id -> transportation_requests (id, organization_id), NO ACTION (no cascade).
+  create_recurring_arrangement: 9 args (uuid org, uuid passenger, text, text, time, smallint[], date, date default
+    null, boolean default null) SECURITY DEFINER, search_path public, pg_temp, authenticated-only; takes
+    p_organization_id and authorizes it with has_org_role (Admin / Dispatcher; active membership; active org); audit
+    'recurring_arrangement_created' with scalar after_data (no requester data).
+  edit / pause / resume / end / set_recurring_wheelchair_requirement: UPDATE named columns only (verified) -- a new
+    column is never touched by them. create_trip_for_recurring_occurrence (uuid, uuid, date): inserts named columns;
+    unchanged.
+  create_trip's Request rule (the one R3 mirrors): role check on the org (ZW002), then Request not found in that org /
+    not accepted / passenger_id distinct -> ZW006.
+  App: request-fulfilment-core (R2B) already had fulfilled = hasActiveTrip OR hasLinkedArrangement (arrangement hook
+    always false); request-readiness-core (trip_created / trip_cancelled / ready / needs_passenger ...); the stranded
+    predicate is ONE PostgREST anti-join (requests-list applyNeedsTripFilter) shared by the Overview count and
+    ?state=accepted&needs=trip; request-detail loads linked Trips authoritatively; Recurring Care New form is
+    uncontrolled, with WeekdaySelector / Select / Input supporting defaults.
+  Tests pinning the 9-arg identity: availability_capability_tests P-1 (updated deliberately, sections 5 and 13).
+
+======================================================================
+3. OWNER DECISIONS APPLIED
+======================================================================
+  D-R3-1 historical fulfilment: ANY linked arrangement (active / paused / ENDED) fulfils the Request.
+  D-R3-2 request_id NOT unique; several arrangements per Request allowed; no automatic second arrangement.
+  D-R3-3 creating an arrangement never changes transportation_requests.state.
+  D-R3-4 pickup_time never prefilled from the appointment time (context only).
+  D-R3-5 return expectation is a hint only (no return workflow, no swapped addresses, no inferred time).
+  Return field interpretation (recorded): the hint shows when EITHER structured field says yes --
+    return_trip_needed = 'yes' OR recurring_return_trip_expected = true. 'not_sure' / 'no' / NULL: no hint.
+
+======================================================================
+4. MIGRATION (one): supabase/migrations/20260927120000_request_recurring_care.sql
+======================================================================
+  1. recurring_arrangements.request_id uuid NULL.
+  2. FK recurring_arrangements_request_id_organization_id_fkey (request_id, organization_id) ->
+     transportation_requests (id, organization_id) -- default NO ACTION on update / delete (the trips.request_id
+     pattern): nothing cascades; Requests and arrangements are operational history.
+  3. recurring_arrangements_org_request_idx (organization_id, request_id) WHERE request_id IS NOT NULL -- NON-unique.
+  4. No UNIQUE constraint (D-R3-2). No backfill: existing rows stay NULL.
+  5. create_recurring_arrangement 9 -> 10 args (drop + create; one overload), comment, REVOKE ALL FROM PUBLIC,
+     GRANT EXECUTE TO authenticated.
+  6. PRE-RELEASE HARDENING (section 16a, owner-approved, folded into this same unshipped migration):
+     link_request_passenger and cancel_transportation_request re-created (CREATE OR REPLACE, same identities, grants
+     kept) with ONE added guard each -- ZW004 when ANY recurring arrangement references the Request.
+  Nothing else: no facility / return-leg / notes columns, no table grant change, no service-role path.
+
+======================================================================
+5. create_recurring_arrangement SIGNATURE + COMPATIBILITY
+======================================================================
+  create_recurring_arrangement(p_organization_id uuid, p_passenger_id uuid, p_pickup_description text,
+    p_destination_description text, p_pickup_time time, p_days_of_week smallint[], p_start_date date,
+    p_end_date date default null, p_requires_wheelchair_access boolean default null, p_request_id uuid default null)
+  returns recurring_arrangement_result (unchanged type).
+  Proven: legacy 8-arg named caller (R3-01), 9-arg positional caller with wheelchair (R3-02), new 10-arg caller
+  (R3-03), exactly one overload, no transitional 9-arg version (R3-26); existing suites
+  recurring_arrangement_mutation 49/49, recurring_arrangement_foundation 51/51, availability_capability 25/25,
+  client_privilege_surface 21/21 still green.
+
+======================================================================
+6. REQUEST VALIDATION (p_request_id supplied)
+======================================================================
+  After the unchanged checks (auth ZW001; has_org_role(org, [organization_admin, dispatcher]) with active membership
+  and active organization -> else ZW002; descriptions / time / dates / days; Passenger exists, same org, ACTIVE):
+    select the Request WHERE id = p_request_id AND organization_id = p_organization_id FOR SHARE;
+    not found (foreign or missing) OR state <> 'accepted' OR passenger_id IS DISTINCT FROM p_passenger_id -> ZW006.
+  The organization is the already-authorized one (never a second client value). No oracle: foreign and missing
+  Requests are the identical ZW006 (R3-08). The Request row is never updated (R3-04: state and updated_at unchanged,
+  no request event). request_id stored; audit after_data gains request_id only when supplied (R3-25).
+  No recurring-intent requirement in the database (section 6 of the brief): an accepted Request without structured
+  recurring fields is accepted by the RPC; the UI offers the entry point only when structured intent exists (or an
+  arrangement already exists -- "Create another").
+
+======================================================================
+7. STRUCTURED PREFILL / PICKUP-TIME RULE / APPOINTMENT HINT / RETURN / WHEELCHAIR
+======================================================================
+  src/lib/operations/request-recurring-prefill-core.ts (pure):
+    Passenger = the linked Passenger (fixed in the form, hidden passengerId); days = recurring_days_of_week;
+    start / end = recurring_start_date / recurring_end_date; pickup / destination = the Request descriptions.
+    pickupTime = "" ALWAYS. The appointment time appears ONLY as the field's help text:
+      "Requested appointment time: 10:00 AM" -- no offset, no route inference.
+    wheelchair = "yes" ONLY when service_type = 'wheelchair_transportation', else "unspecified" -- never from
+      assistance / additional notes, Passenger history or any free text (E2E B8: a Request whose notes say "Uses a
+      wheelchair at the clinic" prefills Not specified).
+    No free text is copied (the arrangement model has no equivalent reviewed field; no new field added).
+    Facilities: not in the arrangement model; omitted (no schema expansion).
+    Return hint (info callout): "Return trip expected" / "This arrangement covers one recurring schedule. Create
+      another arrangement if the return needs its own schedule." Nothing automatic; the second form prefills the SAME
+      facts (addresses are NOT swapped -- E2E F6).
+
+======================================================================
+8. REQUEST DETAIL CTA / MULTIPLE ARRANGEMENTS / LINKED DISPLAY
+======================================================================
+  - "Create recurring arrangement" (outline LinkButton) -> /operations/recurring-care/new?requestId=<id>, shown for an
+    accepted Request with an ACTIVE linked Passenger and a structured recurring schedule. Create Trip is kept.
+  - Once an arrangement exists: "Create another recurring arrangement" (return schedules etc.).
+  - Not shown: pending, declined / cancelled, accepted without an active Passenger ("Passenger needed" as before),
+    accepted one-time Requests (no structured intent).
+  - "Recurring care" panel (only when rows exist): per arrangement "Mon / Wed / Fri · 9:15 AM", status badge (Ended is
+    simply history), date range, route, "View arrangement ->".
+  - Once an arrangement exists, the Request's Cancel and Link-Passenger actions are hidden in the UI (the standing
+    order is managed from the arrangement; relinking would break Passenger consistency) with the note "This request
+    already has recurring care. Manage the standing order from the recurring arrangement." See open issue 1.
+
+======================================================================
+9. RECURRING CARE NEW PAGE / DETAIL BACK-LINK / EDITS
+======================================================================
+  New page (?requestId=): loads the Request with the normal org-scoped, RLS-bound getRequestDetail (no service role);
+    a malformed id, missing, foreign, non-accepted or Passenger-less Request all show the SAME calm copy
+    "This request is no longer ready for recurring care." and no form (E2E G4 x5). The action forwards only a
+    well-formed requestId; on ZW006 it re-reads the Request (RLS) only to choose REQUEST_NOT_READY copy.
+  Detail: "Created from a request · View originating Request" (normal tenant authorization; no requester contact data
+    loaded -- only id / state / return fields); when the Request expects a return and is still accepted,
+    "Return trip expected · Create another recurring arrangement".
+  Edits: request_id is never editable; edit / pause / resume / end / wheelchair keep it (SQL R3-17..R3-19).
+
+======================================================================
+10. FULFILMENT / READINESS / OVERVIEW / FILTER
+======================================================================
+  request-fulfilment-core: hasLinkedArrangement = ANY linked arrangement (status is not an input). Stranded =
+    accepted AND no non-cancelled linked Trip AND no linked arrangement.
+  request-readiness-core: new "arrangement_created" ("Recurring care created"), taking precedence over trip_created /
+    trip_cancelled for an accepted Request; pending / declined / cancelled unchanged; the Request state never mutated.
+  Overview + ?needs=trip: the SAME PostgREST query gains a second anti-join embed
+    linked_arrangements:recurring_arrangements(id) + .is("linked_arrangements", null), with NO status filter; one
+    count query and one list query (no N+1), the caller's own RLS session. The URL keeps needs=trip (compatibility).
+  Visible copy: "1 accepted request still needs a trip or recurring arrangement" / "N accepted requests still need a
+    trip or recurring arrangement"; filter note "Showing accepted requests that still need a trip or recurring
+    arrangement." (E2E B0 / E1 / E2 / E3: count, list and SQL truth agree; conversion decreases the count by one;
+    ending the arrangement does NOT re-strand -- F4).
+  Return expectation never controls fulfilment: one linked arrangement fulfils the Request.
+
+======================================================================
+11. OCCURRENCES
+======================================================================
+  Occurrence Trips keep recurring_arrangement_id only; request_id is NOT copied (SQL R3-23; E2E F2). The Request never
+  appears to own dozens of Trips. Wheelchair snapshot unchanged (R3-24). create_trip_for_recurring_occurrence not
+  modified.
+
+======================================================================
+12. SECURITY / RLS / PRIVILEGE CONTRACT / AUDIT
+======================================================================
+  - request_id follows the existing recurring_arrangements RLS (SELECT Admin / Dispatcher). No new grant; no direct
+    INSERT / UPDATE for authenticated (R3-28).
+  - create_recurring_arrangement: SECURITY DEFINER, search_path public, pg_temp, PUBLIC / anon no EXECUTE,
+    authenticated EXECUTE, one overload (R3-26 / R3-27). Admin / Dispatcher allowed (R3-11 / R3-12); Driver,
+    inactive membership, suspended org, Platform Admin without membership, no membership -> ZW002; anon denied
+    (R3-13..R3-16).
+  - Privilege contract: the function identity updated 9 -> 10 args. Local 0 violations / 29 checks. R2B trips /
+    requests revokes and the R2C recovery RPC intact.
+  - Audit: the existing recurring_arrangement_created row carries request_id (scalar) when supplied; never requester
+    name / phone / email / notes (R3-25). No new Activity item.
+
+======================================================================
+13. TEST RESULTS
+======================================================================
+  SQL -- supabase/tests/request_recurring_care_tests.sql: 31 / 31 PASS on the FIRST run (R3-01..R3-28 + R3-15b
+    platform / no-membership / no-auth, R3-20b cancelled-only-then-arrangement, CLEANUP after ROLLBACK). Transactional;
+    rerun in the full collection: 31 / 31.
+  SQL -- deliberate identity update: availability_capability_tests P-1 now names the 10-arg identity (comment in file);
+    25 / 25. privilege_contract: the identity line.
+  SQL -- full collection (53 suites) on a FRESH local reset (73 migrations applied cleanly):
+    R3 / Request / recurring / privilege suites GREEN: request_recurring_care 31/31, recurring_arrangement_foundation
+    51/51, recurring_arrangement_mutation 49/49, recurring_occurrence_exception 19/19, request_decision_workflow 60/60,
+    request_mutation 39/39, request_mutation_privilege 23/23, request_mutation_atomicity 4/4,
+    request_trip_passenger_integrity 11/11, public_request_intake 42/42, client_privilege_surface 21/21,
+    create_trip_privilege 5/5, availability_capability 25/25, record_completion 31/31, trip_details_update 22/22,
+    privilege_baseline_behavior 30/30.
+    Pre-existing hygiene failures UNCHANGED: notifications_activity ACT-1 / PAGE-1; request_decision_expand_compat
+      (historical EXPAND window); website_requests_form A1 / A2 / F5 / P7; website_request_form_publication PU4a.
+    Clock-dependent: recurring_trip_creation RTC-04 FAILED this run -- it treats the database's UTC current_date - 1
+      as "the past"; the run was at 00:12 UTC = 20:12 New York on 2026-09-27, so that date is still TODAY for the
+      organization and is correctly accepted. Documented as time-of-day dependent in the R2B report (it passed there);
+      create_trip_for_recurring_occurrence is unchanged by R3. NOT an R3 regression.
+    NOT claimed: "all SQL tests pass".
+  Unit: npm test 722 / 722 (711 -> 722):
+    request-recurring-care.test.mjs (10): readiness arrangement_created + precedence; R2B values unchanged; declined /
+      cancelled not_convertible; CTA gating (intent / Passenger / state / create another); Create Trip kept; cancel /
+      relink blocked with an arrangement; structured prefill only; pickup time empty; appointment context; wheelchair
+      Yes only for wheelchair_transportation; no free text; return hint from either field; addresses never swapped;
+      not-ready -> null; intent detection.
+    request-fulfilment-core.test.mjs (+1): the full R3 fulfilment matrix. DELIBERATE copy expectation change: the
+      Overview line test now expects "... trip or recurring arrangement" (owner section 16).
+    request-readiness-core.test.mjs: two deepEqual action-shape assertions gained the two ADDED fields
+      (cancelBlockedByArrangement / canCreateRecurringArrangement = false); every pre-existing value unchanged.
+  Browser E2E (.tmp-qa/p1-pilot-r3-request-recurring-care-e2e.mjs, local): 49 / 49 PASS on the FIRST run, cleanup
+    verified. Entry-point visibility (recurring / one-time / pending / no Passenger); requestId URL; Passenger fixed;
+    pickup / destination / Mon-Wed-Fri / start / end prefilled; pickup time empty; appointment hint; free-text
+    wheelchair ignored; return hint; no free text copied; 390 px; empty pickup time refused; create -> request_id,
+    Request still accepted; back-link + "Create another"; Request Detail panel / readiness / CTA / cancel note;
+    Overview -1 and needs=trip list agree with SQL truth; occurrence Trip created without request_id; end through UI;
+    not re-stranded; ended shown as history; second arrangement (same facts, operator reversed the addresses
+    manually) -> two listed; wheelchair_transportation -> Yes; no-return -> no hint; manual creation unchanged
+    (request_id NULL); five ineligible requestId variants -> calm copy, nothing created.
+  Regressions (sequential, local, no stale Chrome after any suite; Org A identical before / after each suite):
+    PROG3B 51/51 (run first, NY 19:15, normal daytime path), R2C E2E 47/47, R2B E2E 49/49, PROG1 46/46, PROG2 56/56,
+    PROG4B 45/45, R2 integration 16/16, R2 E2E 20/20, PROG5B 74/74,
+    R1 integration 18/19 in the batch -> 19/19 on an unchanged isolated rerun. Cause (proven, not assumed): its
+      cleanup check counts ANY trip with pickup_description LIKE 'R1 %'; one such trip ("R1 trip pickup") had been
+      committed at 16:45:56 UTC by request_decision_workflow_tests.sql during the R2C-phase SQL collection (that
+      suite does not roll back) -- ~7 h before this run. That single local fixture trip was deleted and R1
+      integration re-run alone, unchanged: 19 / 19. (The deletion happened while PROG5B was mid-run; PROG5B still
+      passed 74/74.)
+    R2B E2E DELIBERATE expectation change: E1 compares the Overview line to the new owner-approved copy.
+  Local Org A note: the R2C-phase fresh reset re-seeded Org A with the CURRENT seed (73 trips incl. seed fixtures and
+    an inactive seed driver A9); the older "9 trips" baseline no longer applies. Every suite compares Org A with its
+    own pre-run snapshot.
+  Application gate: TypeScript PASS; lint 0 errors (100 warnings, all in untracked .tmp-qa; 0 in src); unit 722/722;
+    build PASS; local privilege contract 0 / 29.
+
+======================================================================
+14. FILES
+======================================================================
+  Created:
+    supabase/migrations/20260927120000_request_recurring_care.sql
+    supabase/tests/request_recurring_care_tests.sql
+    src/lib/operations/request-recurring-prefill-core.ts
+    src/lib/operations/request-recurring-care.test.mjs
+    src/components/operations/requests/RequestLinkedArrangementsPanel.tsx
+    docs/reports/p1-pilot-r3-request-recurring-care-implementation.txt
+    (local QA only, untracked: .tmp-qa/p1-pilot-r3-request-recurring-care-e2e.mjs; .tmp-qa/p1-pilot-r2b-trip-
+     correction-e2e.mjs E1 copy)
+  Modified (tracked):
+    src/app/operations/recurring-care/{new/page.tsx, new/actions.ts, [arrangementId]/page.tsx}
+    src/app/operations/requests/{page.tsx, [requestId]/page.tsx}
+    src/components/operations/recurring-care/NewRecurringArrangementForm.tsx
+    src/components/operations/requests/{RequestActionBar, RequestsTable}.tsx
+    src/lib/operations/{presentation, recurring-arrangement-detail, recurring-arrangement-errors, request-detail,
+      request-fulfilment-core, request-readiness-core, requests-list}.ts
+    src/lib/operations/{request-fulfilment-core, request-readiness-core}.test.mjs
+    src/lib/supabase/database.types.ts (additions only: request_id + FK + p_request_id, regenerated from local)
+    supabase/tests/{privilege_contract, availability_capability}_tests.sql
+    docs/data/mutation-api.md (new "Request -> Recurring Care" section)
+
+======================================================================
+15. MIGRATION STATE / PRODUCTION
+======================================================================
+  - Local head 20260927120000 (73 migrations).
+  - Production UNTOUCHED in this phase apart from the approved docs-only push (aaff7dd): no db push, no R3 push, no
+    deploy, no Vercel / DNS change, no tenant mutation, no linked query. Production remains 22693db / 20260927110000 /
+    0 of 29.
+
+======================================================================
+16. OPEN ISSUES
+======================================================================
+  1. RESOLVED BEFORE RELEASE (discovered during local review; see section 16a). As first implemented, the guard was
+     UI-only: once an arrangement existed Request Cancel / Link Passenger were hidden, but the database RPCs
+     (cancel_transportation_request, link_request_passenger) still checked only for Trips, so a direct RPC caller or a
+     stale page could cancel the Request or relink its Passenger after conversion. Both RPCs now enforce it.
+  2. Pre-existing SQL hygiene: request_decision_workflow_tests / trip_exception suites COMMIT fixtures into Org A,
+     which can collide with E2E cleanup patterns (seen once here with R1 integration). Recommend making those suites
+     transactional (test-only change) in a hygiene pass.
+  3. Clock-dependent SQL checks (RTC-04, SKIP-05 / 08 / 09) remain time-of-day dependent.
+  4. PR-18 tooling: Supabase CLI 2.109.0 (2.118.0 available).
+
+======================================================================
+16a. PRE-RELEASE DATA-INTEGRITY HARDENING (owner-approved; same migration)
+======================================================================
+  Rule: once ANY recurring_arrangements row has request_id = the Request (same organization) -- active, paused or ENDED
+  (D-R3-1: ended is still historical fulfilment) -- the Request's Passenger relationship and Request-level cancellation
+  are no longer mutable through the ordinary Request RPCs. The Request stays the accepted historical intake record.
+  link_request_passenger: after its unchanged Trip guard, ZW004 'illegal_transition' if a linked arrangement exists
+    (the existing "operational work already exists" code). Everything else unchanged.
+  cancel_transportation_request: after its unchanged state and Trip guards, ZW004 if a linked arrangement exists.
+    Nothing cascades: the arrangement is never ended, paused, deleted or modified; the standing order is managed in
+    Recurring Care.
+  Both: inside the existing SECURITY DEFINER functions, organization from the authorized, row-locked (FOR UPDATE)
+    Request; the existence check is organization-scoped; foreign callers still get ZW002 before it (no oracle); no
+    grant change, no service role, R2B Request UPDATE revoke intact. The Request row lock serializes with
+    create_recurring_arrangement's FOR SHARE read, so neither order can race.
+  UI: unchanged (Cancel / Link stay hidden with the existing note). A STALE page is refused by the server and shows
+    the existing calm copy -- Cancel: "This request has changed and can no longer be updated this way."; Link:
+    "This request can no longer be changed in this way." No silent success.
+  Tests:
+    SQL (request_recurring_care_tests.sql, +11 -> 42 / 42, run twice): R3-H-A link still allowed / R3-H-B cancel still
+      allowed without Trip or arrangement; R3-H-C/F active, R3-H-D/G paused, R3-H-E/H ended -> Link ZW004 and Cancel
+      ZW004, Request unchanged, no event, arrangement untouched; R3-H-I multiple arrangements same denial; R3-H-J Trip
+      guard unchanged; R3-H-K a foreign-tenant arrangement does not affect this organization's Request, foreign Admin
+      ZW002; R3-H-L direct Request UPDATE denied; R3-H-M another arrangement still creatable; R3-H-N all arrangements
+      ended -> Request accepted, request_id intact, fulfilled (not stranded).
+    Request mutation suites unchanged and green: request_mutation 39/39, request_mutation_privilege 23/23,
+      request_mutation_atomicity 4/4, request_decision_workflow 60/60, request_trip_passenger_integrity 11/11.
+    Browser (R3 E2E section H, +8 -> 57 / 57): operator A holds the Request page, operator B (Dispatcher) creates
+      Recurring Care; A's stale Cancel -> calm refusal, Request accepted, arrangement active (H1a-d); A's stale Link
+      Passenger (page loaded while the linked Passenger was inactive; the Passenger is then reactivated and B
+      converts) -> calm refusal, Request keeps its Passenger, arrangement intact (H2a-d).
+  Narrow re-run after the hardening: TypeScript PASS; lint 0 errors (0 in src); unit 722 / 722; build PASS; R3 E2E
+    57 / 57; R2B E2E 49 / 49; local privilege contract 0 / 29 (local reset re-applied the amended migration; 73
+    migrations).
+
+======================================================================
+17. REMAINING GAPS / PR-12 / RELEASE BOUNDARY / PILOT READINESS
+======================================================================
+  Remaining P0 pilot blockers: 0 (conditional on PR-12).
+  Remaining P1 pilot gaps: 0 open -- PR-01 / PR-02 / PR-03 released; PR-04 ADDRESSED locally (effective once R3 is
+    released).
+  PR-12 discovery gate: OPEN -- pilot go-live requires the payer / broker's evidence requirements (signature / photo /
+    mileage / other); if any is mandated, PR-12 becomes P0 before live go-live.
+
+  Exact R3 production-release boundary:
+    Prerequisite: origin/main == aaff7dd (true now).
+    One implementation commit: the migration; request_recurring_care_tests.sql; privilege_contract +
+    availability_capability test updates; regenerated database.types.ts; all src changes in section 14 (incl. unit
+    tests); docs/data/mutation-api.md; this report. Excluded: .tmp-qa, logs, scratch, credentials, env files.
+    Release order (established): immutable commit -> PRE-R3 production contract (from aaff7dd) = 0/29 -> POST-R3
+    contract vs PRE-R3 DB = mismatch allowed ONLY from the create_recurring_arrangement identity transition (9-arg
+    present, 10-arg expected); the exact count and check numbers are measured and recorded, not assumed -> identity Nemryn / wyocbivzgrbekuyqdfts -> head 20260927110000, only pending
+    20260927120000 -> db push -> POST-R3 contract 0/29 + object checks (request_id column / FK NO ACTION / non-unique
+    partial index; one 10-arg overload; definer; pinned; grants) -> push -> Vercel SHA -> read-only UI (Request Detail
+    entry point / Recurring Care back-link where a synthetic accepted recurring Request exists; nothing created
+    unless the owner designates a synthetic Request) -> report.
+    Interim safety: between migration and deploy, the old app calls create_recurring_arrangement with named
+    arguments (no p_request_id) -> resolves to the 10-arg function with p_request_id NULL; the new column is ignored
+    by old readers.
+    Rollback: revert the application, or promote deployment 6698850119 (22693db). Schema additive (nullable column,
+    FK, index) + a defaulted trailing argument; old callers keep working. Do not drop request_id data (historical
+    fulfilment).
+
+  Pilot-readiness recommendation: with R3 released, every P0 / P1 gap from the readiness audit is closed; the only
+  go-live condition left is the PR-12 payer / broker discovery. Recommended next step: a first-day pilot simulation
+  in the synthetic tenant (intake -> accept -> one-time trip + recurring care -> dispatch -> driver lifecycle ->
+  correction / recovery -> Proof of Service), run after the R3 production release.
+
+P1-PILOT-R3 LOCAL IMPLEMENTATION: PASS
+
+PR-04 REQUEST → RECURRING CARE: ADDRESSED
+
+PRODUCTION MIGRATION APPLIED: NO
+
+PRODUCTION DEPLOYED: NO
+
+READY FOR R3 PRODUCTION RELEASE REVIEW: YES
+
+REMAINING P0 PILOT BLOCKERS: 0
+
+REMAINING P1 PILOT GAPS: 0
+
+READY FOR FIRST-DAY PILOT SIMULATION: YES
+
+PR-12 DISCOVERY GATE: OPEN
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+PROG6 PLANNED: NO

@@ -81,6 +81,27 @@ export default async function RecurringArrangementDetailPage({ params }: { param
           <p className={cn(typography.body, "mt-1 text-text-secondary")}>
             {formatRecurringPattern(arrangement.daysOfWeek)} · {formatWallClockTime(arrangement.pickupTime)}
           </p>
+          {/* P1-PILOT-R3 (PR-04): a quiet relationship back to the originating Request (normal tenant authorization). */}
+          {arrangement.originatingRequest && (
+            <p className={cn(typography.bodySmall, "mt-1 text-text-muted")} data-testid="arrangement-originating-request">
+              Created from a request ·{" "}
+              <Link href={`/operations/requests/${arrangement.originatingRequest.id}`} className="text-text-link hover:underline">
+                View originating Request
+              </Link>
+              {arrangement.originatingRequest.returnTripExpected && arrangement.originatingRequest.state === "accepted" && (
+                <>
+                  {" · "}Return trip expected ·{" "}
+                  <Link
+                    href={`/operations/recurring-care/new?requestId=${arrangement.originatingRequest.id}`}
+                    className="text-text-link hover:underline"
+                    data-testid="arrangement-create-another"
+                  >
+                    Create another recurring arrangement
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
         </div>
         <ArrangementLifecycleControls
           arrangementId={arrangement.id}

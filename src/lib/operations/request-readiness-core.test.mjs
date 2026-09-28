@@ -58,6 +58,8 @@ test("actions — pending: Accept + Decline, never Cancel, never Create Trip (B/
   assert.deepEqual(a, {
     canAccept: true, canDecline: true, canCancel: false, cancelBlockedByTrips: false,
     canCreateTrip: false, canCreateAnotherTrip: false, canLinkPassenger: true,
+    // P1-PILOT-R3: two ADDED fields (additive shape change; every pre-existing value above is unchanged).
+    cancelBlockedByArrangement: false, canCreateRecurringArrangement: false,
   });
 });
 
@@ -66,6 +68,8 @@ test("actions — accepted, no passenger: Cancel + link, no Create Trip, no Acce
   assert.deepEqual(a, {
     canAccept: false, canDecline: false, canCancel: true, cancelBlockedByTrips: false,
     canCreateTrip: false, canCreateAnotherTrip: false, canLinkPassenger: true,
+    // P1-PILOT-R3: two ADDED fields (additive shape change; every pre-existing value above is unchanged).
+    cancelBlockedByArrangement: false, canCreateRecurringArrangement: false,
   });
 });
 

@@ -5,9 +5,11 @@
  *   fulfilled = hasActiveTrip OR hasLinkedArrangement
  * - Active Trip = a linked Trip whose state is NOT 'cancelled'. Completed / no_show Trips are historical fulfilment:
  *   they never re-strand the Request. A cancelled-only Trip set does NOT fulfil it.
- * - hasLinkedArrangement is always false in R2B (Request -> Recurring Care, PR-04, is a future R3). R3 supplies it
- *   without changing any caller. Owner decision D-4: an arrangement that legitimately fulfilled a recurring Request
- *   and is later ended does NOT re-strand the historical Request (R3 formalizes that query).
+ * - P1-PILOT-R3 (PR-04, owner decision D-R3-1): hasLinkedArrangement = ANY recurring_arrangements row with
+ *   request_id = the Request (same organization), whatever its status -- active, paused or ENDED. An arrangement that
+ *   legitimately fulfilled a standing-order Request does not re-strand it when it later concludes. Several
+ *   arrangements may reference one Request (D-R3-2); one is enough (a return-trip expectation never makes fulfilment
+ *   depend on a second one).
  * Stranded = state 'accepted' AND not fulfilled. Pending / declined / cancelled Requests are never stranded.
  */
 
@@ -18,7 +20,7 @@ export interface RequestFulfilmentFacts {
   state: string;
   /** States of every Trip linked through trips.request_id (any order; may be empty). */
   linkedTripStates: readonly string[];
-  /** R3 (PR-04) hook -- always false in R2B. */
+  /** P1-PILOT-R3: at least one recurring arrangement was created from this Request (any status). */
   hasLinkedArrangement: boolean;
 }
 
@@ -34,10 +36,15 @@ export function isRequestStranded(facts: RequestFulfilmentFacts): boolean {
   return facts.state === "accepted" && !isRequestFulfilled(facts);
 }
 
-/** Overview copy: "1 accepted request still needs a trip" / "N accepted requests still need a trip". */
+/**
+ * Overview copy (P1-PILOT-R3): "1 accepted request still needs a trip or recurring arrangement" /
+ * "N accepted requests still need a trip or recurring arrangement".
+ */
 export function strandedRequestsLine(count: number): string | null {
   if (count <= 0) return null;
-  return count === 1 ? "1 accepted request still needs a trip" : `${count} accepted requests still need a trip`;
+  return count === 1
+    ? "1 accepted request still needs a trip or recurring arrangement"
+    : `${count} accepted requests still need a trip or recurring arrangement`;
 }
 
 export const STRANDED_REQUESTS_HREF = "/operations/requests?state=accepted&needs=trip";

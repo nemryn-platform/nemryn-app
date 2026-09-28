@@ -32,6 +32,11 @@ export interface RecurringArrangementDetailFacts {
   endedReason: string | null;
   /** P1-OPS-PROG5B (Q4): true / false / NULL (not specified); snapshotted onto occurrence trips at creation. */
   requiresWheelchairAccess: boolean | null;
+  /**
+   * P1-PILOT-R3 (PR-04): the Request this arrangement was created from (null for arrangements created directly), with
+   * only the facts needed for the back-link and the return-trip hint -- never requester contact details.
+   */
+  originatingRequest: { id: string; state: string; returnTripExpected: boolean } | null;
 }
 
 export type RecurringArrangementDetailResult =
@@ -66,12 +71,23 @@ interface ArrangementDetailDbRow {
   ended_at: string | null;
   ended_reason: string | null;
   requires_wheelchair_access: boolean | null;
+  request_id: string | null;
+  originating_request: OriginatingRequestRelation;
 }
+
+interface OriginatingRequestEmbed {
+  id: string;
+  state: string;
+  return_trip_needed: string;
+  recurring_return_trip_expected: boolean | null;
+}
+type OriginatingRequestRelation = OriginatingRequestEmbed | OriginatingRequestEmbed[] | null;
 
 const DETAIL_COLUMNS =
   "id, organization_id, passenger_id, passengers!recurring_arrangements_passenger_id_organization_id_fkey(display_name), " +
   "pickup_description, destination_description, pickup_time, days_of_week, start_date, end_date, timezone, status, " +
-  "paused_at, ended_at, ended_reason, requires_wheelchair_access";
+  "paused_at, ended_at, ended_reason, requires_wheelchair_access, request_id, " +
+  "originating_request:transportation_requests!recurring_arrangements_request_id_organization_id_fkey(id, state, return_trip_needed, recurring_return_trip_expected)";
 
 export async function getRecurringArrangementDetail(
   organizationId: string,
@@ -124,6 +140,12 @@ export async function getRecurringArrangementDetail(
         pausedAt: data.paused_at,
         endedAt: data.ended_at,
         endedReason: data.ended_reason,
+        originatingRequest: (() => {
+          const r = unwrapOne(data.originating_request);
+          return r
+            ? { id: r.id, state: r.state, returnTripExpected: r.return_trip_needed === "yes" || r.recurring_return_trip_expected === true }
+            : null;
+        })(),
       },
       assurance,
     };

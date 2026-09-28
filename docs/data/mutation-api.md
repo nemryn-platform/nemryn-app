@@ -263,3 +263,15 @@ All: Organization Admin / Dispatcher of an active organization (`has_org_role`);
 None of them creates a Passenger, Trip, or assignment, touches provenance (`intake_integration_id`, `source`, requester snapshot, acquisition), or sends an external notification.
 
 **Release shape (P1-OPS-R1R):** shipped as EXPAND (`20260924090000_request_decision_workflow_expand`) → deploy app → CONTRACT (`20260924091000_request_decision_workflow_contract`). Between the two, the pre-R1 `decline_transportation_request(uuid, uuid, text)` / `cancel_transportation_request(uuid, uuid)` overloads and `create_trip`'s implicit pending → accepted still exist for the previously deployed app, and the new `decline_transportation_request(uuid, uuid, text, text)` has no default for `p_reason_note` (callers pass it; `''` = none). CONTRACT removes the bridge, makes `create_trip` accepted-only, adds `p_reason_note default null`, and requires a reason code on every new decline/cancel event. The privilege contract lists the legacy overloads as TRANSITIONAL; check 29 fails until CONTRACT is applied.
+
+## Request → Recurring Care (P1-PILOT-R3, PR-04)
+
+### `create_recurring_arrangement(..., p_requires_wheelchair_access boolean default null, p_request_id uuid default null)`
+
+The existing Organization Admin / Dispatcher RPC gained ONE trailing optional argument (9 → 10 args; the 9-arg version was dropped, so exactly one overload exists and every existing named / positional caller still resolves). `p_request_id = NULL` is the unchanged behaviour.
+
+- **With `p_request_id`:** the Request must be in the same (already authorized) organization, `state = 'accepted'`, with its linked Passenger equal to `p_passenger_id` (which must be active). Any failure is the identical `ZW006` (no existence oracle — a foreign Request reads exactly like a missing one). The Request is read `FOR SHARE` and never modified: its `state` stays `accepted`.
+- **Writes:** `recurring_arrangements.request_id` (composite FK `(request_id, organization_id)` → `transportation_requests`, NO ACTION, **not unique** — one Request may produce several arrangements, e.g. a separate return schedule). The existing `recurring_arrangement_created` audit gains `after_data.request_id` only when supplied; no requester data.
+- **Never:** set / change `request_id` after creation (edit / pause / resume / end / wheelchair setter update named columns only); copy it onto occurrence Trips (they keep `recurring_arrangement_id` only).
+- **Fulfilment (application):** a Request is fulfilled by a non-cancelled Trip OR by ANY linked arrangement — active, paused or ended (owner decision D-R3-1). The Overview stranded count and `?state=accepted&needs=trip` use the same RLS-scoped PostgREST anti-join (`active_trips` + `linked_arrangements`).
+- **After conversion (pre-release hardening):** `link_request_passenger` and `cancel_transportation_request` also return `ZW004` once ANY recurring arrangement (active, paused or ended) references the Request — the same code as their existing linked-Trip guard. Nothing cascades to the arrangement; the Request stays accepted.

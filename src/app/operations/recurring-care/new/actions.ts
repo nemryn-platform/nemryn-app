@@ -6,6 +6,9 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { triStateToBoolean } from "@/lib/operations/capability-core";
 import { mapRecurringArrangementError, type RecurringArrangementErrorCode } from "@/lib/operations/recurring-arrangement-errors";
+import { isReadyForRecurringCare } from "@/lib/operations/request-recurring-prefill-core";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CreateRecurringArrangementActionState {
   status: "idle" | "success" | "error";
@@ -37,6 +40,13 @@ export async function createRecurringArrangementAction(
   const pickupTime = stringField(formData, "pickupTime");
   const startDate = stringField(formData, "startDate");
   const endDate = stringField(formData, "endDate");
+  // P1-PILOT-R3 (PR-04): the originating Request (optional). Only a well-formed id is ever forwarded; the RPC checks
+  // accepted / same organization / linked Passenger and never changes the Request.
+  const rawRequestId = stringField(formData, "requestId");
+  if (rawRequestId !== null && !UUID_RE.test(rawRequestId)) {
+    return { status: "error", errorCode: "REQUEST_NOT_READY" };
+  }
+  const requestId = rawRequestId;
   const daysOfWeek = formData
     .getAll("daysOfWeek")
     .map((value) => Number(value))
@@ -73,13 +83,35 @@ export async function createRecurringArrangementAction(
     p_end_date: endDate ?? undefined,
     // P1-OPS-PROG5B (Q4): exactly the operator's choice (yes / no / not specified); never inferred.
     p_requires_wheelchair_access: triStateToBoolean(stringField(formData, "requiresWheelchairAccess")) ?? undefined,
+    p_request_id: requestId ?? undefined,
   });
 
   if (error) {
+    // A Request that stopped being eligible (decision changed, Passenger changed / inactive) answers ZW006 like any
+    // invalid input; re-read it (RLS-scoped) only to choose the precise message.
+    if (requestId && error.code === "ZW006") {
+      const { data: request } = await supabase
+        .from("transportation_requests")
+        .select("state, passenger_id, passengers!transportation_requests_passenger_id_organization_id_fkey(id, status)")
+        .eq("id", requestId)
+        .eq("organization_id", organization.organizationId)
+        .maybeSingle();
+      const linked = request ? (Array.isArray(request.passengers) ? request.passengers[0] : request.passengers) : null;
+      const ready =
+        request !== null &&
+        request.passenger_id === passengerId &&
+        isReadyForRecurringCare({ state: request.state, passenger: linked ? { id: linked.id, status: linked.status } : null });
+      if (!ready) return { status: "error", errorCode: "REQUEST_NOT_READY" };
+    }
     return { status: "error", errorCode: mapRecurringArrangementError(error.code) };
   }
 
   revalidatePath("/operations/recurring-care");
+  if (requestId) {
+    revalidatePath(`/operations/requests/${requestId}`);
+    revalidatePath("/operations/requests");
+    revalidatePath("/operations");
+  }
   if (data?.arrangement_id) {
     revalidatePath(`/operations/recurring-care/${data.arrangement_id}`);
   }

@@ -31,6 +31,8 @@ export type RequestReadiness =
   | "trip_created"
   /** P1-PILOT-R2B: accepted, Trips were created, but every one of them is cancelled -- the ride still needs a Trip. */
   | "trip_cancelled"
+  /** P1-PILOT-R3: accepted and at least one recurring arrangement was created from it (any status -- D-R3-1). Takes precedence over the Trip readiness values. */
+  | "arrangement_created"
   /** Declined / cancelled — terminal. */
   | "not_convertible";
 
@@ -48,11 +50,18 @@ export interface RequestReadinessInput {
    * Omitted = same as hasLinkedTrips (callers that cannot distinguish keep the pre-R2B meaning).
    */
   hasActiveTrips?: boolean;
+  /** P1-PILOT-R3: at least one recurring_arrangements row references this Request (active, paused or ended). Omitted = false. */
+  hasLinkedArrangement?: boolean;
+  /** P1-PILOT-R3: the Request carries a STRUCTURED recurring schedule (recurring_days_of_week present). Omitted = false. */
+  hasRecurringIntent?: boolean;
 }
 
 export function deriveRequestReadiness(input: RequestReadinessInput): RequestReadiness {
   if (input.state === "declined" || input.state === "cancelled") {
     return "not_convertible";
+  }
+  if (input.state === "accepted" && input.hasLinkedArrangement) {
+    return "arrangement_created";
   }
   if (input.hasLinkedTrips) {
     return (input.hasActiveTrips ?? true) ? "trip_created" : "trip_cancelled";
@@ -77,8 +86,16 @@ export interface RequestActions {
   canCreateTrip: boolean;
   /** Additional Trip (return / multi-leg) from an accepted Request whose Passenger is still active. */
   canCreateAnotherTrip: boolean;
-  /** Mirrors link_request_passenger: pending or accepted, until the first Trip exists. */
+  /** Mirrors link_request_passenger: pending or accepted, until the first Trip (P1-PILOT-R3: or recurring arrangement) exists. */
   canLinkPassenger: boolean;
+  /** P1-PILOT-R3: accepted + a recurring arrangement exists -- cancellation is managed on the arrangement instead. */
+  cancelBlockedByArrangement: boolean;
+  /**
+   * P1-PILOT-R3: Request -> Recurring Care. Offered for an accepted Request with an active linked Passenger that carries
+   * a structured recurring schedule, or that already produced an arrangement (then as "Create another ..." -- e.g. a
+   * separate return schedule). create_recurring_arrangement re-checks accepted / same org / Passenger.
+   */
+  canCreateRecurringArrangement: boolean;
 }
 
 /**
@@ -90,13 +107,16 @@ export function deriveRequestActions(input: RequestReadinessInput): RequestActio
   const isPending = input.state === "pending";
   const isAccepted = input.state === "accepted";
   const passengerActive = input.passengerId !== null && input.passengerActive;
+  const hasArrangement = input.hasLinkedArrangement === true;
   return {
     canAccept: isPending,
     canDecline: isPending,
-    canCancel: isAccepted && !input.hasLinkedTrips,
+    canCancel: isAccepted && !input.hasLinkedTrips && !hasArrangement,
     cancelBlockedByTrips: isAccepted && input.hasLinkedTrips,
     canCreateTrip: isAccepted && !input.hasLinkedTrips && passengerActive,
     canCreateAnotherTrip: isAccepted && input.hasLinkedTrips && passengerActive,
-    canLinkPassenger: (isPending || isAccepted) && !input.hasLinkedTrips,
+    canLinkPassenger: (isPending || isAccepted) && !input.hasLinkedTrips && !hasArrangement,
+    cancelBlockedByArrangement: isAccepted && !input.hasLinkedTrips && hasArrangement,
+    canCreateRecurringArrangement: isAccepted && passengerActive && (input.hasRecurringIntent === true || hasArrangement),
   };
 }

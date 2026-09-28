@@ -18,6 +18,10 @@ export interface RequestActionBarProps {
   requestId: string;
   actions: RequestActions;
   createTripHref: string;
+  /** P1-PILOT-R3: /operations/recurring-care/new?requestId=... */
+  createRecurringHref: string;
+  /** P1-PILOT-R3: an arrangement already exists -> "Create another recurring arrangement" (e.g. a separate return schedule). */
+  hasLinkedArrangement: boolean;
 }
 
 /**
@@ -33,7 +37,7 @@ export interface RequestActionBarProps {
  * are terminal and open a reason dialog. Every gate is UI convenience
  * only; the RPCs are the authority.
  */
-export function RequestActionBar({ requestId, actions, createTripHref }: RequestActionBarProps) {
+export function RequestActionBar({ requestId, actions, createTripHref, createRecurringHref, hasLinkedArrangement }: RequestActionBarProps) {
   const [activeDialog, setActiveDialog] = useState<"decline" | "cancel" | null>(null);
   const [acceptState, acceptAction, accepting] = useActionState(acceptRequestAction, INITIAL_STATE);
   const router = useRouter();
@@ -43,7 +47,12 @@ export function RequestActionBar({ requestId, actions, createTripHref }: Request
   }, [acceptState, router]);
 
   const hasAny =
-    actions.canAccept || actions.canDecline || actions.canCancel || actions.canCreateTrip || actions.canCreateAnotherTrip;
+    actions.canAccept ||
+    actions.canDecline ||
+    actions.canCancel ||
+    actions.canCreateTrip ||
+    actions.canCreateAnotherTrip ||
+    actions.canCreateRecurringArrangement;
   if (!hasAny) return null;
 
   return (
@@ -66,6 +75,12 @@ export function RequestActionBar({ requestId, actions, createTripHref }: Request
           <Button type="button" variant="outline" onClick={() => setActiveDialog("cancel")}>
             Cancel Request
           </Button>
+        )}
+        {/* P1-PILOT-R3 (PR-04): explicit, never automatic; Create Trip stays available (a recurring Request may still need a one-time Trip). */}
+        {actions.canCreateRecurringArrangement && (
+          <LinkButton href={createRecurringHref} variant="outline" data-testid="create-recurring-arrangement">
+            {hasLinkedArrangement ? "Create another recurring arrangement" : "Create recurring arrangement"}
+          </LinkButton>
         )}
         {(actions.canCreateTrip || actions.canCreateAnotherTrip) && (
           <LinkButton href={createTripHref}>{actions.canCreateTrip ? "Create Trip" : "Create Another Trip"}</LinkButton>

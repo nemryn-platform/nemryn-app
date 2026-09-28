@@ -520,7 +520,8 @@ begin
     'public.set_vehicle_capabilities(uuid,boolean,boolean,integer,integer)', 'public.set_trip_wheelchair_requirement(uuid,boolean)',
     'public.set_recurring_wheelchair_requirement(uuid,uuid,boolean)', 'public.driver_get_own_schedule(uuid)',
     'public.create_trip(uuid,uuid,text,text,timestamptz,timestamptz,uuid,uuid,text,text,uuid,integer,boolean)',
-    'public.create_recurring_arrangement(uuid,uuid,text,text,time,smallint[],date,date,boolean)',
+    -- P1-PILOT-R3 -- deliberate identity change: create_recurring_arrangement gained a trailing p_request_id (9 -> 10 args).
+    'public.create_recurring_arrangement(uuid,uuid,text,text,time,smallint[],date,date,boolean,uuid)',
     'public.create_trip_for_recurring_occurrence(uuid,uuid,date)'
   ] loop
     if not has_function_privilege('authenticated', sig, 'EXECUTE') or has_function_privilege('anon', sig, 'EXECUTE')

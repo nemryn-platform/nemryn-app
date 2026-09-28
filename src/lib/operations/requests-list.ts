@@ -29,14 +29,15 @@ export function parseRequestsNeedsTrip(value: unknown, state: RequestsListStateF
 }
 
 /**
- * P1-PILOT-R2B (PR-03): the ONE database form of request-fulfilment-core's "stranded" predicate for R2B
- *   state = 'accepted' AND no linked Trip whose state <> 'cancelled'   (hasLinkedArrangement is false until R3)
- * as a PostgREST anti-join on the aliased `active_trips` embed (which callers must select). Verified against direct
- * SQL: no Trip and cancelled-only Trips match; scheduled / completed / no_show / cancelled+active do not.
+ * P1-PILOT-R2B (PR-03) + P1-PILOT-R3 (PR-04): the ONE database form of request-fulfilment-core's "stranded" predicate
+ *   state = 'accepted' AND no linked Trip whose state <> 'cancelled' AND no linked recurring arrangement (ANY status)
+ * as two PostgREST anti-joins on the aliased `active_trips` and `linked_arrangements` embeds (which callers must
+ * select). The arrangement embed carries NO status filter: an ended arrangement still fulfils the Request (D-R3-1).
+ * RLS-scoped (the caller's own session); no service role; one query for the count and one for the list.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyNeedsTripFilter<Q extends { eq: any; neq: any; is: any }>(query: Q): Q {
-  return query.eq("state", "accepted").neq("active_trips.state", "cancelled").is("active_trips", null);
+  return query.eq("state", "accepted").neq("active_trips.state", "cancelled").is("active_trips", null).is("linked_arrangements", null);
 }
 
 /** Overview (PR-03): how many accepted Requests of the organization still need a Trip. Null = the count failed. */
@@ -45,7 +46,7 @@ export async function countStrandedAcceptedRequests(organizationId: string): Pro
   const { count, error } = await applyNeedsTripFilter(
     supabase
       .from("transportation_requests")
-      .select("id, active_trips:trips(id)", { count: "exact", head: true })
+      .select("id, active_trips:trips(id), linked_arrangements:recurring_arrangements(id)", { count: "exact", head: true })
       .eq("organization_id", organizationId),
   );
   if (error || count === null) {
@@ -66,6 +67,8 @@ export interface RequestsListRow {
   hasLinkedTrips: boolean;
   /** P1-PILOT-R2B: whether at least one linked Trip is NOT cancelled (fulfilment). */
   hasActiveTrips: boolean;
+  /** P1-PILOT-R3: at least one recurring arrangement was created from this Request (any status). */
+  hasLinkedArrangement: boolean;
   pickupDescription: string;
   destinationDescription: string;
   preferredDate: string | null;
@@ -140,6 +143,8 @@ interface RequestRow {
   trips: { id: string }[] | null;
   /** P1-PILOT-R2B: at most one NON-cancelled linked Trip -- existence only (fulfilment / needs-a-trip). */
   active_trips: { id: string }[] | null;
+  /** P1-PILOT-R3: at most one linked recurring arrangement (any status) -- existence only. */
+  linked_arrangements: { id: string }[] | null;
 }
 
 function unwrapPassenger(value: RequestRow["passengers"]): { display_name: string; status: string } | null {
@@ -218,13 +223,14 @@ export async function getRequestsList(organizationId: string, filters: RequestsL
   let query = supabase
     .from("transportation_requests")
     .select(
-      "id, requester_name, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, state, created_at, updated_at, passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status), trips(id), active_trips:trips(id)",
+      "id, requester_name, passenger_id, pickup_description, destination_description, preferred_date, preferred_time, state, created_at, updated_at, passengers!transportation_requests_passenger_id_organization_id_fkey(display_name, status), trips(id), active_trips:trips(id), linked_arrangements:recurring_arrangements(id)",
       { count: "exact" },
     )
     .eq("organization_id", organizationId)
     .limit(1, { referencedTable: "trips" })
     .neq("active_trips.state", "cancelled")
-    .limit(1, { referencedTable: "active_trips" });
+    .limit(1, { referencedTable: "active_trips" })
+    .limit(1, { referencedTable: "linked_arrangements" });
 
   if (state === "accepted" && filters.needsTrip) {
     query = applyNeedsTripFilter(query);
@@ -307,6 +313,7 @@ export async function getRequestsList(organizationId: string, filters: RequestsL
       passengerActive: passenger?.status === "active",
       hasLinkedTrips: (row.trips ?? []).length > 0,
       hasActiveTrips: (row.active_trips ?? []).length > 0,
+      hasLinkedArrangement: (row.linked_arrangements ?? []).length > 0,
       pickupDescription: row.pickup_description,
       destinationDescription: row.destination_description,
       preferredDate: row.preferred_date,

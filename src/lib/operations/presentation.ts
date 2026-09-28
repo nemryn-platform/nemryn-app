@@ -200,6 +200,7 @@ export function requestReadinessLabel(readiness: RequestReadiness): string {
   if (readiness === "needs_passenger") return "Passenger needed";
   if (readiness === "ready") return "Ready to schedule";
   if (readiness === "trip_created") return "Trip created";
+  if (readiness === "arrangement_created") return "Recurring care created";
   if (readiness === "trip_cancelled") return "Trip cancelled — needs a trip";
   return "Not convertible";
 }
