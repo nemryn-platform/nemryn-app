@@ -1,0 +1,197 @@
+NEMRYN PLATFORM
+P1-PILOT-R3 -- REQUEST -> RECURRING CARE (PR-04) -- PRODUCTION RELEASE
+Date: 2026-09-28 (UTC).
+Release SHA: 2f8b9a93a6070a967f79e2f716daff302efd66f0 ("feat(pilot): connect requests to recurring care").
+Not amended. This report is NOT committed.
+Implementation record: docs/reports/p1-pilot-r3-request-recurring-care-implementation.txt (in 2f8b9a9).
+PR-12, automatic occurrences, billing / payer / claims, Progressive Operations and PROG6 were NOT touched.
+
+======================================================================
+1. STARTING BASELINE
+======================================================================
+  - Production application 22693db6be09d9f151859efe4c31747dddd4fd6d (R2C), migration head 20260927110000, privilege
+    contract 0 / 29.
+  - R2C closeout: aaff7dd8e36247a36e63303d9171b7cf27a630b5 ("docs(pilot): record R2C production release") on
+    origin/main before the R3 commit (Vercel built it as deployment 6698995083 -- docs only).
+
+======================================================================
+2. FINAL INTEGRITY HARDENING (before the immutable commit; same unshipped migration)
+======================================================================
+  Discovered during local review (R3 implementation report, open issue 1): the UI hid Request Cancel / Link Passenger
+  once Recurring Care existed, but the database RPCs checked only for Trips. Resolved BEFORE release:
+    - link_request_passenger: after its unchanged Trip guard, ZW004 when ANY recurring arrangement references the
+      Request (active, paused or ended).
+    - cancel_transportation_request: after its unchanged state and Trip guards, the same ZW004 guard. Nothing cascades
+      to the arrangement; the Request stays accepted.
+  Both inside the existing SECURITY DEFINER functions (CREATE OR REPLACE, same identities, grants kept), organization
+  from the authorized, row-locked Request; no grant change, no service role, R2B Request UPDATE revoke intact. Folded
+  into 20260927120000_request_recurring_care.sql -- R3 remained ONE migration.
+  Stale UI: a page opened before another operator converted the Request is refused by the server with the existing
+  calm copy ("This request has changed and can no longer be updated this way." / "This request can no longer be
+  changed in this way.") -- no silent success.
+
+======================================================================
+3. LOCAL GATE
+======================================================================
+  R3 SQL (request_recurring_care_tests.sql): 42 / 42 (31 R3 + 11 hardening), run twice; cleanup verified.
+  Request mutation SQL: request_mutation 39/39, request_mutation_privilege 23/23, request_mutation_atomicity 4/4,
+    request_decision_workflow 60/60, request_trip_passenger_integrity 11/11.
+  Unit: npm test 722 / 722.
+  R3 browser E2E: 57 / 57 (49 R3 + 8 stale two-session hardening checks).
+  Affected regressions: R2B E2E 49/49 after the hardening. Full R3 regression set (before the hardening, which touched
+    only the two Request RPCs): PROG3B 51/51, R2C E2E 47/47, R2B E2E 49/49, PROG1 46/46, PROG2 56/56, PROG4B 45/45,
+    R1 integration 19/19 (18/19 in the batch because of a stray SQL-suite fixture row -- proven, isolated clean rerun),
+    R2 integration 16/16, R2 E2E 20/20, PROG5B 74/74.
+  Full SQL collection (53 suites, fresh local reset): R3 / Request / recurring / privilege suites green.
+  Known unrelated SQL hygiene (disclosed, unchanged): notifications_activity ACT-1 / PAGE-1; request_decision_expand_
+    compat (historical EXPAND window); website_requests_form A1 / A2 / F5 / P7; website_request_form_publication PU4a;
+    clock-dependent recurring_trip_creation RTC-04 (UTC current_date vs New York local date at run time). Some SQL
+    suites commit fixtures into local Org A.
+  TypeScript PASS; lint 0 errors (100 warnings, all in untracked .tmp-qa; 0 in src); build PASS; local privilege
+    contract 0 / 29.
+
+======================================================================
+4. IMMUTABLE COMMIT
+======================================================================
+  2f8b9a93a6070a967f79e2f716daff302efd66f0 -- 27 files (+1786 / -37), parent aaff7dd: the R3 migration (incl. the
+  hardening), request_recurring_care_tests.sql, privilege_contract + availability_capability identity updates,
+  regenerated database.types.ts, R3 application code (Request Detail CTA / panel, Recurring Care new / detail, action,
+  prefill core, fulfilment / readiness / list predicate, presentation), unit tests, docs/data/mutation-api.md, the R3
+  implementation report. Excluded: .tmp-qa, logs, screenshots, scratch, credentials, environment files.
+
+======================================================================
+5. PRODUCTION PRIVILEGE CONTRACT -- BEFORE / TRANSITION / AFTER
+======================================================================
+  A. PRE-R3 database + PRE-R3 contract (aaff7dd:supabase/tests/privilege_contract_tests.sql, scratch copy, read-only):
+       0 violations / 29 checks -- PASS.   PRE-R3 PRODUCTION PRIVILEGE BASELINE: 0/29 PASS
+  B. PRE-R3 database + POST-R3 contract (2f8b9a9) -- measured, not assumed:
+       2 violations / 29 checks, EXACTLY the reviewed identity transition:
+         check 13 "every public function is in the contract" -> EXTRA (old identity present in the database):
+           create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date,boolean)
+         check 14 "every contract function exists" -> MISSING (new identity not yet created):
+           create_recurring_arrangement(uuid,uuid,text,text,time without time zone,smallint[],date,date,boolean,uuid)
+       No other check differed (check 17 authenticated EXECUTE passed).
+  C. POST-R3 database + POST-R3 contract, immediately after the migration: 0 violations / 29 checks -- PASS.
+
+======================================================================
+6. PROJECT IDENTITY / MIGRATION
+======================================================================
+  - Nemryn / wyocbivzgrbekuyqdfts, linked = true, ACTIVE_HEALTHY; supabase/.temp/project-ref matches.
+  - Head before 20260927110000 (72 applied); pending: exactly 20260927120000; dry-run delta the same single file.
+  - supabase db push --linked: "Applying migration 20260927120000_request_recurring_care.sql ... Finished".
+  - No ad-hoc production schema SQL; no unrelated migration.
+  - Production head after: 20260927120000 (73 applied, 0 pending).
+
+======================================================================
+7. PRODUCTION OBJECT / SECURITY VERIFICATION (read-only, linked)
+======================================================================
+  recurring_arrangements.request_id      uuid, nullable
+  FK                                     FOREIGN KEY (request_id, organization_id) REFERENCES
+                                         transportation_requests(id, organization_id); on delete / update NO ACTION
+  index                                  recurring_arrangements_org_request_idx (organization_id, request_id)
+                                         WHERE (request_id IS NOT NULL); NON-unique; no unique index on request_id
+  backfill                               none: 0 of 2 existing arrangements have request_id
+  create_recurring_arrangement           exactly 1 overload; 10 args (3 defaults); last arg
+                                         "p_request_id uuid DEFAULT NULL::uuid"; SECURITY DEFINER;
+                                         search_path=public, pg_temp; PUBLIC false / anon false / authenticated true
+  recurring_arrangements direct INSERT / UPDATE for authenticated: none
+  R2B trips / transportation_requests UPDATE (table or column): none -- intact
+  R2C record_trip_completion_by_operations: 1 overload, SECURITY DEFINER -- intact
+  link_request_passenger / cancel_transportation_request: the linked-arrangement guard present in both production
+    definitions; SECURITY DEFINER; authenticated EXECUTE, anon none -- REQUEST PASSENGER / CANCELLATION
+    POST-CONVERSION MUTATION: BLOCKED.
+
+======================================================================
+8. PUSH / VERCEL / DEPLOYED SHA
+======================================================================
+  - Pushed the exact commit (active nemryn identity): aaff7dd..2f8b9a9 -> main (fast-forward; no force, no amend).
+  - local HEAD == origin/main == 2f8b9a93a6070a967f79e2f716daff302efd66f0.
+  - Vercel (existing GitHub path; no project / DNS / env change): production deployment 6700135980, sha 2f8b9a9,
+    state success (2026-09-28T00:49:36Z); commit status success. Previous: 6698995083 (aaff7dd, docs), 6698850119
+    (22693db).
+  - https://app.nemryn.com/sign-in -> HTTP 200 (server: Vercel).
+  - Interim state (migration applied, aaff7dd serving): safe -- the old app calls create_recurring_arrangement with
+    named arguments (resolves to the 10-arg function, p_request_id NULL) and ignores the new column; the two guards
+    only refuse actions the old UI does not offer after conversion (no conversions existed).
+
+======================================================================
+9. READ-ONLY PRODUCTION UI VERIFICATION
+======================================================================
+  Script .tmp-qa/p1-pilot-r3-prod-readonly-ui.mjs (untracked), Siloan Medical Centre admin session, navigation / reads
+  only. Result: 23 PASS / 0 FAIL.
+    - Overview, Requests (accepted), needs=trip filter, a Request Detail, Recurring Care list + an arrangement detail,
+      the manual New arrangement form, the unknown-requestId page: all load, no error page, no uncaught client error.
+    - Overview line (live data): "2 accepted requests still need a trip or recurring arrangement"; filter note
+      "Showing accepted requests that still need a trip or recurring arrangement."
+    - Manual New form unchanged (Passenger select, no Request banner); unknown requestId -> "This request is no longer
+      ready for recurring care." and no form.
+    - Delivery evidence: the deployed Recurring Care bundle contains the R3 Request-prefill code.
+    - 390 px needs=trip view: no overflow.
+  Eligible-Request checks (CTA, prefill, pickup time empty, appointment / return hints): a read-only query found NO
+    accepted Siloan Request with a structured recurring schedule; none was created. LOCAL-VERIFIED / PRODUCTION NOT
+    FORCED (R3 E2E A1, B1-B11, C-F, H).
+  Non-mutation proof (read-only): recurring arrangements with request_id = 0; arrangements total unchanged (2).
+
+======================================================================
+10. MUTATION EVIDENCE -- OWNER-ACCEPTED FROM LOCAL
+======================================================================
+  No production mutation smoke was run; no production Request was converted. Owner-accepted local evidence: R3 SQL
+  42/42, Request mutation suites green, unit 722/722, R3 E2E 57/57, R2B E2E 49/49, the full R3 regression set green,
+  local privilege contract 0/29.
+
+======================================================================
+11. RESIDUAL RISK
+======================================================================
+  - The production write path (create with request_id, the two new guards) has not been exercised in production;
+    identical migration proven locally; production definitions / grants / contract verified.
+  - The Request-derived form has not been rendered in production (no eligible synthetic Request); its code is in the
+    deployed bundle and is E2E-verified locally.
+  - Pre-existing SQL test hygiene (committing suites, clock-dependent checks) remains a local-verification nuisance.
+  - PR-18 tooling: Supabase CLI 2.109.0 (2.118.0 available).
+
+======================================================================
+12. DISPOSITIONS / GAPS / PILOT READINESS
+======================================================================
+  PR-04 Request -> Recurring Care: RELEASED.
+  Request Passenger mutation after conversion: BLOCKED. Request cancellation after conversion: BLOCKED.
+  Remaining P0 pilot blockers: 0 (conditional on PR-12).
+  Remaining P1 pilot gaps: 0 (PR-01, PR-02, PR-03, PR-04 all released).
+  PR-12 discovery gate: OPEN -- pilot go-live requires the payer / broker's evidence requirements (signature / photo /
+    mileage / other); if any is mandated, PR-12 becomes P0 before live go-live.
+  Pilot-readiness: every P0 / P1 gap from the readiness audit is closed in production. Ready for a first-day pilot
+    simulation in the synthetic tenant (intake -> accept -> one-time Trip + Recurring Care -> dispatch -> driver
+    lifecycle -> correction / recovery -> Proof of Service); PR-12 remains the go-live condition.
+
+======================================================================
+13. ROLLBACK POINT
+======================================================================
+  Application: revert 2f8b9a9, or promote deployment 6698995083 (aaff7dd; same application as 22693db).
+  Database: normally unnecessary -- additive (nullable column, FK, index) + a defaulted trailing argument + two
+    stricter guards; old callers keep working. Do not drop request_id data (historical fulfilment). If a guard or the
+    RPC misbehaves, fix forward with a reviewed migration; never re-grant direct table UPDATE.
+
+P1-PILOT-R3 PRODUCTION RELEASE: PASS
+
+PRODUCTION MIGRATION HEAD: 20260927120000
+
+PRODUCTION PRIVILEGE CONTRACT: 0 violations / 29 checks
+
+DEPLOYED COMMIT: 2f8b9a93a6070a967f79e2f716daff302efd66f0
+
+PR-04 REQUEST → RECURRING CARE: RELEASED
+
+REQUEST PASSENGER POST-CONVERSION MUTATION: BLOCKED
+
+REQUEST CANCELLATION POST-CONVERSION: BLOCKED
+
+REMAINING P0 PILOT BLOCKERS: 0
+
+REMAINING P1 PILOT GAPS: 0
+
+READY FOR FIRST-DAY PILOT SIMULATION: YES
+
+PR-12 DISCOVERY GATE: OPEN
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+PROG6 PLANNED: NO
