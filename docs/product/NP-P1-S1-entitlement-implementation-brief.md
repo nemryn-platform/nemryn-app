@@ -54,7 +54,7 @@ UX1 is described as "LOCAL ONLY: not committed, not pushed, not deployed" (`docs
    - a new action in the existing `actions.ts`;
    - a loader in `src/lib/platform/platform.ts` (§4.3).
 7. Regenerate `src/lib/supabase/database.types.ts` (generated file; part of this slice).
-8. Docs: `docs/data/schema.md`, `docs/data/mutation-api.md`, `docs/security/database-privilege-contract.md`, and the decision register (approved PDs → ZD-205+).
+8. Docs: `docs/data/schema.md`, `docs/data/mutation-api.md`, `docs/security/database-privilege-contract.md`. Decision register: only formally approved decisions get a ZD number (ZD-205 is UX1; the route decision PD-04 is recorded as ZD-206). PD-02 and PD-17 are working requirements, not yet ZD entries.
 
 ### Out of scope (explicit)
 - Any `plus_*` CRM table or customer data.
@@ -73,7 +73,8 @@ organization_id uuid not null references public.organizations (id),
 module          text not null check (module in ('plus')),
 status          text not null check (status in ('trial','active','expired','cancelled','disabled')),
 restriction     text check (restriction in ('read_only','no_access')),
-trial_ends_at   timestamptz,
+trial_started_at timestamptz,          -- set on the single trial; never cleared (one-trial rule)
+trial_ends_at   timestamptz,           -- kept as history after the trial ends
 trial_extension_count smallint not null default 0 check (trial_extension_count between 0 and 1),
 access_ends_at  timestamptz,
 status_reason   text not null check (length(status_reason) between 3 and 500 and btrim(status_reason) = status_reason),
@@ -81,9 +82,11 @@ updated_by      uuid references auth.users (id),
 created_at      timestamptz not null default now(),
 updated_at      timestamptz not null default now(),
 primary key (organization_id, module),
-constraint organization_modules_trial_check check ((status = 'trial') = (trial_ends_at is not null)),
+constraint organization_modules_trial_dates_check check ((trial_started_at is null) = (trial_ends_at is null) and (trial_ends_at is null or trial_ends_at > trial_started_at)),
+constraint organization_modules_trial_check check (status <> 'trial' or trial_ends_at is not null),
 constraint organization_modules_restriction_check check ((status = 'disabled') = (restriction is not null)),
-constraint organization_modules_trial_access_check check (status <> 'trial' or access_ends_at is null)
+constraint organization_modules_access_ends_check check (status = 'active' or access_ends_at is null)
+-- (implemented: supabase/migrations/20261013100000_plus_entitlement_foundation.sql)
 ```
 
 - Triggers: `set_updated_at`; `prevent_organization_id_change` (the existing shared functions).
@@ -109,7 +112,7 @@ constraint organization_modules_trial_access_check check (status <> 'trial' or a
 
 ### 3.4 `platform_set_organization_module(p_organization_id uuid, p_module text, p_status text, p_trial_days integer, p_access_ends_at timestamptz, p_restriction text, p_reason text)`
 
-Returns `platform_organization_module_result (organization_id, module, status, restriction, trial_ends_at, access_ends_at, changed boolean)`. The body follows `set_platform_organization_status` (`20260920130000_platform_admin_foundation.sql:989-1048`):
+Returns `platform_organization_module_result (organization_id, module, status, restriction, trial_ends_at, trial_extension_count, access_ends_at, effective_state, changed boolean)`. The body follows `set_platform_organization_status` (`20260920130000_platform_admin_foundation.sql:989-1048`):
 1. `perform public._require_platform_admin();`
 2. Validate:
    - `p_module = 'plus'`; status in the set;
@@ -118,13 +121,14 @@ Returns `platform_organization_module_result (organization_id, module, status, r
      - `p_trial_days` null → **14** (the `PLUS_TRIAL_DEFAULT_DAYS` constant in the function);
      - otherwise it must be 7–30;
      - `trial_ends_at := now() + days`;
-     - **refused (ZW004) when the current status is already `trial`**: use the extend RPC (§3.4a);
+     - **refused (ZW004) whenever `trial_started_at` is already set** (NP-P1-S1 correction): a running trial is never restarted, and a consumed trial is never granted again. Extensions use §3.4a. A regrant needs a separately approved procedure (not implemented);
+     - an organization with no row may only be given `trial` or `active`; `expired` / `cancelled` / `disabled` on a missing row → ZW004;
    - non-trial ⇒ `p_trial_days` null;
    - `p_access_ends_at` null or `> now()`, and only for `active`;
    - `p_restriction` is required for `disabled` (`read_only` | `no_access`) and must be null otherwise.
    - Anything else → ZW006.
 3. Organization must exist (any `organizations.status`) → else ZW002. Lock the organization row `for update` to serialize concurrent changes, even when no module row exists yet.
-4. Read the current module row. If the status, restriction and access end all match (and, for a trial request, the row is not already a trial; see validation), return `changed = false` with no audit (idempotent).
+4. Read the current module row (`for update`). For any non-trial request whose status, restriction and access end all match the row, return `changed = false` with no write and no audit (idempotent). Trial requests are never no-ops: they start the one trial or are refused (ZW004).
 5. Upsert the row with `updated_by = auth.uid()`.
 6. `insert into audit_events (organization_id, entity_type, entity_id, action, actor_user_id, before_data, after_data, reason)` with `entity_type = 'organization_module'`, `entity_id = p_organization_id`, `action = 'platform_plus_access_changed'`, before/after `{module, status, restriction, trial_ends_at, access_ends_at}` (null before on first grant), and `reason`.
 7. `revoke all … from public, anon; grant execute … to authenticated` (the platform pattern: authenticated may call, `_require_platform_admin` refuses non-platform callers with ZW002).
@@ -141,7 +145,9 @@ Returns `platform_organization_module_result (organization_id, module, status, r
 
 ### 3.5 `platform_get_organization_module(p_organization_id uuid, p_module text)`
 
-Platform Admin only (`_require_platform_admin`). Returns the row (or nulls) plus the effective state. `grant execute … to authenticated`.
+Platform Admin only (`_require_platform_admin`). Returns `platform_organization_module_state (organization_id, module, provisioned, status, restriction, trial_started_at, trial_ends_at, trial_extension_count, access_ends_at, effective_state, status_reason, updated_at)`; `provisioned = false` when there is no row. Unknown module → ZW006, unknown organization → ZW002. `grant execute … to authenticated`.
+
+> The optional `platform_list_activity` whitelist change below was **not** made in S1 (no existing function body replaced); the audit row is written regardless.
 
 > **Optional, recommended (owner choice):** add `platform_plus_access_changed` to `platform_list_activity`'s action whitelist so the change shows in the platform activity feed. That requires `create or replace` of an existing function. Skip it if the owner prefers S1 not to replace any existing function body. The audit row is written either way.
 
@@ -164,7 +170,7 @@ Purely additive (new table + new functions). Apply the migration **before** the 
 
 ### 4.1 `src/lib/plus/access.ts` (`import "server-only"`)
 
-- `getPlusAccessState(organizationId): Promise<{ state: 'none'|'read_only'|'write'; trialEndsAt: string | null }>`. Calls `plus_access_state` through the existing per-request server client (`src/lib/supabase/server.ts`), **never** the service-role client. Any RPC error maps to `'none'` (fail closed) with a fixed-message log.
+- `getPlusAccessState(organizationId): Promise<{ state: 'none'|'write'|'read_only'|'locked'; trialEndsAt: string | null }>` (all four effective states; NP-P1-S1 correction). Calls `plus_access_state` through the existing per-request server client (`src/lib/supabase/server.ts`), **never** the service-role client. Any RPC error maps to `'none'` (fail closed) with a fixed-message log.
 - `requirePlusAccess(currentPath)`:
   - `const context = await requireOrganizationAdminAccess(currentPath)` (reuses the existing redirects: no session → sign-in, Driver → `/driver`, Dispatcher → `/operations`);
   - then `state = getPlusAccessState(context.organizationId)`;
@@ -186,7 +192,7 @@ Purely additive (new table + new functions). Apply the migration **before** the 
 
 - On the organization detail page, a **Nemryn Plus** panel beside `OrganizationLifecycleControl`. It shows:
   - the current status, trial end and access end;
-  - the effective state (Write / Read-only / Not provisioned).
+  - the effective state (Full access / Read-only / Locked / Not provisioned), the restriction, trial start / end / extensions used, access end, last change and the internal reason.
 - Actions:
   - Start trial (days, default 14, 7–30);
   - Extend trial (once, 1–30 days);
@@ -208,7 +214,9 @@ Purely additive (new table + new functions). Apply the migration **before** the 
 | E1 | anon / authenticated `select/insert/update/delete` on `organization_modules` | permission denied |
 | E2 | Org A admin, Org A dispatcher, driver, `e1` (no membership) call `platform_set_organization_module` | ZW002 |
 | E3 | Platform Admin `d1`: trial grant → state for Org A admin = `write` | OK; one `platform_plus_access_changed` audit row with reason and actor `d1` |
-| E4 | Same call repeated | `changed = false`; no second audit row |
+| E4 | Identical non-trial update repeated (e.g. `active` twice, `active` with the same end date twice) | `changed = false`; no second audit row; reason not overwritten |
+| E4b | Repeated start-trial (running trial, any days) | ZW004; trial dates unchanged; no audit |
+| E4c | Start-trial after a consumed trial (e.g. after `expired`) | ZW004 |
 | E5 | Trial days < 7 or > 30; non-trial with trial days; active with a past `access_ends_at`; `disabled` without restriction or a non-disabled status with one; bad module/status; blank or oversized reason | ZW006 |
 | E6 | Elapsed trial (set the row directly as owner inside the test transaction) | `plus_access_state = 'read_only'` |
 | E7 | `expired`, `cancelled`, `disabled`+`read_only`; `active` with elapsed `access_ends_at` | `read_only` |
@@ -255,7 +263,7 @@ Two sessions change Org A's Plus at once (after the `platform_lifecycle_concurre
 ## 7. Rollback
 
 - **App:** revert the S1 commit, or promote the previous Vercel deployment. Core is unaffected because nothing in Core reads the new objects.
-- **Database:** leave the table and functions in place (they are inert without the app). If removal is required: a reviewed forward migration that drops the four functions and the table, **only** if no production row exists for a real operator. Audit rows stay.
+- **Database:** leave the table, the five functions and the three result types in place (inert without the app). If removal is required: a reviewed forward migration dropping `platform_get_organization_module`, `platform_extend_plus_trial`, `platform_set_organization_module`, `plus_access_state`, `_plus_entitlement_state`, the types `platform_organization_module_state`, `platform_organization_module_result`, `plus_access_state_result`, and `organization_modules` -- **only** if no production row exists for a real operator -- plus the matching privilege-contract entries. Audit rows stay.
 - No data migration exists, so there is nothing to back-fill or restore.
 
 ## 8. Risks specific to S1

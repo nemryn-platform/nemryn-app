@@ -52,7 +52,9 @@ c_tables(tbl) as (values
   ('driver_weekly_schedules'),
   ('driver_weekly_shifts'),
   ('driver_unavailability_windows'),
-  ('vehicle_unavailability_windows')
+  ('vehicle_unavailability_windows'),
+  -- NP-P1-S1 Nemryn Plus entitlement: class A (no anon / authenticated / service_role privilege; RPCs only)
+  ('organization_modules')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -231,7 +233,13 @@ c_fn(sig, roles) as (values
   ('driver_get_own_schedule(uuid)', 'u'),
   ('update_organization_trip_defaults(uuid,integer)', 'u'),
   ('update_organization_settings(uuid,jsonb)', 'u'),
-  ('update_request_intake_integration_origin(uuid,text)', 'u')
+  ('update_request_intake_integration_origin(uuid,text)', 'u'),
+  -- NP-P1-S1 Nemryn Plus entitlement
+  ('_plus_entitlement_state(uuid)', ''),
+  ('plus_access_state(uuid)', 'u'),
+  ('platform_set_organization_module(uuid,text,text,integer,timestamp with time zone,text,text)', 'u'),
+  ('platform_extend_plus_trial(uuid,integer,text)', 'u'),
+  ('platform_get_organization_module(uuid,text)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

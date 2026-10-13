@@ -34,6 +34,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
   Only Platform Admin RPCs write it. No Core function references it, so **no Plus state can affect Core operations**.
 - **Status:** PROPOSED (OWNER-APPROVED DIRECTION; A02R adds `restriction` / `locked`)
 - **Changed from A02:** A02 treated `disabled` as read-only only. A02R adds the stronger `no_access` restriction for security cases.
+- **NP-P1-S1:** implemented locally as a working requirement (migration `20261013100000`). Still PROPOSED: it needs formal owner approval before it becomes a ZD entry.
 - **Review trigger:** Billing provider integration (NP-P5)
 
 ### PD-03 — Plus access: Admin-only for technical testing, named-staff grants before beta *(revised A02R)*
@@ -53,7 +54,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
 
 - **Category:** Architecture / UX
 - **Decision:** Growth pages live at `/operations/growth/*` with their own `layout.tsx` calling `requirePlusAccess`. The module boundary lives in code (`src/lib/plus/*`, `src/components/growth/*`, `plus_*` tables and RPCs).
-- **Status:** **OWNER-APPROVED** (NP-P0-A02R brief: "Preserve `/operations/growth` route structure") — ready to record as a ZD entry.
+- **Status:** **OWNER-APPROVED** (NP-P0-A02R brief: "Preserve `/operations/growth` route structure") — **recorded as ZD-206** (NP-P1-S1).
 - **Reason:** single Operations layout, guard and pathname-driven shell (`src/app/operations/layout.tsx`; `src/components/operations/OperationsLayoutClient.tsx:13-28, 96-150`).
 - **Follow-on constraint (A02R):** if PD-18 introduces growth-only members, the Operations layout guard must become path-aware (access model §2.3).
 
@@ -163,7 +164,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
 
 - **Category:** Commercial
 - **Decision:** default trial **14 days** (platform constant). A Platform Admin may choose 7–30 days at grant time and extend a running trial up to 30 additional days, with a required reason and an audit event. At the end the state becomes `read_only` automatically (computed), never `locked`. Core is unaffected.
-- **Status:** PROPOSED — owner to confirm 14 / 7–30 / +30 (replaces the A02 90-day cap)
+- **Status:** PROPOSED — owner to confirm 14 / 7–30 / +30 (replaces the A02 90-day cap). **NP-P1-S1** implements it as a working requirement (no ZD entry yet), and adds the one-trial rule: `trial_started_at` is never cleared, so a running trial is never restarted and a consumed trial is never re-granted; a regrant needs a separately approved procedure.
 
 ### PD-18 — Growth-only staff members
 

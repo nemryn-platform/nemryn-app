@@ -2510,6 +2510,20 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A defined Search or Dispatch Settings feature; Dispatcher access to notification history (needs a database change)
 
+### ZD-206 — Nemryn Plus Growth surface is mounted at `/operations/growth`
+
+- **Date:** 2026-10-13
+- **Category:** Architecture / UX
+- **Decision:** Nemryn Plus (Growth) pages live under `/operations/growth/*`, inside the existing Operations layout and shell.
+  - A Growth `layout.tsx` and every Growth page call `requirePlusAccess` (`src/lib/plus/access.ts`): Organization Admin plus a Plus entitlement that allows entry.
+  - The module boundary is kept in code (`src/lib/plus/*`, `plus_*` / `platform_*_module` database objects), not in a separate URL root, shell or application.
+- **Status:** CONFIRMED (owner-approved direction, NP-P0-A02R brief "Preserve `/operations/growth` route structure"; proposed as PD-04 in `plus-decisions-proposed.md`)
+- **Reason:** One Operations layout already resolves the organization context and renders the pathname-driven shell (`src/app/operations/layout.tsx`, `OperationsLayoutClient.tsx`). A top-level `/growth` would need a second guard and shell path without any security benefit.
+- **Affected Product Areas:** `src/app/operations/growth/*`, `src/lib/plus/access.ts`
+- **Dependencies:** ZD-205 (UX1 header); Plus entitlement (NP-P1-S1)
+- **Owner:** Product
+- **Review Trigger:** A growth-only membership role (PD-18), which requires a path-aware Operations guard
+
 No decisions have been REJECTED as of this update. ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

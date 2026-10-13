@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getOrganizationDetail, getOrganizationIntegrations } from "@/lib/platform/platform";
+import { getOrganizationDetail, getOrganizationIntegrations, getPlusEntitlement } from "@/lib/platform/platform";
 import {
   failureReasonLabel,
   formatPlatformDate,
@@ -13,6 +13,14 @@ import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { OrganizationLifecycleControl } from "@/components/platform/OrganizationLifecycleControl";
+import { PlusEntitlementControl } from "@/components/platform/PlusEntitlementControl";
+import {
+  availablePlusActions,
+  plusEffectiveStateCategory,
+  plusEffectiveStateLabel,
+  plusRestrictionLabel,
+  plusStatusLabel,
+} from "@/lib/plus/entitlement-admin-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -41,7 +49,11 @@ export default async function PlatformOrganizationPage({ params }: { params: Pro
   const { organizationId } = await params;
   if (!UUID_PATTERN.test(organizationId)) notFound();
 
-  const [org, integrations] = await Promise.all([getOrganizationDetail(organizationId), getOrganizationIntegrations(organizationId).catch(() => null)]);
+  const [org, integrations, plus] = await Promise.all([
+    getOrganizationDetail(organizationId),
+    getOrganizationIntegrations(organizationId).catch(() => null),
+    getPlusEntitlement(organizationId).catch(() => null),
+  ]);
   if (!org || !integrations) notFound();
 
   const n = org.notifications;
@@ -146,6 +158,43 @@ export default async function PlatformOrganizationPage({ params }: { params: Pro
             </p>
           )}
         </div>
+      </Section>
+
+      <Section
+        title="Nemryn Plus"
+        description="The Plus growth module entitlement. Separate from suspension: no Plus change affects operations, and nothing is ever deleted."
+      >
+        {plus ? (
+          <div className="flex flex-col gap-zw-md" data-testid="plus-entitlement-panel">
+            <div className="flex items-center gap-2">
+              <StatusBadge label={plusEffectiveStateLabel(plus.effectiveState)} category={plusEffectiveStateCategory(plus.effectiveState)} />
+            </div>
+            <DefinitionList
+              columns={2}
+              items={[
+                { label: "Stored status", value: plusStatusLabel(plus) },
+                { label: "Effective access", value: plusEffectiveStateLabel(plus.effectiveState) },
+                { label: "Restriction", value: plusRestrictionLabel(plus.restriction) },
+                { label: "Trial started", value: formatPlatformTimestamp(plus.trialStartedAt) },
+                { label: "Trial ends", value: formatPlatformTimestamp(plus.trialEndsAt) },
+                { label: "Trial extensions used", value: plus.provisioned ? `${plus.trialExtensionCount} of 1` : "—" },
+                { label: "Access ends", value: plus.status === "active" ? (plus.accessEndsAt ? formatPlatformTimestamp(plus.accessEndsAt) : "Open-ended") : "—" },
+                { label: "Last change", value: formatPlatformTimestamp(plus.updatedAt) },
+                { label: "Last reason (internal)", value: plus.statusReason ?? "—" },
+              ]}
+            />
+            <PlusEntitlementControl
+              key={plus.updatedAt ?? "none"}
+              organizationId={org.organizationId}
+              organizationName={org.name}
+              actions={availablePlusActions(plus)}
+            />
+          </div>
+        ) : (
+          <p role="status" className={cn(typography.bodySmall, "text-text-secondary")}>
+            The Nemryn Plus entitlement could not be loaded.
+          </p>
+        )}
       </Section>
 
       <Section title="Lifecycle" description="Suspending pauses the workspace; nothing is deleted. There is no delete or purge.">

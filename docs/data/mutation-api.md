@@ -275,3 +275,56 @@ The existing Organization Admin / Dispatcher RPC gained ONE trailing optional ar
 - **Never:** set / change `request_id` after creation (edit / pause / resume / end / wheelchair setter update named columns only); copy it onto occurrence Trips (they keep `recurring_arrangement_id` only).
 - **Fulfilment (application):** a Request is fulfilled by a non-cancelled Trip OR by ANY linked arrangement — active, paused or ended (owner decision D-R3-1). The Overview stranded count and `?state=accepted&needs=trip` use the same RLS-scoped PostgREST anti-join (`active_trips` + `linked_arrangements`).
 - **After conversion (pre-release hardening):** `link_request_passenger` and `cancel_transportation_request` also return `ZW004` once ANY recurring arrangement (active, paused or ended) references the Request — the same code as their existing linked-Trip guard. Nothing cascades to the arrangement; the Request stays accepted.
+
+## Nemryn Plus entitlement RPCs (NP-P1-S1)
+
+Migration `20261013100000_plus_entitlement_foundation.sql`; table `organization_modules` (class A). None of these functions reads or writes `organizations.status` (beyond an existence check and row lock) or any Core table, and no Core function calls them.
+
+### `plus_access_state(p_organization_id uuid) → plus_access_state_result (state, trial_ends_at)`
+- **Who:** authenticated.
+- **Returns:** the caller's effective Nemryn Plus state.
+  - For an Organization Admin of that active organization (`has_org_role(org, ['organization_admin'])`): `write`, `read_only` or `locked`. `trial_ends_at` is set only while a trial runs (`write`).
+  - For everyone else (Dispatcher, Driver, inactive member, suspended organization, foreign tenant, Platform Admin without membership): `none`. It never raises (no oracle).
+- **Effective state rules:**
+
+  | Stored entitlement | Effective state |
+  |---|---|
+  | running trial, or `active` without an end / before `access_ends_at` | `write` |
+  | `disabled` + `no_access` | `locked` |
+  | any other existing row (elapsed trial or period, `expired`, `cancelled`, `disabled` + `read_only`) | `read_only` |
+  | no row | `none` |
+
+### `platform_set_organization_module(p_organization_id, p_module, p_status, p_trial_days, p_access_ends_at, p_restriction, p_reason) → platform_organization_module_result`
+- **Who:** Platform Admin only. Errors: ZW002 for anyone else, ZW001 without a uid.
+- **Validation (ZW006):**
+  - `p_module = 'plus'`; status in `trial | active | expired | cancelled | disabled`; reason 3–500 after trim.
+  - `trial`: `p_trial_days` NULL means **14**, otherwise 7–30. No access end, no restriction.
+  - `active`: optional future `p_access_ends_at`, no restriction.
+  - `disabled`: `p_restriction` is `read_only` or `no_access`, no access end.
+  - `expired` / `cancelled`: neither.
+  - Non-trial statuses take no trial days.
+- **Transitions (ZW004):**
+  - A trial starts only if `trial_started_at` is NULL. One trial per organization: a running trial is never restarted and a consumed trial is never re-granted.
+  - `expired` / `cancelled` / `disabled` are refused for an organization with no row.
+- **Unknown organization:** ZW002.
+- **Concurrency:** locks the organization row, then the module row.
+- **Idempotency:** an identical non-trial request returns `changed = false` with no write and no audit.
+- **Audit:** every real change writes one `audit_events` row: `entity_type = 'organization_module'`, `action = 'platform_plus_access_changed'`, before/after `{module, status, restriction, trial_ends_at, trial_extension_count, access_ends_at}`, the reason, and actor `auth.uid()`.
+- **Result:** `(organization_id, module, status, restriction, trial_ends_at, trial_extension_count, access_ends_at, effective_state, changed)`.
+
+### `platform_extend_plus_trial(p_organization_id, p_extra_days, p_reason) → platform_organization_module_result`
+- **Who:** Platform Admin only.
+- **Validation:** 1–30 days and a 3–500-char reason (ZW006).
+- **Effect:** valid only while `status = 'trial'` and `trial_extension_count = 0` (else ZW004). Sets `trial_ends_at = greatest(trial_ends_at, now()) + days` and `trial_extension_count` to 1.
+- **Concurrency and audit:** the same row locks and audit event as above.
+
+### `platform_get_organization_module(p_organization_id, p_module) → platform_organization_module_state`
+- **Who:** Platform Admin only.
+- **Returns:** `(organization_id, module, provisioned, status, restriction, trial_started_at, trial_ends_at, trial_extension_count, access_ends_at, effective_state, status_reason, updated_at)`. `provisioned = false` when there is no row.
+- **Errors:** unknown module ZW006; unknown organization ZW002.
+
+### Tests
+- `supabase/tests/plus_entitlement_tests.sql` (rollback-only).
+- `supabase/tests/plus_entitlement_concurrency_test.sh`.
+- `supabase/tests/privilege_contract_tests.sql`.
+

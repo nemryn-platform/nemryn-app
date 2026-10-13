@@ -123,7 +123,9 @@ Each step ships as its own migration with its own privilege-contract update and 
 | `module` | text not null | `check (module in ('plus'))` |
 | `status` | text not null | `trial`, `active`, `expired`, `cancelled`, `disabled` |
 | `restriction` | text | **only when `status = 'disabled'`**: `read_only` or `no_access` (see below); NULL otherwise |
-| `trial_ends_at` | timestamptz | required iff `status = 'trial'` |
+| `trial_started_at` | timestamptz | set when the organization's single trial starts; never cleared (one-trial rule, NP-P1-S1) |
+| `trial_ends_at` | timestamptz | required while `status = 'trial'`; kept as history afterwards |
+| `trial_extension_count` | smallint not null default 0 | 0 or 1 (one extension via `platform_extend_plus_trial`) |
 | `access_ends_at` | timestamptz | optional end of a paid or comped `active` period; NULL = open-ended |
 | `status_reason` | text not null | 3–500 chars; Nemryn-internal |
 | `updated_by` | uuid | `auth.users(id)` |
@@ -131,9 +133,12 @@ Each step ships as its own migration with its own privilege-contract update and 
 
 - **Keys:** `primary key (organization_id, module)`; the row is never deleted.
 - **Checks:**
-  - `(status = 'trial') = (trial_ends_at is not null)`
+  - `(trial_started_at is null) = (trial_ends_at is null)` and `trial_ends_at > trial_started_at`
+  - `status <> 'trial' or trial_ends_at is not null`
   - `(status = 'disabled') = (restriction is not null)`
-  - `status <> 'trial' or access_ends_at is null`
+  - `trial_extension_count between 0 and 1`
+  - `status = 'active' or access_ends_at is null`
+  - (implemented in `supabase/migrations/20261013100000_plus_entitlement_foundation.sql`)
 - **RLS:** enabled, no policy, no grant (privilege-contract class A).
 
 ### Effective state (computed at read time; no scheduler)

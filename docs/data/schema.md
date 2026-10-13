@@ -116,3 +116,20 @@ supabase stop        # stops the local stack
 ```
 
 **Port note:** this project's local Supabase ports are shifted +10 from the CLI's defaults (API 54331, DB 54332, Studio 54333, etc.) because another, unrelated local Supabase project was already running on the default ports on the machine this was built on. See `supabase/config.toml` and `docs/product/product-definition.md` §14 for the underlying environment condition. This has no bearing on any deployed environment — only local dev port selection.
+
+## Nemryn Plus entitlement — `organization_modules` (NP-P1-S1)
+
+**Ownership:** platform-owned. One row per `(organization_id, module)`, `module = 'plus'` only. Separate from `organizations.status` by design (PD-02), and never read by Core.
+
+**Columns:**
+- `status`: `trial | active | expired | cancelled | disabled`.
+- `restriction`: `read_only | no_access`, only while `disabled`.
+- Trial history: `trial_started_at` and `trial_ends_at` (set together; the start is never cleared, which enforces one trial per organization) and `trial_extension_count` (0..1).
+- `access_ends_at`: only while `active`.
+- `status_reason` (3–500, internal), `updated_by`, `created_at`, `updated_at`.
+
+**Integrity and access:**
+- Triggers: `set_updated_at` and `prevent_organization_id_change`.
+- RLS on, no policy, no client or service_role privilege (privilege-contract class A).
+- RPCs: [mutation-api.md](./mutation-api.md#nemryn-plus-entitlement-rpcs-np-p1-s1).
+

@@ -1,0 +1,253 @@
+NEMRYN PLUS -- NP-P1-S1
+ENTITLEMENT FOUNDATION -- LOCAL IMPLEMENTATION REPORT
+Date: 2026-10-13 (UTC). Author: Claude Code (Opus 5.5).
+LOCAL ONLY: S1 implementation not committed, not pushed, not merged, not deployed; no production migration; no
+production data or entitlement change.
+
+=====================================================================================================
+1. STARTING GIT BRANCH AND SHA
+=====================================================================================================
+  Started on      p1-pilot-ux1-header-day-sheet @ 866db09 (clean tracked state; untracked docs / .tmp-qa only)
+  git fetch       origin/main advanced 83506b0 -> 7cac1878d1aeb0795c9528d53ef52668fbafc13e
+                  ("Merge pull request #1 from nemryn-platform/p1-pilot-ux1-header-day-sheet"); 866db09 is an
+                  ancestor; tree of 7cac187 == tree of 866db09. UX1 is integrated into main.
+  New branch      np-p1-s1-plus-entitlement, created from origin/main 7cac187 with --no-track (no upstream, so a
+                  stray push can never target main). The old 83506b0 baseline was not used.
+  Branch HEAD     98ec723 (Plus docs commit, section 3) on top of 7cac187.
+
+=====================================================================================================
+2. PRODUCTION BASELINE VERIFICATION (read-only)
+=====================================================================================================
+  Deployed SHA      VERIFIED -- GitHub deployments API (nemryn account, isolated gh config): latest Production
+                    deployment 7029737803, sha 7cac187, status success (2026-10-13T04:02:59Z). Production = main.
+  Migration head    NOT VERIFIED -- the Supabase CLI is logged into the Chelth account (`supabase projects list`
+                    shows only "chelth-Project"); Nemryn production (wyocbivzgrbekuyqdfts) is not visible. Per
+                    project rule, no workaround credentials were used.
+  Privilege contract (production) NOT VERIFIED -- same reason.
+  Expected production head from source: 20260927120000 (no migration added to main since 83506b0).
+  Local schema baseline (independent): local head 20260927120000 = latest migration on main; committed privilege
+  contract 0 violations / 29 checks BEFORE S1. No contradiction found -> local implementation proceeded.
+  => PRODUCTION RELEASE REMAINS BLOCKED until the owner logs the Supabase CLI into the Nemryn account and the
+     production head + contract are verified.
+
+=====================================================================================================
+3. PLUS DOCUMENTATION COMMIT
+=====================================================================================================
+  The eight canonical Plus files were untracked (not on main). Committed on np-p1-s1-plus-entitlement:
+    98ec723 docs(plus): establish Nemryn Plus product and architecture blueprint (8 files, +2480)
+    docs/product/{plus-product-spec, plus-domain-model, plus-decisions-proposed,
+    NP-P1-S1-entitlement-implementation-brief}.md, docs/security/plus-access-model.md,
+    docs/reports/NP-P0-A01-..., NP-P0-A02-..., NP-P0-A02R-....
+  Secret scan: no keys / tokens / e-mails (one false positive: "task_completed"). Not pushed.
+  The S1 corrections to those docs (section 4) are uncommitted working-tree changes for review.
+
+=====================================================================================================
+4. SPECIFICATION INCONSISTENCIES CORRECTED
+=====================================================================================================
+  A Access-state contract: four states none | write | read_only | locked everywhere --
+    PlusAccessState (src/lib/plus/access-core.ts), getPlusAccessState, requirePlusAccess, Growth page, Platform
+    panel labels, brief section 4.1 / 4.3. Unknown values fail closed to none.
+  B Trial idempotency: E4 now = identical NON-trial update -> changed=false, no audit. Repeated start-trial ->
+    ZW004 (E4b). A consumed trial is never re-granted (E4c): new column trial_started_at is set once and never
+    cleared; any trial start with it set is refused. Regrant = separately approved procedure (not implemented).
+  C trial_extension_count consistent in domain model section 4, brief 3.1, migration, mutation-api.md, tests.
+  D Five functions listed consistently: privilege contract, brief 3.6 + rollback (was "four functions"),
+    mutation-api.md, database-privilege-contract.md.
+  E Decisions: register checked (ZD-205 = UX1). Recorded ZD-206 CONFIRMED only for the owner-approved
+    /operations/growth route (PD-04). PD-02 and PD-17 implemented as working requirements and left PROPOSED.
+  Also: the brief's spec allowed ending a non-existent entitlement; now ZW004 (no read_only row is created for an
+  organization that never had Plus). access_ends_at is constrained to status = active.
+
+=====================================================================================================
+5. DATABASE OBJECTS CREATED -- supabase/migrations/20261013100000_plus_entitlement_foundation.sql
+=====================================================================================================
+  Table public.organization_modules: PK (organization_id, module); module = 'plus'; status trial | active |
+    expired | cancelled | disabled; restriction read_only | no_access (only when disabled); trial_started_at,
+    trial_ends_at (together; history kept); trial_extension_count 0..1; access_ends_at (active only);
+    status_reason 3-500; updated_by; created_at / updated_at. Seven named CHECK constraints. Triggers
+    set_updated_at + prevent_organization_id_change (existing shared functions). RLS enabled, no policy,
+    `revoke all ... from public, anon, authenticated, service_role` (class A).
+  Types: plus_access_state_result, platform_organization_module_result, platform_organization_module_state.
+  No Core table / function / policy / grant created, replaced or altered. No CRM table.
+
+=====================================================================================================
+6. RPCS IMPLEMENTED (all SECURITY DEFINER, search_path = public, pg_temp)
+=====================================================================================================
+  _plus_entitlement_state(uuid)              owner-only (EXECUTE revoked from public/anon/authenticated/service_role)
+  plus_access_state(uuid)                    authenticated; Org Admin only via has_org_role, else 'none' (no oracle)
+  platform_set_organization_module(uuid,text,text,integer,timestamptz,text,text)   authenticated; Platform Admin
+  platform_extend_plus_trial(uuid,integer,text)                                     authenticated; Platform Admin
+  platform_get_organization_module(uuid,text)                                       authenticated; Platform Admin
+  Conventions: _require_platform_admin (ZW002 / ZW001), ZW006 input validation, ZW004 transitions, organization
+  row lock + module row lock, idempotent no-op (changed=false, no audit), one audit_events row per real change
+  (entity_type organization_module, action platform_plus_access_changed, before/after entitlement keys only,
+  reason, actor auth.uid()). platform_list_activity whitelist NOT replaced (owner option; audit rows still written).
+
+=====================================================================================================
+7. PLATFORM ADMIN FUNCTIONALITY
+=====================================================================================================
+  /platform/organizations/[id]: new "Nemryn Plus" section, separate from the suspension "Lifecycle" section, with
+  copy "Separate from suspension: no Plus change affects operations, and nothing is ever deleted".
+  Shows: effective-state badge, stored status, effective access, restriction, trial started / ends, extensions
+  used (n of 1), access ends (or open-ended), last change, last internal reason.
+  Actions (only those valid for the current state; src/lib/plus/entitlement-admin-core.ts): Start trial (blank =
+  14 days, 7-30), Extend trial (once, 1-30), Activate (optional inclusive end date, UTC), Mark expired, Cancel,
+  Disable (read-only), Disable (no access). Every dialog requires a reason (3-500) and states that operations are
+  unaffected. Server action changePlusEntitlementAction re-checks requirePlatformAdminAccess; the database
+  re-checks everything; ZW004 / ZW006 / other mapped to plain messages. Files: actions.ts, page.tsx,
+  src/lib/platform/platform.ts (getPlusEntitlement), src/components/platform/PlusEntitlementControl.tsx.
+  No billing or payment-provider functionality.
+
+=====================================================================================================
+8. GROWTH ROUTE BEHAVIOUR (/operations/growth)
+=====================================================================================================
+  layout.tsx and page.tsx both call requirePlusAccess (deduplicated per request with React cache):
+  requireOrganizationAdminAccess (signed-out -> /sign-in?next=..., Driver -> /driver, Dispatcher -> /operations),
+  then plus_access_state through the per-request cookie client (never service role); none / locked -> /operations.
+  Page: PageHeader "Growth"; write: "Nemryn Plus is enabled for this workspace. Growth tools will appear here." +
+  "Trial ends <date in org timezone> (N days left)." while trialling; read_only: "Nemryn Plus is not active for
+  this workspace." + info notice "Nemryn Plus is not active -- Your records are kept. Operations are not affected."
+  No data, metrics, buttons, teasers or nav item (Growth nav = NP-P1-S2). Renders in the existing Operations shell;
+  AppHeader / OperationsLayoutClient / OperationsSidebar untouched (header context label falls back to
+  "Operations", as specified).
+
+=====================================================================================================
+9. ENTITLEMENT STATE BEHAVIOUR
+=====================================================================================================
+  write      running trial; active without end or before access_ends_at
+  read_only  elapsed trial; elapsed access_ends_at; expired; cancelled; disabled + read_only
+  locked     disabled + no_access (Org Admin sees 'locked' via plus_access_state; Growth redirects)
+  none       no row; and for every non-Org-Admin caller in every state
+  Computed at read time (no scheduler). organizations.status suspension overrides (has_org_role).
+  No Core function reads organization_modules -> no Plus state affects Core (proven by E18 and E2E).
+
+=====================================================================================================
+10. SECURITY AND TENANT-ISOLATION EVIDENCE
+=====================================================================================================
+  E1  anon / authenticated (admin and platform admin) / service_role: SELECT, INSERT, UPDATE, DELETE on
+      organization_modules -> 42501 (16 cases)
+  E2  Org Admin, Dispatcher, Driver, no-membership -> ZW002 on all 3 platform RPCs; no uid -> ZW001; anon and
+      service_role -> no EXECUTE (21 cases); no row created by any refused call
+  E9/E11  Dispatcher, Driver, inactive dispatcher, inactive admin, Org B admin about Org A, no-membership user,
+      Platform Admin without membership -> 'none'; multi-org user: write in A, none in B
+  E10/E13 suspended organization -> 'none' for its admin; suspension never changes organization_modules;
+      entitlement changes never change organizations.status
+  E7a locked -> 'locked' for the Org Admin, 'none' for everyone else; Growth route redirects (E2E E3)
+  E14 _plus_entitlement_state not executable by anon / authenticated / service_role
+  T   audit rows contain only entitlement keys (no tenant content); table has no client grant
+  Privilege contract: 0 / 29 locally after S1. platform_admin EX-1/EX-2 pass with the new functions.
+  Browser: Org A admin gets 404 on /platform/*; no Plus panel for tenants; Dispatcher / Driver / Org B / signed-out
+  never reach Growth.
+
+=====================================================================================================
+11. TESTS RUN (actual counts; all local)
+=====================================================================================================
+  TypeScript `npx tsc --noEmit`                                   PASS (exit 0)
+  ESLint `npx eslint src`                                         PASS (0 problems)
+  Unit `npm test`                                                 749 / 749 PASS (732 before + 17 new)
+  Production build `npx next build`                               PASS (/operations/growth built)
+  SQL supabase/tests/plus_entitlement_tests.sql (rollback-only)   150 / 150 PASS -- on the local dev DB AND on an
+                                                                  isolated restored copy; dev DB verified unchanged
+  Concurrency plus_entitlement_concurrency_test.sh                5 / 5 PASS (dev DB and isolated copy)
+  Privilege contract                                              0 / 29 violations (before and after S1)
+  Browser E2E .tmp-qa/np-p1-s1-plus-entitlement-e2e.mjs           45 / 45 PASS (after one test-expectation fix:
+                                                                  F6 expected a redirect, the platform guard
+                                                                  answers tenants with a 404 by design)
+  UX1 browser E2E regression                                      46 / 46 PASS
+  Types regenerated: `supabase gen types typescript --local` (repo workflow) -> +138 lines, 0 removed.
+  Not run / limitations:
+    - Fresh `supabase db reset` (brief acceptance 6.1): NOT RUN, by instruction (no reset of the existing local
+      DB). The migration was applied cleanly twice on top of head 20260927120000 (dev DB via `supabase migration
+      up --local`; isolated copy via psql).
+    - Production verification: see section 2.
+    - Two harness-level browser attempts failed before any check ran (headless Chrome start timeout at machine
+      load 13-25); counted as not run, then re-run.
+
+=====================================================================================================
+12. EXISTING CORE REGRESSION RESULTS
+=====================================================================================================
+  E18 (in the S1 suite): request log -> passenger link -> accept -> create_trip -> assign_trip, as Dispatcher and as
+  Admin, under Plus none / trial / active / expired / read_only / locked: 12 / 12 OK.
+  Browser: Overview, Requests, Dispatch, Trips open normally under trial, expired and locked (E2E 12 checks).
+  Existing SQL suites -- controlled A/B: the pre-S1 backup restored into two throwaway databases, S1 applied to
+  one only, the same 10 suites run on both, twice:
+    platform_admin_foundation, rls_adversarial, security_definer_exposure, function_privilege,
+    request_decision_workflow, create_trip, public_request_intake, request_mutation, create_trip_privilege,
+    mutation_authorization.
+  Result: identical PASS/FAIL on every line except platform_admin EX-1, whose hard-coded inventory ("exactly 7
+  platform_* functions") S1 legitimately changes; updated to 10 with a comment. After the fix EX-1..EX-4 PASS on
+  the S1 copy. The remaining failures (e.g. request_decision 21, request_mutation 9, create_trip 2,
+  public_request_intake 1, rls_adversarial 1, mutation_authorization 1) occur IDENTICALLY on the pre-S1 baseline:
+  pre-existing local-state / fixture-hygiene issues (duplicate fixture keys, accumulated rows from earlier runs),
+  not S1 regressions. They require a fresh reset to evaluate cleanly (not done; see 11).
+  Note: the first, pre-A/B run of these suites on the dev DB committed their usual fixtures there (existing suite
+  behaviour). A pg_dump of the dev DB taken before S1 is in this session's scratchpad (nemryn-pre-s1.dump).
+
+=====================================================================================================
+13. CHANGED-FILE INVENTORY (S1 working tree, uncommitted)
+=====================================================================================================
+  New:
+    supabase/migrations/20261013100000_plus_entitlement_foundation.sql
+    supabase/tests/plus_entitlement_tests.sql
+    supabase/tests/plus_entitlement_concurrency_test.sh
+    src/lib/plus/access.ts, access-core.ts, access-core.test.mjs
+    src/lib/plus/entitlement-admin-core.ts, entitlement-admin-core.test.mjs
+    src/app/operations/growth/layout.tsx, page.tsx
+    src/components/platform/PlusEntitlementControl.tsx
+    docs/reports/NP-P1-S1-plus-entitlement-implementation.txt (this report)
+  Modified:
+    src/app/platform/organizations/[organizationId]/actions.ts   (+ changePlusEntitlementAction)
+    src/app/platform/organizations/[organizationId]/page.tsx     (+ Nemryn Plus section)
+    src/lib/platform/platform.ts                                 (+ getPlusEntitlement)
+    src/lib/supabase/database.types.ts                           (regenerated, additive)
+    supabase/tests/privilege_contract_tests.sql                  (+ table, + 5 functions)
+    supabase/tests/platform_admin_foundation_tests.sql           (EX-1 inventory 7 -> 10)
+    docs/data/mutation-api.md, docs/data/schema.md, docs/security/database-privilege-contract.md
+    docs/product/decision-register.md (ZD-206), plus-decisions-proposed.md, plus-domain-model.md,
+    NP-P1-S1-entitlement-implementation-brief.md
+  Local QA (untracked, not for commit): .tmp-qa/np-p1-s1-plus-entitlement-e2e.mjs
+  Untouched: AppHeader.tsx, OperationsLayoutClient.tsx, OperationsSidebar.tsx, all Core migrations, Core RPCs, RLS
+  helpers, public intake / public forms, organizations.status logic, package files.
+
+=====================================================================================================
+14. OUTSTANDING DEFECTS AND RISKS
+=====================================================================================================
+  - No known S1 defect.
+  - R1 Production head / contract unverified (CLI account). Blocks release, not review.
+  - R2 Pre-existing local SQL-suite failures mask a clean regression signal; a fresh-reset run (or an isolated
+    reset stack) is recommended before release review sign-off.
+  - R3 The local dev DB now carries migration 20261013100000 (additive). If S1 is rejected: drop the five
+    functions, three types and the table, and delete the schema_migrations row (or restore the backup).
+  - R4 Generated Args types are non-nullable for p_trial_days / p_access_ends_at / p_restriction; the action casts
+    NULLs, following the existing repository convention (trips/[tripId]/actions.ts).
+  - R5 Platform activity feed does not list Plus changes (whitelist not replaced; owner option).
+  - R6 Growth header label shows "Operations" until NP-P1-S2.
+
+=====================================================================================================
+15. FORMAL DECISIONS STILL REQUIRING OWNER APPROVAL
+=====================================================================================================
+  PD-02 revised entitlement states (incl. restriction / locked) -- implemented as working requirement
+  PD-17 trial 14 days default, 7-30, one extension <= 30 days, ONE trial per organization (no regrant) --
+        implemented as working requirement; regrant procedure undefined
+  Optional: add platform_plus_access_changed to platform_list_activity (replaces an existing function body)
+  Still gating real customer data / beta: PD-10 (HIPAA / BAA), PD-11 (retention)
+  Release gate: Supabase CLI login with the Nemryn account for production verification
+
+=====================================================================================================
+16. READY FOR A CONTROLLED IMPLEMENTATION COMMIT?
+=====================================================================================================
+  YES, for review. Suggested scoped commit on np-p1-s1-plus-entitlement (explicit paths, section 13 minus
+  .tmp-qa), e.g. "feat(plus): add Nemryn Plus entitlement foundation (NP-P1-S1)". Not committed by instruction.
+  Not release-ready until: production head + contract verified (R1), PD-02 / PD-17 approved, and ideally a
+  fresh-reset regression run (R2).
+
+=====================================================================================================
+17. NEXT RECOMMENDED MILESTONE
+=====================================================================================================
+  After S1 review + commit + release: NP-P1-S2 -- Plus access helpers (plus_can_read / plus_can_write /
+  _require_plus_write / _require_plus_admin_write), the Growth sidebar group, read-only / locked / trial notices
+  and the Settings "Nemryn Plus" card (touches OperationsLayoutClient / OperationsSidebar; UX1 is now on main).
+  Not started.
+
+FINAL: STOP -- awaiting review. No push, merge, deploy, production migration, production data or entitlement grant.
+END OF REPORT -- NP-P1-S1
