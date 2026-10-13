@@ -1,7 +1,7 @@
 # Zenward Platform — UI/Backend Gap Register
 
 **Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S0A — Controlled Internal Trip Creation Boundary (GAP-1 and GAP-2 resolved), P1-E3-S8B1 (GAP-12 through GAP-15 found), P1-E3-S9 (GAP-12 through GAP-15 resolved, GAP-16 found)
-**Status:** GAP-1/GAP-2/GAP-12/GAP-13/GAP-14/GAP-15 all resolved with real migrations, RPCs, and tests — see the respective phase reports. GAP-16 is a deliberate, documented deferral.
+**Status:** GAP-1/GAP-2/GAP-12/GAP-13/GAP-14/GAP-15 all resolved with real migrations, RPCs, and tests — see the respective phase reports. GAP-9 (Export Day Sheet) resolved in P1-PILOT-UX1 (ZD-205), application-only. GAP-16 is a deliberate, documented deferral.
 **Last updated:** 2026-09-03
 
 Every UI requirement from the 7 Stitch references that the current backend does not support, classified `BLOCKS P1-E3-S1` / `BLOCKS SPECIFIC SCREEN` / `DEFERRED` / `OPTIONAL`. Only gaps actually found by the reference analysis in [ui-data-action-map.md](./ui-data-action-map.md) are listed — nothing speculative.
@@ -104,12 +104,18 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Recommendation:** Do not build speculatively; revisit if real usage shows the client-side aggregation is a performance problem.
 - **Resolution (Today's Operations, P1-E3-S4):** Confirmed as recommended — `getTodaysOperations()` (`src/lib/operations/todays-operations.ts`) derives every summary count server-side from the same three real queries the panels below already need. No aggregate RPC was built.
 
-### GAP-9 — "Export Day Sheet"
+### GAP-9 — "Export Day Sheet" — **RESOLVED (P1-PILOT-UX1)**
 
 - **Finding:** No backend export/report-generation capability exists in any phase to date.
 - **Severity:** Low — a single button on one screen, not core trip-management functionality.
 - **Recommendation:** Scope as its own small feature when prioritized; not designed here.
 - **Resolution (Today's Operations, P1-E3-S4):** The button is rendered, real, and `disabled` — not hidden, not a fake working control. Still fully open as a future feature.
+- **Resolution (P1-PILOT-UX1, ZD-205):** Implemented without a database change.
+  - The header's Export Day Sheet menu (Overview = today; Dispatch = the selected Today / Tomorrow) opens a printable Day Sheet (`/day-sheet`, browser Print → Save as PDF) or downloads a CSV (`/day-sheet/csv`).
+  - Both reuse the Dispatch loader (`getDispatchBoardData`) for the caller's current organization and organization-local day, with the caller's own RLS-bound session.
+  - Access is limited to Organization Admin and Dispatcher (`requireOperationsAccess`).
+  - Columns are minimized (no phones, emails, notes or ids), and CSV formula-injection is neutralized.
+- **Blocks:** Nothing — closed.
 
 ### GAP-11 — No Trip duration / expected-dropoff field — found P1-E3-S5
 

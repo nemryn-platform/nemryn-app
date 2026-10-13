@@ -1,0 +1,197 @@
+NEMRYN PLATFORM
+P1-PILOT-UX1 -- HEADER ACTIONS + DAY SHEET COMPLETION -- LOCAL IMPLEMENTATION
+Date: 2026-09-28. LOCAL ONLY: not committed, not pushed, not deployed. No database migration.
+
+======================================================================
+1. STARTING STATE / R3 CLOSEOUT
+======================================================================
+  - R3 production-release record: already committed and pushed in the previous phase as
+    0b3568f231cd4e44dff03966c923af7b897591e1 "docs(pilot): record R3 production release" (docs only); re-verified
+    accurate (production deployment 6700135980 = 2f8b9a9; head 20260927120000).
+  - The owner has since pushed 83506b02ff23e68548e96f6bf3d7175510215e08 "assets: add Nemryn email banner" (one PNG).
+    UX1 starts from origin/main = 83506b0. Production application code = R3 (2f8b9a9) + that asset.
+  - Note: the first-day pilot simulation (P1-PILOT-S1) was already run before this phase
+    (docs/reports/p1-pilot-s1-first-day-simulation.txt, uncommitted).
+
+======================================================================
+2. CURRENT-CONTROL AUDIT (before any change)
+======================================================================
+  All in the Operations header, rendered by src/components/operations/AppHeader.tsx (every Operations page) and
+  src/components/operations/OperationsLayoutClient.tsx (route-specific header actions):
+  | Control              | Where                          | State before UX1                                            |
+  | Notifications bell   | AppHeader, every page          | ENABLED IconButton with NO onClick -- visibly active, dead  |
+  | Help (?)             | AppHeader, every page          | ENABLED IconButton with NO onClick -- visibly active, dead  |
+  | Export Day Sheet     | Overview header (NOT Dispatch) | disabled, title "Export is not available yet (GAP-9)"       |
+  | Search box           | Overview + Dispatch headers    | disabled, title "Search is not wired up yet."               |
+  | Dispatch Settings    | Dispatch header                | disabled, title "Dispatch Settings has no defined behavior" |
+  Notification system (read, not changed):
+    - notification_events (event_type, entity_type, entity_id, status, recipient / sent / failed counts, timestamps);
+      authenticated has NO SELECT on it (privilege contract). No read_at / seen_at / unread column exists.
+    - Events: website_request ("New website request"), trip_exception ("Trip exception") -- notification-core.ts.
+    - The only authorized read path: RPC list_notification_history(p_organization_id, p_limit) -- SECURITY DEFINER,
+      Organization Admin ONLY, returns created_at, event_type, status, recipient_count, sent_count (NO entity id).
+      Loader getNotificationHistory (notifications.ts); shown on Settings -> Notifications (Admin-only page).
+  Support destination audit: no approved GENERAL support address / URL in the repository or .env.example.
+    SETUP_HELP_EMAIL exists but is scoped to "Website Requests setup help" (buildSetupHelpMailto) and is blank in
+    .env.example; it is NOT repurposed.
+  Dispatch data model: getDispatchBoardData(org, tz, day) (dispatch-board.ts) -- org-local day bounds (Tomorrow composed
+    on today's end, DST-safe), RLS-scoped, non-terminal trips with a pickup in the day, already carrying passenger,
+    pickup, destination, appointment, driver, vehicle, status label and requiresWheelchairAccess.
+
+======================================================================
+3. GENERAL RULE APPLIED (no dead controls)
+======================================================================
+  Bell: WORKS (Admins) / REMOVED (Dispatchers -- no authorized data source without a database change).
+  Help: WORKS (Admin + Dispatcher, role-aware).
+  Export Day Sheet: WORKS on Overview (today) and Dispatch (the selected Today / Tomorrow).
+  Search box (Overview + Dispatch): REMOVED -- search does not exist and building it is a new feature (out of scope).
+  Dispatch Settings: REMOVED -- no defined behavior.
+  No "coming soon", disabled or inert control remains in the Operations header.
+
+======================================================================
+4. NOTIFICATIONS BELL
+======================================================================
+  Component: src/components/operations/header/NotificationsBell.tsx; data: server action
+  loadRecentNotificationsAction (src/app/operations/notifications-actions.ts) -> requireOperationsAccess -> Admin only
+  -> getNotificationHistory (the EXISTING RPC; up to 10 rows).
+  Popover "Notifications": per row the event label (New website request / Trip exception), the org-local time (same
+    formatter as Settings -> Notifications) and the existing delivery status badge (Sent / Partly sent / Not delivered /
+    No recipients / Sending). Footer: "View notification history" -> /operations/settings/notifications.
+  Entity links: NOT added -- the authorized history carries no entity id; nothing is invented.
+  Unread: NO unread model exists -> no badge, no count, no read styling.
+  States: Loading… (non-blocking, fetched on open) / "No recent notifications." / "Notifications couldn't be loaded."
+    (the action returns failure as data; the shell never fails).
+  Accessibility: IconButton label "Notifications", tooltip "Notifications", aria-haspopup / expanded / controls;
+    Escape closes and returns focus; outside click closes.
+  Dispatchers: the bell is not rendered. Owner option (NOT done -- needs a migration): extend list_notification_history
+    to Dispatchers and return entity ids so rows could link to Request / Trip Detail.
+
+======================================================================
+5. HELP & SUPPORT
+======================================================================
+  Component: src/components/operations/header/HelpMenu.tsx; content: src/lib/operations/header-help-core.ts (pure).
+  Popover "Help & support" (label "Help", tooltip "Help & support"), quick paths with one-line descriptions:
+    all operations roles: Requests, Prepare tomorrow, Dispatch, Recurring care;
+    Organization Admin only: Website requests, Team, Notifications (routes guarded by requireOrganizationAdminAccess).
+  Drivers never see the Operations header. No support contact (section 2). No articles, no AI text.
+  Keyboard: button (Enter / Space), Escape closes + focus returns, outside click closes.
+
+======================================================================
+6. DAY SHEET
+======================================================================
+  Architecture:
+    - pure core src/lib/operations/day-sheet-core.ts: rows, sorting (pickup ascending, pickup-less last, ties by
+      passenger), RFC 4180 CSV, filename, day parsing;
+    - server src/lib/operations/day-sheet.ts getDaySheet(org, day): calls getDispatchBoardData(org, tz, day) -- the
+      SAME day bounds and working set as the Dispatch screen, no second scheduling interpretation, no extra query;
+      header facts (organization, full local date, timezone, generated timestamp) formatted in the org timezone.
+  Scope: exactly what Dispatch shows for that day (non-terminal trips with a pickup in the org-local day). Completed,
+    cancelled and no-show trips are excluded, as on Dispatch.
+  Entry: header "Export Day Sheet" -> small menu ("Today's / Tomorrow's Day Sheet": Print / Save PDF, Download CSV).
+    Overview exports today; Dispatch exports the selected day (?day=tomorrow -> Tomorrow; never silently Today).
+  Columns (only): Pickup time, Appointment (when present), Passenger, Pickup, Destination, Driver ("Unassigned" when
+    none), Vehicle, Status, Wheelchair equipment (Yes / No / blank -- already carried by the Dispatch data).
+  NOT exported: phones, emails, requester data, assistance notes, instructions, notes, recovery notes, audit data,
+    exception details, readiness reasons, notification data, ids, tokens.
+  Print / PDF: authenticated route /day-sheet?day=today|tomorrow (src/app/day-sheet/page.tsx), OUTSIDE /operations so
+    it has no sidebar / navigation; a screen-only toolbar (print:hidden) with Back to Dispatch, Download CSV and
+    "Print / Save PDF" (window.print). Clean table; thead repeats on every printed page (table-header-group); rows
+    break-inside-avoid; confidentiality line. No PDF dependency: the browser's Print -> Save as PDF.
+  CSV: /day-sheet/csv?day=... (route handler): UTF-8 BOM, CRLF, header facts + column row + one row per trip;
+    Content-Disposition attachment "<safe-org-name>-day-sheet-YYYY-MM-DD.csv"; Cache-Control private, no-store;
+    X-Robots-Tag noindex.
+  Zero-trip day: the control stays active; print view "No trips scheduled for this day."; CSV has headers only.
+
+======================================================================
+7. AUTHORIZATION
+======================================================================
+  /day-sheet and /day-sheet/csv call requireOperationsAccess: signed-out -> /sign-in?next=...; Drivers -> /driver;
+  no membership -> the existing continuation. Data is the caller's current organization only, read with the caller's
+  own RLS-bound session (no service role). No public URL, no token in the file. The bell's action re-checks access and
+  the Admin role; the RPC re-checks Admin in the database.
+
+======================================================================
+8. RESPONSIVE
+======================================================================
+  Bell / Help popovers: w-80 capped at viewport - 1.5 rem, anchored right; Export menu w-60 likewise. Verified inside the
+  viewport with no page overflow at 1440, 768 and 390 px. The Day Sheet print view is desktop / print oriented; CSV works
+  at any size.
+
+======================================================================
+9. TESTS / GATE
+======================================================================
+  Unit: src/lib/operations/day-sheet-core.test.mjs (9): rows + org-local times + appointment / unassigned / wheelchair;
+    sorting incl. pickup-less last; timezone; CSV escaping; CSV document + zero-trip; data minimization; filename + day
+    parsing; Help role-aware links + no invented support contact; bell role rule.
+  Browser E2E (.tmp-qa/p1-pilot-ux1-header-day-sheet-e2e.mjs, local): 46 / 46 PASS on the first run, cleanup verified:
+    bell (Admin) opens, existing history with label / time / status, no unread badge, no private data, footer link,
+    Escape + focus return, outside click; Help tooltip / label, 7 Admin links all resolve; Export menu Today on
+    Overview, Tomorrow on Dispatch?day=tomorrow; Search + Dispatch Settings gone; CSV headers / filename / no-store,
+    tomorrow-only rows sorted, assigned / unassigned / appointment / wheelchair, escaping, no phone / notes / ids,
+    Today CSV = today only; print view facts, no sidebar, sorting, screen-only toolbar, repeating header + unbroken
+    rows; Dispatcher: no bell, 4 Help links, can export; Org B: own data only, zero-trip message; Driver: /day-sheet ->
+    /driver, CSV refused; signed-out -> sign-in; popovers inside the viewport at 768 / 390 px.
+  Regressions (sequential, local, expectations unchanged): PROG3B 51 / 51 (NY 18:03), PROG4B 45 / 45, PROG5B 74 / 74,
+    R2C E2E 47 / 47 on an unchanged, isolated rerun. Two earlier attempts stalled inside a page navigation that never
+    returned (Node exit 13 / no progress for 20+ min, after 1 and 2 checks -- different pages). At that time the
+    machine carried an unrelated workload from another project (Monatriq Supabase stack + a long-running Monatriq
+    eslint + another Claude session): load average 46, 8.3 GB swap in use. Each stalled run's fixtures (its finally never
+    ran) were removed by label in one transaction (0 leftovers) before the next attempt. The third run, under a progress
+    watchdog (load ~14-18), passed 47 / 47 -- the stalls are proven environmental, not a UX1 regression.
+  TypeScript PASS; lint 0 errors (107 warnings, all in untracked .tmp-qa; 0 in src); unit 731 / 731 (722 -> 731); build
+  PASS; local privilege contract 0 violations / 29 checks (no migration).
+
+======================================================================
+10. FILES
+======================================================================
+  Modified: src/components/operations/AppHeader.tsx, src/components/operations/OperationsLayoutClient.tsx
+    (2 files, +26 / -40: dead Search / Dispatch Settings / inert bell + help / disabled export removed; real controls
+    wired).
+  Created: src/app/day-sheet/page.tsx, src/app/day-sheet/csv/route.ts, src/app/operations/notifications-actions.ts,
+    src/components/operations/header/{useHeaderPopover.ts, NotificationsBell.tsx, HelpMenu.tsx, ExportDaySheetMenu.tsx},
+    src/components/operations/day-sheet/DaySheetPrintToolbar.tsx, src/lib/operations/{day-sheet-core.ts, day-sheet.ts,
+    header-help-core.ts, day-sheet-core.test.mjs}, this report.
+    (local QA only, untracked: .tmp-qa/p1-pilot-ux1-header-day-sheet-e2e.mjs)
+  Database: none.
+
+======================================================================
+11. PRODUCTION
+======================================================================
+  Untouched: no push of UX1, no deploy, no database change, no pilot / simulation data mutated.
+
+======================================================================
+12. OPEN ISSUES
+======================================================================
+  1. Dispatchers have no bell (the notification history is Admin-only in the database). Owner decision: keep, or a
+     small reviewed migration extending list_notification_history to Dispatchers (+ entity ids for links).
+  2. No general support contact exists; Help omits it until an approved destination is provided.
+  3. Header Search was removed, not built; a real search is a separate feature decision.
+  4. Local test environment: heavy concurrent workload from another project can stall headless-Chrome navigations; long
+     browser suites should run when the machine is otherwise idle.
+  5. Local-only server log line "Refusing to build an application link from a loopback origin (http://localhost:3000)
+     in production": the existing production guard when NEXT_PUBLIC_APP_URL is localhost while `next start` serves
+     :3100. Pre-existing; not triggered by UX1 code; no production impact.
+
+======================================================================
+13. EXACT PRODUCTION-RELEASE BOUNDARY
+======================================================================
+  One commit on top of 83506b0: the 2 modified + 11 created src files in section 10 and this report. Excluded:
+  .tmp-qa, logs, scratch, credentials. No migration -> no db push; release = push main -> Vercel -> verify SHA ->
+  read-only check in the synthetic "Nemryn Pilot Simulation" tenant (bell as Admin, Help as Admin / Dispatcher, Day
+  Sheet print + CSV for Today / Tomorrow). Rollback: revert the commit (no data or schema to undo).
+
+P1-PILOT-UX1 LOCAL IMPLEMENTATION: PASS
+
+NOTIFICATIONS BELL: FUNCTIONAL
+
+HELP CONTROL: FUNCTIONAL
+
+EXPORT DAY SHEET: FUNCTIONAL
+
+DATABASE MIGRATION: NONE
+
+PRODUCTION TOUCHED: NO
+
+READY FOR UX1 PRODUCTION RELEASE REVIEW: YES
+
+READY TO RESUME FIRST-DAY PILOT SIMULATION: YES
