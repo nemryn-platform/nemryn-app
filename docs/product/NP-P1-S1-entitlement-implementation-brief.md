@@ -1,6 +1,6 @@
 # NP-P1-S1 — Nemryn Plus Entitlement Gate: Implementation Brief
 
-**Status:** READY FOR REVIEW (refined in NP-P0-A02R) — **do not start** until the §1 preconditions are met and the owner approves PD-02 (revised states) and PD-17 (trial duration). PD-04 (`/operations/growth`) is owner-approved. PD-03 needs no change for S1, which is Admin-only.
+**Status:** IMPLEMENTED (NP-P1-S1, commit 7c25f55; PR #2). Decisions: PD-04 → ZD-206, PD-02 → ZD-207 and PD-17 → ZD-208, all owner-approved. PD-03 needs no change for S1, which is Admin-only. *(Originally: do not start until the §1 preconditions are met and the owner approves PD-02 and PD-17.)*
 **Prepared in:** NP-P0-A02 (2026-10-13) · **Baseline:** `origin/main` = `83506b02ff23e68548e96f6bf3d7175510215e08`; production migration head `20260927120000` (per the R3 release report; re-verify read-only before starting).
 **Design references:** [plus-domain-model.md](./plus-domain-model.md) §3 · [../security/plus-access-model.md](../security/plus-access-model.md) §3, §8 · [plus-decisions-proposed.md](./plus-decisions-proposed.md) PD-02/03/04
 
@@ -273,6 +273,6 @@ Two sessions change Org A's Plus at once (after the `platform_lifecycle_concurre
 | Building on the dirty UX1 tree | §1 reconciliation is mandatory |
 | A helper accidentally used by Core later | Code review rule + an S2 test asserting no Core function body references `organization_modules` / `plus_` |
 | Platform Admin confuses Suspend with Plus disable | Separate panel, separate copy, separate audit action |
-| Trial length wrong for sales (14-day default, 7–30, one +30 extension) | Owner confirms PD-17 before implementation |
+| Trial length wrong for sales (14-day default, 7–30, one +30 extension) | Confirmed by the owner as ZD-208 (was PD-17) |
 | Security disable (`no_access`) mistaken for suspension | Separate control and audit action; tests E7a/E18 prove Core keeps working |
 | `database.types.ts` drift | Regenerate it in the same commit; type check in acceptance |

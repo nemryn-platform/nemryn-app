@@ -2524,6 +2524,47 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A growth-only membership role (PD-18), which requires a path-aware Operations guard
 
+### ZD-207 — Nemryn Plus entitlement is platform-controlled and separate from Core
+
+- **Date:** 2026-10-13
+- **Category:** Architecture / Commercial
+- **Decision:** The Nemryn Plus entitlement (`organization_modules`, module `plus`) is controlled by the Nemryn Platform Admin only.
+  - **Stored statuses:** `trial`, `active`, `expired`, `cancelled`, `disabled`; `disabled` carries a restriction, `read_only` or `no_access`.
+  - **Effective states**, computed at read time:
+
+    | Effective state | When |
+    |---|---|
+    | `write` | a running trial, or an active period |
+    | `read_only` | an elapsed trial or period, `expired`, `cancelled`, or `disabled` + `read_only`. The Organization Admin keeps history read / export, and all Plus writes stop |
+    | `locked` | `disabled` + `no_access`: no tenant read; data retained |
+    | `none` | no entitlement row |
+
+  - It is separate from `organizations.status`, and no Core function reads it. **A Plus subscription change can never suspend or alter Nemryn Core.** Organization suspension still overrides Plus.
+  - Organization Admins (and every other tenant role) cannot grant, extend, activate, expire or disable their own Plus entitlement. Those functions are Platform-Admin-only (ZW002 for anyone else).
+- **Status:** CONFIRMED (owner approval recorded in NP-P1-S1-R2B; was PD-02 in `plus-decisions-proposed.md`)
+- **Reason:** Re-using `organizations.status` would stop operations when Plus lapses. A security restriction needs a stronger state than read-only.
+- **Affected Product Areas:** `supabase/migrations/20261013100000_plus_entitlement_foundation.sql`, `src/lib/plus/*`, `/operations/growth`, Platform Admin organization page
+- **Dependencies:** ZD-206
+- **Owner:** Product
+- **Review Trigger:** Billing-provider integration (NP-P5); named-staff Plus grants (NP-P1-S3)
+
+### ZD-208 — Nemryn Plus trial rules
+
+- **Date:** 2026-10-13
+- **Category:** Commercial
+- **Decision:**
+  - The default Plus trial is **14 days**. The Platform Admin may choose an initial duration of **7–30 days**.
+  - A trial may be **extended once**, by **up to 30 days**.
+  - There is **one trial per organization**: `trial_started_at` is never cleared, so a running trial cannot be restarted and a consumed trial is never granted again automatically. Any future regrant needs its own separately approved procedure.
+  - When a trial ends, the effective state becomes `read_only` (computed; never `locked`). Core is unaffected.
+  - Every meaningful entitlement change (trial start, extension, activation, expiry, cancellation, disable) requires a reason and writes one `platform_plus_access_changed` audit event. Identical no-op requests write nothing.
+- **Status:** CONFIRMED (owner approval recorded in NP-P1-S1-R2B; was PD-17 in `plus-decisions-proposed.md`)
+- **Reason:** A predictable evaluation period without silently repeatable trials; every change is auditable.
+- **Affected Product Areas:** `platform_set_organization_module`, `platform_extend_plus_trial`, Platform Admin Nemryn Plus panel
+- **Dependencies:** ZD-207
+- **Owner:** Product
+- **Review Trigger:** A commercial request for trial regrants; billing-provider integration
+
 No decisions have been REJECTED as of this update. ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

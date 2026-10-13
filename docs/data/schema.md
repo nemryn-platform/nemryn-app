@@ -119,7 +119,7 @@ supabase stop        # stops the local stack
 
 ## Nemryn Plus entitlement — `organization_modules` (NP-P1-S1)
 
-**Ownership:** platform-owned. One row per `(organization_id, module)`, `module = 'plus'` only. Separate from `organizations.status` by design (PD-02), and never read by Core.
+**Ownership:** platform-owned. One row per `(organization_id, module)`, `module = 'plus'` only. Separate from `organizations.status` by design (ZD-207, was PD-02), and never read by Core.
 
 **Columns:**
 - `status`: `trial | active | expired | cancelled | disabled`.

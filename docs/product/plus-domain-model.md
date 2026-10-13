@@ -155,7 +155,7 @@ Each step ships as its own migration with its own privilege-contract update and 
 | `disabled` + `restriction = 'no_access'` | **locked** | security or abuse restriction: no tenant user can read Plus data. Data is retained and nothing is deleted |
 | no row | **none** | Core only |
 
-- **Trial duration:** platform default **14 days** (`PLUS_TRIAL_DEFAULT_DAYS`, a constant in the platform RPC). A Platform Admin may set 7–30 days at grant time, or extend a running trial once by up to 30 days. Every change is audited with a reason (PD-17).
+- **Trial duration:** platform default **14 days** (`PLUS_TRIAL_DEFAULT_DAYS`, a constant in the platform RPC). A Platform Admin may set 7–30 days at grant time, or extend a running trial once by up to 30 days. Every change is audited with a reason (ZD-208, was PD-17).
 - **Core independence:** no Core function reads `organization_modules`. No effective state, `locked` included, can affect Requests, dispatch, Trips, Drivers, Recurring Care or Proof of Service. `organizations.status` (suspension) still overrides Plus, because every Plus helper builds on `has_org_role`.
 - **Side effects of a non-`write` state** (computed, never stored):
   - published Plus inquiry forms stop accepting submissions (§13);

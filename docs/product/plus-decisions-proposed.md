@@ -2,7 +2,7 @@
 
 **Work item:** NP-P0-A02 · **Date:** 2026-10-13
 **Revised:** NP-P0-A02R (2026-10-13). PD-02, PD-03, PD-04, PD-08 and PD-12 were changed; PD-16 to PD-20 were added.
-**Status of every entry:** PROPOSED unless marked OWNER-APPROVED. These are **not** in [decision-register.md](./decision-register.md), and ZD-numbers have not been assigned (the register ends at ZD-204).
+**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B). All others have no ZD number yet.
 On approval, each accepted entry is copied into the register as the next ZD number, with `Status: CONFIRMED`.
 
 Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in the NP-P0-A02 brief. They still need formal recording.
@@ -32,9 +32,9 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
   | no row | `none` |
 
   Only Platform Admin RPCs write it. No Core function references it, so **no Plus state can affect Core operations**.
-- **Status:** PROPOSED (OWNER-APPROVED DIRECTION; A02R adds `restriction` / `locked`)
+- **Status:** **OWNER-APPROVED — RECORDED AS ZD-207** (NP-P1-S1-R2B, 2026-10-13). History: PROPOSED (owner-approved direction; A02R added `restriction` / `locked`).
 - **Changed from A02:** A02 treated `disabled` as read-only only. A02R adds the stronger `no_access` restriction for security cases.
-- **NP-P1-S1:** implemented locally as a working requirement (migration `20261013100000`). Still PROPOSED: it needs formal owner approval before it becomes a ZD entry.
+- **NP-P1-S1:** implemented as a working requirement (migration `20261013100000`), then formally approved by the owner (NP-P1-S1-R2B), including: Platform Admin controls Plus, the four effective states, no Plus change can suspend Core, and Organization Admins cannot grant or extend their own Plus.
 - **Review trigger:** Billing provider integration (NP-P5)
 
 ### PD-03 — Plus access: Admin-only for technical testing, named-staff grants before beta *(revised A02R)*
@@ -164,7 +164,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
 
 - **Category:** Commercial
 - **Decision:** default trial **14 days** (platform constant). A Platform Admin may choose 7–30 days at grant time and extend a running trial up to 30 additional days, with a required reason and an audit event. At the end the state becomes `read_only` automatically (computed), never `locked`. Core is unaffected.
-- **Status:** PROPOSED — owner to confirm 14 / 7–30 / +30 (replaces the A02 90-day cap). **NP-P1-S1** implements it as a working requirement (no ZD entry yet), and adds the one-trial rule: `trial_started_at` is never cleared, so a running trial is never restarted and a consumed trial is never re-granted; a regrant needs a separately approved procedure.
+- **Status:** **OWNER-APPROVED — RECORDED AS ZD-208** (NP-P1-S1-R2B, 2026-10-13): 14-day default, 7–30 initial, one extension of up to 30 days, one trial per organization with no automatic regrant, and every meaningful change audited. History: PROPOSED — owner to confirm 14 / 7–30 / +30 (replaced the A02 90-day cap); **NP-P1-S1** implemented it as a working requirement and added the one-trial rule: `trial_started_at` is never cleared, so a running trial is never restarted and a consumed trial is never re-granted; a regrant needs a separately approved procedure.
 
 ### PD-18 — Growth-only staff members
 
