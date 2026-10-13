@@ -1,0 +1,147 @@
+NEMRYN PLUS -- NP-P0-A02R
+PRODUCT & TECHNICAL BLUEPRINT REFINEMENT -- COMPLETION REPORT
+Mode: DOCUMENTATION REVIEW AND CORRECTIONS ONLY. Date: 2026-10-13 (UTC). Author: Claude Code (Opus 5.5).
+
+Repository: /Users/datamatics/Nemryn, branch p0-e3-s2-identity-organisations-auth,
+HEAD 83506b02ff23e68548e96f6bf3d7175510215e08 (unchanged). Uncommitted UX1 work untouched (the tracked diff is still
+AppHeader.tsx + OperationsLayoutClient.tsx, +26/-40; the UX1 untracked files are unchanged).
+
+FILES UPDATED (all are untracked NP-P0 documents created in A02; no other file changed)
+  docs/product/plus-domain-model.md                          rewritten (dependency sequence, new tables, constraints)
+  docs/security/plus-access-model.md                         sections 2, 3, 6, 6b, 7, 8, 10 revised
+  docs/product/plus-product-spec.md                          sections 3, 4, 5, 6, 7, 8, 9 revised
+  docs/product/plus-decisions-proposed.md                    PD-02/03/04/08/11/12 revised; PD-16..PD-20 added
+  docs/product/NP-P1-S1-entitlement-implementation-brief.md  entitlement states, trial rules, RPCs, tests
+FILE CREATED
+  docs/reports/NP-P0-A02R-nemryn-plus-blueprint-refinement.txt  (this report)
+NOT MODIFIED: docs/reports/NP-P0-A02-...-blueprint.txt (kept as the historical A02 record; this report supersedes it
+where they differ), NP-P0-A01 report, all application code, migrations, UI, tests, deployments, data.
+
+=====================================================================================================
+1. CORRECTIONS MADE
+=====================================================================================================
+  C1 Forward foreign keys removed. Nine forward dependencies were found (F1-F9, domain model section 3.1): account
+     links on contacts / activities / opportunities / tasks / attributions, activities -> opportunities, inquiry
+     consent before the consent table existed, and quotes -> undesigned pricing rules. Each table is now created
+     without the forward column, and the column is added later by an additive, nullable migration with a composite
+     FK (precedent: recurring_arrangements.request_id, 20260927120000:24-33). Every replaced CHECK is named and
+     validates all existing rows.
+  C2 Opportunity contact constraint corrected. A02 used (channel = 'private_pay') = (primary_contact_id is not null),
+     which forbade facility opportunities from naming a decision-maker. It is replaced by:
+     private_pay => contact required (P2-S1); facility => account required (P3-S1); facility contact optional and
+     RPC-checked to belong to the same account.
+  C3 Plus online inquiry capability moved into the private-pay MVP (P2-S7). It is a separate boundary: own tables,
+     publication, rate-limit ledger, service-role RPCs, route and pages. Submissions land in a triage inbox
+     (plus_inquiries); nothing auto-creates a Contact, Opportunity, Core Request, Passenger or Trip.
+  C4 Quotes staged. Q1 staff estimates and quotes (plus_quotes, P2-S5) come first; Q2 Core pricing rules after the
+     pricing approval; Q3 payments as a separate decision; no billing system.
+  C5 Named-staff Plus grants moved from NP-P5 to P1-S3. Growth-only members are a separate owner decision (PD-18).
+     A salesperson is never made an Org Admin to reach the CRM.
+  C6 Entitlement states refined: new restriction column (read_only | no_access) for 'disabled'; new effective state
+     'locked' for security disables; grant holders lose access outside 'write'; historical export is Admin-only.
+     Trial default is 14 days (7-30 configurable, one extension of up to 30 days), replacing the A02 90-day cap. No
+     Plus state can affect Core.
+  C7 Consent ledger moved from NP-P4 to P2-S6 (needed by the inquiry form); sending stays NP-P4.
+  C8 Verified-in-source correction: Core memberships has only PK id and unique (organization_id, user_id), and no
+     table references it. Composite-FK grants therefore require an additive Core constraint
+     unique (id, organization_id) in P1-S3 (PD-20). A02 had not identified this.
+  C9 PD-04 (/operations/growth) is now recorded as OWNER-APPROVED.
+  C10 Exports reuse the UX1 CSV writer, including the formula-injection fix from P1-PILOT-UX1-CLOSEOUT.
+
+=====================================================================================================
+2. DATABASE DEPENDENCY SEQUENCE (each step references only earlier steps or Core)
+=====================================================================================================
+  P1-S1  organization_modules (+restriction, trial fields) + entitlement / platform functions
+  P1-S2  plus_can_read / plus_can_write / _require_plus_write / _require_plus_admin_write (functions)
+  P1-S3  membership_module_grants; memberships unique (id, organization_id) [additive Core constraint]; helpers
+         replaced with grant-aware versions
+  P1-S4  plus_contacts (no account_id); plus_activities (contact subject)
+  P2-S1  plus_opportunities (private_pay only); + plus_activities.opportunity_id
+  P2-S2  plus_tasks (contact | opportunity)
+  P2-S3  plus_request_attributions (request_id PK; contact, opportunity); + plus_activities.request_id
+  P2-S4  conversion / rebooking RPCs (no tables)
+  P2-S5  plus_quotes (Q1, staff lines)
+  P2-S6  plus_communication_consents
+  P2-S7  plus_inquiry_forms, plus_inquiries, plus_inquiry_rate_limit_events;
+         + plus_opportunities.inquiry_id, + plus_communication_consents.inquiry_id
+  P2-S9  (only if PD-18) growth role in memberships / staff_invites CHECKs [Core change]
+  P3-S1  plus_accounts; + account_id on contacts / tasks / activities; + account_id and referral_account_id on
+         opportunities (channel CHECK widened to facility); + referral_account_id on attributions; checks replaced
+  P3-S2  plus_account_facilities (-> Core facilities)
+  Q2     Core organization_pricing_rules; + plus_quotes.pricing_rule_id
+  New test T27: each migration applies on a database reset to the previous slice, and later additive migrations
+  validate every existing row.
+
+=====================================================================================================
+3. REVISED PRIVATE-PAY MVP SCOPE (milestone M2 = P2-S1..S8)
+=====================================================================================================
+  In: phone/email inquiry capture; Plus web inquiry form + "Inquiries to review" inbox (convert / dismiss); private-pay
+  pipeline with derived Core outcomes; tasks; Track in Plus on Core Requests; controlled conversion to a pending
+  Core Request and rebooking; staff estimates/quotes (Q1); consent recording (follow-up vs marketing, versioned);
+  Growth Overview counts; Admin CSV export.
+  Out: rule-based pricing (Q2), online payment (Q3), any sending of email/SMS, inquiry email alerts (PD-16),
+  automatic creation of CRM or Core records, invoicing/billing, Core public-intake changes.
+  Gate: real customer submissions and data only after PD-10 (HIPAA/BAA) and PD-11 (retention/purge) close.
+
+=====================================================================================================
+4. UPDATED IMPLEMENTATION ORDER
+=====================================================================================================
+  M1 Technical foundation: P1-S1 entitlement gate -> P1-S2 helpers + nav + state frames -> P1-S3 named-staff grants
+     -> P1-S4 contacts + activities
+  M2 Private-pay MVP: P2-S1 opportunities -> P2-S2 tasks -> P2-S3 request attribution -> P2-S4 conversion ->
+     P2-S5 staff quotes -> P2-S6 consent ledger -> P2-S7 Plus inquiry form -> P2-S8 overview + export
+     [-> P2-S9 growth-only members, only if PD-18 is approved]
+  M3 Facility CRM: P3-S1 accounts + additive links -> P3-S2 linked locations -> P3-S3 facility opportunities ->
+     P3-S4 referral & volume
+  NP-P4 sending (consent-gated email, reminders, optional alerts) | NP-P5 beta readiness (+Q2 if approved, billing
+  webhook) | NP-P6 marketplace contract only.
+  Commercial beta gate: M2 + M3 + PD-10/PD-11 closed + the staff-access decision (P1-S3 is sufficient, or PD-18
+  shipped) + NP-P5 readiness items.
+
+=====================================================================================================
+5. DECISIONS REQUIRING OWNER APPROVAL
+=====================================================================================================
+  Before NP-P1-S1:
+    PD-02 (revised states incl. restriction / locked)       PD-17 (14-day default, 7-30 range, one +30 extension)
+  Before P1-S3:   PD-03 (revised staging) and PD-20 (additive memberships constraint, reviewer acknowledgement)
+  Before P2-S5:   PD-08 Q1 (staff quotes); Q2 needs a pricing-scope decision later
+  Before P2-S7:   PD-12 (revised), PD-16 (challenge provider? email alerts?), PD-19
+  Before real data / beta: PD-10 (HIPAA/BAA), PD-11 (retention, erasure, inquiry purge), PD-18 (growth-only role)
+  Unchanged open: PD-13 marketplace scope status (ZS-035 conflict)
+  Recorded as owner-approved: PD-04 /operations/growth (plus the A02 owner-approved directions)
+
+=====================================================================================================
+6. REMAINING ARCHITECTURAL CONFLICTS (documented, none blocks NP-P1-S1)
+=====================================================================================================
+  A1 Growth-only members vs the single /operations layout guard. requireOperationsAccess (authorization.ts:47-51)
+     guards all of /operations; admitting a 'growth' role there would expose every Operations route shell. PD-18
+     therefore requires a path-aware guard (a Core authorization change, P2-S9).
+  A2 Growth-only members cannot convert to Core Requests: log_transportation_request requires
+     organization_admin | dispatcher. Intentional; the spec uses "Send to Operations".
+  A3 The P2-S7 inquiry form needs reviewed edits to the shared src/proxy.ts (NO_SESSION_PATH, request-form host
+     allowlist) and next.config.ts (headers). These are not public-intake functions, but they are Core-shared files.
+  A4 Inquiry email alerts would need a new notification_events event type (Core CHECK change); deferred (PD-16).
+  A5 P1-S3 requires an additive Core constraint on memberships (PD-20).
+  A6 The service-role client's doc comment is already stale (A01); P2-S7 adds callers, so the comment must be
+     corrected in that slice.
+  A7 Outside Plus but affecting the baseline: ZD-134 vs UX1 header (decision-register wording pending, UX1
+     closeout D2), and scope-register ZS-035 vs marketplace direction (PD-13).
+
+=====================================================================================================
+7. IS NP-P1-S1 TECHNICALLY READY AFTER UX1 RECONCILIATION?
+=====================================================================================================
+  YES, as a specification, once these conditions hold:
+    (1) The UX1 scoped commit lands on main (it is validated and awaiting approval) and the NP-P0 / historical docs
+        are committed separately or consciously left untracked.
+    (2) No modified tracked files remain; S1 starts on a fresh branch from the reconciled origin/main.
+    (3) The owner approves PD-02 (revised) and PD-17.
+    (4) Read-only production checks pass: deployed SHA = main, migration head = latest on main, privilege
+        contract 0 violations.
+  S1 has no dependency on grants, contacts, inquiries or quotes, and it touches no UX1 file. Its brief now covers
+  the restriction / locked states, the 14-day trial and its extension, and tests E1-E18 (incl. E7a).
+
+CONFIRMATION: Documentation only. No application code, migration, UI, test, deployment, database or production
+change. No commit, push, stash or branch operation. UX1 work preserved. NP-P1-S1 not started.
+
+STOP: awaiting review.
+END OF REPORT -- NP-P0-A02R

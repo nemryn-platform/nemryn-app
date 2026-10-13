@@ -1,0 +1,723 @@
+NEMRYN PLUS -- NP-P0-A01
+EXISTING PLATFORM ARCHITECTURE AUDIT & INTEGRATION ASSESSMENT
+Mode: READ-ONLY SOURCE AUDIT. This file is the only artifact written.
+Audit date: 2026-10-13 (UTC). Auditor: Claude Code (Opus 5.5), acting as staff architect.
+
+Evidence labels used throughout:
+  [SRC]   VERIFIED FROM SOURCE (file + line cited, read during this audit)
+  [INF]   INFERRED from source, not directly executed or observed
+  [DOC]   DOCUMENTED ONLY (a report/doc says so; not re-verified against a live system)
+  [NV]    NOT VERIFIED (could not be established safely)
+
+Security finding labels (section 8): VERIFIED CURRENT CONTROL / UNVERIFIED CONTROL /
+RECOMMENDED CONTROL / BLOCKER. Risk labels (section 12): P0 / P1 / P2 / INFO.
+
+=====================================================================================================
+1. EXECUTIVE ARCHITECTURE RECOMMENDATION
+=====================================================================================================
+
+VERDICT: Same repository, same Supabase backend/Postgres, same domain, same authentication --
+CONDITIONAL YES.
+
+The hypothesis holds. The codebase is already shaped for it: a single Next.js 16 App Router app with
+surface-separated route trees (/operations, /driver, /platform, public), a single Supabase project
+with deny-by-default privileges, every write routed through SECURITY DEFINER RPCs that re-check
+tenant + role, and a machine-checked privilege contract that fails if a new table or function is not
+explicitly classified. Nemryn Plus fits as a new module inside that model; nothing in the source
+justifies a separate repo, database or auth realm.
+
+The YES is conditional on four things, all of which are absent today:
+
+  C1. A module entitlement mechanism that is NOT organizations.status. Today the only tenant-level
+      switch is organizations.status ('active'/'inactive' = "suspended"), and it is wired into the
+      core RLS helpers (is_org_member / has_org_role / current_driver_id). Re-using it for Plus would
+      stop dispatch and drivers when a Plus subscription lapses. A separate, Plus-only entitlement
+      check is required. [SRC: supabase/migrations/20260920130000_platform_admin_foundation.sql:98-102]
+  C2. A decision on who may use Plus. memberships.role is a closed CHECK of exactly
+      organization_admin | dispatcher | driver [SRC: 20260830130400_memberships.sql role CHECK;
+      src/lib/auth/types.ts:10]. There is no sales/growth role and no per-member capability grant.
+  C3. Plus must never become a second booking system. The Request Hub (transportation_requests +
+      accept/decline/cancel RPCs + create_trip accepted-only) is the single controlled entry into
+      operations and must stay that way. Plus records reference Requests; they never create Trips.
+  C4. Explicit privacy separation. Plus (marketing/sales) data must not copy passenger assistance
+      notes, trip content, or request free-text into CRM tables, analytics or ad integrations.
+      No HIPAA assessment has been done [DOC: docs/commercial/sales-claims-boundary.md:11].
+
+Shape of the recommendation:
+  - Plus = new route tree /growth/* (sibling of /operations, same shell and design system), a small
+    set of new plus_* tables, a new has_org_module() helper, and a handful of SECURITY DEFINER RPCs.
+  - Core stays the system of record for Requests, Passengers, Trips, Recurring Care, Proof of Service.
+  - Plus owns: accounts (B2B businesses), contacts, opportunities (one table, two channels), tasks,
+    activities, consent ledger, and -- later -- quotes. It links to Core through a link table to
+    transportation_requests, never by copying operational data.
+  - The existing website intake + acquisition attribution is the private-pay acquisition entry
+    point. Do not build a second public form.
+  - Billing/fares/payments do not exist in Core at all; Plus quotes and payment status require a
+    product decision before schema work (open question Q3).
+
+=====================================================================================================
+2. REPOSITORY STATUS, COMMIT SHA AND AUDIT PROVENANCE
+=====================================================================================================
+
+  Repository root            /Users/datamatics/Nemryn  [SRC: git rev-parse --show-toplevel]
+  Remote                     github.com/nemryn-platform/nemryn-app  [SRC: git remote -v]
+  Confirmed Nemryn?          YES -- remote, migrations, docs and reports are Nemryn's. Note: package.json
+                             "name" is still "zenward-mobility" and README.md heading is "Zenward Mobility"
+                             (legacy name; informational only).
+  Current branch             p0-e3-s2-identity-organisations-auth
+  HEAD                       83506b02ff23e68548e96f6bf3d7175510215e08 ("assets: add Nemryn email banner")
+  Commits on branch history  78
+  Working tree BEFORE report NOT CLEAN:
+                               M  src/components/operations/AppHeader.tsx
+                               M  src/components/operations/OperationsLayoutClient.tsx
+                               265 untracked entries, including in-progress application code
+                               (src/app/day-sheet/, src/app/operations/notifications-actions.ts,
+                               src/components/operations/day-sheet/, src/components/operations/header/,
+                               src/lib/operations/day-sheet*.ts, src/lib/operations/header-help-core.ts),
+                               ~30 untracked docs/reports/*.txt, and many .tmp-qa/*.mjs scripts.
+                             These belong to the uncommitted P1-PILOT-UX1 work
+                             [DOC: docs/reports/p1-pilot-ux1-header-day-sheet-completion.txt:3 "LOCAL ONLY:
+                             not committed, not pushed, not deployed"]. All of it was left untouched.
+  Latest local migration     20260927120000_request_recurring_care.sql (73 migrations)
+  Production state           [DOC] production deployment = 2f8b9a9 (R3) + 83506b0 (asset only); production
+                             migration head 20260927120000; privilege contract 0/29 violations
+                             [docs/reports/p1-pilot-r3-production-release.txt:105-190].
+                             [NV] Not re-verified in this audit: no production DB, Vercel or Supabase call
+                             was made (read-only, no-secrets rule).
+
+  Commands used: git (rev-parse, status, diff, log, remote), ls, find, grep, sed, awk, cat, head.
+  Nothing was built, tested, generated, formatted, installed, deployed or committed.
+
+=====================================================================================================
+3. EXISTING PLATFORM ARCHITECTURE
+=====================================================================================================
+
+3.1 Stack [SRC: package.json]
+  next 16.3.3 (App Router), react 19.2.8, @supabase/ssr 0.12.5, @supabase/supabase-js 2.112.4,
+  Tailwind v4, @phosphor-icons/react, clsx. No other runtime dependencies: no Stripe, Twilio, analytics,
+  queue, scheduler or ORM. Tests: `node --test 'src/**/*.test.mjs'` (pure-core unit tests) plus
+  SQL/bash suites under supabase/tests/ (60+ files: RLS adversarial, privilege contract, concurrency).
+
+3.2 Route surfaces [SRC: src/app/**]
+  (public)/             marketing pages, request-transportation
+  /request/[publicKey]  Nemryn-hosted public request form;  /embed/request/[publicKey]  iframe form
+  /api/public-forms/[publicKey](/submit), /api/public-intake/website   public write boundaries
+  /operations/*         operator console (Admin + Dispatcher)
+  /driver/*             Driver PWA (sw.js, driver.webmanifest)
+  /platform/*           Nemryn platform-admin control plane
+  /onboarding, /sign-up, /sign-in, /complete-signup, /join/[token], /team-invite/[token], /auth/*
+  /day-sheet            (untracked, in-progress UX1 work)
+  Stubs: /operations/billing and /operations/reports render OperationsRouteStub ("structural placeholder")
+  [SRC: src/app/operations/billing/page.tsx, src/app/operations/reports/page.tsx].
+
+3.3 Code organisation
+  src/lib/<domain>/*-core.ts     pure, unit-tested logic (*.test.mjs beside it)
+  src/lib/<domain>/*.ts          server data access (RLS selects, RPC calls)
+  src/app/**/actions.ts          Server Actions -> RPCs
+  src/components/ui/*            shared primitives; src/components/operations|driver|platform|public*
+  src/design/                    typography + icon tokens; colours/spacing in src/app/globals.css @theme
+  This "core + loader + actions" pattern is the convention Plus should follow.
+
+3.4 Authentication & tenancy [SRC]
+  - Supabase Auth, cookie session refreshed in src/proxy.ts (Next 16 "proxy", session refresh only; it
+    is explicitly NOT the authorization layer -- src/proxy.ts:5-10).
+  - Organization context: cookie zw_org_context holds only a REQUESTED org; it is re-validated
+    against live active memberships every request (src/lib/auth/organization.ts:7-46).
+  - Route guards: requireOperationsAccess / requireOrganizationAdminAccess / requireOnboardingAccess /
+    requireDriverAccess (src/lib/auth/authorization.ts:26,68,85,135).
+  - Platform admin is a separate grant table (platform_admin_grants), never a membership role.
+
+3.5 Database pattern [SRC]
+  - 27 tables in public, all tenant-owned rows keyed by organization_id with composite
+    (id, organization_id) FKs so cross-tenant references are structurally impossible
+    (e.g. trips FKs, 20260830131000_trips.sql).
+  - RLS helpers: is_org_member, has_org_role, current_driver_id, is_driver_assigned_to_trip,
+    is_platform_admin (20260830131600_rls_helper_functions.sql:20-135); since R4E they also require
+    organizations.status = 'active'.
+  - Reads: RLS-scoped .from() selects (21 tables referenced from src). Writes: ~100 .rpc() call sites
+    into SECURITY DEFINER functions with pinned search_path, row locks and idempotency signals.
+  - Privilege baseline (P1-SEC-01, 20260921110000_production_privilege_baseline_hardening.sql:1-80,
+    104-130): default privileges revoked, so a NEW table has zero client access until its migration
+    grants it; per-table authenticated grants are an explicit JSON contract; anon has no table access.
+  - supabase/tests/privilege_contract_tests.sql: adding a table/function without listing it in the
+    contract makes the contract fail (header lines 1-25). This is a ready-made gate for Plus.
+
+3.6 Server-side privileged paths [SRC]
+  Service-role client: src/lib/supabase/service-role-server.ts ("server-only"). Callers (all
+  "server-only"): public-intake/website-intake.ts, public-intake/rate-limit.ts, public-intake/cors.ts,
+  public-forms/public-form.ts, notifications/dispatch.ts.
+
+3.7 Deployment [DOC + SRC]
+  Vercel via the GitHub path (no vercel.json); next.config.ts derives build id from
+  VERCEL_GIT_COMMIT_SHA; release convention = EXPAND migration -> deploy app -> smoke -> CONTRACT
+  migration (e.g. 20260924090000 / 20260924091000), recorded in docs/reports/*-production-release.txt.
+  Optional dedicated hosted-form host REQUEST_FORM_ORIGIN with a strict allowlist (src/proxy.ts:17-55).
+
+3.8 Which parts are operations vs extensible for Plus
+  Operations (Core, do not fork): requests, trips, dispatch, drivers, fleet, recurring-care,
+    proof-of-service, tomorrow, driver PWA, availability.
+  Extensible for Plus: auth/org context, shell + design system, website forms + intake + acquisition
+    attribution, notification_events/dispatch + Resend email boundary, audit_events/activity projection,
+    organization settings & service offerings, platform admin control plane (for entitlement admin).
+
+=====================================================================================================
+4. CURRENT CAPABILITY INVENTORY AND REUSE MATRIX
+=====================================================================================================
+
+"Deployed" = [DOC] per latest production-release reports; not re-verified live ([NV]).
+"Local only" = in the working tree, uncommitted.
+
+ORGANIZATION & USER MANAGEMENT
+  Multi-tenancy                      VERIFIED IMPLEMENTED [SRC]  deployed [DOC]
+     organization_id everywhere + composite FKs + RLS helpers.        Plus: reuse unchanged.
+  Organization onboarding            VERIFIED IMPLEMENTED [SRC]  deployed [DOC]
+     sign-up -> complete_pending_signup -> /onboarding/* (basics, driver, vehicle, facility, passenger);
+     organizations.business_stage starting|growing|established (20260903100000_organization_signup.sql:30-34).
+     Plus: add a Plus onboarding checklist later; reuse business details.
+  Memberships / team                 VERIFIED IMPLEMENTED [SRC]  staff_invites, set_membership_status,
+     last-admin protection tests.                                     Plus: reuse; role model gap (C2).
+  Roles & permissions                VERIFIED IMPLEMENTED [SRC]  3 fixed roles, DB-enforced.
+  Authentication                     VERIFIED IMPLEMENTED [SRC]  incl. password recovery, invites.
+  Platform admin                     VERIFIED IMPLEMENTED [SRC]  org suspend/reactivate with audit.
+     Plus: natural home for manual Plus entitlement grants in NP-P1.
+  Subscription / entitlements        NOT IMPLEMENTED [SRC: zero matches for subscription|entitlement|
+     feature flag|stripe|trial|plan_tier across src/ and supabase/migrations/].
+
+TRANSPORTATION OPERATIONS
+  Request intake (staff-logged)      VERIFIED IMPLEMENTED  log_transportation_request; source in
+     phone|facility|email|web|other (20260916100000_request_mutation_foundation.sql:48-52).
+  Website intake integration         VERIFIED IMPLEMENTED  developer API + existing-form + hosted/embed form
+     (see section 5). deployed [DOC: p1-comm-d1/d2/d3 reports].
+  Request Hub (queue + detail)       VERIFIED IMPLEMENTED  /operations/requests, RequestStatusTabs etc.
+  Request review & decision          VERIFIED IMPLEMENTED  accept/decline/cancel with structured reasons
+     (20260924090000 expand, 20260924091000 contract).
+  Passenger records                  VERIFIED IMPLEMENTED  minimal: display_name, phone, assistance_notes,
+     status (20260830130600_passengers.sql). Drivers have NO direct SELECT (ZD-080).
+  Driver management                  VERIFIED IMPLEMENTED  invites, self-link owner-operator, schedules.
+  Dispatch & scheduling              VERIFIED IMPLEMENTED  dispatch board, assignment, reassignment
+     concurrency hardening, overlap & capacity signals, availability windows.
+  Trip status management             VERIFIED IMPLEMENTED  9-state lifecycle via controlled RPCs.
+  Driver PWA                         VERIFIED IMPLEMENTED  /driver, service worker, location tracking.
+  Proof of service                   PARTIALLY IMPLEMENTED  timestamps/events-based evidence view
+     (/operations/proof-of-service); NO signature/photo/odometer capture -- open PR-12 gate
+     [DOC: p1-pilot-readiness-r1-operational-mvp-audit.txt:394; p1-pilot-r3-production-release.txt:159].
+  Trip completion & recovery         VERIFIED IMPLEMENTED  20260927110000_trip_completion_recovery.sql.
+  Recurring transportation           VERIFIED IMPLEMENTED  arrangements, skips, bulk "create missing" trips,
+     Request -> Recurring Care link (recurring_arrangements.request_id, 20260927120000:24-33).
+
+BUSINESS & FINANCIAL
+  Facilities                         PARTIALLY IMPLEMENTED  facilities = PLACES only (name + address +
+     status), used as trip pickup/destination FKs. No contacts, no account/contract semantics, and
+     transportation_requests has NO facility_id (20260830130700_facilities.sql; trips.sql:33-34).
+  Customer profiles                  NOT IMPLEMENTED  requester data lives as columns on each Request
+     (requester_name/phone/email/relationship); there is no reusable customer/requester entity.
+  Fare configuration                 NOT IMPLEMENTED  no price/fare/amount columns in any migration.
+  Quotation                          NOT IMPLEMENTED
+  Invoicing / Billing                NOT IMPLEMENTED  /operations/billing is a stub, hidden from nav
+     (OperationsSidebar.tsx:30-36); scope register ZS-021 "billing workflow UNKNOWN".
+  Payment tracking                   NOT IMPLEMENTED
+  Reporting                          PARTIALLY IMPLEMENTED  Operations Brief, Tomorrow readiness, Day Sheet
+     CSV (local-only, uncommitted); /operations/reports is a stub. No revenue reporting.
+
+COMMUNICATIONS
+  Email                              VERIFIED IMPLEMENTED  Resend over HTTPS, server-only, single platform
+     sender (src/lib/email/send.ts:1-80). Transactional only (invites, staff notifications).
+  SMS                                NOT IMPLEMENTED  [SRC: no sms|twilio match in src/ or migrations]
+  Notifications                      VERIFIED IMPLEMENTED  notification_events (website_request,
+     trip_exception) + per-org recipient-role settings + service-role claim/complete dispatch; staff
+     recipients only, never passengers/requesters (20260920120000_notifications_activity.sql:1-25).
+  Calls                              NOT IMPLEMENTED
+  Follow-up capability               NOT IMPLEMENTED  no tasks/reminders; no scheduler exists (stated in
+     the notifications migration header, lines 19-22).
+
+REUSE MATRIX (top value for Plus)
+  1. Website intake + hosted/embed forms + rate limit + idempotency -> private-pay lead capture.
+  2. request_acquisition_attributions (UTM/landing/referrer snapshot) -> lead-source attribution.
+  3. Request decision workflow + structured decline/cancel reasons -> conversion/loss analytics.
+  4. Tenancy/RLS/privilege-contract pattern + SECURITY DEFINER RPC style -> Plus schema & tests.
+  5. Request -> Trip / Recurring Care linkage -> booking conversion, repeat bookings, retention.
+  Also: notification_events + Resend boundary (staff alerts for Plus tasks), audit_events/activity,
+  platform admin (entitlement administration), service offerings (service_type taxonomy).
+
+=====================================================================================================
+5. PRIVATE-PAY ACQUISITION INTEGRATION MAP
+=====================================================================================================
+
+5.1 Traced flow as it exists today [SRC]
+
+  Visitor on operator website
+   |-- (a) Nemryn-hosted page /request/<publicKey> or iframe /embed/request/<publicKey>
+   |       POST /api/public-forms/<publicKey>/submit  (src/app/api/public-forms/[publicKey]/submit/route.ts)
+   |-- (b) Operator's own form/site -> POST /api/public-intake/website (developer integration, CORS)
+   v
+  Route handler: closed-key validation (website-intake-core.ts:122-144, 332-344) -> durable rate limit
+  (check_and_record_public_intake_rate_limit, per-integration and per-client) -> service_role RPC
+  (submit_public_form_request / submit_public_transportation_request) -> shared _create_public_request
+   v
+  transportation_requests row: state='pending', source='web', intake_integration_id,
+  external_submission_ref; optional request_acquisition_attributions snapshot; notification_events
+  'website_request' in the same transaction -> staff email via dispatch
+   v
+  Request Hub: dispatcher reviews -> link_request_passenger (explicit, staff-chosen) -> accept /
+  decline(reason) / cancel(reason)
+   v
+  create_trip (accepted Requests only, 20260924091000 header) and/or create_recurring_arrangement
+  (p_request_id) -> dispatch -> driver lifecycle -> completion / Proof of Service view.
+
+5.2 Answers to the ten questions
+  1. Storage: transportation_requests (+ request_events, request_acquisition_attributions).
+  2. Org identification: ONLY from the opaque public key / integration external_id resolved inside
+     the SECURITY DEFINER function; the body may never name an organization (route.ts doc block;
+     20260919090000 header lines 12-30). Suspended orgs are indistinguishable from unknown (404).
+  3. Auth & abuse: unauthenticated by design; service-role-only RPCs; closed schema; 16 KB body cap;
+     Origin check (hosted) / per-integration origin allow-list (developer API); durable atomic rate
+     limit ledger; uniform minimal responses. No CAPTCHA/bot challenge exists [SRC: no match].
+  4. Duplicates: idempotency via partial unique index transportation_requests_intake_idempotency_idx
+     on (intake_integration_id, external_submission_ref) (20260919090000:166-175). This dedupes
+     retries, NOT a person submitting twice; human duplicates are handled by the 'duplicate_request'
+     decline reason.
+  5. Public forms create Trips?  NO. Locked decision: stops at 'pending'; no Trip/Passenger/Driver.
+  6. Review: Request Hub (/operations/requests, /operations/requests/[id]) by Admin/Dispatcher.
+  7. Request -> Trip: explicit accept, then create_trip requiring state='accepted' and the linked
+     passenger; request becomes historically fulfilled by linked Trips/arrangements.
+  8. Reusable customer records: NO customer entity. Requester details are per-Request columns.
+     Passengers are reusable, but are the RIDER, not the payer/contact.
+  9. Recurring <-> Request Hub: YES since R3 (recurring_arrangements.request_id). Also the public form
+     can carry a structured recurring schedule (20260919130000_structured_website_intake_extension.sql).
+ 10. Where a private-pay pipeline should integrate: alongside the Request, never in place of it.
+
+5.3 Smallest integration that keeps one booking system
+  - Plus does NOT add a public form. The existing website forms remain the only public capture.
+  - New "opportunity" (channel=private_pay) is a SALES wrapper. It links to zero or more Requests
+    via plus_opportunity_requests (link table). The Request remains Core-owned.
+  - Two entry paths into the pipeline:
+      (i) Inquiry-first (phone/web question about price, no date yet): staff create an opportunity +
+          contact in Plus; when the customer commits, a Plus RPC calls the SAME
+          log_transportation_request primitive (source chosen explicitly) and links the result.
+          The Request then lands in Request Hub as 'pending' -- dispatch still accepts/declines.
+     (ii) Request-first (website submission): when the org has Plus, a staff action "Track in Plus"
+          (or an opt-in automatic link at submission time -- decision Q2) creates an opportunity
+          referencing the Request. No requester data is copied beyond what the contact needs.
+  - Stage changes driven by Core facts, read-only: Request accepted -> "booked"; declined/cancelled ->
+    "lost" with the Core reason; first linked Trip completed -> "won/served". Plus never writes to
+    Core tables directly.
+  - Quote and payment status sit on the opportunity (NP-P2), not on Request/Trip, until a fare model
+    exists in Core (Q3).
+
+=====================================================================================================
+6. FACILITY ACQUISITION INTEGRATION MAP
+=====================================================================================================
+
+  Today [SRC]: facilities = locations; requests carry requester_relationship='facility_coordinator'
+  and source='facility' but no FK to any facility or account. Trips reference facilities only as
+  pickup/destination places.
+
+  Proposed:
+    plus_accounts (B2B business: hospital, dialysis centre, SNF...) -- NEW. Not the same thing as a
+      Core facility (a place). An account may own several Core facility locations through
+      plus_account_facilities (account_id, facility_id) -- REUSES facilities rows; no duplicate address
+      data.
+    contacts (coordinators, decision-makers) -> plus_contacts with account_id.
+    pipeline -> plus_opportunities channel='facility' (contract/referral deals).
+    contract status -> columns on plus_accounts (status prospect|active_referrer|contracted|lapsed,
+      contract_start/end, no document storage in NP-P3).
+    referral attribution -> plus_opportunity_requests links Requests to the referring account/contact.
+      Revenue/volume attribution is DERIVED: account -> linked Requests -> Trips (completed count) and,
+      for pickup/destination-based volume, trips.pickup_facility_id/destination_facility_id via
+      plus_account_facilities. No money until a fare model exists.
+    onboarding -> an account "contracted" state + task checklist; facility self-service portal stays
+      out of scope (scope register ZS-012..ZS-017 POST-MVP).
+
+  UX consequence: the Operations "Facilities" page stays the list of PLACES. Plus "Accounts" is the
+  business relationship, and an account page shows its linked locations read-only with a link to the
+  Core facility page. One concept per page; no duplicate facility records.
+
+=====================================================================================================
+7. PROPOSED CRM DATA MODEL (proposal only -- no tables created)
+=====================================================================================================
+
+All new tables: organization_id NOT NULL + unique(id, organization_id) + composite FKs (the existing
+convention), RLS enabled, writes only via SECURITY DEFINER RPCs, listed in the privilege contract.
+
+SHARED
+  organizations, memberships, user_profiles ............ REUSE EXISTING TABLE (tenant + actor identity)
+  plus_contacts ......................................... NEW CANDIDATE TABLE
+     People Plus talks to: facility staff, private-pay customers, family caregivers. name, phone,
+     email, title, account_id NULL, preferred_channel. NO medical/assistance fields. Reason: Core has
+     no customer entity; Passengers are riders with assistance notes and must not become a marketing
+     list.
+  plus_opportunities .................................... NEW CANDIDATE TABLE
+     One table, channel in ('private_pay','facility'), stage (fixed CHECK per channel in v1, not
+     user-configurable pipelines -- avoids a generic CRM builder), owner_user_id, primary_contact_id,
+     account_id, source (phone|web|referral|facility|event|other), lost_reason, estimated_value
+     (nullable), timestamps. Reason: both tracks need the same mechanics; two tables would double RLS
+     and tests.
+  plus_tasks ............................................ NEW CANDIDATE TABLE
+     Follow-ups: subject ref (opportunity/contact/account), due_at, assignee, completed_at.
+     Reminders surface in-app first; email reminders reuse notification_events later.
+  plus_activities ....................................... NEW CANDIDATE TABLE
+     Append-only timeline: note, call_logged, email_logged, stage_changed, quote_sent... Short
+     operator text with the same length bounds as request_events.reason_note. Reason: audit_events is
+     an admin audit trail and must not hold sales free text (its own convention).
+  pipelines / stages table .............................. NOT NEEDED in v1 (fixed CHECK values).
+  reporting ............................................. REUSE via read-only RPC projections; no
+     reporting tables.
+
+FACILITY CRM
+  plus_accounts ......................................... NEW CANDIDATE TABLE
+  plus_account_facilities ............................... NEW CANDIDATE TABLE (link to REUSED facilities)
+  facilities ............................................ REUSE EXISTING TABLE (locations)
+  contract/referral status .............................. columns on plus_accounts (no separate table v1)
+
+PRIVATE-PAY CRM
+  transportation_requests ............................... REUSE EXISTING TABLE (the booking)
+  request_acquisition_attributions ...................... REUSE EXISTING TABLE (lead source for web)
+  plus_opportunity_attributions ......................... NEW CANDIDATE TABLE (only for opportunities
+     that did not originate from a web Request; same sanitised shape: utm_*, landing_path,
+     referrer_host; no click ids, IP or cookies -- matches the existing privacy rule)
+  plus_communication_consents ........................... NEW CANDIDATE TABLE
+     Append-only ledger: contact_id, channel (email|sms|voice), purpose (transactional|marketing),
+     status (granted|revoked), captured_at, captured_via, evidence text. Current state = latest row.
+  plus_quotes ........................................... NEW CANDIDATE TABLE (NP-P2, after Q3)
+     opportunity_id, amount_cents, currency, valid_until, status (draft|sent|accepted|expired|declined).
+  pricing rules ......................................... DEFER (Q3) -- would be a Core concern
+     (organization_pricing_rules) because dispatch-time pricing and marketplace pricing need it too.
+  payment status ........................................ columns on plus_opportunities v1
+     (unpaid|deposit|paid|refunded, manual entry). Processor integration deferred.
+  plus_opportunity_requests ............................. NEW CANDIDATE TABLE (the conversion link)
+     (opportunity_id, request_id) with composite FKs, plus unique (request_id): one Request belongs to
+     at most one opportunity, so volume and revenue are never double-counted.
+  repeat bookings / retention ........................... DERIVED from Requests/Trips/recurring
+     arrangements linked to the contact's opportunities; no new table.
+
+IDENTITY RULE FOR LEAD -> REQUEST -> PASSENGER -> TRIP
+  - Link by explicit IDs only: opportunity -> request (link table) -> passenger (Core's own
+    link_request_passenger, chosen by staff) -> trips/arrangements (Core FKs).
+  - Never auto-match a contact to a passenger by name/phone/email. A caregiver contact and the rider
+    are different people; a phone number is shared within families and facilities.
+  - Plus reads passenger/trip facts only through a minimum-necessary RPC (counts, dates, states --
+    never assistance_notes, instructions, trip notes or exceptions).
+  - Invoices: none exist; when Core billing is designed, invoice -> trip(s) -> request -> opportunity
+    gives attribution without new identity assumptions.
+
+=====================================================================================================
+8. RECOMMENDED AUTHORIZATION, RLS AND PRIVACY CONTROLS
+=====================================================================================================
+
+VERIFIED CURRENT CONTROLS
+  V1  RLS on every table; deny-by-default default privileges; explicit per-table grant contract
+      [SRC: 20260921110000:1-80,104-130].
+  V2  Tenant identity resolved server-side; cookie is only a request, re-validated each time
+      [SRC: src/lib/auth/organization.ts:7-46].
+  V3  Writes via SECURITY DEFINER RPCs re-checking has_org_role (active membership + active org)
+      [SRC: 20260924090000 header "AUTHORIZATION"; rls_helper_functions.sql:43].
+  V4  Service-role key only in server-only modules [SRC: all 5 callers start with import "server-only"].
+  V5  Public intake: org from opaque key only, closed schema, durable rate limit, idempotency,
+      no auto Trip/Passenger [SRC: section 5].
+  V6  Driver data minimisation: no driver SELECT on passengers (ZD-080) [SRC: passengers.sql:5-15].
+  V7  Acquisition attribution excludes IP, UA, cookies, click ids, full URLs [SRC: 20260921120000:28-31].
+  V8  Tenant-isolation & privilege test suites exist (rls_adversarial_tests.sql,
+      privilege_contract_tests.sql, security_definer_exposure_tests.sql) [SRC: supabase/tests/].
+
+UNVERIFIED CONTROLS
+  U1  Production ACL == contract (0/29) [DOC only: p1-pilot-r3-production-release.txt]; not re-run.
+  U2  Resend account configuration, DKIM/SPF, and data-processing terms [NV].
+  U3  Supabase/Vercel BAA status and HIPAA posture [NV; docs say no assessment done:
+      docs/commercial/security-overview.md:33].
+
+RECOMMENDED CONTROLS FOR PLUS
+  R1  Operator separation: same composite-FK + RLS pattern on every plus_* table; add every table and
+      RPC to privilege_contract_tests.sql; extend rls_adversarial_tests with a Plus section (foreign
+      tenant, inactive member, suspended org, Driver, Platform Admin without membership).
+  R2  Plus vs dispatch users: new SECURITY DEFINER helper has_plus_access(org) = has_org_role(org,
+      allowed roles) AND has_org_module(org,'plus') [AND membership Plus grant if Q1 says so]. Drivers
+      never. Dispatchers by default only if product says so (Q1).
+  R3  Medical info: no plus_* column may hold assistance/medical text; enforce with column-name review
+      in the contract test and CHECK length limits on free text; Plus reads Core only through
+      minimum-necessary RPCs.
+  R4  Public lead submission: reuse the existing public boundary only; no new anon endpoint in Plus.
+  R5  Conversion: a single RPC plus_convert_opportunity_to_request() that calls the existing request
+      creation logic inside the same transaction, verifies opportunity and request share organization,
+      and writes the link; idempotent on (opportunity_id, idempotency key).
+  R6  Role-based customer access: contacts visible to Plus users; opportunity owner filter is a UI
+      convenience, not a security boundary, unless Q1 requires owner-only visibility.
+  R7  Consent: no marketing send without a 'granted' marketing consent row for that channel; record
+      captured_via/evidence; honour revocation immediately; SMS must follow TCPA/10DLC requirements
+      before any SMS provider is enabled.
+  R8  Promotional vs transactional: separate message categories in code and data; transactional
+      (trip reminders, booking confirmations) remain Core; promotional is Plus-only, consent-gated,
+      and never contains trip/medical content.
+  R9  Advertising attribution: inbound-only (UTM snapshot). No outbound conversion API, pixel or
+      analytics script on authenticated pages, on /request or /embed forms, or containing any request
+      data. Offline conversion uploads only with aggregated/non-PHI data and only after legal review.
+  R10 Marketplace boundary: a future marketplace gets its own versioned API reading only explicitly
+      "public" provider profile fields (section 11), never tenant tables directly.
+
+BLOCKERS (before Plus processes real customer data)
+  B1  HIPAA/BAA determination: an NEMT operator's request data (who rides where, to dialysis, with what
+      assistance) is plausibly PHI when the operator is a covered entity or business associate. Before
+      Plus stores customer data in production, decide the posture and confirm BAAs (Supabase, Vercel,
+      Resend, any SMS/payment provider). [NV -- no evidence of BAAs in repo]
+  B2  Payments: if card payments are taken, use a hosted processor flow (no card data touches Nemryn;
+      PCI SAQ-A scope) and keep ride payments in a separate ledger from operator subscription billing.
+
+=====================================================================================================
+9. CORE / PLUS SUBSCRIPTION ENTITLEMENT STRATEGY
+=====================================================================================================
+
+  Current state: NOT IMPLEMENTED (no plan, subscription, feature flag, trial or billing state).
+  Only organizations.status exists and it gates ALL access.
+
+  Recommendation:
+    - NEW table organization_modules (organization_id, module CHECK in ('plus'), status CHECK in
+      ('trial','active','grace','expired','cancelled'), trial_ends_at, current_period_end, source
+      ('manual'|'billing_provider'), updated_by). Absence of a row = Core only.
+    - Written only by Platform Admin RPCs at first (manual activation for beta). A billing provider
+      webhook can later write through a service-role-only RPC, same pattern as public intake.
+    - Helper has_org_module(org, 'plus') SECURITY DEFINER, used inside every Plus RPC and Plus RLS
+      policy. Server route guard requirePlusAccess() in src/lib/auth/authorization.ts mirrors it.
+      Sidebar visibility is cosmetic only.
+    - State behaviour:
+        trial / active   full Plus read + write
+        grace            full read + write, banner (avoid cutting off a sales team mid-cycle)
+        expired/cancelled  Plus WRITE refused; READ of historical CRM allowed for Org Admin (export),
+                         no automations; nothing deleted
+      Core functions never call has_org_module, so expiry cannot touch dispatch, drivers or requests.
+      The conversion RPC is Plus-gated; Requests already created stay in Core regardless.
+    - Operator subscription billing (Nemryn charges the operator) is a platform concern; ride payments
+      (operator charges the rider) are a tenant concern. Separate tables, separate providers/accounts.
+    - Organization suspension (organizations.status) continues to override everything.
+
+=====================================================================================================
+10. PROPOSED NAVIGATION AND USER EXPERIENCE STRUCTURE
+=====================================================================================================
+
+  Existing shell [SRC: src/components/operations/OperationsSidebar.tsx:45-119]: one flat list --
+  Overview, Requests, Trips, Dispatch, Tomorrow, Recurring Care, Passengers, Facilities, Drivers,
+  Fleet, then conditional Drive (linked driver) and Settings (Org Admin). Icons from navIcons in
+  src/design/icons.ts. Billing/Reports intentionally hidden (no dead navigation rule).
+
+  Proposal (no redesign; same component, add a labelled group):
+    OPERATIONS (unchanged order) Overview, Requests, Trips, Dispatch, Tomorrow, Recurring Care,
+                                 Passengers, Facilities, Drivers, Fleet
+    GROWTH (only when has_plus_access) routes under /growth/*
+        Growth Overview   /growth
+        Pipeline          /growth/pipeline      (both channels, filter by channel)
+        Accounts          /growth/accounts      (facility businesses)
+        Contacts          /growth/contacts
+        Tasks             /growth/tasks
+      Later phases only when real: Communications, Campaigns, Growth Analytics. Do not add "Leads"
+      and "Private-Pay CRM" and "Sales Pipelines" as three separate items -- one Pipeline with a
+      channel filter avoids the duplicate-page problem.
+    Drive, Settings unchanged (Settings gains a "Plus" section for Org Admin when entitled).
+
+  Cross-links instead of duplicates: Request detail shows a small "Opportunity" panel (Plus users
+  only) next to the existing RequestAcquisitionPanel; Account page shows linked Core facilities with
+  links back to /operations/facilities.
+
+  Behaviour by user state:
+    Core-only org          no Growth group; /growth/* -> redirect to /operations (same pattern as
+                           requireOrganizationAdminAccess); optional single Settings card describing Plus.
+    Trial                  Growth group + trial-days badge for Org Admin.
+    Expired Plus           Growth group visible to Org Admin only, read-only with a renewal notice;
+                           hidden for others. Never blocks Operations.
+    No Plus permission     Growth group hidden; direct URL redirects; RPCs refuse (ZW002 style).
+    Driver                 unchanged; never sees Growth.
+
+=====================================================================================================
+11. FUTURE MARKETPLACE-READINESS RECOMMENDATIONS
+=====================================================================================================
+
+  Already present and useful now [SRC]: organizations.name, business_phone/email/address,
+  service_area_description, timezone, operating_days/opens/closes, organization_service_offerings
+  (service_type taxonomy incl. wheelchair_transportation, dialysis, hospital_discharge), vehicle
+  capability columns (wheelchair_ramp/lift/positions, seated_capacity), driver/vehicle availability.
+
+  Recommendations:
+    - Keep all of the above INTERNAL. When needed, introduce a separate provider_public_profile
+      (opt-in, Org Admin-published snapshot: public name, service area, categories, accessibility
+      summary, public contact) -- the same "publish a snapshot" pattern website_request_forms /
+      website_request_form_publications already use.
+    - Capacity/availability published only as coarse statements ("wheelchair accessible: yes"),
+      never live fleet or driver data.
+    - Pricing rules (when designed for Plus quotes) should be Core-owned so a marketplace could later
+      read a published subset.
+    - Marketplace bookings must enter as transportation_requests with a new source value through a
+      service-role RPC -- the same single booking door.
+    - Provider verification and marketplace participation flags: platform-admin-owned columns later;
+      not needed now.
+    - Scope register lists "Provider marketplace" as EXPLICITLY EXCLUDED (ZS-035) -- a decision-register
+      update is needed before NP-P6.
+
+=====================================================================================================
+12. PILOT REGRESSION RISKS AND UNRESOLVED BLOCKERS
+=====================================================================================================
+
+  P0 (resolve before implementation)
+    P0-1 Entitlement must not reuse organizations.status (would suspend dispatch). Mitigation:
+         separate organization_modules + has_org_module, never referenced by Core helpers.
+    P0-2 Uncommitted UX1 work in the tree touches the Operations shell (AppHeader,
+         OperationsLayoutClient, header/*). Plus nav work would collide. Mitigation: commit/release or
+         shelve UX1 before NP-P1 starts; branch Plus from the resulting main.
+    P0-3 Role/permission decision (Q1) and HIPAA/BAA posture (B1) are prerequisites for schema.
+
+  P1 (resolve before beta)
+    P1-1 Changing the memberships.role CHECK (if a 'sales' role is chosen) affects every has_org_role
+         caller list and the team-management UI and tests. Additive-only (explicit role lists mean a
+         new role gets nothing) but must be tested. Mitigation: prefer a membership-level Plus grant.
+    P1-2 Any change to _create_public_request / submit_* functions (e.g. auto-linking opportunities)
+         touches the most hardened path. Mitigation: do NOT modify it in v1; link post-hoc via staff
+         action or a separate trigger-free RPC.
+    P1-3 Privilege contract drift: every new object must be added to privilege_contract_tests.sql, or
+         production release checks fail (intended behaviour).
+    P1-4 Pre-existing SQL test hygiene (some suites commit fixtures; clock-dependent checks)
+         [DOC: p1-pilot-r3-production-release.txt:149]. Plus tests should be rollback-only.
+    P1-5 Doc contradictions could mislead implementers (see section 16 L4).
+
+  P2 (can defer)
+    P2-1 No scheduler/cron exists; task reminders and automated follow-ups need one (Supabase cron or
+         Vercel cron) -- in-app task lists first.
+    P2-2 No CAPTCHA/bot challenge on public forms; rate limit + idempotency exist. Re-evaluate once
+         Plus increases marketing traffic to forms.
+    P2-3 Legacy "Zenward" naming in package.json/README/.env.example/cookie name zw_org_context.
+
+  INFORMATIONAL
+    I-1 PR-12 (Proof of Service signature/photo/mileage) remains the open pilot go-live gate
+        [DOC: p1-pilot-r3-production-release.txt:157-163]; unrelated to Plus but competes for capacity.
+    I-2 Request passenger mutation and cancellation after conversion are deliberately BLOCKED
+        [DOC: same report]; Plus must not offer actions that imply otherwise.
+    I-3 Dispatchers cannot read notification history (Admin-only); Plus task alerts need their own
+        read path.
+
+  Old blockers checked: R3 report lists 0 P0 / 0 P1 pilot gaps with PR-12 conditional; source agrees
+  that request->recurring linkage and accepted-only create_trip are present (20260927120000,
+  20260924091000). Production equality is [DOC]/[NV].
+
+=====================================================================================================
+13. PHASED IMPLEMENTATION ROADMAP
+=====================================================================================================
+
+  Sequence change vs preliminary roadmap: NP-P2 private-pay is split -- pipeline/conversion first
+  (no money), quotes/payments after the pricing decision. Communications (NP-P4) stays after both
+  CRMs because consent + providers + BAA gate it.
+
+  NP-P0 Architecture & Product Specification
+    Goal: approve this audit, answer section 15, write the Plus decision records and data-map docs.
+    Reuse: docs/product conventions (decision-register, *-data-map.md).
+    New: Plus domain model doc, permission matrix, entitlement states, privacy classification.
+    DB/security: none. Dependencies: owner decisions. Acceptance: signed decisions Q1-Q7.
+    Rollback: n/a. Excluded: any code.
+
+  NP-P1 Foundation
+    Goal: entitlement + access plumbing and the first CRM tables, with isolation tests.
+    Reuse: RLS helpers, privilege contract, platform admin, auth guards, settings sections.
+    New: organization_modules, has_org_module, has_plus_access, requirePlusAccess guard, platform-admin
+      RPC to grant/expire Plus, plus_contacts, plus_accounts, plus_opportunities, plus_tasks,
+      plus_activities; empty /growth shell route.
+    DB/security: additive migrations only; contract + adversarial tests; no Core function changed.
+    Dependencies: NP-P0. Acceptance: Core-only org sees zero change; Plus org gated server-side;
+      foreign tenant/driver/inactive/suspended/expired cases refused; contract 0 violations.
+    Rollback: drop the /growth routes; tables are isolated (no Core FK points at them).
+    Excluded: public intake changes, email/SMS, quotes, payments.
+
+  NP-P2 Private-Pay Acquisition (pipeline + conversion)
+    Goal: private-pay opportunities, follow-up tasks, and controlled conversion to a Request.
+    Reuse: website intake, acquisition attribution, log_transportation_request logic, Request Hub
+      decisions as stage drivers.
+    New: plus_opportunity_requests, plus_opportunity_attributions, conversion RPC, Request-detail
+      Opportunity panel, stage derivation from Core facts; manual payment_status columns.
+    DB/security: one link table, RPCs; no change to _create_public_request.
+    Acceptance: a converted opportunity yields exactly one pending Request in Request Hub; dispatch
+      flow unchanged; replay-safe; lost reasons mirror Core decline reasons.
+    Rollback: remove link + RPC; Requests remain valid Core data.
+    Excluded: quotes, pricing, payment processor, outbound messaging.
+  NP-P2b Quotes (after Q3) plus_quotes (+ Core pricing rules if approved).
+
+  NP-P3 Facility CRM
+    Goal: accounts, contacts, facility pipeline, contract/referral status, location links.
+    Reuse: facilities, requests (source='facility'), trips facility FKs.
+    New: plus_account_facilities, account pages, referral attribution read RPC.
+    Acceptance: no duplicate facility records; volume per account derived from Core.
+    Rollback: drop link table/pages. Excluded: facility self-service portal.
+
+  NP-P4 Communications & Acquisition Tracking
+    Goal: consent ledger, logged + sent email, SMS only after provider/BAA/TCPA decision.
+    Reuse: Resend boundary, notification_events dispatch pattern.
+    New: plus_communication_consents, Plus email templates, scheduler for reminders, campaign tag on
+      opportunities. Acceptance: no send without consent; promotional never includes trip content.
+    Excluded: ad pixels, outbound ad-platform conversion uploads.
+
+  NP-P5 Retention & Commercial Beta
+    Goal: repeat-booking view, recurring-customer view, revenue reporting (once fares exist),
+      Plus onboarding, beta readiness. Reuse: recurring arrangements, request linkage.
+    Excluded: loyalty program (ZS-036 excluded).
+
+  NP-P6 Marketplace Readiness
+    Goal: provider_public_profile snapshot + interface spec only. Excluded: everything listed in brief
+    section 11.
+
+  SMALLEST SAFE FIRST TASK (after approval): NP-P1-S1 "Plus entitlement gate":
+    organization_modules table + has_org_module() + platform-admin grant/expire RPC + requirePlusAccess
+    guard + an empty /growth page that renders only for entitled orgs, with privilege-contract and
+    adversarial tests. No CRM tables yet. It proves the gate, the expiry semantics and "Core unaffected"
+    before any customer data exists.
+
+=====================================================================================================
+14. RECOMMENDED NEXT PHASE -- NP-P0-A02
+=====================================================================================================
+
+  NP-P0-A02 -- Nemryn Plus Product & Data Specification (docs only).
+  Deliverables:
+    a. Owner answers to section 15.
+    b. docs/product/plus-domain-model.md (entities from section 7, final fields, ownership).
+    c. docs/security/plus-access-model.md (role x action matrix, entitlement states, privacy classes,
+       which Core facts Plus may read).
+    d. Decision-register entries (Plus module boundary, single booking door, marketplace status vs
+       ZS-035, consent model).
+    e. NP-P1-S1 implementation brief with acceptance tests listed.
+    f. Correct stale docs flagged in section 16 L4 (optional, docs-only).
+  No migrations, no UI.
+
+=====================================================================================================
+15. OPEN QUESTIONS REQUIRING PRODUCT DECISIONS (max seven)
+=====================================================================================================
+
+  Q1 Who uses Plus: Org Admin only, Admin + Dispatcher, or a new sales role / per-member Plus grant?
+  Q2 Should every website Request automatically appear in the Plus pipeline for entitled orgs, or only
+     when staff choose "Track in Plus"?
+  Q3 Pricing: will Core own fare/pricing rules (needed for quotes, revenue and any marketplace), and are
+     private-pay payments taken in-app (processor) or recorded manually?
+  Q4 HIPAA posture: will Nemryn sign BAAs with operators, and are BAAs in place / obtainable with
+     Supabase, Vercel, Resend and any SMS provider?
+  Q5 Expired Plus: read-only access for Org Admin (recommended) or fully hidden until renewal?
+  Q6 Is SMS in scope for the Plus beta, and if so is it transactional only or also promotional?
+  Q7 Does the marketplace remain "explicitly excluded" (ZS-035) or move to FUTURE so NP-P6 is allowed?
+
+=====================================================================================================
+16. AUDIT LIMITATIONS AND UNVERIFIED ASSUMPTIONS
+=====================================================================================================
+
+  L1 Production was not queried. Deployed state, migration head and privilege contract results are
+     taken from release reports [DOC]. Mark as UNVERIFIED until a read-only production check is run.
+  L2 No tests were executed (rule 13). Test coverage statements reflect file presence and headers.
+  L3 Not every one of the 73 migrations was read in full; schema facts cite the specific migrations
+     read. Later CREATE OR REPLACE versions of functions supersede earlier ones; the latest definitions
+     of create_trip and _create_public_request were identified by file order, not by reading every body.
+  L4 Contradictions found between source and documentation:
+     - src/lib/supabase/service-role-server.ts doc comment says the ONLY caller is website-intake.ts
+       using only two functions; source shows five server-only callers (website-intake.ts,
+       rate-limit.ts, cors.ts, public-forms/public-form.ts, notifications/dispatch.ts). All are
+       server-only; the comment is stale.
+     - docs/deployment/environment-variable-inventory.md:14,24 says no service-role key appears
+       anywhere in the codebase; source and .env.example use SUPABASE_SERVICE_ROLE_KEY server-side.
+     - docs/product/scope-register.md (last updated 2026-08-29) lists recurring transport, proof of
+       service, exception management and facility records as POST-MVP; source has since implemented
+       them. ZS-035 "Provider marketplace: explicitly excluded" conflicts with the Plus/Marketplace brief.
+     - transportation_requests table comment still says "No anonymous access of any kind exists"
+       (20260830130900); later migrations added the service-role public intake path (the comment
+       is historical).
+  L5 The in-progress UX1 files were read only as far as the git diff; their behaviour is not assessed.
+  L6 Legal/regulatory points (HIPAA, TCPA, PCI) are flagged for review, not legal conclusions.
+  L7 Vleeds was not inspected (per instruction); Plus as proposed has no dependency on it.
+
+END OF REPORT -- NP-P0-A01
