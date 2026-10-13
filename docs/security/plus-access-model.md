@@ -77,6 +77,8 @@ Recommended option: add `growth` to the `memberships.role` CHECK **and** the `st
 
 `_plus_member_access` always goes through `has_org_role` (or the same active-membership + active-organization join). Suspension and inactive membership therefore remove Plus exactly as they remove Core.
 
+> **Implementation status (NP-P1-S2, migration `20261013120000`):** `plus_can_read`, `plus_can_write`, `_require_plus_write` and `_require_plus_admin_write` exist with the S2 (Admin-only) rule. `_plus_member_access` and the grant-aware bodies arrive with named-staff grants in NP-P1-S3, which replaces these function bodies.
+
 ### 3.1a Entitlement states — behaviour summary
 
 | Effective state | Plus UI | Plus data | Writes / automations | Inquiry form submissions | Core |
@@ -221,6 +223,7 @@ Harness: the existing `pg_temp.try_as(role, uid, stmt)` pattern (`supabase/tests
 | T26 | Core public intake regression (T18) re-run after P2-S7 with no diff to any Core intake function | pass |
 | T27 | Forward-FK safety: each Plus migration applies on top of the previous slice alone (fresh reset to that point), and later additive migrations validate every existing row | apply cleanly |
 | T28 | Quotes: totals computed server-side; a `sent` quote is immutable; no quote state changes `payment_reported_status`, a Request or any Core row | as stated |
+| T29 | Concurrent Platform Admin entitlement changes from the same rendered version (NP-P1-S2-R1; `plus_entitlement_versioned_tests.sql`, `plus_entitlement_versioned_concurrency_test.sh`) | exactly one applies; the other ZW003, nothing written, no audit |
 
 ## 9. Compliance and vendor gates (unresolved — do not claim compliance)
 

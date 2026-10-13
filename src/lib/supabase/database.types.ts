@@ -1917,6 +1917,14 @@ export type Database = {
         Returns: string[]
       }
       _require_platform_admin: { Args: never; Returns: undefined }
+      _require_plus_admin_write: {
+        Args: { p_organization_id: string }
+        Returns: undefined
+      }
+      _require_plus_write: {
+        Args: { p_organization_id: string }
+        Returns: undefined
+      }
       _sanitize_acquisition: { Args: { p_acquisition: Json }; Returns: Json }
       _staff_invite_token_hash: { Args: { p_token: string }; Returns: string }
       _validate_request_decision_reason: {
@@ -2588,20 +2596,36 @@ export type Database = {
           isSetofReturn: false
         }
       }
-      platform_extend_plus_trial: {
-        Args: {
-          p_extra_days: number
-          p_organization_id: string
-          p_reason: string
-        }
-        Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
-        SetofOptions: {
-          from: "*"
-          to: "platform_organization_module_result"
-          isOneToOne: true
-          isSetofReturn: false
-        }
-      }
+      platform_extend_plus_trial:
+        | {
+            Args: {
+              p_extra_days: number
+              p_organization_id: string
+              p_reason: string
+            }
+            Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
+            SetofOptions: {
+              from: "*"
+              to: "platform_organization_module_result"
+              isOneToOne: true
+              isSetofReturn: false
+            }
+          }
+        | {
+            Args: {
+              p_expected_updated_at: string
+              p_extra_days: number
+              p_organization_id: string
+              p_reason: string
+            }
+            Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
+            SetofOptions: {
+              from: "*"
+              to: "platform_organization_module_result"
+              isOneToOne: true
+              isSetofReturn: false
+            }
+          }
       platform_get_organization: {
         Args: { p_organization_id: string }
         Returns: {
@@ -2718,24 +2742,44 @@ export type Database = {
           trip_count: number
         }[]
       }
-      platform_set_organization_module: {
-        Args: {
-          p_access_ends_at: string
-          p_module: string
-          p_organization_id: string
-          p_reason: string
-          p_restriction: string
-          p_status: string
-          p_trial_days: number
-        }
-        Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
-        SetofOptions: {
-          from: "*"
-          to: "platform_organization_module_result"
-          isOneToOne: true
-          isSetofReturn: false
-        }
-      }
+      platform_set_organization_module:
+        | {
+            Args: {
+              p_access_ends_at: string
+              p_module: string
+              p_organization_id: string
+              p_reason: string
+              p_restriction: string
+              p_status: string
+              p_trial_days: number
+            }
+            Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
+            SetofOptions: {
+              from: "*"
+              to: "platform_organization_module_result"
+              isOneToOne: true
+              isSetofReturn: false
+            }
+          }
+        | {
+            Args: {
+              p_access_ends_at: string
+              p_expected_updated_at: string
+              p_module: string
+              p_organization_id: string
+              p_reason: string
+              p_restriction: string
+              p_status: string
+              p_trial_days: number
+            }
+            Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
+            SetofOptions: {
+              from: "*"
+              to: "platform_organization_module_result"
+              isOneToOne: true
+              isSetofReturn: false
+            }
+          }
       plus_access_state: {
         Args: { p_organization_id: string }
         Returns: Database["public"]["CompositeTypes"]["plus_access_state_result"]
@@ -2746,6 +2790,8 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_can_read: { Args: { p_organization_id: string }; Returns: boolean }
+      plus_can_write: { Args: { p_organization_id: string }; Returns: boolean }
       publish_website_request_form: {
         Args: { p_organization_id: string }
         Returns: Database["public"]["CompositeTypes"]["website_request_form_publish_result"]

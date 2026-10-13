@@ -318,6 +318,13 @@ Migration `20261013100000_plus_entitlement_foundation.sql`; table `organization_
 - **Effect:** valid only while `status = 'trial'` and `trial_extension_count = 0` (else ZW004). Sets `trial_ends_at = greatest(trial_ends_at, now()) + days` and `trial_extension_count` to 1.
 - **Concurrency and audit:** the same row locks and audit event as above.
 
+### Versioned forms (NP-P1-S2-R1, used by the Platform Admin panel)
+Migration `20261013140000_plus_entitlement_optimistic_concurrency.sql` adds overloads with a trailing `p_expected_updated_at timestamptz`:
+- `platform_set_organization_module(... the 7 arguments above ..., p_expected_updated_at)`
+- `platform_extend_plus_trial(p_organization_id, p_extra_days, p_reason, p_expected_updated_at)`
+
+Each one locks the organization row and the module row, then compares the module row's `updated_at` with `p_expected_updated_at` **under those locks**. NULL means "no entitlement row expected". On any mismatch it raises **ZW003 `stale_state`** and writes nothing (no row change, no audit). Otherwise it calls the unchanged function above in the same transaction, so every rule, the idempotent no-op and the audit event are identical. Two Platform Admins who submit from the same rendered version serialize on the organization lock: exactly one change applies and the other gets ZW003 instead of silently overwriting it. The unversioned signatures remain for the previously deployed app (EXPAND). A later reviewed CONTRACT migration may drop them.
+
 ### `platform_get_organization_module(p_organization_id, p_module) → platform_organization_module_state`
 - **Who:** Platform Admin only.
 - **Returns:** `(organization_id, module, provisioned, status, restriction, trial_started_at, trial_ends_at, trial_extension_count, access_ends_at, effective_state, status_reason, updated_at)`. `provisioned = false` when there is no row.
@@ -326,5 +333,20 @@ Migration `20261013100000_plus_entitlement_foundation.sql`; table `organization_
 ### Tests
 - `supabase/tests/plus_entitlement_tests.sql` (rollback-only).
 - `supabase/tests/plus_entitlement_concurrency_test.sh`.
+- `supabase/tests/plus_entitlement_versioned_tests.sql` (rollback-only, NP-P1-S2-R1).
+- `supabase/tests/plus_entitlement_versioned_concurrency_test.sh` (NP-P1-S2-R1).
 - `supabase/tests/privilege_contract_tests.sql`.
+
+## Nemryn Plus access helpers (NP-P1-S2)
+
+Migration `20261013120000_plus_access_helpers.sql`: functions only, no table, policy or Core change. No Core function calls them. They are the building blocks for future `plus_*` tables and RPCs.
+
+| Function | Who may call | Returns / effect |
+|---|---|---|
+| `plus_can_read(org)` | authenticated | `true` iff the caller is Organization Admin of that active organization (active membership) AND the effective Plus state is `write` or `read_only`. Otherwise `false` (locked, none, any other role, inactive member, suspended organization, foreign tenant, bare PlatformAdminGrant). Never raises |
+| `plus_can_write(org)` | authenticated | The same caller rule AND an effective state of `write`. `read_only` never writes |
+| `_require_plus_write(org)` | owner-only (no client EXECUTE) | ZW001 without a uid; **ZW002** when the caller cannot read (no oracle); **ZW001** when readable but not writable |
+| `_require_plus_admin_write(org)` | owner-only | `_require_plus_write` AND Organization Admin. Identical in S2; diverges when S3 named-staff grants arrive |
+
+Tests: `supabase/tests/plus_access_helpers_tests.sql` (rollback-only, 170 cases).
 

@@ -239,7 +239,15 @@ c_fn(sig, roles) as (values
   ('plus_access_state(uuid)', 'u'),
   ('platform_set_organization_module(uuid,text,text,integer,timestamp with time zone,text,text)', 'u'),
   ('platform_extend_plus_trial(uuid,integer,text)', 'u'),
-  ('platform_get_organization_module(uuid,text)', 'u')
+  ('platform_get_organization_module(uuid,text)', 'u'),
+  -- NP-P1-S2 Nemryn Plus access helpers
+  ('plus_can_read(uuid)', 'u'),
+  ('plus_can_write(uuid)', 'u'),
+  ('_require_plus_write(uuid)', ''),
+  ('_require_plus_admin_write(uuid)', ''),
+  -- NP-P1-S2-R1 versioned (optimistic-concurrency) entitlement mutations
+  ('platform_set_organization_module(uuid,text,text,integer,timestamp with time zone,text,text,timestamp with time zone)', 'u'),
+  ('platform_extend_plus_trial(uuid,integer,text,timestamp with time zone)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

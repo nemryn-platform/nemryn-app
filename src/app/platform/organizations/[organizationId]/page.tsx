@@ -20,6 +20,7 @@ import {
   plusEffectiveStateLabel,
   plusRestrictionLabel,
   plusStatusLabel,
+  entitlementVersionToken,
 } from "@/lib/plus/entitlement-admin-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -172,6 +173,7 @@ export default async function PlatformOrganizationPage({ params }: { params: Pro
             <DefinitionList
               columns={2}
               items={[
+                { label: "Organization", value: `${org.name} · ${org.organizationId}` },
                 { label: "Stored status", value: plusStatusLabel(plus) },
                 { label: "Effective access", value: plusEffectiveStateLabel(plus.effectiveState) },
                 { label: "Restriction", value: plusRestrictionLabel(plus.restriction) },
@@ -188,6 +190,7 @@ export default async function PlatformOrganizationPage({ params }: { params: Pro
               organizationId={org.organizationId}
               organizationName={org.name}
               actions={availablePlusActions(plus)}
+              versionToken={entitlementVersionToken(plus.updatedAt)}
             />
           </div>
         ) : (

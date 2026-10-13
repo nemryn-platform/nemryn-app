@@ -18,6 +18,7 @@ const SECTION_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/operations/facilities", label: "Facilities" },
   { prefix: "/operations/drivers", label: "Drivers" },
   { prefix: "/operations/fleet", label: "Fleet" },
+  { prefix: "/operations/growth", label: "Growth" },
   { prefix: "/operations/settings", label: "Settings" },
   { prefix: "/operations/billing", label: "Billing" },
   { prefix: "/operations/reports", label: "Reports" },
@@ -43,6 +44,8 @@ export interface OperationsLayoutClientProps {
   hasMultipleOrganizations: boolean;
   /** Real fact from a live `current_driver_id()` call (P1-E3-S9, Owner-Operator Mode) — gates the sidebar's conditional "Drive" item. Never inferred from Membership.role. */
   hasLinkedDriverProfile: boolean;
+  /** NP-P1-S2: server-resolved Nemryn Plus entry (see OperationsSidebar.canAccessGrowth). */
+  canAccessGrowth: boolean;
   children: ReactNode;
 }
 
@@ -156,6 +159,7 @@ export function OperationsLayoutClient({
   dispatcherEmail,
   hasMultipleOrganizations,
   hasLinkedDriverProfile,
+  canAccessGrowth,
   children,
 }: OperationsLayoutClientProps) {
   const pathname = usePathname();
@@ -170,6 +174,7 @@ export function OperationsLayoutClient({
         dispatcherRole: ROLE_LABEL[organization.role],
         hasLinkedDriverProfile,
         canManageSettings: organization.role === "organization_admin",
+        canAccessGrowth,
       }}
       header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations, dispatchDay)}
     >

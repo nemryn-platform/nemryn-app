@@ -75,6 +75,8 @@ export interface OperationsSidebarProps {
   hasLinkedDriverProfile?: boolean;
   /** P1-PILOT-S4B-R4A: true only for an Organization Admin of the active workspace -- gates the "Settings" nav item. Navigation convenience only; every /operations/settings route and mutation independently enforces Organization Admin. */
   canManageSettings?: boolean;
+  /** NP-P1-S2: true only when the server resolved Nemryn Plus entry (Organization Admin + write / read_only entitlement) -- gates the "Growth" nav item. Navigation convenience only; every /operations/growth route re-checks requirePlusAccess and the database re-checks plus_access_state. Never shown while Plus is locked or absent. */
+  canAccessGrowth?: boolean;
 }
 
 /**
@@ -103,6 +105,7 @@ export function OperationsSidebar({
   dispatcherRole,
   hasLinkedDriverProfile,
   canManageSettings,
+  canAccessGrowth,
 }: OperationsSidebarProps) {
   const pathname = usePathname();
   // P1-E3-S9 (work item §4/§12, "progressive complexity" — "a 1-2 vehicle
@@ -112,6 +115,9 @@ export function OperationsSidebar({
   // dual-hat owner-operator. Same platform, no forked nav structure.
   const navItems = [
     ...NAV_ITEMS,
+    // NP-P1-S2: Nemryn Plus (Growth) -- one item, after the Core operational modules and before Drive / Settings,
+    // only for callers the server already authorised. No group header yet: Growth has a single page in S2.
+    ...(canAccessGrowth ? [{ key: "growth" as const, label: "Growth", href: "/operations/growth" }] : []),
     ...(hasLinkedDriverProfile ? [{ key: "drive" as const, label: "Drive", href: "/driver" }] : []),
     // P1-PILOT-S4B-R4A: tenant administration, Organization Admin only,
     // always last -- below the operational modules it configures.

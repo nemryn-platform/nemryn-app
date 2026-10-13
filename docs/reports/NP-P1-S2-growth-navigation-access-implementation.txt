@@ -1,0 +1,197 @@
+NEMRYN PLUS -- NP-P1-S2
+GROWTH NAVIGATION, ACCESS CONTROLS & ADMIN SAFETY -- LOCAL IMPLEMENTATION REPORT
+Date: 2026-10-13 (UTC). Author: Claude Code (Opus 5.5).
+LOCAL ONLY: S2 not committed, not pushed, not merged, not deployed; no production migration; no production
+entitlement or data change.
+
+=====================================================================================================
+1. STARTING GIT BASELINE
+=====================================================================================================
+  origin/main = cea620ab36c6549f3c53fb70c74f8804a0521e4b (S1 merge; = production per NP-P1-S1-R3).
+  New branch np-p1-s2-growth-access-navigation from origin/main with --no-track (no upstream). Clean tracked state at
+  start; all untracked reports, .tmp-qa and credentials preserved. No other project's Git or Supabase configuration
+  was touched (Chelth stack left running, untouched).
+
+=====================================================================================================
+2. PART 1 -- S1 RELEASE HOUSEKEEPING (no production change)
+=====================================================================================================
+  Claude Code has NO production database access (Supabase CLI still logged into the Chelth account), so:
+  - Pilot Simulation audit pair (trial start, then expired): NOT VERIFIED.
+  - Final Zenward / Pilot entitlement states: owner-reported only (Pilot expired / trial dates kept; Zenward trial,
+    internal exception) -- NOT re-verified.
+  - Production backup / PITR readiness: NOT VERIFIED (no owner evidence).
+  Prepared for the owner (read-only, one SELECT): docs/reports/NP-P1-S2-s1-closeout-readonly-check.sql -- lists both
+  organizations' entitlement rows and every platform_plus_access_changed audit event with expected output
+  (2 entitlement rows, 3 Plus audit events: Pilot trial -> expired, Zenward trial). Instructions in its header.
+  No entitlement, trial history or audit row was changed.
+
+=====================================================================================================
+3. DATABASE -- migration 20261013120000_plus_access_helpers.sql (functions only)
+=====================================================================================================
+  plus_can_read(uuid)              authenticated  true iff caller is Org Admin of the active organization (active
+                                                  membership, via has_org_role) AND effective Plus = write | read_only
+  plus_can_write(uuid)             authenticated  same caller rule AND effective Plus = write
+  _require_plus_write(uuid)        owner-only     ZW001 no uid; ZW002 cannot read (no oracle); ZW001 read-only
+  _require_plus_admin_write(uuid)  owner-only     _require_plus_write AND Org Admin (diverges in S3)
+  All SECURITY DEFINER, stable, search_path pinned; no table / policy / grant on existing objects; no Core function
+  references them (asserted by test P6); a PlatformAdminGrant does not satisfy them. Registered in the privilege
+  contract (2 x 'u', 2 x ''). _plus_member_access deferred to S3 (it is only meaningful with grants).
+  Applied locally with `supabase migration up --local` (dev DB, additive). Types regenerated (+10 lines, 0 removed).
+
+=====================================================================================================
+4. UI FUNCTIONALITY
+=====================================================================================================
+  Growth navigation: one "Growth" item (TrendUp icon via navIcons) in the existing sidebar, after Fleet and before
+    Drive / Settings, shown only when the server resolved Plus entry (Organization Admin + effective write or
+    read_only; computed in src/app/operations/layout.tsx with the request-cached plus_access_state read -- no RPC
+    for other roles). Hidden while locked or not provisioned, and for Dispatchers / Drivers. Same component, same
+    styles, active state (aria-current) and tablet rail behaviour; no second navigation system; below md the
+    existing narrow-screen guard is unchanged.
+  Header context: "/operations/growth" -> "Growth" (was the "Operations" fallback).
+  Growth page: badge "Plus: Trial | Active | Not active"; trial end + days left; active message; read-only notice.
+    No CRM data, metrics or placeholders.
+  Settings -> Nemryn Plus (new section, Organization Admin only): read-only status for Not enabled / Trial (end date)
+    / Active / Not active / Restricted ("Nemryn Plus access is restricted ... Contact Nemryn"), an "Open Growth"
+    link only when Growth is reachable, and a note that Plus is managed by Nemryn (ZD-207). No controls, no billing.
+  Shared, unit-tested wording: plusStatusSummary() in src/lib/plus/access-core.ts.
+
+=====================================================================================================
+5. PLATFORM ADMIN TARGETING SAFEGUARDS (response to the S1 wrong-organization trial)
+=====================================================================================================
+  1. Every Plus dialog shows a "Target organization" block: organization name (heading) + full organization id.
+  2. The Nemryn Plus panel lists "Organization: <name> · <id>".
+  3. Every Plus action (all are consequential: audited; one trial per organization) requires typing the
+     organization's name; the submit button stays disabled until it matches (case / spacing insensitive).
+  4. Server binding (changePlusEntitlementAction): re-reads the organization and its entitlement BY THE SUBMITTED ID
+     (Platform-Admin-gated RPCs), refuses unless the typed name equals THAT organization's name, and refuses if the
+     entitlement changed since the panel rendered (version token = updated_at). Then calls the S1 RPC with that id.
+  5. Platform authorization (requirePlatformAdminAccess + _require_platform_admin) and auditing unchanged; S1 trial
+     policy unchanged; Zenward's entitlement and history untouched.
+  6. Evidence (browser E2E): tampered hidden id (Org B) with Org A's name -> refused naming Org B, nothing written;
+     missing confirmation (required attribute removed) -> refused by the server; stale panel after a concurrent change
+     -> "changed ... since this page was loaded", no extension, no audit; correct confirmation -> applied to Org A
+     only. Unit: confirmsOrganization (incl. the "Zenward vs Pilot" case), isStaleEntitlementToken.
+
+=====================================================================================================
+6. TENANT SECURITY EVIDENCE
+=====================================================================================================
+  plus_access_helpers_tests.sql (170): every effective state (none, trial, active, active with future end, elapsed
+  trial, elapsed active, expired, cancelled, disabled read-only, locked) x Org A admin (read/write + both guards) and
+  x dispatcher, driver, inactive dispatcher, Org B admin, platform admin without membership, no-membership user
+  (always false/false, guard ZW002); cross-tenant (Org B entitled / Org A not); multi-org user; inactive admin;
+  suspended organization; null / unknown organization; no-uid; privilege grants; SECURITY DEFINER + search_path;
+  no Core function references the helpers or organization_modules.
+  Browser: Growth item and routes never shown to Dispatcher / Driver / Org B; Settings > Nemryn Plus refused to
+  Dispatcher (-> /operations) and Driver (-> /driver); Org B sees only its own status; locked hides Growth and shows
+  only "Restricted".
+
+=====================================================================================================
+7. CORE REGRESSION -- isolated clean stack (NemrynS1Iso, reset before every suite; removed afterwards)
+=====================================================================================================
+  Pass "pre-S2" (Core + S1 schema) vs pass "S2" (+ 20261013120000):
+    privilege contract (S1 file / S2 file)   0 / 29          0 / 29
+    platform_admin_foundation               58 PASS          58 PASS        identical
+    rls_adversarial                         33 PASS          33 PASS        identical
+    security_definer_exposure               20 PASS          20 PASS        identical
+    function_privilege                       7 PASS*          7 PASS        identical (*re-run, see below)
+    request_decision_workflow               60 PASS          60 PASS        identical
+    create_trip                             20 PASS          20 PASS        identical
+    public_request_intake                   42 PASS          42 PASS        identical
+    request_mutation                        39 PASS          39 PASS        identical
+    create_trip_privilege                    5 PASS           5 PASS        identical
+    mutation_authorization                   4 PASS           4 PASS        identical
+    plus_entitlement (S1)                  150 / 150        150 / 150       identical
+    plus_access_helpers (S2)                   --           170 / 170
+  (The runner's single "fail" per rls_adversarial / request_decision / request_mutation is each suite's closing
+  "review PASS/FAIL lines above" notice, not a test.)
+  * Environment limitation: in the pre-S2 pass the reset before function_privilege_tests failed (machine load 61;
+    the isolated storage container missed its health deadline). Re-run after a fresh reset: 7 PASS, identical to S2
+    apart from UUID masking in the diff.
+
+=====================================================================================================
+8. TEST COUNTS (all executed; nothing skipped is counted as passed)
+=====================================================================================================
+  TypeScript `tsc --noEmit`          PASS
+  ESLint `eslint src`                PASS (0 problems)
+  Unit `npm test`                    752 / 752 (749 + 3 new; +2 new assertion groups in existing Plus test files)
+  Production build `next build`      PASS (/operations/growth, /operations/settings/plus, platform org page)
+  Dev DB: plus_access_helpers 170/170, plus_entitlement 150/150, privilege contract 0/29 (rollback-only; 0 rows left)
+  Isolated stack: section 7
+  Browser E2E (dev stack, next start :3100):
+    NP-P1-S2 growth / access / safeguards       49 / 49   (.tmp-qa/np-p1-s2-growth-access-navigation-e2e.mjs)
+    NP-P1-S1 entitlement (updated for typed confirmation)  45 / 45
+    UX1 header / Day Sheet regression           46 / 46
+  E2E history (honest record): run 1 stopped after 22 PASS / 1 FAIL -- B11 was blocked by the browser's own
+  `required` validation (test now removes it to exercise the SERVER refusal) and the first Admin session idled out
+  (test re-opens it); its interrupted cleanup left 1 local fixture row + 1 local audit row, removed by hand. Run 2:
+  48 / 1 -- C5 expected "14 days left" but B15's simulated concurrent change adds 1 minute, so the page correctly
+  shows 15 (expectation widened to 14 | 15, exact line recorded). Run 3: 49 / 49. No product code changed between
+  runs. QA tooling: .tmp-qa/local-helper.mjs Chrome start-up wait raised (5 -> 40 tries) for load spikes.
+  Environment restored: server stopped, headless-Chrome profiles removed by literal path, Nemryn containers stopped,
+  isolated stack and volumes removed, Chelth untouched.
+
+=====================================================================================================
+9. EXACT FILES CHANGED (uncommitted)
+=====================================================================================================
+  New:
+    supabase/migrations/20261013120000_plus_access_helpers.sql
+    supabase/tests/plus_access_helpers_tests.sql
+    src/app/operations/settings/plus/page.tsx
+    docs/reports/NP-P1-S2-s1-closeout-readonly-check.sql
+    docs/reports/NP-P1-S2-growth-navigation-access-implementation.txt (this report)
+  Modified:
+    src/app/operations/layout.tsx                         (+ canAccessGrowth, server-side)
+    src/components/operations/OperationsLayoutClient.tsx  (+ prop pass-through, "Growth" context label)
+    src/components/operations/OperationsSidebar.tsx       (+ conditional Growth item)
+    src/design/icons.ts                                   (+ growth / plus icon keys)
+    src/lib/operations/settings-sections.ts               (+ Nemryn Plus section)
+    src/app/operations/growth/page.tsx                    (status badge, active state)
+    src/lib/plus/access-core.ts (+ .test.mjs)             (plusStatusSummary)
+    src/lib/plus/entitlement-admin-core.ts (+ .test.mjs)  (targeting safeguards)
+    src/components/platform/PlusEntitlementControl.tsx   (target block, typed confirmation, version token)
+    src/app/platform/organizations/[organizationId]/actions.ts  (server binding + stale check)
+    src/app/platform/organizations/[organizationId]/page.tsx    (Organization id row, version token)
+    src/lib/supabase/database.types.ts                    (regenerated, additive)
+    supabase/tests/privilege_contract_tests.sql           (+ 4 functions)
+    docs/data/mutation-api.md, docs/security/database-privilege-contract.md, docs/security/plus-access-model.md
+  Local QA (untracked, not for commit): .tmp-qa/np-p1-s2-growth-access-navigation-e2e.mjs; .tmp-qa/local-helper.mjs
+    (start-up wait); .tmp-qa/np-p1-s1-plus-entitlement-e2e.mjs (typed confirmation).
+  Not modified: AppHeader.tsx, Core migrations / RPCs / RLS / policies, public intake, brand assets, layout styles.
+
+=====================================================================================================
+10. REMAINING S1 CLOSEOUT ISSUES
+=====================================================================================================
+  - Pilot audit pair + final states: owner to run NP-P1-S2-s1-closeout-readonly-check.sql.
+  - Backup / PITR readiness: owner evidence needed.
+  - Supabase CLI production access (Nemryn account) still unresolved -- needed (or the SQL Editor package path) to
+    apply 20261013120000 when S2 is released.
+  - Zenward Mobility trial (internal exception) ends 2026-10-27 15:31 UTC -> read-only automatically.
+
+=====================================================================================================
+11. OUTSTANDING DECISIONS
+=====================================================================================================
+  - Release path for 20261013120000 (CLI with a Nemryn token, or the SQL Editor package approach used for S1 --
+    a package for this migration is not yet prepared).
+  - Optional: Plus changes in the platform activity feed (deferred; no S2 dependency).
+  - Growth group header in the sidebar (deferred until Growth has more than one page).
+  - PD-10 / PD-11 still gate real customer data.
+
+=====================================================================================================
+12. READY FOR A CONTROLLED COMMIT?
+=====================================================================================================
+  YES, for review: no known defect; every S2 check passes locally and on the isolated stack; Core unchanged
+  (identical suites, privilege contract 0/29). Suggested scoped commit on np-p1-s2-growth-access-navigation using
+  the explicit file list in section 9 (excluding .tmp-qa), e.g.
+  "feat(plus): Growth navigation, Plus status visibility and admin targeting safeguards (NP-P1-S2)".
+  Not committed by instruction. Release additionally needs: owner closeout of section 10, a production migration
+  path, PR review, and a synthetic smoke (Pilot uses "Activate Plus" now -- its trial is consumed).
+
+=====================================================================================================
+13. RECOMMENDED NEXT MILESTONE
+=====================================================================================================
+  NP-P1-S2-R1: controlled S2 commit + PR + production release package for 20261013120000 (same verified path as S1),
+  then the S1 closeout evidence. After that: NP-P1-S3 (named-staff Plus grants), per the A02R roadmap. Not started.
+
+STOP: implementation, local tests and report complete. No commit, push, merge, deploy, production migration or
+production entitlement change; NP-P1-S3 not started.
+END OF REPORT -- NP-P1-S2
