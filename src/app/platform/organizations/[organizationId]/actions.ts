@@ -5,7 +5,8 @@ import { requirePlatformAdminAccess } from "@/lib/auth/platform";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateLifecycleInput } from "@/lib/platform/platform-core";
-import { validatePlusAdminInput } from "@/lib/plus/entitlement-admin-core";
+import { confirmsOrganization, isStaleEntitlementToken, validatePlusAdminInput } from "@/lib/plus/entitlement-admin-core";
+import { getOrganizationDetail, getPlusEntitlement } from "@/lib/platform/platform";
 
 export interface LifecycleState {
   status: "idle" | "done" | "error";
@@ -85,6 +86,36 @@ export async function changePlusEntitlementAction(_previous: PlusEntitlementStat
     return { status: "error", message: input.message };
   }
 
+  // NP-P1-S2 organization-targeting safeguards. The change is bound to the organization id in THIS request: its name
+  // and current entitlement are re-read here (Platform-Admin-gated RPCs), the typed confirmation must equal THAT name,
+  // and the entitlement must still be the one the panel showed. A stale tab, a tampered / mismatched hidden id or a
+  // concurrent change is refused before anything is written.
+  const [targetOrganization, currentEntitlement] = await Promise.all([
+    getOrganizationDetail(organizationId),
+    getPlusEntitlement(organizationId),
+  ]);
+  if (!targetOrganization || !currentEntitlement) {
+    return { status: "error", message: "That organization could not be found." };
+  }
+  if (!confirmsOrganization(formData.get("confirmOrganizationName"), targetOrganization.name)) {
+    return {
+      status: "error",
+      message: `Type the organization's name exactly as shown ("${targetOrganization.name}") to confirm this change is for that organization.`,
+    };
+  }
+  if (isStaleEntitlementToken(formData.get("expectedVersion"), currentEntitlement.updatedAt)) {
+    return {
+      status: "error",
+      message: "Nemryn Plus changed for this organization since this page was loaded. Reload the page and review it before trying again.",
+    };
+  }
+
+  // NP-P1-S2-R1: the version check above gives a friendly early answer, but the AUTHORITATIVE check is in the database:
+  // the versioned RPCs compare updated_at under the organization + module row locks (ZW003 when stale), so a change
+  // committed by another Platform Admin after the check above can never be silently overwritten.
+  const expectedVersion = String(formData.get("expectedVersion") ?? "");
+  // NULL = "no entitlement row expected"; the generated Args types have no nullability (repository convention: cast).
+  const expectedUpdatedAt = (expectedVersion === "none" ? null : expectedVersion) as string;
   const supabase = await createServerSupabaseClient();
   const request = input.value;
   const { data, error } =
@@ -93,6 +124,7 @@ export async function changePlusEntitlementAction(_previous: PlusEntitlementStat
           p_organization_id: organizationId,
           p_extra_days: request.extraDays,
           p_reason: request.reason,
+          p_expected_updated_at: expectedUpdatedAt,
         })
       : await supabase.rpc("platform_set_organization_module", {
           p_organization_id: organizationId,
@@ -103,9 +135,16 @@ export async function changePlusEntitlementAction(_previous: PlusEntitlementStat
           p_access_ends_at: request.accessEndsAt as string,
           p_restriction: request.restriction as string,
           p_reason: request.reason,
+          p_expected_updated_at: expectedUpdatedAt,
         });
   if (error) {
     console.error("[platform] plus entitlement change failed", error.code);
+    if (error.code === "ZW003") {
+      return {
+        status: "error",
+        message: "Nemryn Plus changed for this organization since this page was loaded. Reload the page and review it before trying again.",
+      };
+    }
     if (error.code === "ZW004") {
       return { status: "error", message: "That change is not allowed for the current Nemryn Plus state (a trial can be started only once and extended only once)." };
     }

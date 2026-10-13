@@ -176,3 +176,39 @@ export const PLUS_ACTION_NOTES: Record<PlusAdminAction, string> = {
 
 /** Shown on every Plus dialog: the entitlement never touches Core. */
 export const PLUS_CORE_ISOLATION_NOTE = "Nemryn Plus changes never affect operations: requests, trips, dispatch and drivers keep working.";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-P1-S2 -- organization-targeting safeguards (the S1 production smoke granted a trial to the wrong organization).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Case-, space- and Unicode-normalised organization name used for typed confirmation. */
+export function normalizeOrganizationName(name: string): string {
+  return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * True only when the Platform Admin typed exactly the target organization's name (case / spacing insensitive).
+ * Every Plus entitlement change is consequential (audited; a trial can be granted only once), so every action needs it.
+ */
+export function confirmsOrganization(typed: unknown, actualName: string): boolean {
+  if (typeof typed !== "string" || !actualName) return false;
+  const t = normalizeOrganizationName(typed);
+  return t.length > 0 && t === normalizeOrganizationName(actualName);
+}
+
+/** Token the panel renders for the entitlement it is showing: its last update, or "none" when not provisioned. */
+export function entitlementVersionToken(updatedAt: string | null): string {
+  return updatedAt ?? "none";
+}
+
+/**
+ * True when the entitlement changed since the panel was rendered (another tab / admin acted, or the page is stale).
+ * Timestamps are compared as instants so formatting differences do not matter.
+ */
+export function isStaleEntitlementToken(submitted: unknown, currentUpdatedAt: string | null): boolean {
+  if (typeof submitted !== "string" || submitted === "") return true;
+  if (submitted === "none" || currentUpdatedAt === null) return submitted !== entitlementVersionToken(currentUpdatedAt);
+  const a = Date.parse(submitted);
+  const b = Date.parse(currentUpdatedAt);
+  return Number.isNaN(a) || Number.isNaN(b) || a !== b;
+}

@@ -503,9 +503,11 @@ begin
       where n.nspname = 'public' and (p.proname like 'platform\_%' or p.proname = 'set_platform_organization_status')
         and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('public', p.oid, 'execute')
              or not has_function_privilege('authenticated', p.oid, 'execute'))) = 0
-    and (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and (p.proname like 'platform\_%' or p.proname = 'set_platform_organization_status')) = 10);
+    and (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and (p.proname like 'platform\_%' or p.proname = 'set_platform_organization_status')) = 12);
   -- NP-P1-S1 added three platform_* functions (platform_set_organization_module, platform_extend_plus_trial,
   -- platform_get_organization_module), all authenticated-only like the original seven: 7 -> 10.
+  -- NP-P1-S2-R1 added the versioned overloads of platform_set_organization_module and platform_extend_plus_trial
+  -- (also authenticated-only): 10 -> 12.
   perform pg_temp.report('EX-2 (all new definer functions pin search_path)',
     (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and (p.proname like 'platform\_%' or p.proname in ('set_platform_organization_status', '_require_platform_admin'))

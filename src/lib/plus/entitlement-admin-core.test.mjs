@@ -96,3 +96,25 @@ test("labels distinguish stored status from effective access", () => {
   assert.equal(plusEffectiveStateCategory("write"), "positive");
   assert.equal(plusEffectiveStateCategory("locked"), "critical");
 });
+
+test("S2 targeting: typed confirmation must equal the target organization's name (case / spacing insensitive)", () => {
+  const { confirmsOrganization } = core;
+  assert.equal(confirmsOrganization("Nemryn Pilot Simulation", "Nemryn Pilot Simulation"), true);
+  assert.equal(confirmsOrganization("  nemryn   pilot simulation ", "Nemryn Pilot Simulation"), true);
+  assert.equal(confirmsOrganization("Zenward Mobility", "Nemryn Pilot Simulation"), false, "the S1 wrong-org case");
+  assert.equal(confirmsOrganization("Nemryn Pilot", "Nemryn Pilot Simulation"), false, "no prefix match");
+  assert.equal(confirmsOrganization("", "Nemryn Pilot Simulation"), false);
+  assert.equal(confirmsOrganization(null, "Nemryn Pilot Simulation"), false);
+  assert.equal(confirmsOrganization("x", ""), false);
+});
+
+test("S2 targeting: stale entitlement token is detected; unchanged state is not", () => {
+  const { entitlementVersionToken, isStaleEntitlementToken } = core;
+  assert.equal(entitlementVersionToken(null), "none");
+  assert.equal(isStaleEntitlementToken("none", null), false, "still not provisioned");
+  assert.equal(isStaleEntitlementToken("none", "2026-10-13T15:31:00Z"), true, "provisioned meanwhile");
+  assert.equal(isStaleEntitlementToken("2026-10-13T15:31:00.123+00:00", "2026-10-13T15:31:00.123Z"), false, "same instant, other format");
+  assert.equal(isStaleEntitlementToken("2026-10-13T15:31:00Z", "2026-10-13T16:18:29Z"), true, "changed meanwhile");
+  assert.equal(isStaleEntitlementToken("2026-10-13T15:31:00Z", null), true);
+  for (const bad of ["", undefined, null, "garbage"]) assert.equal(isStaleEntitlementToken(bad, "2026-10-13T15:31:00Z"), true, String(bad));
+});

@@ -50,3 +50,29 @@ test("trial end is formatted in the organization's timezone", () => {
   assert.equal(formatTrialEnd(null, "UTC"), null);
   assert.equal(formatTrialEnd("nope", "UTC"), null);
 });
+
+test("status summary: one honest message per state; trial shows its end in the org timezone", async () => {
+  const { plusStatusSummary } = await import("./access-core.ts");
+  const now = new Date("2026-10-13T12:00:00Z");
+  const trial = plusStatusSummary("write", "2026-10-27T15:31:00Z", "America/New_York", now);
+  assert.equal(trial.label, "Trial");
+  assert.equal(trial.trialEnd, "October 27, 2026");
+  assert.equal(trial.trialDaysLeft, 15);
+  assert.match(trial.message, /^Your Nemryn Plus trial ends October 27, 2026 \(15 days left\)\.$/);
+  const active = plusStatusSummary("write", null, "UTC", now);
+  assert.deepEqual([active.label, active.tone, active.trialEnd], ["Active", "positive", null]);
+  const ro = plusStatusSummary("read_only", "2026-10-01T00:00:00Z", "UTC", now);
+  assert.equal(ro.label, "Not active");
+  assert.equal(ro.trialEnd, null, "no trial date once read-only");
+  assert.match(ro.message, /records are kept/);
+  const locked = plusStatusSummary("locked", null, "UTC", now);
+  assert.equal(locked.label, "Restricted");
+  assert.match(locked.message, /Contact Nemryn/);
+  const none = plusStatusSummary("none", null, "UTC", now);
+  assert.equal(none.label, "Not enabled");
+  for (const s of [trial, active, ro, locked, none]) {
+    assert.doesNotMatch(s.message, /lead|revenue|customer|guarantee|grow your/i, "no sales promise or fabricated data");
+  }
+  assert.match(ro.message, /Operations are not affected/);
+  assert.match(locked.message, /Operations are not affected/);
+});

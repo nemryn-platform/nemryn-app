@@ -22,6 +22,7 @@ import {
   UserCircle,
   CalendarCheck,
   Repeat,
+  TrendUp,
 } from "@phosphor-icons/react/dist/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -52,6 +53,7 @@ export const navIcons: Record<string, Icon> = {
   settings: Gear,
   location: MapPin,
   drive: SteeringWheel,
+  growth: TrendUp,
 };
 
 export type NavIconKey = keyof typeof navIcons;
@@ -71,4 +73,5 @@ export const settingsIcons: Record<string, Icon> = {
   operations: Clock,
   security: ShieldCheck,
   activity: ClockCounterClockwise,
+  plus: TrendUp,
 };
