@@ -1635,8 +1635,8 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 
 - **Date:** 2026-09-01
 - **Category:** Product
-- **Decision:** Search and Export Day Sheet are rendered as real, visible, `disabled` controls (with a `title` explaining why). The reference's "Filter" control on Upcoming Trips is omitted from the DOM entirely, not rendered as a disabled affordance.
-- **Status:** CONFIRMED — implemented.
+- **Decision:** ~~Search and Export Day Sheet are rendered as real, visible, `disabled` controls (with a `title` explaining why).~~ (AMENDED by ZD-205: Search is omitted until it has real behavior; Export Day Sheet is implemented.) The reference's "Filter" control on Upcoming Trips is omitted from the DOM entirely, not rendered as a disabled affordance.
+- **Status:** CONFIRMED — implemented (amended by ZD-205)
 - **Reason:** Search/Export are prominent, expected controls whose ABSENCE would itself look like a bug on a screen this visually complete — rendering them disabled communicates "not yet wired" honestly without silently promising a working feature (GAP-9 already established this exact treatment for Export). Filter is a smaller, secondary affordance without an established `ui-backend-gap-register.md` entry of its own; omitting it entirely avoids inventing a placeholder for a control with no defined behavior even once "wired", which disabling would have implied existed.
 - **Affected Product Areas:** `src/components/operations/OperationsLayoutClient.tsx`, `src/app/operations/page.tsx`
 - **Dependencies:** ui-backend-gap-register.md GAP-9
@@ -1755,8 +1755,8 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 
 - **Date:** 2026-09-01
 - **Category:** Product
-- **Decision:** The header's ‹ Today › day navigator and "Dispatch Settings" button are both rendered, real, and `disabled`, each with a `title` explaining why — extending the same treatment ZD-134 established for Today's Operations' Search/Export Day Sheet.
-- **Status:** CONFIRMED — implemented.
+- **Decision:** The header's ‹ Today › day navigator and "Dispatch Settings" button are both rendered, real, and `disabled`, each with a `title` explaining why — extending the same treatment ZD-134 established for Today's Operations' Search/Export Day Sheet. (AMENDED by ZD-205: the "Dispatch Settings" button is no longer rendered; it is omitted until it has a defined behavior. The day-navigator part of this decision is not changed by ZD-205.)
+- **Status:** CONFIRMED — implemented (amended by ZD-205)
 - **Reason:** Both are prominent, expected controls in the reference whose total absence would itself look like a bug on an otherwise-complete header. The board only ever queries the organization's own "today" (no other-day query was built this phase), and "Dispatch Settings" has no defined behavior anywhere in this project — disabling, rather than hiding or faking function, communicates "not yet wired" honestly.
 - **Affected Product Areas:** `src/components/operations/OperationsLayoutClient.tsx`
 - **Dependencies:** ZD-134
@@ -2489,6 +2489,27 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** Customer communication workflow (accept/decline notifications), Request reopen
 
-No decisions have been REJECTED as of this update. ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
+### ZD-205 — The Operations header carries no dead controls; Export Day Sheet is implemented
+
+- **Date:** 2026-10-13
+- **Category:** Product
+- **Decision:** Every control in the Operations header either works for the viewer's role or is not rendered at all.
+  - **Search** (Overview and Dispatch headers) and **Dispatch Settings** (Dispatch header) are **omitted** until each has real, defined behavior.
+  - The Notifications bell is rendered for Organization Admins only, because the notification history is Admin-only in the database.
+  - Help & support offers only routes the viewer's role can open, and invents no support contact.
+  - **Export Day Sheet** is implemented for Organization Admins and Dispatchers. Overview exports today; Dispatch exports the selected Today / Tomorrow.
+    - It has a printable view (`/day-sheet`, browser Print → Save as PDF) and a CSV download (`/day-sheet/csv`).
+    - Both cover the caller's current organization only, with its organization-local day and the same working set as the Dispatch screen. They use the caller's own RLS-bound session.
+    - Exported columns are minimized: no phones, emails, notes, ids or audit data.
+    - CSV cells that begin with a spreadsheet formula character are neutralized.
+  - The existing design system is unchanged.
+- **Status:** CONFIRMED
+- **Reason:** Visible-but-disabled placeholders read as broken controls to pilot operators. A real export now exists, so the disabled treatment adopted in ZD-134 and ZD-144 no longer describes the product. Validated locally in P1-PILOT-UX1 and P1-PILOT-UX1-CLOSEOUT (TypeScript, lint, 732/732 unit, build, 46/46 browser E2E, 7/7 CSV-injection E2E).
+- **Affected Product Areas:** `src/components/operations/AppHeader.tsx`, `src/components/operations/OperationsLayoutClient.tsx`, `src/components/operations/header/*`, `src/app/day-sheet/*`, `src/lib/operations/day-sheet*.ts`
+- **Dependencies:** ZD-134 (amended), ZD-144 (amended), ui-backend-gap-register.md GAP-9 (resolved)
+- **Owner:** Product
+- **Review Trigger:** A defined Search or Dispatch Settings feature; Dispatcher access to notification history (needs a database change)
+
+No decisions have been REJECTED as of this update. ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

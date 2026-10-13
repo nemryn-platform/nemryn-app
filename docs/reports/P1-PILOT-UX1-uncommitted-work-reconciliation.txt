@@ -1,0 +1,295 @@
+NEMRYN CORE
+P1-PILOT-UX1-CLOSEOUT -- UNCOMMITTED WORK RECONCILIATION, REPAIR & RELEASE READINESS
+Date: 2026-10-13 (UTC). Author: Claude Code (Opus 5.5).
+LOCAL ONLY: nothing committed, pushed, merged, deployed, stashed, reset or deleted from the working tree.
+
+=====================================================================================================
+1. INITIAL GIT STATE (recorded before any change)
+=====================================================================================================
+  Repository     /Users/datamatics/Nemryn  (origin github.com/nemryn-platform/nemryn-app) -- confirmed Nemryn
+  Branch         p0-e3-s2-identity-organisations-auth  (stale name; points at the same commit as main)
+  HEAD           83506b02ff23e68548e96f6bf3d7175510215e08
+  origin/main    83506b02ff23e68548e96f6bf3d7175510215e08  (0 ahead / 0 behind)
+  Stashes        none
+  Status         274 entries: 2 modified tracked files + 272 untracked
+                   M  src/components/operations/AppHeader.tsx
+                   M  src/components/operations/OperationsLayoutClient.tsx
+                   ?? 8 UX1 source paths (12 files), 31 docs/reports/*.txt, 5 Plus docs, 227 .tmp-qa/* files
+  Ignored, present .env.local (local Supabase 127.0.0.1:54331), .env.sim.local, .env.s2h.local, .next/,
+                 tsconfig.tsbuildinfo -- all covered by .gitignore (.env*, /.next/, *.tsbuildinfo).
+
+=====================================================================================================
+2. CLASSIFICATION OF UNCOMMITTED WORK
+=====================================================================================================
+  A. UX1 SOURCE CHANGES READY FOR COMMIT (after owner approval)
+     Modified (2):
+       src/components/operations/AppHeader.tsx
+       src/components/operations/OperationsLayoutClient.tsx
+     Created (12 files):
+       src/app/day-sheet/page.tsx
+       src/app/day-sheet/csv/route.ts
+       src/app/operations/notifications-actions.ts
+       src/components/operations/day-sheet/DaySheetPrintToolbar.tsx
+       src/components/operations/header/ExportDaySheetMenu.tsx
+       src/components/operations/header/HelpMenu.tsx
+       src/components/operations/header/NotificationsBell.tsx
+       src/components/operations/header/useHeaderPopover.ts
+       src/lib/operations/day-sheet-core.ts            (REPAIRED in this phase, section 5)
+       src/lib/operations/day-sheet-core.test.mjs      (test added in this phase)
+       src/lib/operations/day-sheet.ts
+       src/lib/operations/header-help-core.ts
+     UX1 documentation:
+       docs/reports/p1-pilot-ux1-header-day-sheet-completion.txt
+       docs/reports/P1-PILOT-UX1-uncommitted-work-reconciliation.txt   (this report)
+
+  B. UX1 SOURCE CHANGES STILL REQUIRING REPAIR
+     None in source code.
+     One DOCUMENTATION follow-up requires an owner decision (not a code defect; see D2 in section 4).
+
+  C. EXISTING HISTORICAL REPORTS (untracked, pre-date UX1; not part of UX1) -- 29 files in docs/reports/:
+       g0-r3-driver-invitation-email-delivery.txt
+       g1-a-nemryn-brand-foundation-architecture.txt
+       g1-b-nemryn-brand-lock-token-specification.txt
+       n0-g0-r2-auth-fix-deployment.txt
+       n0-m1-a0-domain-migration-audit.txt
+       n0-m1-a3-production-validation.txt
+       n0-m2-a5-production-release.txt
+       p0-s2a-closure.txt
+       p0-s2a-d1-driver-invitation-production-release.txt
+       p0-s2b-d1-password-recovery-production-release.txt
+       p0-s2b-ux1-d1-password-visibility-production-release.txt   (password-visibility "UX1" -- a DIFFERENT,
+                                                                   earlier work item; not P1-PILOT-UX1)
+       p1-e1-r1-request-trip-roadmap-reconciliation.txt
+       p1-e1-s1d-operations-brief-production-release.txt
+       p1-e1-s2h-request-hub-production-release-continuation.txt
+       p1-e1-s4f-trip-tomorrow-readiness-production-release.txt
+       p1-e2-s1g-recurring-care-production-release.txt
+       p1-e3-s1g-proof-of-service-production-release.txt
+       p1-operational-mvp-reconciliation-audit.txt
+       p1-pilot-readiness-r1-operational-mvp-audit.txt
+       p1-pilot-s1-first-day-simulation.txt
+       p1-pilot-s1-production-synthetic-driver-qa-repair.txt
+       p1-pilot-s2r-recurring-care-bulk-trip-creation-production-release.txt
+       p1-pilot-s4-pre-pilot-production-release-and-readiness-gate.txt
+       p1-pilot-s4b-pre-r4-zenward-qa-tenant-cleanup-audit.txt
+       p1-pilot-s4b-pre-r4-zenward-qa-tenant-deletion-report.txt
+       p1-pilot-s4b-r2b-structured-intake-production-release.txt
+       p1-pilot-s4b-r4f-production-release-fresh-zenward-onboarding.txt
+       p1-ux-r1-r1a-production-release.txt
+       p1-ux-r2-production-release.txt
+     Recommendation: one separate docs-only commit after owner review (not reviewed for content here; some
+     concern production tenants and should be read for sensitive detail before committing).
+
+  D. NEMRYN PLUS NP-P0 DOCUMENTATION (untracked, preserved, NOT modified in this phase) -- 7 files:
+       docs/reports/NP-P0-A01-nemryn-plus-architecture-audit.txt
+       docs/reports/NP-P0-A02-nemryn-plus-product-technical-blueprint.txt
+       docs/product/plus-product-spec.md
+       docs/product/plus-domain-model.md
+       docs/product/plus-decisions-proposed.md
+       docs/product/NP-P1-S1-entitlement-implementation-brief.md
+       docs/security/plus-access-model.md
+     Recommendation: separate "docs(plus): NP-P0 audit and blueprint" commit, independent of UX1.
+
+  E. TEMPORARY QA AND GENERATED ARTIFACTS
+       .tmp-qa/  227 files (211 .mjs, 29 .sh, 1 .sql), incl. the UX1 browser E2E
+                 .tmp-qa/p1-pilot-ux1-header-day-sheet-e2e.mjs and the shared harness local-helper.mjs.
+                 Not ignored by .gitignore; several scripts read .env.sim.local (production synthetic tenant
+                 credentials file). MUST NOT be committed. Optional owner decision: add `.tmp-qa/` to .gitignore.
+       Generated, already ignored: .next/ (rebuilt in this phase), tsconfig.tsbuildinfo.
+       Session scratch (outside the repo, session scratchpad): csv-injection-e2e.mjs, prefetch-probe.mjs, logs.
+
+  F. UNKNOWN FILES REQUIRING OWNER REVIEW
+       None. Every untracked path falls into A, C, D or E.
+
+=====================================================================================================
+3. UX1 FUNCTIONALITY VERIFIED (source review + local execution)
+=====================================================================================================
+  Header actions (AppHeader.tsx, OperationsLayoutClient.tsx):
+    - The inert Bell and Help IconButtons, the disabled Search box (Overview + Dispatch), the disabled Export button
+      and the disabled Dispatch Settings button are removed; the remaining controls are wired. No dead control remains
+      in the Operations header. VERIFIED (diff + E2E).
+    - Controls are role-aware via the new `role` prop; omitted role renders neither control (no inert button).
+  Notifications bell (Admin only):
+    - Server action loadRecentNotificationsAction re-checks requireOperationsAccess + organization_admin, then the
+      existing Admin-only RPC list_notification_history (limit 10, src/lib/operations/notifications.ts:30-41). No
+      new data path, no service role, no entity ids, no invented unread model. Loading / empty / error states;
+      failure returned as data. Escape returns focus; outside click closes. VERIFIED.
+    - Dispatchers: bell not rendered (DB exposes history to Admins only). By design; owner option documented in the
+      UX1 report (open issue 1).
+  Help & support:
+    - Role-aware links to existing routes only; the 3 Admin-only targets are each guarded by
+      requireOrganizationAdminAccess in their page.tsx (settings/website-requests, team, notifications). No support
+      contact invented. VERIFIED.
+  Day Sheet:
+    - /day-sheet (print) and /day-sheet/csv: requireOperationsAccess (signed-out -> /sign-in?next=..., VERIFIED with
+      curl: 307 for both; Driver -> /driver and Dispatcher allowed, VERIFIED by E2E). Data = getDispatchBoardData for
+      the caller's own organization with the caller's RLS-bound session (no service role). Columns are minimized
+      (no phones, notes, ids). Zero-trip day handled. CSV: BOM, CRLF, attachment filename, Cache-Control private,
+      no-store, X-Robots-Tag noindex. VERIFIED.
+    - On the dedicated request-form host the proxy allowlist 404s /day-sheet (src/proxy.ts) -- not reachable there.
+    - Export menu: Overview = today; Dispatch = the selected ?day (useSearchParams, OperationsLayoutClient.tsx).
+    - Print toolbar "Download CSV" is a next/link with `download`: Next skips client navigation for download links
+      (node_modules/next/dist/client/app-dir/link.js:56) and a browser probe recorded NO prefetch requests to
+      /day-sheet/csv on either the print view or Overview. VERIFIED.
+  Responsive: popovers capped at viewport - 1.5rem; E2E confirmed inside the viewport at 768 / 390 px.
+  Dependencies on unfinished work: none. No migration, no Plus code, no new env var.
+
+=====================================================================================================
+4. ACTUAL DEFECTS FOUND
+=====================================================================================================
+  D1 (SECURITY, fixed) -- CSV / spreadsheet formula injection in the Day Sheet export.
+     csvField (src/lib/operations/day-sheet-core.ts, original lines 79-82) quoted per RFC 4180 but did not
+     neutralize cells beginning with = + - @ TAB CR. Attack path, verified in source: public website Request text
+     prefills New Trip (src/components/operations/new-trip/NewTripForm.tsx:128,158) -> trips.pickup_description
+     (src/app/operations/trips/new/actions.ts:57,176) -> Day Sheet CSV; passenger names can also come from the
+     public request's requested_passenger_name prefill. A hostile submitter could plant e.g.
+     =HYPERLINK("http://attacker","Click") that becomes a live formula when a dispatcher opens the CSV in
+     Excel / Sheets. Severity: medium (requires a dispatcher to accept the text and open the CSV; no server impact).
+  D2 (DOCUMENTATION CONTRADICTION, needs owner decision -- not repaired)
+     UX1 removes the header Search control and makes Export real. Confirmed decision ZD-134
+     (docs/product/decision-register.md:1634-1644) says Search and Export Day Sheet are rendered as visible
+     `disabled` controls; ui-backend-gap-register.md GAP-9 (line 107) and todays-operations-data-map.md:39 still
+     describe Export as disabled. UX1's "no dead controls" rule supersedes ZD-134, but a CONFIRMED decision should not
+     be overwritten without approval. Proposed register entry (for owner approval, then commit with UX1):
+       "ZD-205 -- Operations header carries no dead controls (supersedes ZD-134 for Search / Export / Dispatch
+        Settings). Search and Dispatch Settings are omitted until they have real behavior; Export Day Sheet is
+        implemented (print + CSV, Admin/Dispatcher, current organization, org-local day). Status: CONFIRMED.
+        Affected: AppHeader.tsx, OperationsLayoutClient.tsx, /day-sheet. Closes GAP-9."
+     plus updating GAP-9 to RESOLVED and todays-operations-data-map.md:39 to the implemented behaviour.
+  Observations (not defects; no change made):
+     O1 role="menu" popovers do not implement arrow-key roving focus (Tab works). Same pattern as the existing
+        AccountMenu (AccountMenu.tsx:96,137,152), so consistent; a11y polish candidate.
+     O2 /day-sheet uses print-specific bg-white / text-black / text-[12px] rather than design tokens. Deliberate for
+        paper output, but an ad hoc px value against the README token convention; owner may accept as print-only.
+     O3 If a session expires, clicking "Download CSV" (download attribute) saves the sign-in redirect HTML as the
+        .csv file instead of navigating. Low impact; candidate fix later (plain navigation fallback).
+     O4 Stale comment only: src/app/operations/dispatch/page.tsx:21 still mentions "Dispatch Settings".
+     O5 Pre-existing, local-only server log "Refusing to build an application link from a loopback origin"
+        (NEXT_PUBLIC_APP_URL=localhost:3000 while serving :3100). Not UX1; already UX1 open issue 5.
+  Checked, no defect: TypeScript, lint, refs (IconButton / Button forwardRef), Help link guards, server-action
+  re-authorization, no service-role use, no Plus code, no DB dependency, request-form host isolation.
+
+=====================================================================================================
+5. REPAIRS PERFORMED
+=====================================================================================================
+  src/lib/operations/day-sheet-core.ts
+    - Added SPREADSHEET_FORMULA_PREFIX = /^[=+\-@\t\r]/ and changed csvField to prefix such values with an
+      apostrophe before RFC 4180 quoting (OWASP CSV-injection guidance). Applies to every CSV cell, incl. the header
+      facts (organization name). The on-screen print view is unaffected (React renders the raw text).
+  src/lib/operations/day-sheet-core.test.mjs
+    - New test "CSV: formula-looking values are neutralized (CSV / formula injection)": = + - @ TAB CR prefixes,
+      interaction with quoting, unchanged ordinary values (times, "Apt 4-B", e-mail-like text, empty), and the full
+      document (organization name, passenger, pickup).
+  No other file changed. No design, layout, routing, permission or database change.
+
+=====================================================================================================
+6. TESTS EXECUTED AND RESULTS (all local; nothing claimed that was not run)
+=====================================================================================================
+  Pre-checks: confirmed what each command writes before running it. :3000 was another project's dev server
+  (/Users/datamatics/Chelth) -- left untouched. The running Supabase stack was another project (chelth) -- left
+  untouched. Nemryn's own local stack (project_id ZenWard) was stopped.
+  1. TypeScript  `npx tsc --noEmit`                                 PASS (exit 0)
+  2. Lint        `npx eslint src` (no --fix)                         PASS (0 errors, 0 warnings in src)
+  3. Unit        `npm test` (node --test src/**/*.test.mjs)          PASS 732 / 732 (731 before + 1 new)
+  4. Build       `npx next build`                                    PASS (exit 0; /day-sheet and /day-sheet/csv built;
+                 git status byte-identical before/after the build)
+  5. Local stack Nemryn containers restarted IN PLACE with `docker start` (existing volume; no reset, no seed, no
+                 migration). Read-only checks: migration head 20260927120000 (= production head per R3 report),
+                 seed "Fictional Org A" present, 0 leftover UX1 fixtures.
+  6. Signed-out  curl /day-sheet?day=tomorrow and /day-sheet/csv?day=today -> 307 to /sign-in?next=...   PASS
+  7. UX1 browser E2E  .tmp-qa/p1-pilot-ux1-header-day-sheet-e2e.mjs vs `next start -p 3100` (local DB only)
+                 PASS 46 / 46, fixtures removed. (First attempt: harness-level "fetch failed" before any check --
+                 headless Chrome could not start inside the command sandbox; re-run outside the sandbox, still
+                 localhost-only.)
+  8. Repair E2E  scratch csv-injection-e2e.mjs: Admin downloads the real CSV with a fixture trip whose passenger,
+                 pickup and destination start with = / =HYPERLINK / @ -> all neutralized, quoting intact, print view
+                 shows raw text, cleanup 0 leftovers.                                  PASS 7 / 7
+                 Incidents during this step, both resolved:
+                   - first run: my multi-line SQL broke shell quoting after the passenger insert; one labelled local
+                     passenger ('=CSVINJ Passenger', Org A, no trips) was left and then deleted by exact match.
+                   - second run: the shared harness defaults to http://localhost:3000 when LOCAL_APP_URL is unset, so
+                     the scripted sign-in reached the unrelated Chelth dev server with the fictional local test
+                     account (no Nemryn or Chelth data written by Nemryn tests); re-run with LOCAL_APP_URL set.
+  9. Prefetch probe  print view + Overview: 0 requests to /day-sheet/csv without a click.  PASS
+  NOT RUN (with reason):
+    - SQL authorization suites (supabase/tests/*.sql): UX1 has no migration or SQL change; several suites commit
+      fixtures (known hygiene issue), so they were not run for a change that cannot affect them.
+    - Privilege contract: unchanged schema; not re-run (UX1 report recorded 0 / 29 locally).
+    - Earlier long regression E2Es (PROG3B/4B/5B, R2C): not re-run; the only change since the UX1 report is the
+      pure csvField function, covered by tests 3, 7 and 8.
+  Cleanup: :3100 server stopped; this session's 8 headless-Chrome profiles in /tmp removed; Nemryn containers
+  stopped again (`docker stop`, data kept) -- the environment is back to its initial state.
+
+=====================================================================================================
+7. OUTSTANDING RISKS
+=====================================================================================================
+  R1 D2 decision-register contradiction until the owner approves the proposed ZD entry.
+  R2 Dispatchers have no bell (product decision; needs a migration to change).
+  R3 O1-O3 polish items (a11y roving focus, print tokens, expired-session CSV download).
+  R4 Production verification after deploy still required (synthetic tenant only): bell as Admin, Help as Admin /
+     Dispatcher, Day Sheet print + CSV Today / Tomorrow, one formula-looking value in the CSV.
+  R5 .tmp-qa is not ignored; a careless broad `git add` would commit 227 QA files incl. scripts that read
+     .env.sim.local. Use only the explicit paths in section 8.
+
+=====================================================================================================
+8. EXACT PROPOSED COMMIT CONTENTS (UX1) -- NOT EXECUTED; awaiting approval
+=====================================================================================================
+  Branch: commit on top of origin/main 83506b0 (current HEAD is that commit; the owner may first create a
+  correctly named branch, e.g. `git switch -c p1-pilot-ux1-header-day-sheet`, which keeps the working tree).
+  Stage exactly (no -A, no directory globs beyond the UX1-only directories listed):
+    git add src/components/operations/AppHeader.tsx \
+            src/components/operations/OperationsLayoutClient.tsx \
+            src/app/day-sheet/page.tsx src/app/day-sheet/csv/route.ts \
+            src/app/operations/notifications-actions.ts \
+            src/components/operations/day-sheet/DaySheetPrintToolbar.tsx \
+            src/components/operations/header/ExportDaySheetMenu.tsx \
+            src/components/operations/header/HelpMenu.tsx \
+            src/components/operations/header/NotificationsBell.tsx \
+            src/components/operations/header/useHeaderPopover.ts \
+            src/lib/operations/day-sheet-core.ts src/lib/operations/day-sheet-core.test.mjs \
+            src/lib/operations/day-sheet.ts src/lib/operations/header-help-core.ts \
+            docs/reports/p1-pilot-ux1-header-day-sheet-completion.txt \
+            docs/reports/P1-PILOT-UX1-uncommitted-work-reconciliation.txt
+    (+ docs/product/decision-register.md, ui-backend-gap-register.md, todays-operations-data-map.md ONLY if the
+     owner approves the D2 wording first)
+  Verify before committing: `git diff --cached --stat` shows exactly those 16 files (or 19 with D2 docs).
+  Suggested message: "feat(operations): real header actions and Day Sheet export (P1-PILOT-UX1)" with a body noting
+  the CSV formula-injection hardening, ending with the Co-Authored-By attribution line.
+  Release afterwards (separate approval): push with the nemryn GitHub account -> Vercel -> verify SHA -> R4 smoke.
+  No migration -> no db push. Rollback: revert the one commit.
+
+=====================================================================================================
+9. FILES THAT MUST REMAIN OUTSIDE THE UX1 COMMIT
+=====================================================================================================
+  - All of category C (29 historical reports) -> separate docs commit after owner content review.
+  - All of category D (7 Nemryn Plus files) -> separate docs(plus) commit.
+  - All of category E (.tmp-qa/*, .next/, tsconfig.tsbuildinfo, .env* files).
+
+=====================================================================================================
+10. IS UX1 READY FOR A SCOPED COMMIT?
+=====================================================================================================
+  YES -- source is repaired and validated (tsc, lint, 732/732 unit, build, 46/46 E2E, 7/7 repair E2E).
+  Condition: the owner decides whether the D2 decision-register update ships in the same commit (recommended) or
+  immediately after. The code itself has no outstanding defect.
+
+=====================================================================================================
+11. IS CORE READY TO SERVE AS THE NP-P1-S1 BASELINE?
+=====================================================================================================
+  NOT YET -- CONDITIONAL. Ready once: (1) the UX1 commit lands on main (and, if released, production SHA = main);
+  (2) categories C and D are committed separately or consciously left untracked; (3) `git status` shows no modified
+  tracked files; (4) NP-P1-S1 starts on a fresh branch from that main, per
+  docs/product/NP-P1-S1-entitlement-implementation-brief.md section 1. No source blocker remains.
+
+=====================================================================================================
+12. PRODUCTION
+=====================================================================================================
+  No production change of any kind: no push, deploy, Vercel action, production database query or mutation, env
+  change, or production data access. Local database: only labelled synthetic fixtures, all removed. Git: no commit,
+  stash, reset, checkout, branch or history change. Nemryn Plus: no implementation, and its documents unmodified.
+
+P1-PILOT-UX1 SOURCE: REPAIRED + VALIDATED (LOCAL)
+DEFECTS FIXED: 1 (CSV formula injection)
+OWNER DECISION NEEDED: 1 (ZD-134 supersession wording)
+READY FOR SCOPED COMMIT: YES (awaiting approval)
+NP-P1-S1 BASELINE: AFTER UX1 COMMIT + DOCS SEPARATION
+PRODUCTION TOUCHED: NO

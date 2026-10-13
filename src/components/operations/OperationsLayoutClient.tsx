@@ -2,11 +2,10 @@
 
 import type { ReactNode } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Plus, Gear } from "@phosphor-icons/react/dist/ssr";
+import { Plus } from "@phosphor-icons/react/dist/ssr";
 import { OperationsShell } from "@/components/operations/OperationsShell";
-import { SearchInput } from "@/components/ui/SearchInput";
-import { Button } from "@/components/ui/Button";
 import { LinkButton } from "@/components/ui/LinkButton";
+import { ExportDaySheetMenu } from "@/components/operations/header/ExportDaySheetMenu";
 import { formatOperationsLongDate } from "@/lib/operations/presentation";
 import type { AppHeaderProps } from "@/components/operations/AppHeader";
 import type { OrganizationContext } from "@/lib/auth/types";
@@ -66,26 +65,16 @@ export interface OperationsLayoutClientProps {
  * not the scrollable PageHeader below it (P1-E3-S4). Built here, from data
  * this component already has (`organization.organizationTimezone`) plus
  * static content, rather than a new cross-tree state channel for the page
- * to reach back into its own layout chrome — every action below is
- * genuinely static/inert (Search has no wiring this phase, Export Day
- * Sheet is disabled per GAP-9, New Trip is a plain link), so nothing here
- * actually needs to come from the page itself. A future route that DOES
- * need page-driven header content is a real reason to revisit this.
+ * to reach back into its own layout chrome — the actions below need nothing
+ * from the page itself (Export Day Sheet reads the day from the URL, New Trip
+ * is a plain link). A future route that DOES need page-driven header content
+ * is a real reason to revisit this.
  */
-/** Same `hidden lg:block` wrapper fix as ZD-135 — SearchInput's own `className` only reaches its inner `<input>`. Reused as-is by both the Overview and Dispatch headers rather than duplicated inline twice. */
-function HeaderSearch() {
-  return (
-    <div className="hidden lg:block">
-      <SearchInput
-        label="Search trips, passengers, drivers"
-        placeholder="Search trips, passengers, drivers…"
-        className="w-64"
-        disabled
-        title="Search is not wired up yet."
-      />
-    </div>
-  );
-}
+/*
+ * P1-PILOT-UX1: the header's permanently disabled placeholders (Search -- "not wired up yet"; Dispatch Settings -- "no
+ * defined behavior yet") were REMOVED rather than left as dead controls; Export Day Sheet is now real (Overview =
+ * today, Dispatch = the selected day).
+ */
 
 function buildHeaderProps(
   pathname: string,
@@ -101,6 +90,7 @@ function buildHeaderProps(
     organizationName: organization.organizationName,
     roleLabel: ROLE_LABEL[organization.role],
     hasMultipleOrganizations,
+    role: organization.role,
   };
 
   if (pathname === "/operations") {
@@ -110,10 +100,7 @@ function buildHeaderProps(
       ...identity,
       actions: (
         <>
-          <HeaderSearch />
-          <Button variant="outline" size="md" disabled title="Export is not available yet (see ui-backend-gap-register.md GAP-9).">
-            Export Day Sheet
-          </Button>
+          <ExportDaySheetMenu day="today" />
           <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
             New Trip
           </LinkButton>
@@ -131,16 +118,7 @@ function buildHeaderProps(
       ...identity,
       actions: (
         <>
-          <HeaderSearch />
-          <Button
-            variant="outline"
-            size="md"
-            disabled
-            leadingIcon={<Gear className="size-4" aria-hidden />}
-            title="Dispatch Settings has no defined behavior yet."
-          >
-            Dispatch Settings
-          </Button>
+          <ExportDaySheetMenu day={dispatchDay} />
           <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
             New Trip
           </LinkButton>

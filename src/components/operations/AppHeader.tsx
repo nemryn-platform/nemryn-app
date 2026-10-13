@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { Bell, Question } from "@phosphor-icons/react/dist/ssr";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
-import { IconButton } from "@/components/ui/IconButton";
 import { AccountMenu } from "@/components/operations/AccountMenu";
+import { NotificationsBell } from "@/components/operations/header/NotificationsBell";
+import { HelpMenu } from "@/components/operations/header/HelpMenu";
+import { canViewNotificationHistory, type HelpRole } from "@/lib/operations/header-help-core";
 
 export interface AppHeaderProps {
   /** Short current-context label (e.g. the active nav section) — used as a fallback title on routes that don't yet supply a richer `title`/`description` pair. */
@@ -26,6 +27,12 @@ export interface AppHeaderProps {
   organizationName?: string;
   roleLabel?: string;
   hasMultipleOrganizations?: boolean;
+  /**
+   * P1-PILOT-UX1: the viewer's role in the current organization -- decides which header controls exist at all (the
+   * notification history is Admin-only in the database; Help shows only routes the role can open). Omitted = neither
+   * control is rendered (never an inert button).
+   */
+  role?: HelpRole;
 }
 
 /**
@@ -42,6 +49,7 @@ export function AppHeader({
   organizationName,
   roleLabel,
   hasMultipleOrganizations,
+  role,
 }: AppHeaderProps) {
   return (
     <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-border-subtle bg-surface-elevated px-4 py-3 lg:px-6">
@@ -57,8 +65,8 @@ export function AppHeader({
       </div>
       <div className="flex items-center gap-2">
         {actions}
-        <IconButton label="Notifications" icon={<Bell className="size-5" aria-hidden />} />
-        <IconButton label="Help" icon={<Question className="size-5" aria-hidden />} />
+        {role && canViewNotificationHistory(role) && <NotificationsBell />}
+        {role && <HelpMenu role={role} />}
         {avatarName && organizationName && roleLabel && (
           <AccountMenu
             avatarName={avatarName}
