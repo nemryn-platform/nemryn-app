@@ -1,6 +1,8 @@
 import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { DIRECTORY_PAGE_SIZE, type OrganizationStatus } from "./platform-core";
+import { parsePlusAccessState } from "@/lib/plus/access-core";
+import type { PlusEntitlement } from "@/lib/plus/entitlement-admin-core";
 
 /**
  * Nemryn Platform read models (P1-PILOT-S4B-R4E). Every call goes through a
@@ -257,5 +259,27 @@ export async function getPlatformActivity(cursor: string | null | undefined): Pr
       reason: row.reason,
     })),
     nextCursor: rows.length > PLATFORM_ACTIVITY_PAGE_SIZE && last ? toBase64Url(`${last.occurred_at}|${last.id}`) : null,
+  };
+}
+
+/**
+ * NP-P1-S1 -- the organization's Nemryn Plus entitlement (platform_get_organization_module, Platform Admin only).
+ * Stored status and the effective state, nothing about tenant content. `null` when the read fails.
+ */
+export async function getPlusEntitlement(organizationId: string): Promise<PlusEntitlement | null> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("platform_get_organization_module", { p_organization_id: organizationId, p_module: "plus" });
+  if (error || !data) return null;
+  return {
+    provisioned: data.provisioned === true,
+    status: (data.status as PlusEntitlement["status"]) ?? null,
+    restriction: (data.restriction as PlusEntitlement["restriction"]) ?? null,
+    trialStartedAt: data.trial_started_at ?? null,
+    trialEndsAt: data.trial_ends_at ?? null,
+    trialExtensionCount: data.trial_extension_count ?? 0,
+    accessEndsAt: data.access_ends_at ?? null,
+    effectiveState: parsePlusAccessState(data.effective_state),
+    statusReason: data.status_reason ?? null,
+    updatedAt: data.updated_at ?? null,
   };
 }

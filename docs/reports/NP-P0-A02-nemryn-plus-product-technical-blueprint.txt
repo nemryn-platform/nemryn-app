@@ -1,0 +1,150 @@
+NEMRYN PLUS -- NP-P0-A02
+PRODUCT REQUIREMENTS, DATA MODEL & TECHNICAL BLUEPRINT -- COMPLETION REPORT
+Mode: DOCUMENTATION ONLY. Date: 2026-10-13 (UTC). Author: Claude Code (Opus 5.5).
+Input: docs/reports/NP-P0-A01-nemryn-plus-architecture-audit.txt + current source at 83506b0.
+
+=====================================================================================================
+1. FILES CREATED (all new; no existing file overwritten or modified)
+=====================================================================================================
+  docs/product/plus-product-spec.md                         product spec, UX spec, phased roadmap
+  docs/product/plus-domain-model.md                         tables, keys, indexes, RLS, Core links
+  docs/security/plus-access-model.md                        access, entitlement->DB perms, privacy, tests
+  docs/product/plus-decisions-proposed.md                   PD-01..PD-15 (PROPOSED; not in decision register)
+  docs/product/NP-P1-S1-entitlement-implementation-brief.md first slice brief + worktree reconciliation
+  docs/reports/NP-P0-A02-nemryn-plus-product-technical-blueprint.txt   this report
+  Pre-check: none of the six paths existed before writing.
+
+=====================================================================================================
+2. ARCHITECTURE DECISIONS INCORPORATED
+=====================================================================================================
+  - Same repo / Supabase / domain / auth / design system / shell (PD-01).
+  - Core is the single booking door: Plus may only create a 'pending' Request via Core's
+    log_transportation_request; never sets a Passenger, accepts a Request or creates a Trip (PD-01).
+  - Entitlement = new organization_modules table, separate from organizations.status; effective state
+    write / read_only / none computed at read time from status + timestamps (no scheduler) (PD-02).
+  - Initial access = entitled Organization Admin only; no dispatcher auto-access; no new membership role;
+    future membership_module_grants and later growth-only role designed, not built (PD-03).
+  - Expiry/cancel/disable -> Admin read + export retained, all Plus writes refused (ZW001), no deletion,
+    Core untouched because no Core function calls any Plus helper.
+  - ONE DEVIATION FLAGGED, NOT SILENTLY APPLIED: PD-04 recommends mounting Growth at
+    /operations/growth instead of top-level /growth. Evidence: the single operator layout + guard lives
+    in src/app/operations/layout.tsx and the shell's header logic is pathname-driven against /operations
+    prefixes (src/components/operations/OperationsLayoutClient.tsx:13-28, 96-150). A top-level /growth
+    needs a second layout/guard path or a shell refactor. Owner approval required.
+
+=====================================================================================================
+3. TECHNICAL ASSUMPTIONS VALIDATED AGAINST SOURCE
+=====================================================================================================
+  [SRC] has_org_role requires active Membership AND organizations.status='active'
+        (20260920130000_platform_admin_foundation.sql:54-71) -> Plus helpers built on it inherit
+        suspension/inactive-member handling.
+  [SRC] _require_platform_admin raises ZW001 (no uid) / ZW002 (not platform admin); set_platform_
+        organization_status is the template for the platform entitlement RPC (same file :989-1048).
+  [SRC] audit_events shape (entity_type, entity_id, action, actor, before/after, reason) fits the
+        entitlement audit row (20260830131500_audit_events.sql).
+  [SRC] Error codes ZW001..ZW006 (docs/data/mutation-api.md:19-24) cover all Plus cases; no new code.
+  [SRC] log_transportation_request is Admin/Dispatcher-only and deliberately NON-idempotent
+        (20260916100000_request_mutation_foundation.sql:122,206,308) -> conversion RPC needs its own
+        idempotency key + opportunity row lock.
+  [SRC] Public form always creates a transportation_requests row via _create_public_request
+        (20260921140000:152,787; 20260921150000:593) -> not suitable for non-booking inquiries; left
+        unchanged (PD-12).
+  [SRC] Recurring Care already links to Requests (20260927120000:24-36) -> no Plus recurrence engine.
+  [SRC] Core facilities are locations only; no facility_id on transportation_requests.
+  [SRC] Privilege contract fails on unlisted objects (supabase/tests/privilege_contract_tests.sql:1-25);
+        test harness pg_temp.try_as pattern (platform_admin_foundation_tests.sql:17-30).
+  [SRC] database.types.ts is a generated file (regenerated inside S1, not now).
+  [SRC] Service types closed set (20260920110000:719-724) reused for opportunities.
+
+=====================================================================================================
+4. DATA-MODEL RISKS RESOLVED
+=====================================================================================================
+  R-1 request_id uniqueness conflict: plus_opportunity_requests is REPLACED by plus_request_attributions
+      with request_id as PRIMARY KEY and three independent nullable dimensions (contact_id,
+      opportunity_id, referral_account_id). One attribution per Request -> no double counting; private-pay
+      booking credit and facility-referral credit coexist on one row; reports count once per dimension
+      and never sum across dimensions (domain model section 8; PD-06).
+  R-2 Stage drift between Plus and Core: post-conversion stages (Booking pending / Booked / Served /
+      Declined / Cancelled) are DERIVED at read time, never stored; no Core triggers (PD-05).
+  R-3 Opportunity vs repeat booking confusion: rebookings attach to contact_id with link_method
+      'rebooking'; recurring uses Core Recurring Care.
+  R-4 Location double counting: plus_account_facilities has unique(facility_id).
+  R-5 Duplicate conversion: opportunity FOR UPDATE + unique (organization_id, conversion_idempotency_key).
+  R-6 Unsafe identity matching: no passenger_id anywhere in Plus; conversion passes passenger_id null;
+      contact<->passenger only via staff-linked Requests.
+  R-7 Table sprawl: plus_opportunity_attributions DROPPED for v1 (3 columns on opportunities + Core's
+      existing request_acquisition_attributions); polymorphic subject ids avoided (typed FKs +
+      num_nonnulls checks); no metadata jsonb on activities.
+  R-8 Manual payment status misread as settlement: named payment_reported_status, always labelled
+      "reported", never revenue (PD-09).
+
+=====================================================================================================
+5. OPEN PRIVACY / COMPLIANCE DEPENDENCIES (gates remain OPEN; no compliance claimed)
+=====================================================================================================
+  - PD-10 HIPAA applicability for private-pay riders and Nemryn's role; BAA availability for Supabase,
+    Vercel, Resend (and any future SMS/telephony/payment vendor). Blocks real customer data and any
+    production Plus entitlement for a real operator.
+  - PD-11 CRM retention / erasure / export policy (proposed: redaction RPC + Admin CSV export).
+  - TCPA / 10DLC before any SMS (NP-P4+).
+  - PCI SAQ-A hosted payment flow before any online payment (NP-P5+).
+  - State consumer-privacy obligations (owner + counsel).
+  - Synthetic data only until the above close.
+
+=====================================================================================================
+6. PRODUCT SCOPE AND EXPLICIT EXCLUSIONS
+=====================================================================================================
+  In scope (beta, NP-P1..NP-P4): entitlement; contacts; private-pay and facility opportunities with fixed
+  stages; tasks; append-only activities; Track in Plus on Requests; controlled conversion + rebooking;
+  accounts + linked Core locations; referral and location volume reporting; conversion analytics;
+  consent ledger and consented email (NP-P4); CSV export.
+  Excluded: generic CRM builder, workflow builder, website/landing builder, ad buying/pixels/outbound
+  conversion uploads, SMS/telephony (until gated), bulk campaigns, online payments, invoicing, loyalty,
+  predictive analytics, Plus-created Trips, automatic Passenger matching, facility portal, marketplace,
+  Vleeds dependency, any change to public intake functions. Quotes deferred to NP-P2b behind PD-08
+  (Core-owned pricing rules).
+
+=====================================================================================================
+7. FIRST SAFE IMPLEMENTATION MILESTONE
+=====================================================================================================
+  NP-P1-S1 Plus entitlement gate (docs/product/NP-P1-S1-entitlement-implementation-brief.md):
+  organization_modules (class A: no client privilege), _plus_entitlement_state (owner-only),
+  plus_access_state (authenticated, returns 'none' for any non-admin -- no oracle),
+  platform_set_organization_module + platform_get_organization_module (Platform Admin, audited,
+  idempotent, org-row lock), requirePlusAccess server guard, empty authorized /operations/growth page,
+  Platform Admin "Nemryn Plus" panel, privilege-contract entries, 15 SQL cases + concurrency test + E2E.
+  Touches no Core RPC/RLS helper/public-intake file and none of the UX1-modified shell files.
+  No CRM table, no customer data, no sidebar nav (nav is NP-P1-S2).
+
+=====================================================================================================
+8. BLOCKERS BEFORE NP-P1-S1
+=====================================================================================================
+  B-1 Worktree reconciliation (owner action; nothing was changed in this phase):
+      - Branch p0-e3-s2-identity-organisations-auth == main == origin/main == 83506b0 (0 ahead/behind);
+        stale name.
+      - Modified: src/components/operations/AppHeader.tsx, OperationsLayoutClient.tsx (UX1).
+      - Untracked UX1 code: src/app/day-sheet/, src/app/operations/notifications-actions.ts,
+        src/components/operations/day-sheet/, src/components/operations/header/,
+        src/lib/operations/day-sheet-core.ts, day-sheet-core.test.mjs, day-sheet.ts, header-help-core.ts.
+      - Untracked: 31 docs/reports/*.txt (pre-existing + A01), the 6 A02 files, 227 .tmp-qa/ files.
+      - No stashes.
+      Required: release or branch-preserve UX1; decide on the docs commit separately; keep .tmp-qa
+      uncommitted (optionally .gitignore); start S1 on a fresh branch from reconciled origin/main;
+      read-only verify origin/main == production SHA, migration head, privilege contract 0 violations.
+  B-2 Owner approval of PD-02, PD-03, PD-04 (route mount) and the proposed 90-day trial cap.
+  B-3 PD-10 does NOT block S1 (no customer data) but blocks granting Plus to any real operator.
+  Not blocking S1: PD-08 pricing, PD-11 retention, PD-13 marketplace status, PR-12 pilot gate
+  (competes for capacity only).
+
+=====================================================================================================
+9. GIT STATE AND CHANGE CONFIRMATION
+=====================================================================================================
+  Branch: p0-e3-s2-identity-organisations-auth
+  HEAD:   83506b02ff23e68548e96f6bf3d7175510215e08 (unchanged)
+  Tracked-file modifications: only the 2 pre-existing UX1 files (untouched by this phase).
+  This phase added 6 untracked documentation files and nothing else.
+  No application code, migration, SQL test, package file, UI component, database (local or production),
+  RLS policy, deployment, or Git history (commit/push/stash/branch) was created or changed. No build,
+  test, generator, formatter or database command was run.
+
+STOP: awaiting review before NP-P1-S1.
+END OF REPORT -- NP-P0-A02

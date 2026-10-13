@@ -489,6 +489,59 @@ export type Database = {
           },
         ]
       }
+      organization_modules: {
+        Row: {
+          access_ends_at: string | null
+          created_at: string
+          module: string
+          organization_id: string
+          restriction: string | null
+          status: string
+          status_reason: string
+          trial_ends_at: string | null
+          trial_extension_count: number
+          trial_started_at: string | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          access_ends_at?: string | null
+          created_at?: string
+          module: string
+          organization_id: string
+          restriction?: string | null
+          status: string
+          status_reason: string
+          trial_ends_at?: string | null
+          trial_extension_count?: number
+          trial_started_at?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          access_ends_at?: string | null
+          created_at?: string
+          module?: string
+          organization_id?: string
+          restriction?: string | null
+          status?: string
+          status_reason?: string
+          trial_ends_at?: string | null
+          trial_extension_count?: number
+          trial_started_at?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_modules_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_notification_settings: {
         Row: {
           event_type: string
@@ -1855,6 +1908,10 @@ export type Database = {
           utc: string
         }[]
       }
+      _plus_entitlement_state: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
       _public_form_service_types: {
         Args: { p_offered: string[]; p_organization_id: string }
         Returns: string[]
@@ -2531,6 +2588,20 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      platform_extend_plus_trial: {
+        Args: {
+          p_extra_days: number
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
+        SetofOptions: {
+          from: "*"
+          to: "platform_organization_module_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       platform_get_organization: {
         Args: { p_organization_id: string }
         Returns: {
@@ -2564,6 +2635,16 @@ export type Database = {
           vehicle_count: number
           website_request_count: number
         }[]
+      }
+      platform_get_organization_module: {
+        Args: { p_module: string; p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["platform_organization_module_state"]
+        SetofOptions: {
+          from: "*"
+          to: "platform_organization_module_state"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       platform_get_overview: {
         Args: never
@@ -2636,6 +2717,34 @@ export type Database = {
           total_count: number
           trip_count: number
         }[]
+      }
+      platform_set_organization_module: {
+        Args: {
+          p_access_ends_at: string
+          p_module: string
+          p_organization_id: string
+          p_reason: string
+          p_restriction: string
+          p_status: string
+          p_trial_days: number
+        }
+        Returns: Database["public"]["CompositeTypes"]["platform_organization_module_result"]
+        SetofOptions: {
+          from: "*"
+          to: "platform_organization_module_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_access_state: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["plus_access_state_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_access_state_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       publish_website_request_form: {
         Args: { p_organization_id: string }
@@ -3230,10 +3339,39 @@ export type Database = {
         organization_id: string | null
         linked: boolean | null
       }
+      platform_organization_module_result: {
+        organization_id: string | null
+        module: string | null
+        status: string | null
+        restriction: string | null
+        trial_ends_at: string | null
+        trial_extension_count: number | null
+        access_ends_at: string | null
+        effective_state: string | null
+        changed: boolean | null
+      }
+      platform_organization_module_state: {
+        organization_id: string | null
+        module: string | null
+        provisioned: boolean | null
+        status: string | null
+        restriction: string | null
+        trial_started_at: string | null
+        trial_ends_at: string | null
+        trial_extension_count: number | null
+        access_ends_at: string | null
+        effective_state: string | null
+        status_reason: string | null
+        updated_at: string | null
+      }
       platform_organization_status_result: {
         organization_id: string | null
         status: string | null
         changed: boolean | null
+      }
+      plus_access_state_result: {
+        state: string | null
+        trial_ends_at: string | null
       }
       public_request_submission_result: {
         accepted: boolean | null
