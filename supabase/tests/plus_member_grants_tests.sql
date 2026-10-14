@@ -399,8 +399,10 @@ begin
       and p.proname !~ '^(plus_|_plus_|_require_plus_)'
       and p.proname not in ('platform_set_organization_module', 'platform_extend_plus_trial', 'platform_get_organization_module')
       and p.prosrc ~ 'plus_can_(read|write)|_require_plus_|_plus_member_access|membership_module_grants|organization_modules|_plus_entitlement_state'));
-  perform pg_temp.t('C2 no RLS policy references Plus objects (Core RLS unchanged)',
-    not exists (select 1 from pg_policy where coalesce(pg_get_expr(polqual, polrelid), '') || coalesce(pg_get_expr(polwithcheck, polrelid), '')
+  -- (Plus tables' own policies -- plus_* from NP-P1-S4 -- legitimately call plus_can_read; every OTHER policy is Core.)
+  perform pg_temp.t('C2 no Core RLS policy references Plus objects (Core RLS unchanged)',
+    not exists (select 1 from pg_policy where polrelid::regclass::text !~ '^(public\.)?plus_'
+                and coalesce(pg_get_expr(polqual, polrelid), '') || coalesce(pg_get_expr(polwithcheck, polrelid), '')
                 ~ 'plus_|membership_module_grants|organization_modules'));
   perform pg_temp.t('C3 the composite FK changes no membership behaviour: Core role change and deactivation of a grant holder worked (L1-L5)',
     (select role = 'dispatcher' and status = 'active' from public.memberships where id = m_a2));

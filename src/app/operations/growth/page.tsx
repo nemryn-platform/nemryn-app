@@ -1,9 +1,11 @@
+import Link from "next/link";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
 import { isPlusReadOnly, plusCapabilitySummary, plusStatusSummary } from "@/lib/plus/access-core";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { Panel } from "@/components/ui/Panel";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -30,7 +32,7 @@ export default async function GrowthPage() {
         description={
           readOnly
             ? "Nemryn Plus is not active for this workspace."
-            : "Nemryn Plus is enabled for this workspace. Growth tools will appear here."
+            : "Nemryn Plus is enabled for this workspace."
         }
         actions={<StatusBadge label={`Plus: ${status.label}`} category={status.tone} />}
       />
@@ -48,6 +50,14 @@ export default async function GrowthPage() {
           {status.message}
         </p>
       )}
+      <Panel className="flex flex-col gap-1" data-testid="growth-contacts-link">
+        <Link href="/operations/growth/contacts" className={cn(typography.subsectionHeading, "text-text-link hover:underline")}>
+          Contacts
+        </Link>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>
+          The people you work with or follow up with, and a timeline of notes, calls, emails and meetings.
+        </p>
+      </Panel>
       <div className="flex flex-col gap-1" data-testid="plus-my-access">
         <div className="flex items-center gap-2">
           <span className={cn(typography.label, "text-text-primary")}>Your access</span>

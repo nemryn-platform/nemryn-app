@@ -115,9 +115,14 @@ export function OperationsSidebar({
   // dual-hat owner-operator. Same platform, no forked nav structure.
   const navItems = [
     ...NAV_ITEMS,
-    // NP-P1-S2: Nemryn Plus (Growth) -- one item, after the Core operational modules and before Drive / Settings,
-    // only for callers the server already authorised. No group header yet: Growth has a single page in S2.
-    ...(canAccessGrowth ? [{ key: "growth" as const, label: "Growth", href: "/operations/growth" }] : []),
+    // NP-P1-S2 / S4: Nemryn Plus (Growth) -- after the Core operational modules and before Drive / Settings, only for
+    // callers the server already authorised. Growth (overview) + Contacts (S4); no separate group shell.
+    ...(canAccessGrowth
+      ? [
+          { key: "growth" as const, label: "Growth", href: "/operations/growth" },
+          { key: "contacts" as const, label: "Contacts", href: "/operations/growth/contacts" },
+        ]
+      : []),
     ...(hasLinkedDriverProfile ? [{ key: "drive" as const, label: "Drive", href: "/driver" }] : []),
     // P1-PILOT-S4B-R4A: tenant administration, Organization Admin only,
     // always last -- below the operational modules it configures.
@@ -231,8 +236,9 @@ export function OperationsSidebar({
         <ul className="flex flex-col gap-1">
           {navItems.map((item) => {
             const Icon = navIcons[item.key];
+            // "/operations" and the Growth overview match exactly (their sub-routes have their own items).
             const isActive =
-              item.href === "/operations" ? pathname === item.href : pathname.startsWith(item.href);
+              item.href === "/operations" || item.href === "/operations/growth" ? pathname === item.href : pathname.startsWith(item.href);
             return (
               <li key={item.key}>
                 <Link

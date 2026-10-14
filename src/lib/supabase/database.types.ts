@@ -770,6 +770,119 @@ export type Database = {
         }
         Relationships: []
       }
+      plus_activities: {
+        Row: {
+          activity_type: string
+          actor_user_id: string
+          body: string | null
+          contact_id: string | null
+          from_stage: string | null
+          id: string
+          occurred_at: string
+          organization_id: string
+          recorded_at: string
+          to_stage: string | null
+        }
+        Insert: {
+          activity_type: string
+          actor_user_id: string
+          body?: string | null
+          contact_id?: string | null
+          from_stage?: string | null
+          id?: string
+          occurred_at?: string
+          organization_id: string
+          recorded_at?: string
+          to_stage?: string | null
+        }
+        Update: {
+          activity_type?: string
+          actor_user_id?: string
+          body?: string | null
+          contact_id?: string | null
+          from_stage?: string | null
+          id?: string
+          occurred_at?: string
+          organization_id?: string
+          recorded_at?: string
+          to_stage?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_activities_contact_fkey"
+            columns: ["contact_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_activities_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      plus_contacts: {
+        Row: {
+          contact_kind: string
+          created_at: string
+          created_by: string
+          display_name: string
+          do_not_contact: boolean
+          email: string | null
+          id: string
+          job_title: string | null
+          organization_id: string
+          owner_user_id: string | null
+          phone: string | null
+          preferred_channel: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          contact_kind: string
+          created_at?: string
+          created_by: string
+          display_name: string
+          do_not_contact?: boolean
+          email?: string | null
+          id?: string
+          job_title?: string | null
+          organization_id: string
+          owner_user_id?: string | null
+          phone?: string | null
+          preferred_channel?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          contact_kind?: string
+          created_at?: string
+          created_by?: string
+          display_name?: string
+          do_not_contact?: boolean
+          email?: string | null
+          id?: string
+          job_title?: string | null
+          organization_id?: string
+          owner_user_id?: string | null
+          phone?: string | null
+          preferred_channel?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_contacts_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       public_intake_rate_limit_events: {
         Row: {
           client_key: string
@@ -1959,6 +2072,21 @@ export type Database = {
           utc: string
         }[]
       }
+      _plus_contact_matches: {
+        Args: {
+          p_display_name: string
+          p_email: string
+          p_exclude_contact_id: string
+          p_organization_id: string
+          p_phone: string
+        }
+        Returns: {
+          contact_id: string
+          display_name: string
+          match_on: string
+          status: string
+        }[]
+      }
       _plus_entitlement_state: {
         Args: { p_organization_id: string }
         Returns: string
@@ -1966,6 +2094,15 @@ export type Database = {
       _plus_member_access: {
         Args: { p_organization_id: string }
         Returns: string
+      }
+      _plus_resolve_owner: {
+        Args: { p_organization_id: string; p_owner_membership_id: string }
+        Returns: string
+      }
+      _plus_staff_name: { Args: { p_user_id: string }; Returns: string }
+      _plus_user_can_write: {
+        Args: { p_organization_id: string; p_user_id: string }
+        Returns: boolean
       }
       _public_form_service_types: {
         Args: { p_offered: string[]; p_organization_id: string }
@@ -2845,8 +2982,79 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_archive_contact: {
+        Args: {
+          p_contact_id: string
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_contact_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_contact_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_can_read: { Args: { p_organization_id: string }; Returns: boolean }
       plus_can_write: { Args: { p_organization_id: string }; Returns: boolean }
+      plus_create_contact: {
+        Args: {
+          p_confirm_possible_duplicate: boolean
+          p_contact_kind: string
+          p_display_name: string
+          p_do_not_contact: boolean
+          p_email: string
+          p_job_title: string
+          p_organization_id: string
+          p_owner_membership_id: string
+          p_phone: string
+          p_preferred_channel: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_contact_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_contact_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_find_contact_matches: {
+        Args: {
+          p_display_name: string
+          p_email: string
+          p_exclude_contact_id: string
+          p_organization_id: string
+          p_phone: string
+        }
+        Returns: {
+          contact_id: string
+          display_name: string
+          match_on: string
+          status: string
+        }[]
+      }
+      plus_get_contact: {
+        Args: { p_contact_id: string; p_organization_id: string }
+        Returns: {
+          contact_id: string
+          contact_kind: string
+          created_at: string
+          created_by_name: string
+          display_name: string
+          do_not_contact: boolean
+          email: string
+          job_title: string
+          owner_can_write: boolean
+          owner_membership_id: string
+          owner_name: string
+          phone: string
+          preferred_channel: string
+          status: string
+          updated_at: string
+        }[]
+      }
       plus_grant_member_access: {
         Args: {
           p_access: string
@@ -2862,6 +3070,55 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_list_contact_activities: {
+        Args: {
+          p_contact_id: string
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+        }
+        Returns: {
+          activity_id: string
+          activity_type: string
+          actor_name: string
+          body: string
+          occurred_at: string
+          recorded_at: string
+          total_count: number
+        }[]
+      }
+      plus_list_contact_owner_options: {
+        Args: { p_organization_id: string }
+        Returns: {
+          display_name: string
+          is_self: boolean
+          membership_id: string
+        }[]
+      }
+      plus_list_contacts: {
+        Args: {
+          p_contact_kind: string
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_search: string
+          p_status: string
+        }
+        Returns: {
+          contact_id: string
+          contact_kind: string
+          display_name: string
+          do_not_contact: boolean
+          email: string
+          job_title: string
+          owner_name: string
+          phone: string
+          preferred_channel: string
+          status: string
+          total_count: number
+          updated_at: string
+        }[]
+      }
       plus_list_member_access: {
         Args: { p_organization_id: string }
         Returns: {
@@ -2876,6 +3133,22 @@ export type Database = {
           status: string
         }[]
       }
+      plus_log_contact_activity: {
+        Args: {
+          p_activity_type: string
+          p_body: string
+          p_contact_id: string
+          p_occurred_at: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_activity_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_activity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_revoke_member_access: {
         Args: {
           p_expected_grant_id: string
@@ -2886,6 +3159,28 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_member_access_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_update_contact: {
+        Args: {
+          p_contact_id: string
+          p_contact_kind: string
+          p_display_name: string
+          p_do_not_contact: boolean
+          p_email: string
+          p_expected_updated_at: string
+          p_job_title: string
+          p_organization_id: string
+          p_owner_membership_id: string
+          p_phone: string
+          p_preferred_channel: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_contact_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_contact_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3517,6 +3812,16 @@ export type Database = {
         state: string | null
         trial_ends_at: string | null
         access: string | null
+      }
+      plus_activity_write_result: {
+        activity_id: string | null
+        changed: boolean | null
+      }
+      plus_contact_write_result: {
+        contact_id: string | null
+        updated_at: string | null
+        changed: boolean | null
+        possible_duplicates: number | null
       }
       plus_member_access_result: {
         membership_id: string | null
