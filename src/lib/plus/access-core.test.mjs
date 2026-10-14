@@ -76,3 +76,41 @@ test("status summary: one honest message per state; trial shows its end in the o
   assert.match(ro.message, /Operations are not affected/);
   assert.match(locked.message, /Operations are not affected/);
 });
+
+test("NP-P1-S3 capability: none | read | write only; anything else fails closed", async () => {
+  const { PLUS_CAPABILITIES, parsePlusCapability } = await import("./access-core.ts");
+  assert.deepEqual([...PLUS_CAPABILITIES], ["none", "read", "write"]);
+  for (const c of PLUS_CAPABILITIES) assert.equal(parsePlusCapability(c), c);
+  for (const raw of [undefined, null, "", "WRITE", "admin", "read_only", "full", 1, {}, ["write"]]) {
+    assert.equal(parsePlusCapability(raw), "none", String(raw));
+  }
+});
+
+test("NP-P1-S3 Growth entry needs an entering state AND a capability (fail closed)", async () => {
+  const { canOpenGrowth, canWriteGrowth } = await import("./access-core.ts");
+  assert.equal(canOpenGrowth("write", "write"), true, "Admin or write grant");
+  assert.equal(canOpenGrowth("write", "read"), true, "read grant");
+  assert.equal(canOpenGrowth("read_only", "read"), true, "Admin history");
+  assert.equal(canOpenGrowth("write", "none"), false, "no grant");
+  assert.equal(canOpenGrowth("read_only", "none"), false);
+  assert.equal(canOpenGrowth("locked", "write"), false, "locked never, whatever the capability");
+  assert.equal(canOpenGrowth("none", "write"), false);
+  assert.equal(canWriteGrowth("write", "write"), true);
+  assert.equal(canWriteGrowth("write", "read"), false, "read grant has no create / edit controls");
+  assert.equal(canWriteGrowth("read_only", "write"), false);
+  assert.equal(canWriteGrowth("locked", "write"), false);
+});
+
+test("NP-P1-S3 own-access summary: Admin vs named Dispatcher; never claims access the database did not give", async () => {
+  const { plusCapabilitySummary } = await import("./access-core.ts");
+  assert.equal(plusCapabilitySummary("organization_admin", "write", "write").label, "Full access");
+  assert.equal(plusCapabilitySummary("organization_admin", "read_only", "read").label, "View only");
+  const read = plusCapabilitySummary("dispatcher", "write", "read");
+  assert.equal(read.label, "Read access");
+  assert.match(read.message, /not change/);
+  assert.match(read.message, /operations access is unchanged/);
+  assert.equal(plusCapabilitySummary("dispatcher", "write", "write").label, "Write access");
+  assert.equal(plusCapabilitySummary("dispatcher", "write", "none").label, "No access");
+  assert.equal(plusCapabilitySummary("organization_admin", "locked", "none").label, "No access");
+  assert.equal(plusCapabilitySummary("dispatcher", "read_only", "read").label, "No access", "grant holders lose access when not writable");
+});

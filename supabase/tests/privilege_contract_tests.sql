@@ -54,7 +54,9 @@ c_tables(tbl) as (values
   ('driver_unavailability_windows'),
   ('vehicle_unavailability_windows'),
   -- NP-P1-S1 Nemryn Plus entitlement: class A (no anon / authenticated / service_role privilege; RPCs only)
-  ('organization_modules')
+  ('organization_modules'),
+  -- NP-P1-S3 named-staff Plus grants: class A (RPCs only)
+  ('membership_module_grants')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -247,7 +249,12 @@ c_fn(sig, roles) as (values
   ('_require_plus_admin_write(uuid)', ''),
   -- NP-P1-S2-R1 versioned (optimistic-concurrency) entitlement mutations
   ('platform_set_organization_module(uuid,text,text,integer,timestamp with time zone,text,text,timestamp with time zone)', 'u'),
-  ('platform_extend_plus_trial(uuid,integer,text,timestamp with time zone)', 'u')
+  ('platform_extend_plus_trial(uuid,integer,text,timestamp with time zone)', 'u'),
+  -- NP-P1-S3 named-staff Plus grants
+  ('_plus_member_access(uuid)', ''),
+  ('plus_list_member_access(uuid)', 'u'),
+  ('plus_grant_member_access(uuid,uuid,text,uuid)', 'u'),
+  ('plus_revoke_member_access(uuid,uuid,uuid)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

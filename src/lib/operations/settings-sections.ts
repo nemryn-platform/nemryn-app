@@ -27,5 +27,5 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { slug: "operations", title: "Operations", description: "Operating hours and dispatch information", available: true },
   { slug: "security", title: "Security", description: "Account and access security", available: true },
   { slug: "activity", title: "Activity", description: "Administrative change history", available: true },
-  { slug: "plus", title: "Nemryn Plus", description: "Growth module status for this workspace", available: true },
+  { slug: "plus", title: "Nemryn Plus", description: "Growth module status and team access", available: true },
 ];

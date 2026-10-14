@@ -2515,9 +2515,9 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Date:** 2026-10-13
 - **Category:** Architecture / UX
 - **Decision:** Nemryn Plus (Growth) pages live under `/operations/growth/*`, inside the existing Operations layout and shell.
-  - A Growth `layout.tsx` and every Growth page call `requirePlusAccess` (`src/lib/plus/access.ts`): Organization Admin plus a Plus entitlement that allows entry.
+  - A Growth `layout.tsx` and every Growth page call `requirePlusAccess` (`src/lib/plus/access.ts`): ~~Organization Admin plus a Plus entitlement that allows entry.~~ (AMENDED by ZD-210: an Organization Admin, or a Dispatcher holding an active named Plus grant, plus a Plus entitlement and capability that allow entry; `requirePlusAccess` resolves the context through `requireOperationsAccess`.)
   - The module boundary is kept in code (`src/lib/plus/*`, `plus_*` / `platform_*_module` database objects), not in a separate URL root, shell or application.
-- **Status:** CONFIRMED (owner-approved direction, NP-P0-A02R brief "Preserve `/operations/growth` route structure"; proposed as PD-04 in `plus-decisions-proposed.md`)
+- **Status:** CONFIRMED (amended by ZD-210) (owner-approved direction, NP-P0-A02R brief "Preserve `/operations/growth` route structure"; proposed as PD-04 in `plus-decisions-proposed.md`)
 - **Reason:** One Operations layout already resolves the organization context and renders the pathname-driven shell (`src/app/operations/layout.tsx`, `OperationsLayoutClient.tsx`). A top-level `/growth` would need a second guard and shell path without any security benefit.
 - **Affected Product Areas:** `src/app/operations/growth/*`, `src/lib/plus/access.ts`
 - **Dependencies:** ZD-205 (UX1 header); Plus entitlement (NP-P1-S1)
@@ -2565,6 +2565,39 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A commercial request for trial regrants; billing-provider integration
 
-No decisions have been REJECTED as of this update. ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
+### ZD-209 — Additive Core constraint `memberships unique (id, organization_id)` for tenant-isolated Plus grants
+
+- **Date:** 2026-10-14
+- **Category:** Data / Core change
+- **Decision:** Core `public.memberships` gains the additive constraint `memberships_id_organization_id_key unique (id, organization_id)`.
+  - Its only purpose is to let `membership_module_grants` reference a membership with the tenant-isolating composite FK `(membership_id, organization_id) → memberships (id, organization_id)`, so a grant can never point at another organization's membership.
+  - It is the one Core schema touch in NP-P1. It changes no row, policy, trigger, function, privilege or Core membership behaviour, and it cannot fail because `id` is already the primary key.
+  - It is shipped as its own migration, `20261013160000_memberships_id_organization_unique.sql`, released before `20261013160100_plus_member_grants.sql`.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P1-S3 owner decision ratification, 2026-10-14; was PD-20 in `plus-decisions-proposed.md`)
+- **Reason:** The alternative, a plain FK to `memberships(id)` plus an RPC check of the organization, breaks the composite-FK isolation convention used by every tenant table. The constraint is always satisfiable.
+- **Affected Product Areas:** `supabase/migrations/20261013160000_memberships_id_organization_unique.sql`, `membership_module_grants`
+- **Dependencies:** ZD-210
+- **Owner:** Product / Engineering
+- **Review Trigger:** Any proposal to hard-delete memberships. The grant FK is NO ACTION, so grant history must be handled first.
+
+### ZD-210 — Named-staff Nemryn Plus permissions (Read / Write) for eligible Dispatchers, managed by the Organization Admin
+
+- **Date:** 2026-10-14
+- **Category:** Security / Product
+- **Decision:** An Organization Admin may give an eligible existing staff member explicit Nemryn Plus access, `read` or `write`, through `membership_module_grants`, and may change or revoke it.
+  - **Eligible:** only an **active `dispatcher`** membership of the Admin's own organization. Drivers never; Organization Admins need no grant; other organizations' memberships are always refused. Nobody receives Plus automatically.
+  - **Effective only while** the membership is an active Dispatcher of an active organization **and** the Plus entitlement is `write` (ZD-207). In `read_only`, historical access stays Organization-Admin-only. `locked` and `none` deny everyone.
+  - **Read** lets the Dispatcher view Growth. **Write** lets them view and change it. Admin-only Plus settings (managing grants, and later inquiry-form publishing) stay Organization-Admin-only.
+  - **Grants never change a Core membership role** and never confer subscription-management privileges. The entitlement stays Platform-Admin-controlled (ZD-207). A salesperson is never made an Organization Admin to reach the CRM.
+  - **Reactivation (owner-approved behaviour):** a grant that was never revoked becomes effective again when an inactive Dispatcher membership is reactivated, provided every other authorization and entitlement condition is satisfied. An Admin can revoke it at any time, including while the member is inactive.
+  - **History and audit:** a change revokes the active row and inserts a new one, and a revoke stamps `revoked_at` / `revoked_by`. Rows are never deleted. Every real change writes `plus_member_access_granted` or `plus_member_access_revoked`; identical repeats write nothing; stale submissions are refused (ZW003). Authority is enforced in the database (`plus_grant_member_access`, `plus_revoke_member_access`, `plus_list_member_access`).
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P1-S3 owner decision ratification, 2026-10-14; was PD-03 in `plus-decisions-proposed.md`)
+- **Reason:** A real sales or intake person who is already a Dispatcher can use Plus without becoming an Admin. Access stays explicit, revocable, audited and tenant-isolated.
+- **Affected Product Areas:** `supabase/migrations/20261013160100_plus_member_grants.sql`, `plus_can_read` / `plus_can_write` / `plus_access_state`, `src/lib/plus/access.ts` (`requirePlusAccess`), Operations sidebar Growth item, Settings → Nemryn Plus → Team access
+- **Dependencies:** ZD-206, ZD-207, ZD-209
+- **Owner:** Product
+- **Review Trigger:** A growth-only membership role (PD-18); Plus write RPCs in NP-P1-S4, which must use `_require_plus_write`
+
+No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

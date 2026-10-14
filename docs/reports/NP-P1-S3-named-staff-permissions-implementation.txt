@@ -1,0 +1,524 @@
+NP-P1-S3 -- NAMED STAFF PERMISSIONS & GROWTH TEAM ACCESS -- IMPLEMENTATION REPORT
+Date: 2026-10-13/14
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing is staged, committed, pushed, merged or deployed.
+- No production migration was applied and no production entitlement was changed.
+- NP-P1-S4 has not been started.
+
+======================================================================
+1. STARTING MAIN SHA AND BRANCH
+======================================================================
+origin/main: 50dd6c2afb85759cf4310f3a2c84d6a90900e50f, "Merge pull request #3 from
+nemryn-platform/np-p1-s2-growth-access-navigation".
+- Branch np-p1-s3-named-staff-permissions was created from origin/main 50dd6c2. The tracked tree was clean at the
+  start.
+- All unrelated untracked work was preserved and left untouched: .tmp-qa/, older reports and
+  NP-P1-S2-R1-controlled-commit-and-pr.txt.
+
+======================================================================
+2. S2 PRODUCTION-BASELINE VERIFICATION (read-only)
+======================================================================
+- PR #3: state MERGED at 2026-10-13T20:18:32Z, merge commit 50dd6c2, head f6f34a8. Checked with the isolated nemryn
+  gh config.
+- Supabase CLI:
+  - only project wyocbivzgrbekuyqdfts is listed, and it is marked linked;
+  - `supabase migration list --linked` shows 20261013100000, 20261013120000 and 20261013140000 present both locally
+    and remotely. The remote head is 20261013140000.
+- Vercel Production: GitHub deployment 7049124539, environment Production, sha 50dd6c2, status success.
+- https://app.nemryn.com/sw.js has BUILD = "50dd6c2afb85", which matches the merge SHA.
+- Conclusion: the owner's report is confirmed. Production runs S2 + R1 at 50dd6c2, with migrations up to
+  20261013140000.
+
+======================================================================
+3. EXACT MIGRATIONS (new, forward-only, local only)
+======================================================================
+Neither migration edits an earlier one.
+
+1. supabase/migrations/20261013160000_memberships_id_organization_unique.sql  (Core constraint, PD-20)
+     alter table public.memberships
+       add constraint memberships_id_organization_id_key unique (id, organization_id);
+   plus a COMMENT.
+
+2. supabase/migrations/20261013160100_plus_member_grants.sql
+   - table public.membership_module_grants:
+     - id;
+     - organization_id, references organizations;
+     - membership_id, with composite FK (membership_id, organization_id) -> memberships (id, organization_id);
+     - module, check 'plus';
+     - access, check 'read' | 'write';
+     - granted_by (not null, references auth.users) and granted_at;
+     - revoked_by and revoked_at, with check (revoked_at is null) = (revoked_by is null) and
+       revoked_at >= granted_at;
+     - unique (id, organization_id);
+     - partial unique index (membership_id, module) WHERE revoked_at IS NULL, giving one active grant;
+     - index (organization_id, module) WHERE active;
+     - prevent_organization_id_change trigger;
+     - RLS enabled, NO policy, REVOKE ALL from public, anon, authenticated and service_role.
+   - function _plus_member_access(uuid), internal, with no client EXECUTE.
+   - CREATE OR REPLACE, same signatures and grants: plus_can_read(uuid), plus_can_write(uuid) and
+     plus_access_state(uuid).
+   - ALTER TYPE plus_access_state_result ADD ATTRIBUTE access text. This is additive; the S2 app reads `state` only.
+   - type plus_member_access_result (membership_id, access, grant_id, changed).
+   - RPCs, each with authenticated EXECUTE only and anon/PUBLIC revoked:
+     - plus_list_member_access(uuid);
+     - plus_grant_member_access(uuid,uuid,text,uuid);
+     - plus_revoke_member_access(uuid,uuid,uuid).
+   - Updated COMMENTs on _require_plus_write and _require_plus_admin_write. Their bodies are unchanged.
+
+Release order: 20261013160000, then 20261013160100. Apply them BEFORE the S3 app.
+- If the S3 app reaches production first, it fails closed: plus_access_state has no `access` field, the capability
+  parses as none, and Growth is hidden even for Admins until the migration lands.
+- The S2 app (50dd6c2) stays fully compatible with these migrations: it reads `state` only, and every signature it
+  calls is unchanged.
+
+======================================================================
+4. CORE MEMBERSHIP CONSTRAINT REVIEW (PD-20)
+======================================================================
+Verified on the local schema before writing the migration:
+- memberships constraints: pkey (id), unique (organization_id, user_id), FKs to organizations and auth.users
+  (ON DELETE CASCADE), and the role and status CHECKs;
+- no foreign key references memberships (pg_constraint confrelid count 0);
+- owner: postgres.
+
+Because id is the primary key, (id, organization_id) is unique for every possible row. The constraint cannot fail, it
+changes no row, policy, trigger, function or privilege, and it adds one btree index.
+
+Compatibility evidence:
+- All migrations from zero on the isolated stack: PASS.
+- S3 migrations applied on top of a SEEDED database at the production head 20261013140000:
+  - memberships 16 -> 16;
+  - head 20261013160100;
+  - S3 suite 76/76 and contract 0/29 on that upgraded database.
+- Core membership behaviour is unchanged. Core change_membership_role and set_membership_status work on a grant
+  holder (SQL L1-L5, E2E G1/G2), and no Core function, policy or privilege was modified (SQL C1-C3, contract 0/29).
+
+Note -- deletion semantics. The composite FK is NO ACTION, chosen to preserve grant history.
+- No code path deletes memberships today.
+- An operational hard delete of a membership, or of an auth user whose membership has grant rows, must delete those
+  grant rows first. This matches how audit_events.actor_user_id already constrains auth user deletion.
+- Recorded as a known limitation (section 15).
+
+PD-20 status: PROPOSED. It needs FORMAL OWNER APPROVAL before either S3 migration is released to production
+(documented in docs/product/plus-decisions-proposed.md, PD-20).
+
+======================================================================
+5. GRANT / REVOKE IMPLEMENTATION
+======================================================================
+plus_grant_member_access(p_organization_id, p_membership_id, p_access, p_expected_grant_id)
+  1. _require_plus_admin_write(org): Organization Admin of the org and entitlement write.
+     - ZW001: no uid, or an Admin while Plus is read_only.
+     - ZW002: everyone else, including a Dispatcher with a write grant, a Driver, a foreign tenant, a Platform Admin
+       without membership, and the none/locked states.
+  2. _lock_org_admins(org), the advisory lock change_membership_role and set_membership_status already take. Then
+     _require_plus_admin_write is called AGAIN, so an Admin demoted or deactivated, or an entitlement that ended, while
+     the call waited cannot complete it.
+  3. p_access must be 'read' or 'write' (ZW006).
+  4. The membership is looked up by id AND organization_id, FOR SHARE. A forged, foreign or unknown id gives ZW002.
+  5. The membership must have role = 'dispatcher' and status = 'active'. Otherwise ZW006 (Admins need no grant,
+     Drivers never, inactive never).
+  6. The active grant is locked FOR UPDATE.
+     - Same access already active: changed = false, nothing written, no audit (duplicate submissions).
+     - Otherwise p_expected_grant_id must equal the active grant id (NULL = none), or ZW003.
+  7. A change revokes the old row (revoked_at, revoked_by) and inserts a new one, so history is kept.
+  8. Audit event:
+     - action plus_member_access_granted; entity_type membership_module_grant; entity_id = new grant; actor =
+       auth.uid();
+     - before = {module, membership_id, access, grant_id} of the previous grant, or NULL;
+     - after = {module, membership_id, access, grant_id, email}.
+
+plus_revoke_member_access(p_organization_id, p_membership_id, p_expected_grant_id)
+  - Organization Admin while Plus is write or read_only, so grants can be cleaned up after Plus ends. Otherwise ZW002,
+    including locked and none. Uses the same lock and re-check.
+  - Any membership of THAT organization qualifies, so a deactivated or re-roled member's grant can still be revoked.
+    Otherwise ZW002.
+  - No active grant: changed = false (duplicate submit). A wrong expected id gives ZW003.
+  - Stamps revoked_at and revoked_by; the row is never deleted. Audited as plus_member_access_revoked.
+
+plus_list_member_access(p_organization_id)
+  - Organization Admin while Plus is write or read_only; otherwise ZW002 (ZW001 without a uid).
+  - Returns staff memberships (Admins and Dispatchers; Drivers are never listed) with name, email, Core role, status,
+    is_self, and the active grant (access, grant_id, granted_at).
+
+Not automatic: nobody receives Plus implicitly. There is no invitation, role conversion or staff management in S3.
+A salesperson is never made an Admin.
+
+======================================================================
+6. UPDATED AUTHORIZATION HELPERS
+======================================================================
+Database:
+  _plus_member_access(org) returns:
+    - none for no uid or a NULL org;
+    - write for an active Organization Admin of an active org (has_org_role);
+    - for an active Dispatcher of an active org (has_org_role), the access of their active grant joined through the
+      membership (user_id = auth.uid(), status active, role dispatcher), or none;
+    - none for anyone else.
+  plus_can_read(org):
+    - member access none -> false;
+    - entitlement write -> true;
+    - entitlement read_only -> Organization Admin only;
+    - locked / none -> false.
+  plus_can_write(org): member access write AND entitlement write.
+  _require_plus_write and _require_plus_admin_write: bodies unchanged (they build on the two above), with new
+    COMMENTs. A write-grant Dispatcher passes _require_plus_write and never passes _require_plus_admin_write; a
+    read-grant Dispatcher gets ZW001.
+  plus_access_state(org):
+    - Admins: unchanged state (write / read_only / locked / none), plus access write / read / none.
+      trial_ends_at is returned to Admins only.
+    - Grant holders: state 'write' with access read or write, while the entitlement is write; otherwise none/none.
+    - Everyone else: none/none. Never raises.
+    - The four effective states are unchanged; no state value 'read' was introduced.
+
+Application:
+  src/lib/plus/access-core.ts:
+    - new PlusCapability (none | read | write), with parsePlusCapability (fail closed);
+    - canOpenGrowth(state, capability): the state allows entry AND the capability is not none;
+    - canWriteGrowth;
+    - plusCapabilitySummary: the person's OWN access wording. A non-admin is told "no access" unless the state is
+      write.
+  src/lib/plus/access.ts:
+    - getPlusAccessState returns { state, capability, trialEndsAt } and fails closed to none/none;
+    - requirePlusAccess now resolves through requireOperationsAccess instead of requireOrganizationAdminAccess.
+      Signed-out users go to sign-in, Drivers to /driver, and non-Operations roles to /access-unavailable, exactly as
+      on every Operations page. The guard then requires canOpenGrowth from the database, or redirects to /operations.
+  requireOperationsAccess and the organization context: REVIEWED, NOT CHANGED.
+    - The context's role is untouched, so a Dispatcher passing the Growth guard gains no Admin privilege.
+    - Every Settings page, including Settings > Nemryn Plus and its Team access, still calls
+      requireOrganizationAdminAccess.
+    - Core permissions and Core navigation are unchanged.
+
+======================================================================
+7. TEAM ACCESS UI (Settings > Nemryn Plus > Team access)
+======================================================================
+Files:
+  - src/app/operations/settings/plus/page.tsx
+  - src/components/operations/settings/PlusTeamAccessSection.tsx
+  - src/app/operations/settings/plus/actions.ts
+  - src/lib/plus/team-access.ts
+  - src/lib/plus/team-access-core.ts
+
+When it shows: the page stays Organization-Admin-only. The status panel is unchanged. The Team access section appears
+only while Plus is write or read_only (no Plus data while locked or not enabled).
+
+What each row shows:
+  - existing staff (Admins and Dispatchers; never Drivers), with name, email and "You";
+  - "Core role: Organization Admin / Dispatcher" (and "Inactive") on the left;
+  - a separate "Nemryn Plus" badge on the right: Full access (Admin), Read, Write or No access. The wording is
+    distinct from the Core role labels (unit-tested);
+  - for inert grants, an explanation: "Inactive account: no Plus access while deactivated" or "Nemryn Plus is not
+    active, so named staff currently have no access".
+
+What is offered:
+  - only for an ACTIVE Dispatcher, and only while Plus is writable: Give read / Give write / Change to read / Change
+    to write;
+  - Remove access whenever a grant exists, including inactive members and read-only Plus;
+  - nothing for Admins.
+
+Confirmation: every change opens a dialog that names the staff member (name and email) AND the organization, shows
+"Core role (unchanged)" and "Nemryn Plus: <current> -> <new>", and states that operations access is not changed.
+Remove access uses the destructive variant.
+
+Server action (changePlusTeamAccessAction):
+  - requireOrganizationAdminAccess runs on every call;
+  - pure input validation;
+  - the posted organizationId must equal the CURRENT session organization. Otherwise the action refuses with "You
+    switched to a different organization since this page was loaded". This is the target-organization safeguard for
+    multi-organization Admins;
+  - the opaque membership handle and the expected grant version are posted; the RPC decides everything;
+  - errors map to plain copy: ZW003 means the access changed since the page was loaded; ZW006 means only active
+    Dispatchers; ZW001 means Plus is not active (removal is still possible); ZW002 means not available in this
+    organization;
+  - feedback: a success notice ("Nemryn Plus access set to read.", "removed.", "No change was needed").
+
+Visual system: existing Panel, SectionHeader, StatusBadge, Dialog, Button and typography tokens, and the same row
+layout as Team & Access. There is no new navigation system or staff-management system, and the Plus subscription
+itself cannot be changed here. Responsive: no horizontal overflow at 800px (E2E J1/J2).
+
+Non-admin staff: Settings stays Admin-only (unchanged, by design). A named Dispatcher sees their own access on the
+Growth page: "Your access: Read access / Write access", with an explanation that their operations access is unchanged.
+No team-management controls are exposed.
+
+Settings home: the Nemryn Plus description now reads "Growth module status and team access".
+
+======================================================================
+8. GROWTH ROUTING CHANGES
+======================================================================
+- src/app/operations/layout.tsx:
+  - the Growth item is computed for every Operations role through canOpenGrowth(plus_access_state);
+  - it was previously Admin-only, with no RPC for other roles. A Dispatcher now costs one request-cached RPC per
+    request;
+  - navigation only.
+- src/app/operations/growth/layout.tsx and page.tsx are protected server-side by requirePlusAccess on every request.
+  - The page shows the caller's own access and no create/edit controls; no CRM tools exist, and none are fabricated.
+  - Grant holders see no Admin trial details.
+- Verified in the browser (section 10):
+  - granted staff see the Growth item and enter;
+  - read vs write wording;
+  - unauthorized staff never see or enter it, including by direct URL;
+  - a revoked user's NEXT request loses Growth (E4/E5);
+  - multi-organization memberships are isolated (I1-I6);
+  - Core navigation is identical (A1, B6, and the S2 / UX1 regressions).
+
+======================================================================
+9. RLS AND TENANT ISOLATION EVIDENCE
+======================================================================
+- membership_module_grants is class A: RLS on, no policy, no table privilege for anon, authenticated, service_role or
+  PUBLIC.
+  - Direct SELECT, INSERT, UPDATE and DELETE as authenticated all give 42501 (SQL S3/S4).
+  - Deviation, stricter than the domain model's proposed select policy: Admins read through plus_list_member_access,
+    and members read their own access through plus_access_state. Documented in plus-access-model.md section 3.1.
+- Structural isolation: the composite FK refuses a grant that pairs Org B with an Org A membership (SQL S8). The
+  partial unique index refuses two active grants (S9). Module and access CHECKs (S10).
+- Cross-tenant and forged-id attacks:
+  - an Org B Admin cannot list, grant or revoke for Org A (A4);
+  - an Org A membership posted under Org B, and the reverse, give ZW002 with nothing written (A5/A6);
+  - unknown or NULL ids give ZW002 (A7);
+  - in the browser, a forged handle (an Org B membership) and a form for another organization are both refused (E2E
+    D5/D7).
+- Platform Admin without a membership: plus_can_read/write false/false, plus_access_state none/none, and cannot list,
+  grant or revoke (A3).
+- Multi-organization identities:
+  - a person who is a Dispatcher in A (granted) and in B (not granted) has Plus in A only, even with Plus active in B
+    (M1, E2E I1-I5);
+  - c1 (Admin in A, Driver in B) has none in B (M3);
+  - A and B grants and audits stay independent (M4-M6, E2E I6).
+- Core isolation:
+  - no Core function references a Plus helper or table (C1, and S2 P6 widened to the Plus naming convention);
+  - no RLS policy references Plus objects (C2);
+  - Core role checks are unchanged for a grant holder (B22);
+  - the granted Dispatcher's membership row is unchanged (B21, E2E B11).
+- The privilege contract registers the new table (class A) and the four functions (_plus_member_access internal;
+  three RPCs 'u'). Result: 0 violations of 29, on the dev DB, the isolated clean stack and the upgraded stack.
+
+======================================================================
+10. TEST COUNTS AND OUTCOMES
+======================================================================
+Isolated clean stack (separate project NemrynS1Iso; ALL migrations from zero; reset before each suite):
+
+  | Suite                                    | Result                       |
+  |------------------------------------------|------------------------------|
+  | privilege_contract_tests                 | 0 of 29 violations           |
+  | platform_admin_foundation_tests          | 58 PASS (EX-1 = 12)          |
+  | rls_adversarial_tests                    | 33 PASS                      |
+  | security_definer_exposure_tests          | 20 PASS                      |
+  | function_privilege_tests                 | 7 PASS                       |
+  | request_decision_workflow_tests          | 60 PASS                      |
+  | create_trip_tests                        | 20 PASS                      |
+  | public_request_intake_tests              | 42 PASS                      |
+  | request_mutation_tests                   | 39 PASS                      |
+  | create_trip_privilege_tests              | 5 PASS                       |
+  | mutation_authorization_tests             | 4 PASS                       |
+  | plus_entitlement_tests (S1)              | 150/150                      |
+  | plus_access_helpers_tests (S2)           | 170/170                      |
+  | plus_entitlement_versioned_tests (R1)    | 17/17 (see note)             |
+  | plus_member_grants_tests (S3, NEW)       | 76/76                        |
+
+  Notes on the runner output:
+  - The runner's "fail=1" for rls_adversarial, request_decision_workflow and request_mutation is each suite's footer
+    line ("review PASS/FAIL lines above"), unchanged from the S2/R1 baseline. Real failures: 0.
+  - plus_entitlement_versioned_tests: the runner's reset hung (a CLI "Restarting containers" step after migrations
+    and seed had completed). The suite was re-run on a database freshly reset to head 20261013160100 (16 seed
+    memberships, no entitlement rows): 17/17.
+
+Dev database (the same suites after supabase migration up --local): S3 76/76, S2 170/170, S1 150/150, R1 17/17,
+contract 0/29.
+- platform_admin_foundation_tests showed 6 failures there. That suite needs freshly seeded data, and the dev DB holds
+  earlier E2E data. On the isolated clean stack it passes 58/58, so it is judged on the clean stack only.
+
+Application:
+  | Check                          | Result                                                            |
+  |--------------------------------|-------------------------------------------------------------------|
+  | tsc --noEmit                   | PASS                                                              |
+  | eslint src                     | 0 problems                                                        |
+  | npm test (node --test)         | 762/762 (752 before; +10: 3 in access-core, 7 in team-access-core)|
+  | next build                     | PASS                                                              |
+
+Browser E2E (local, next start -p 3100, fictional seed; the local auth container was restarted between suites to reset
+GoTrue's in-memory sign-in limit):
+
+  | Suite                                                         | Result |
+  |---------------------------------------------------------------|--------|
+  | NEW .tmp-qa/np-p1-s3-named-staff-permissions-e2e.mjs          | 57/57  |
+  | np-p1-s2-growth-access-navigation (S2 regression)             | 49/49  |
+  | np-p1-s1-plus-entitlement (S1 regression)                     | 45/45  |
+  | p1-pilot-ux1-header-day-sheet (UX1 / Core shell regression)   | 46/46  |
+
+  S3 E2E coverage:
+  - A: baseline and eligibility display;
+  - B: give read access (dialog names person and org, Growth read, no controls, Settings still Admin-only, Core role
+    unchanged);
+  - C: change to write;
+  - D: stale tab refused (ZW003), wrong-organization form refused, forged membership refused;
+  - E: remove access, with the next request losing Growth;
+  - F: expired, locked and re-activated;
+  - G: Core deactivation;
+  - H: Driver;
+  - I: multi-organization;
+  - J: 800px.
+
+  First S3 E2E run: 56/57.
+  - B3 FAILED: no success message after a change, although the grant had applied.
+  - Root cause, a real UI defect: rows were keyed by handle plus grant version, so the refresh after a change
+    remounted the row and its open dialog before it could report success.
+  - Fixed by keying rows by the stable handle. The re-run passed 57/57. This was the only code change between runs.
+
+Skipped: nothing in scope. Preview and production tests were not run (out of scope; local only).
+
+======================================================================
+11. CONCURRENCY RESULTS
+======================================================================
+NEW supabase/tests/plus_member_grants_concurrency_test.sh (real parallel psql sessions; each holds its locks ~1s):
+
+  | Test     | Scenario                                                        | Result |
+  |----------|-----------------------------------------------------------------|--------|
+  | CONC-G1  | Two Admins submit the same grant at once: one change + one no-op, one active grant, one audit | PASS |
+  | CONC-G2  | READ vs WRITE grants from the same version: one applies, the other ZW003, the winner's access is active, one audit | PASS |
+  | CONC-G3  | READ->WRITE change vs revoke from the same version: one applies, the other ZW003, never two active grants | PASS |
+  | CONC-G4  | Two simultaneous revokes: one revoke + one no-op, one audit     | PASS   |
+  | CONC-G5  | Grant racing Core deactivation (set_membership_status): serialized on the organization admin lock; the deactivated Dispatcher ends with no effective Plus (the grant was refused with ZW006) | PASS |
+  | CONC-G6  | Invariant: never two active grants; history rows = grant audits (no row deleted) | PASS |
+
+  Result: 6/6 on the dev DB and 6/6 on the isolated clean stack.
+
+Existing concurrency scripts on the isolated stack:
+  | Script                                            | Result                                    |
+  |---------------------------------------------------|-------------------------------------------|
+  | plus_entitlement_versioned_concurrency_test (R1)  | 4/4                                       |
+  | plus_entitlement_concurrency_test (S1)            | 5/5                                       |
+  | request_decision_concurrency_test (Core Requests) | 0 failures (14 scenarios)                 |
+  | platform_lifecycle_concurrency_test               | 2/2 on re-run; first run 1 failure (see below) |
+  | mutation_concurrency_test (Core trips)            | FAIL, pre-existing                        |
+
+  platform_lifecycle_concurrency_test: the first run reported 1 failure. It ran immediately after a hung reset was
+  killed, and the test asserts a >1s blocking time. The detail line was not captured. The immediate re-run passed
+  2/2 (CONC-LIFECYCLE-1 blocked 3198ms, then rejected). Recorded as a timing-sensitive result, not attributed to S3,
+  which touches no lifecycle code.
+
+  mutation_concurrency_test: FAIL, pre-existing and identical to NP-P1-S2-R1 O1. The script locks `trips` directly as
+  authenticated, which earlier hardening revoked. It also fails on the pre-S1 schema (proven in R1). Unrelated to S3.
+
+======================================================================
+12. COMPLETE CHANGED-FILE INVENTORY (uncommitted; nothing staged)
+======================================================================
+Modified (14):
+  docs/data/mutation-api.md                          -- S3 grants section; helper note
+  docs/product/plus-decisions-proposed.md            -- PD-20 implementation note; owner approval required
+  docs/security/database-privilege-contract.md       -- NP-P1-S3 additions
+  docs/security/plus-access-model.md                 -- S3 implementation status, stricter-RLS deviation, deferred activity row
+  src/app/operations/growth/page.tsx                 -- "Your access" (own capability)
+  src/app/operations/layout.tsx                      -- Growth item via canOpenGrowth for every Operations role
+  src/app/operations/settings/plus/page.tsx          -- Team access section (Admin, write / read_only)
+  src/lib/operations/settings-sections.ts            -- Nemryn Plus description
+  src/lib/plus/access-core.test.mjs                  -- +3 tests
+  src/lib/plus/access-core.ts                        -- PlusCapability, canOpenGrowth, canWriteGrowth, plusCapabilitySummary
+  src/lib/plus/access.ts                             -- capability; requirePlusAccess via requireOperationsAccess
+  src/lib/supabase/database.types.ts                 -- regenerated (additive only: 0 removed lines)
+  supabase/tests/plus_access_helpers_tests.sql       -- P6 allow-list -> Plus naming convention
+  supabase/tests/privilege_contract_tests.sql        -- new table + 4 functions
+
+New (10):
+  supabase/migrations/20261013160000_memberships_id_organization_unique.sql
+  supabase/migrations/20261013160100_plus_member_grants.sql
+  supabase/tests/plus_member_grants_tests.sql                  -- 76 tests, rollback-only
+  supabase/tests/plus_member_grants_concurrency_test.sh        -- 6 scenarios
+  src/app/operations/settings/plus/actions.ts
+  src/components/operations/settings/PlusTeamAccessSection.tsx
+  src/lib/plus/team-access.ts
+  src/lib/plus/team-access-core.ts
+  src/lib/plus/team-access-core.test.mjs                       -- 7 tests
+  docs/reports/NP-P1-S3-named-staff-permissions-implementation.txt (this report)
+
+QA only (untracked, not for commit): .tmp-qa/np-p1-s3-named-staff-permissions-e2e.mjs
+
+Unchanged (verified): every migration up to 20261013140000, every Core function / policy / privilege,
+requireOperationsAccess, requireOrganizationAdminAccess, organization context resolution, the sidebar component and
+Settings guards.
+
+======================================================================
+13. PD-20 AND REMAINING APPROVALS
+======================================================================
+- PD-20 (additive memberships unique (id, organization_id)): PROPOSED. It needs FORMAL OWNER APPROVAL before
+  20261013160000, and 20261013160100 which depends on it, are released to production.
+- PD-03 (named-staff grants from P1-S3): owner-approved direction, still PROPOSED. This implementation follows it.
+  Recommend recording it as a ZD with PD-20 when approved.
+- Behaviour that needs owner acknowledgement:
+  - Reactivation restores an unrevoked grant (spec-consistent: a grant is effective while the membership is an active
+    Dispatcher). The UI explains inert grants and offers Remove access.
+  - A deviation stricter than the domain model: no client SELECT policy on membership_module_grants.
+  - The plus_activities row per grant change is deferred to P1-S4 (audit_events already record every change).
+- PD-18 (growth-only role): not implemented, as required. Until it is, a salesperson must be a Dispatcher with a
+  grant, which is still an operational role.
+
+======================================================================
+14. SUPABASE FREE PLAN -- RECOVERY LIMITATION (UNRESOLVED RISK)
+======================================================================
+- Nemryn production (wyocbivzgrbekuyqdfts) is on the Supabase Free plan. Managed backups and point-in-time recovery
+  are NOT available to the owner.
+- NO RECOVERY POINT EXISTS. None is claimed by this report or by any earlier one for this release.
+- The S3 migrations are additive, so the database-side rollback is a reviewed forward migration that drops them in
+  dependency order:
+    the three RPCs, plus_member_access_result and _plus_member_access;
+    restore the S2 bodies of plus_can_read / plus_can_write / plus_access_state;
+    drop the `access` attribute;
+    drop membership_module_grants;
+    drop memberships_id_organization_id_key.
+  This would lose grant history. A data-corruption or operator-error event has no managed restore path.
+- Recommendation (risk mitigation only, NOT equivalent to PITR): before the S3 production release, run an
+  owner-approved, owner-executed logical export. That means a schema + data `pg_dump`, or `supabase db dump` for
+  schema and data, using the owner's own credentials. Store it encrypted outside the repository, and verify that it
+  restores into a scratch local project.
+- Not performed here. No export was taken, no credential was changed and no production migration was applied.
+- Pending S1 closeout evidence from earlier reports: the Pilot audit pair. The Zenward internal trial must stay
+  unchanged.
+
+======================================================================
+15. KNOWN DEFECTS AND LIMITATIONS
+======================================================================
+L1 mutation_concurrency_test.sh is pre-existing broken (direct trips lock as authenticated). Needs a separately
+   approved rewrite.
+L2 Hard-deleting a membership or auth user that has grant rows requires deleting those rows first (NO ACTION FK,
+   chosen for history). No product path deletes memberships today.
+L3 A reactivated Dispatcher regains an unrevoked grant. This is by design, explained in the UI, and revocable.
+L4 The plus_activities timeline row for grant changes is deferred to P1-S4 (audit_events cover it now).
+L5 Growth has no CRM tools yet. Read vs write differ only in wording and server capability until P1-S4 adds write
+   RPCs. Those must call _require_plus_write, and their tests must cover read-grant refusal (ZW001).
+L6 A Dispatcher's Operations layout now makes one plus_access_state RPC per request (request-cached). Negligible, but
+   new for that role.
+L7 Local test-harness notes:
+   - GoTrue's 30-per-5-minutes sign-in limit requires an auth restart between back-to-back E2E suites;
+   - `supabase db reset` on the isolated stack hung twice at "Restarting containers" after completing migrations and
+     seed;
+   - platform_lifecycle_concurrency_test is timing-sensitive (section 11).
+L8 A grant holder's Growth badge shows "Plus: Active" even while the workspace is in a trial. Trial details are
+   Admin-only by spec.
+Fixed during this phase: the Team access success message was lost on refresh (E2E B3; see section 10).
+
+======================================================================
+16. READINESS FOR A CONTROLLED COMMIT
+======================================================================
+READY for a controlled commit of the 24 files in section 12 (14 modified + 10 new, including this report), staged by
+explicit path. Exclude .tmp-qa/ and all other untracked reports.
+- Suggested message: "feat(plus): add named-staff Plus permissions and Team access (NP-P1-S3)".
+
+Before production release:
+  (a) owner approval of PD-20, recording PD-03/PD-20 as decisions;
+  (b) the Free-plan recovery risk accepted, or the logical export in section 14 taken by the owner;
+  (c) release order: the two migrations (dry run first, exactly 20261013160000 and 20261013160100 pending), then
+      verification (contract 0/29 + S3 checks), then the app;
+  (d) a Pilot Simulation smoke test only:
+      - grant a synthetic Dispatcher read;
+      - verify Growth;
+      - revoke;
+      - Zenward untouched.
+
+======================================================================
+17. NEXT RECOMMENDED MILESTONE
+======================================================================
+NP-P1-S3-R1: final review, controlled commit and GitHub PR.
+- Includes the Vercel Preview check (backend identified before any data-changing test), a read-only production dry
+  run, post-migration verification SQL for S3, and the PD-20 approval record.
+- Then the owner-run release.
+- After that, NP-P1-S4 (contacts and activities). S4 must use _require_plus_write and add the plus_activities row for
+  grant changes. Not started.
+
+STOP. Not staged, not committed, not pushed, not merged, not deployed. No production migration, export, credential or
+entitlement change. NP-P1-S4 not started.

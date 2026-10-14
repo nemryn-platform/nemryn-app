@@ -1,6 +1,6 @@
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
-import { isPlusReadOnly, plusStatusSummary } from "@/lib/plus/access-core";
+import { isPlusReadOnly, plusCapabilitySummary, plusStatusSummary } from "@/lib/plus/access-core";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -10,15 +10,18 @@ import { cn } from "@/lib/cn";
 export const metadata = { title: "Growth" };
 
 /**
- * NP-P1-S1 / S2 -- the Growth page. Deliberately empty of data: no contacts, leads, opportunities, revenue or metrics
- * exist yet, so none are shown. It states the workspace's Nemryn Plus status only: active, the trial end while a trial
- * runs, or a read-only notice once Plus is no longer active. (locked / none never reach this page: requirePlusAccess.)
+ * NP-P1-S1 / S2 / S3 -- the Growth page. Deliberately empty of data: no contacts, leads, opportunities, revenue or
+ * metrics exist yet, so none are shown, and no create / edit control is offered for tools that do not exist. It states
+ * the workspace's Nemryn Plus status (active, the trial end for an Admin while a trial runs, or a read-only notice) and
+ * the signed-in person's OWN access (S3: Admin, or a named Dispatcher's read / write grant).
+ * (locked / none / no grant never reach this page: requirePlusAccess.)
  */
 export default async function GrowthPage() {
   const pathname = await getCurrentPathname("/operations/growth");
   const { context, plus } = await requirePlusAccess(pathname);
   const readOnly = isPlusReadOnly(plus.state);
   const status = plusStatusSummary(plus.state, plus.trialEndsAt, context.organizationTimezone, new Date());
+  const mine = plusCapabilitySummary(context.role, plus.state, plus.capability);
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -45,6 +48,13 @@ export default async function GrowthPage() {
           {status.message}
         </p>
       )}
+      <div className="flex flex-col gap-1" data-testid="plus-my-access">
+        <div className="flex items-center gap-2">
+          <span className={cn(typography.label, "text-text-primary")}>Your access</span>
+          <StatusBadge label={mine.label} category="neutral" />
+        </div>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>{mine.message}</p>
+      </div>
     </div>
   );
 }

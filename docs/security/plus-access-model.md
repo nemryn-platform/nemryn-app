@@ -49,6 +49,7 @@
 - Granted and revoked by an Organization Admin only, through an RPC, with an audit event and a `plus_activities` row.
 - A grant is effective only while the membership is `active` with role `dispatcher` (or `growth`). A Driver membership can never hold one.
 - Grants survive entitlement expiry (they are history), but are inert unless the effective state is `write` (or `read_only`, for Admins only).
+- **Reactivation (owner-approved, ZD-210):** an unrevoked grant becomes effective again when an inactive Dispatcher membership is reactivated, provided every other authorization and entitlement condition is satisfied. Grants never change a Core role and never confer subscription management.
 
 ### 2.3 Growth-only members (PD-18 — owner decision; Core change)
 
@@ -78,6 +79,12 @@ Recommended option: add `growth` to the `memberships.role` CHECK **and** the `st
 `_plus_member_access` always goes through `has_org_role` (or the same active-membership + active-organization join). Suspension and inactive membership therefore remove Plus exactly as they remove Core.
 
 > **Implementation status (NP-P1-S2, migration `20261013120000`):** `plus_can_read`, `plus_can_write`, `_require_plus_write` and `_require_plus_admin_write` exist with the S2 (Admin-only) rule. `_plus_member_access` and the grant-aware bodies arrive with named-staff grants in NP-P1-S3, which replaces these function bodies.
+>
+> **Implementation status (NP-P1-S3, migrations `20261013160000` and `20261013160100`, local only; decisions owner-approved 2026-10-14 as ZD-209 (constraint, was PD-20) and ZD-210 (named-staff grants, was PD-03), including the approved reactivation behaviour, section 2.2):**
+> - `_plus_member_access` and the grant-aware `plus_can_read`, `plus_can_write` and `plus_access_state` exist. `plus_access_state` keeps the four states and adds `access` (`none` / `read` / `write`). It never returns a state value `read`, so the four effective states stay unchanged.
+> - **Deviation, stricter:** `membership_module_grants` has **no** client SELECT policy or privilege (class A). Admins read it through `plus_list_member_access`, and a member learns their own access through `plus_access_state`.
+> - **Deferred:** the `plus_activities` row for each grant change (section 2.2) waits for P1-S4, which creates that table. Grant changes are already audited in `audit_events`.
+> - `requirePlusAccess` now resolves through `requireOperationsAccess`. Settings, including Team access, stays Organization-Admin-only through `requireOrganizationAdminAccess`.
 
 ### 3.1a Entitlement states — behaviour summary
 
