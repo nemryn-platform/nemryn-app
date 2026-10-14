@@ -46,7 +46,7 @@
 
 ### 2.2 Named-staff grants (P1-S3) — table in domain model §5
 
-- Granted and revoked by an Organization Admin only, through an RPC, with an audit event and a `plus_activities` row.
+- Granted and revoked by an Organization Admin only, through an RPC, with an audit event ~~and a `plus_activities` row~~. (CORRECTED by ZD-211: every grant, change and revocation is recorded in `audit_events` only, as `plus_member_access_granted` / `plus_member_access_revoked`. It never creates a contact `plus_activities` record, because `plus_activities` is a contact-subject timeline.)
 - A grant is effective only while the membership is `active` with role `dispatcher` (or `growth`). A Driver membership can never hold one.
 - Grants survive entitlement expiry (they are history), but are inert unless the effective state is `write` (or `read_only`, for Admins only).
 - **Reactivation (owner-approved, ZD-210):** an unrevoked grant becomes effective again when an inactive Dispatcher membership is reactivated, provided every other authorization and entitlement condition is satisfied. Grants never change a Core role and never confer subscription management.
@@ -83,8 +83,14 @@ Recommended option: add `growth` to the `memberships.role` CHECK **and** the `st
 > **Implementation status (NP-P1-S3, migrations `20261013160000` and `20261013160100`, local only; decisions owner-approved 2026-10-14 as ZD-209 (constraint, was PD-20) and ZD-210 (named-staff grants, was PD-03), including the approved reactivation behaviour, section 2.2):**
 > - `_plus_member_access` and the grant-aware `plus_can_read`, `plus_can_write` and `plus_access_state` exist. `plus_access_state` keeps the four states and adds `access` (`none` / `read` / `write`). It never returns a state value `read`, so the four effective states stay unchanged.
 > - **Deviation, stricter:** `membership_module_grants` has **no** client SELECT policy or privilege (class A). Admins read it through `plus_list_member_access`, and a member learns their own access through `plus_access_state`.
-> - **Deferred:** the `plus_activities` row for each grant change (section 2.2) waits for P1-S4, which creates that table. Grant changes are already audited in `audit_events`.
+> - ~~**Deferred:** the `plus_activities` row for each grant change (section 2.2) waits for P1-S4, which creates that table.~~ (CORRECTED by ZD-211: no `plus_activities` row is written for grant changes, in S4 or later, without a separately approved workspace-feed design.) Grant changes are audited in `audit_events`.
 > - `requirePlusAccess` now resolves through `requireOperationsAccess`. Settings, including Team access, stays Organization-Admin-only through `requireOrganizationAdminAccess`.
+>
+> **Implementation status (NP-P1-S4, migration `20261014100000`, local only):**
+> - `plus_contacts` and `plus_activities` follow section 3.2 exactly: RLS `plus_can_read`, `SELECT` only, and writes only through `_require_plus_write` RPCs. Tests T1–T9, T12, T19 and T20 are covered by `plus_contacts_activities_tests.sql`.
+> - Free text (notes, logged interactions, archive reasons) carries the C6 notice "Don't record medical…". It is a reminder, not a control.
+> - Nothing is sent, called or scheduled. `do_not_contact` is stored for future outreach to enforce.
+> - **Gate:** synthetic data only until PD-10 and PD-11 are resolved.
 
 ### 3.1a Entitlement states — behaviour summary
 

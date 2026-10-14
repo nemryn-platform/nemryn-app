@@ -206,13 +206,19 @@ Each step ships as its own migration with its own privilege-contract update and 
 | Column | Rule |
 |---|---|
 | `id`, `organization_id` | |
-| `activity_type` | `note`, `call_logged`, `email_logged`, `meeting_logged`, `stage_changed`, `task_completed`, `request_linked`, `attribution_changed`, `owner_changed`, `record_archived`, `consent_recorded`, `quote_sent`, `quote_status_changed`, `inquiry_converted`, `account_facility_linked`, `account_facility_unlinked`, `member_access_changed`. The CHECK is replaced additively as features ship |
+| `activity_type` | `note`, `call_logged`, `email_logged`, `meeting_logged`, `stage_changed`, `task_completed`, `request_linked`, `attribution_changed`, `owner_changed`, `record_archived`, `consent_recorded`, `quote_sent`, `quote_status_changed`, `inquiry_converted`, `account_facility_linked`, `account_facility_unlinked`, ~~`member_access_changed`~~ (withdrawn by ZD-211: staff-access changes are audited in `audit_events`). The CHECK is replaced additively as features ship |
 | `body` | ≤ 2000; required for `note` and `*_logged` |
 | `from_stage`, `to_stage` | `stage_changed` only |
 | `contact_id` (P1-S4), `opportunity_id` (P2-S1), `request_id` (P2-S3), `account_id` (P3-S1) | composite FKs; `plus_activities_subject_check` as in §3.2 |
 | `actor_user_id`, `occurred_at` | |
 
 There is no update or delete RPC and no `metadata jsonb` column.
+
+> **NP-P1-S4 implementation notes:**
+> - The S4 `activity_type` CHECK lists only the types S4 actually produces: `note`, `call_logged`, `email_logged`, `meeting_logged`, `owner_changed` and `record_archived`. Every other canonical type is added by its own slice, which replaces the named CHECK additively.
+> - S4 adds one column to the canonical shape: `recorded_at` (when the row was written). `occurred_at` can be earlier for an interaction logged after the fact.
+> - `member_access_changed` cannot be recorded in S4, because an activity requires a contact subject. Grant changes therefore stay in `audit_events` only (see the NP-P1-S4 report).
+> - **Owner decision ZD-211 (2026-10-14):** this is the approved, permanent rule. Staff-access grants, changes and revocations are recorded in `audit_events` and never as `plus_activities`. `member_access_changed` is therefore **withdrawn** from the planned activity types in the table above. `plus_activities` stays a subject-bound timeline (contact in S4; opportunity, request or account as later slices add them), and `plus_activities_subject_check` is never weakened for staff-permission events. A workspace-wide activity feed would need its own approved design.
 
 ## 8. `plus_opportunities` (P2-S1; extended in P2-S7, P3-S1)
 

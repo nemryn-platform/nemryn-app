@@ -412,3 +412,49 @@ Tests:
 - `supabase/tests/plus_member_grants_tests.sql` (rollback-only);
 - `supabase/tests/plus_member_grants_concurrency_test.sh`.
 
+## Nemryn Plus Contacts + activity timeline (NP-P1-S4)
+
+Migration `20261014100000_plus_contacts_activities.sql` creates two tenant tables. Both have RLS on, authenticated `SELECT` through the policy `plus_can_read(organization_id)`, and **no** insert, update or delete privilege for any client role. Writes go only through the RPCs below, which call `_require_plus_write` first:
+- ZW002 when the caller cannot read Plus;
+- ZW001 when they can read but not write (read grant, or `read_only` Plus).
+
+**`plus_contacts`** has exactly the domain-model §6 columns:
+- `display_name` 1–200, trimmed;
+- `phone` ≤ 40: digits, spaces, `+ ( ) . -`, an optional `x123` / `ext 123` extension, and 7–20 digits in total;
+- `email` ≤ 254, stored trimmed and lower-cased;
+- `contact_kind`: individual, family_caregiver, facility_staff, referral_source or other;
+- `job_title` ≤ 120;
+- `preferred_channel`: phone, email or none;
+- `do_not_contact`, a stored preference that future outreach must respect;
+- `owner_user_id`;
+- `status`: active, archived or redacted. `redacted` is reserved for PD-11, and no function sets it;
+- `created_by`, `created_at`, `updated_at`. `updated_at` is the version token.
+
+A contact needs a phone or an email unless redacted. There is no `account_id` (P3-S1), and no passenger, date-of-birth, address, health or insurance field.
+
+**`plus_activities`** is append-only:
+- `contact_id` is the composite FK to `plus_contacts`, and the only subject in S4. `plus_activities_subject_check` is `num_nonnulls(contact_id) = 1`, replaced additively by P2-S1, P2-S3 and P3-S1.
+- `activity_type` (`plus_activities_activity_type_check`) is note, call_logged, email_logged, meeting_logged, owner_changed or record_archived.
+- `body` is 1–2000 characters, required for note and the `*_logged` types.
+- `from_stage` / `to_stage` are allowed only on `stage_changed`, which S4 does not permit.
+- `actor_user_id`, `occurred_at`, and `recorded_at`, which is when the row was written. An interaction may be logged after it happened.
+- There is no metadata JSON, and no function updates or deletes a row.
+
+| RPC | Access | Contract |
+|---|---|---|
+| `plus_list_contacts(org, search, kind, status, limit, offset)` | Plus read | One page (1–100, default 25). `status`: active (default), archived or all. Search covers name, email and phone digits; LIKE wildcards are literal. `total_count` is the filtered total. The owner appears by name only |
+| `plus_get_contact(org, contact_id)` | Plus read | One contact, including `owner_membership_id` (an opaque handle), `owner_can_write` and `updated_at`. **ZW002 for a foreign or unknown id**, the same answer as no access |
+| `plus_list_contact_activities(org, contact_id, limit, offset)` | Plus read | The timeline, newest first, with the actor's name |
+| `plus_find_contact_matches(org, name, phone, email, exclude_id)` | Plus read | Up to 5 possible duplicates in that organization, matching on the same email, the same phone digits (≥ 7) or the same name (case-insensitive). `match_on` lists what matched. Never merges |
+| `plus_list_contact_owner_options(org)` | Plus write | Eligible owners: active Admins, and Dispatchers with an active **write** grant. Returns membership handles and names only |
+| `plus_create_contact(org, …, owner_membership_id, confirm_possible_duplicate)` | Plus write | Trims and normalizes. Invalid input gives ZW006. The owner must be an eligible writer (ZW006). If possible duplicates exist and the call is not confirmed, **nothing is written**: `changed=false`, `possible_duplicates=n`. Audit: `plus_contact_created`, which copies no values |
+| `plus_update_contact(org, contact_id, expected_updated_at, …)` | Plus write | Locks the row and compares the version (ZW003). Archived gives ZW004; identical values give `changed=false`. A **new** owner must be eligible; an unchanged owner who has since lost access is kept. An owner change writes an `owner_changed` activity. Audit: `plus_contact_updated`, recording the **names** of the changed fields only |
+| `plus_archive_contact(org, contact_id, expected_updated_at, reason)` | Plus write | ZW003 when stale; `changed=false` when already archived. The row and its timeline are kept. Writes a `record_archived` activity (the reason ≤ 500 becomes its body) and audit `plus_contact_archived` |
+| `plus_log_contact_activity(org, contact_id, type, body, occurred_at)` | Plus write | Accepts note, call_logged, email_logged and meeting_logged only (ZW006 otherwise). `occurred_at` NULL means now; it may not be in the future (> 5 minutes) or more than 366 days back. An archived contact gives ZW004. The same entry by the same person within 30 s is a no-op. The call locks the contact `FOR NO KEY UPDATE`, which serializes concurrent logs and waits for an in-flight archive or edit. **Logging records what staff did: Nemryn sends, calls and schedules nothing** |
+
+Internal (no client EXECUTE): `_plus_user_can_write(org, user)`, `_plus_contact_matches`, `_plus_staff_name`, `_plus_resolve_owner`.
+
+Tests:
+- `supabase/tests/plus_contacts_activities_tests.sql` (rollback-only);
+- `supabase/tests/plus_contacts_concurrency_test.sh`.
+

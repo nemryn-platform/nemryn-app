@@ -56,7 +56,10 @@ c_tables(tbl) as (values
   -- NP-P1-S1 Nemryn Plus entitlement: class A (no anon / authenticated / service_role privilege; RPCs only)
   ('organization_modules'),
   -- NP-P1-S3 named-staff Plus grants: class A (RPCs only)
-  ('membership_module_grants')
+  ('membership_module_grants'),
+  -- NP-P1-S4 Plus contacts + append-only activities (SELECT via RLS plus_can_read; writes through RPCs only)
+  ('plus_contacts'),
+  ('plus_activities')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -88,7 +91,9 @@ c_auth_tbl(tbl, priv) as (values
   ('driver_weekly_schedules', 'SELECT'),
   ('driver_weekly_shifts', 'SELECT'),
   ('driver_unavailability_windows', 'SELECT'),
-  ('vehicle_unavailability_windows', 'SELECT')
+  ('vehicle_unavailability_windows', 'SELECT'),
+  ('plus_contacts', 'SELECT'),
+  ('plus_activities', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -254,7 +259,21 @@ c_fn(sig, roles) as (values
   ('_plus_member_access(uuid)', ''),
   ('plus_list_member_access(uuid)', 'u'),
   ('plus_grant_member_access(uuid,uuid,text,uuid)', 'u'),
-  ('plus_revoke_member_access(uuid,uuid,uuid)', 'u')
+  ('plus_revoke_member_access(uuid,uuid,uuid)', 'u'),
+  -- NP-P1-S4 Plus contacts + activities
+  ('_plus_user_can_write(uuid,uuid)', ''),
+  ('_plus_contact_matches(uuid,text,text,text,uuid)', ''),
+  ('_plus_staff_name(uuid)', ''),
+  ('_plus_resolve_owner(uuid,uuid)', ''),
+  ('plus_list_contacts(uuid,text,text,text,integer,integer)', 'u'),
+  ('plus_get_contact(uuid,uuid)', 'u'),
+  ('plus_list_contact_activities(uuid,uuid,integer,integer)', 'u'),
+  ('plus_find_contact_matches(uuid,text,text,text,uuid)', 'u'),
+  ('plus_list_contact_owner_options(uuid)', 'u'),
+  ('plus_create_contact(uuid,text,text,text,text,text,text,boolean,uuid,boolean)', 'u'),
+  ('plus_update_contact(uuid,uuid,timestamp with time zone,text,text,text,text,text,text,boolean,uuid)', 'u'),
+  ('plus_archive_contact(uuid,uuid,timestamp with time zone,text)', 'u'),
+  ('plus_log_contact_activity(uuid,uuid,text,text,timestamp with time zone)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

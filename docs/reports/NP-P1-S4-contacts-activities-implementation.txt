@@ -1,0 +1,542 @@
+NP-P1-S4 -- CONTACTS & ACTIVITIES -- FIRST CRM DATA FOUNDATION -- IMPLEMENTATION REPORT
+Date: 2026-10-14
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing is committed, pushed, merged or deployed.
+- No production migration and no production entitlement change.
+- No real customer or patient data. NP-P2-S1 not started.
+
+======================================================================
+1. STARTING GIT BRANCH AND SHA
+======================================================================
+- origin/main: 208e7a596baf22c3b974e757ac435b23d646de91 ("Merge pull request #4 from
+  nemryn-platform/np-p1-s3-named-staff-permissions").
+- New branch: np-p1-s4-contacts-activities, created from origin/main 208e7a5.
+- The tracked tree was clean when the branch was created. Existing untracked reports and .tmp-qa files were preserved.
+- No other project's environment was touched. Chelth's running containers were left as they were.
+
+======================================================================
+2. CURRENT PRODUCTION BASELINE VERIFICATION (read-only)
+======================================================================
+- PR #4 (np-p1-s3-named-staff-permissions): MERGED 2026-10-14T03:17:23Z, merge commit 208e7a5.
+  It includes 4010b5d (the S3 feature) and a97c2d6 (docs aligned with ZD-209 / ZD-210). The decision register on main
+  contains ZD-210.
+- Supabase CLI: project wyocbivzgrbekuyqdfts is listed and linked. `supabase migration list --linked` shows
+  20261013160000 and 20261013160100 present locally and remotely, so the remote head is 20261013160100, as expected.
+- Vercel Production: deployment 7055932118, sha 208e7a5, state success. https://app.nemryn.com/sw.js shows
+  BUILD = "208e7a596baf".
+- Conclusion: the baseline matches the owner-reported state. No contradiction.
+
+======================================================================
+3. EXACT MIGRATIONS CREATED
+======================================================================
+One forward-only, additive migration:
+
+  supabase/migrations/20261014100000_plus_contacts_activities.sql
+
+It contains:
+  - table public.plus_contacts, with constraints, five indexes, the set_updated_at and prevent_organization_id_change
+    triggers, RLS, SELECT for authenticated and the policy plus_contacts_select_plus;
+  - table public.plus_activities (append-only), with constraints, one index, RLS, SELECT for authenticated and the
+    policy plus_activities_select_plus;
+  - internal functions: _plus_user_can_write, _plus_contact_matches, _plus_staff_name, _plus_resolve_owner;
+  - types: plus_contact_write_result, plus_activity_write_result;
+  - nine RPCs (section 6), each with authenticated EXECUTE and anon/PUBLIC revoked.
+
+It references only organizations, auth.users, memberships, membership_module_grants, user_profiles and the S1-S3 Plus
+helpers. There are no forward dependencies: no plus_accounts, plus_opportunities or plus_tasks. It edits no earlier
+migration and changes no Core object.
+
+Two defects were found by the new tests and fixed in this (unreleased) migration before completion:
+  - plus_update_contact built its changed-field list with `text[] || 'literal'`. PostgreSQL parsed the literal as an
+    array, so every real edit failed with 22P02. Now uses array_append (SQL U3).
+  - The 30-second duplicate guard in plus_log_contact_activity compared occurred_at with each transaction's own
+    now(), so two simultaneous identical "now" entries were both written. It now compares the time only when one is
+    given explicitly, and the contact row is locked FOR NO KEY UPDATE so concurrent logs serialize (CONC-C3).
+
+======================================================================
+4. CONTACTS SCHEMA (public.plus_contacts) -- domain model section 6
+======================================================================
+  | Column            | Type / default                       | Rule                                                        |
+  |-------------------|--------------------------------------|-------------------------------------------------------------|
+  | id                | uuid pk                              |                                                             |
+  | organization_id   | uuid not null, FK organizations      | unique (id, organization_id) for composite FKs              |
+  | display_name      | text not null                        | trimmed, 1-200                                              |
+  | phone             | text                                 | trimmed, <= 40; digits, spaces and + ( ) . -; optional "x123" / "ext 123"; 7-20 digits |
+  | email             | text                                 | stored trimmed + lower-cased, 3-254, basic address shape    |
+  | contact_kind      | text not null                        | individual, family_caregiver, facility_staff, referral_source, other |
+  | job_title         | text                                 | trimmed, 1-120                                              |
+  | preferred_channel | text not null default 'phone'        | phone, email, none                                          |
+  | do_not_contact    | boolean not null default false       | stored preference for future outreach to enforce            |
+  | owner_user_id     | uuid, FK auth.users                  | validated by RPC: an eligible Plus writer                   |
+  | status            | text not null default 'active'       | active, archived, redacted (reserved for PD-11; no function sets it) |
+  | created_by        | uuid not null, FK auth.users         |                                                             |
+  | created_at        | timestamptz default now()            |                                                             |
+  | updated_at        | timestamptz default now()            | the version token                                           |
+
+- Reachability check: phone IS NOT NULL OR email IS NOT NULL OR status = 'redacted'.
+- Indexes:
+  - (organization_id, status, display_name);
+  - (organization_id, lower(display_name));
+  - (organization_id, email) WHERE email IS NOT NULL;
+  - (organization_id, phone) WHERE phone IS NOT NULL;
+  - (organization_id, digits-only phone) WHERE phone IS NOT NULL.
+- Duplicates are allowed: there is no unique key on email or phone.
+- Deliberately absent (verified by SQL K6 and E2E B2): account_id (P3-S1), passenger_id, date of birth, address,
+  health, diagnosis, mobility, insurance and trip fields.
+- Archived rows are kept with their whole timeline. Nothing is ever hard-deleted.
+
+======================================================================
+5. ACTIVITY SCHEMA (public.plus_activities) -- domain model section 7, append-only
+======================================================================
+  - id;
+  - organization_id (unique (id, organization_id));
+  - contact_id: nullable, with composite FK plus_activities_contact_fkey (contact_id, organization_id) ->
+    plus_contacts (id, organization_id);
+  - activity_type;
+  - body: trimmed, 1-2000;
+  - from_stage, to_stage;
+  - actor_user_id: not null, FK auth.users;
+  - occurred_at;
+  - recorded_at: when the row was written.
+
+Named constraints, which P2-S1 / P2-S3 / P3-S1 replace deterministically:
+  - plus_activities_subject_check: num_nonnulls(contact_id) = 1. P2-S1 makes it >= 1 with opportunity_id.
+  - plus_activities_activity_type_check: note, call_logged, email_logged, meeting_logged, owner_changed,
+    record_archived. These are only the types S4 produces. Opportunity, quote, consent, task and request types are
+    NOT allowed.
+  - plus_activities_body_required_check: a body is required for note and *_logged.
+  - plus_activities_stage_check: from_stage / to_stage only on stage_changed, which S4 does not allow, so they are
+    always NULL in S4.
+  - plus_activities_occurred_check: occurred_at <= recorded_at + 5 minutes.
+
+Immutability:
+  - no INSERT, UPDATE, DELETE or TRUNCATE privilege for any client role;
+  - no policy other than SELECT;
+  - no function updates or deletes a row (verified by a pg_proc source scan, SQL L9).
+  - This follows the existing append-only precedent (trip_events, audit_events): privileges, not triggers.
+
+There is no metadata JSON column. Logging is a record of what staff did; Nemryn sends, calls and schedules nothing.
+
+Additive deviations from the canonical shape:
+  (a) recorded_at was added, so interactions logged after the fact stay honest ("logged <time>" in the UI).
+  (b) The S4 type CHECK is a subset of the canonical list, as the brief requires. Later slices widen it.
+Both are documented in plus-domain-model.md section 7.
+
+======================================================================
+6. RPC INVENTORY AND AUTHORIZATION RULES
+======================================================================
+Every RPC is SECURITY DEFINER with search_path pinned to (public, pg_temp), and authenticated EXECUTE only.
+Organization binding comes from the server session; the browser never names the organization the database trusts.
+
+Read (plus_can_read: an Admin while write / read_only; a Dispatcher with an active read or write grant while write):
+  - plus_list_contacts(org, search, kind, status, limit, offset):
+    - pages of 1-100 (the UI uses 25);
+    - status active (default), archived or all;
+    - search on name substring, email substring and phone digits (>= 3); LIKE wildcards are literal;
+    - total_count is the filtered total; the owner appears by name only.
+  - plus_get_contact(org, contact_id): ZW002 for no access AND for a foreign or unknown id (no existence oracle).
+    Returns owner_membership_id (opaque), owner_can_write, created_by_name and updated_at.
+  - plus_list_contact_activities(org, contact_id, limit, offset): newest first, with the actor's name.
+  - plus_find_contact_matches(org, name, phone, email, exclude): up to 5 matches in that organization only.
+Write (_require_plus_write: ZW002 when the caller cannot read; ZW001 when they can read but not write):
+  - plus_list_contact_owner_options(org): active Admins and Dispatchers with an active WRITE grant. Membership handles
+    and names only; no user ids or emails.
+  - plus_create_contact(org, name, phone, email, kind, title, channel, dnc, owner_membership_id, confirm)
+  - plus_update_contact(org, contact_id, expected_updated_at, ...): row lock, then version compare (ZW003); archived
+    gives ZW004; identical values give changed = false.
+  - plus_archive_contact(org, contact_id, expected_updated_at, reason): ZW003 when stale; changed = false when already
+    archived.
+  - plus_log_contact_activity(org, contact_id, type, body, occurred_at): loggable types only; the time may not be in
+    the future (> 5 min) or more than 366 days back; archived gives ZW004.
+Internal (no client EXECUTE): _plus_user_can_write, _plus_contact_matches, _plus_staff_name, _plus_resolve_owner.
+
+Owner rule: a NEW owner must be an eligible Plus writer of THAT organization. Anyone else gives ZW006: a Dispatcher
+without a grant or with a read grant, a Driver, an inactive member, or another organization's membership. An unchanged
+owner who has since lost access is kept and flagged in the UI ("no longer has Nemryn Plus write access").
+
+Concurrency: optimistic (updated_at) plus row locks. Edit / archive hold FOR UPDATE; log holds FOR NO KEY UPDATE.
+
+Audit model:
+  - The Plus timeline records owner_changed, record_archived and the four logged interaction types.
+  - audit_events receives plus_contact_created, plus_contact_updated (the NAMES of changed fields only) and
+    plus_contact_archived. No contact values are copied into the Core audit log.
+  - These actions are not in the Core Settings -> Activity allow-list, so they do not appear there.
+
+Service role: not used anywhere in S4.
+
+======================================================================
+7. UI PAGES AND FUNCTIONALITY
+======================================================================
+All pages use the existing Operations shell, components and tokens (PageHeader, Panel, DataTable, Select, Input,
+Textarea, Dialog, StatusBadge, AttentionState, EmptyState, LinkButton). There is no second navigation shell.
+
+Navigation:
+  - The sidebar gains "Contacts" (AddressBook icon, from navIcons) directly under "Growth", for the same
+    server-authorized callers.
+  - The Growth overview item now highlights only on /operations/growth itself.
+  - The Growth page links to Contacts. Core items are unchanged (E2E A1; the S2 / S3 / UX1 regressions).
+/operations/growth/contacts:
+  - title; GET search form (name, email, phone); type filter; Active / Archived / All;
+  - rows: name + kind / role, phone / email, preferred channel, owner, and Do not contact / Archived badges;
+  - the row (and the name link) opens the detail page;
+  - 25 per page with Previous / Next and the total;
+  - "New contact" only with Plus write capability;
+  - empty state: "No contacts yet." (or "No contacts match these filters.");
+  - error state: AttentionState with Retry, keeping the filters;
+  - read-only notice while Plus is not active.
+/operations/growth/contacts/new and /[contactId]/edit:
+  - Plus write only; read-only viewers are redirected;
+  - edit is for active contacts only;
+  - server-validated, with field errors and typed input preserved;
+  - the owner defaults to the creator;
+  - the possible-duplicate panel blocks creation until "Create as a separate contact" is chosen;
+  - the edit form carries the version it was rendered from (a stale page is refused);
+  - the organization the form was rendered for must equal the session organization;
+  - the submit button is disabled while pending.
+/operations/growth/contacts/[contactId]:
+  - name and classification; phone; email; preferred channel; Do not contact badge and value; owner (flagged if no
+    longer a writer); status; who added it and when;
+  - timeline, newest first, with the actor and organization-timezone times. Back-dated entries show "logged <time>".
+  - For Plus write on an active contact only: Edit contact, Add note, Log call, Log email, Log meeting, Archive contact
+    (with an optional reason in a confirmation dialog that states nothing is deleted).
+  - Read-granted users and expired-Plus Admins see the same information with no mutation controls. Archived contacts
+    show a read-only notice.
+  - A foreign, unknown or inaccessible id renders the standard 404, the same for every case.
+  - No account, opportunity, task, quote, passenger, rebooking or Request controls.
+Responsive: no page-level horizontal overflow at 800px. The table scrolls inside its own container. Below md, the
+existing narrow-screen guard applies, unchanged.
+
+======================================================================
+8. DUPLICATE DETECTION BEHAVIOUR
+======================================================================
+- A match within the SAME organization is any of:
+  - the same normalized email;
+  - the same phone digits (>= 7 digits; formatting ignored);
+  - the same name, ignoring case.
+- On create: if any match exists and the person did not confirm, the database writes NOTHING and returns
+  possible_duplicates = n. The UI then lists up to 5 matches (with links and "Same email / phone / name") and offers
+  "Create as a separate contact". Confirming creates a new, separate row.
+- Contacts are never merged and never auto-linked. Another organization's contacts are never matched or revealed
+  (SQL D6).
+- Known limit: two people creating the same new contact at exactly the same moment can both pass the check, because
+  duplicates are allowed by design and the check is advisory.
+
+======================================================================
+9. PRIVACY AND DATA-MINIMIZATION BOUNDARIES
+======================================================================
+- Only canonical minimum fields exist (section 4). The form has exactly 8 fields plus the organization binding (E2E
+  B2).
+- A notice is shown on the contact form, every log dialog and the archive reason: "Don't record medical, diagnosis,
+  insurance or patient-care details here...". It is a reminder, NOT a control. Nothing claims it prevents PHI, and a
+  unit test asserts the copy makes no "prevent / guarantee / HIPAA" claim.
+- Log dialogs state: "Nemryn doesn't send emails, place calls or schedule meetings."
+- do_not_contact is stored and shown (badge plus explanation). There is no outbound communication anywhere in S4.
+- The contact form also says to use fictional test data only until Nemryn confirms Plus is cleared for real customer
+  records. This is product copy; the owner may want to word it differently before a customer beta.
+- PD-10 (HIPAA / BAA) and PD-11 (retention / redaction) remain OPEN. No real customer or patient records may be
+  entered in production until they are resolved. `redacted` is reserved but no redaction workflow exists.
+- Local testing used fictional seed organizations and fictional contacts only. All were removed after each run.
+
+======================================================================
+10. SECURITY AND CROSS-TENANT TEST EVIDENCE
+======================================================================
+NEW supabase/tests/plus_contacts_activities_tests.sql (rollback-only): 82/82, on the dev DB, the clean isolated stack
+and the upgraded stack.
+
+  | Group | Tests | Coverage |
+  |-------|-------|----------|
+  | K     | K1-K9 | RLS on; exactly one SELECT policy per table using plus_can_read; authenticated SELECT only; direct INSERT / UPDATE / DELETE as authenticated, and anon SELECT, give 42501; RPC EXECUTE and internal-helper isolation; SECURITY DEFINER + pinned search_path for all 13 functions; exact minimum column sets; no JSON; no FK to future tables; named constraints present |
+  | V     | V1-V8 | trimming and email normalization; reachability; name / phone / email / title limits; closed sets |
+  | D     | D1-D6 | duplicate warnings by email / phone / name, nothing written; confirmed duplicate kept separate; per-organization matching |
+  | O     | O1-O6 | owner eligibility (Admin, write grant OK; no grant, read grant, Driver, inactive, foreign refused); owner options |
+  | U     | U1-U8 | stale version ZW003; identical-update no-op; real update; audit field names only; owner_changed activity; reachability on edit; unknown / foreign / NULL ZW002; unchanged ineligible owner kept, new one refused |
+  | L     | L1-L10| four interaction types; duplicate-submit no-op; body rules; system / fake / future types refused; time window; subject check; composite FK; stage_changed refused; immutability scan; timeline order and recorded_at |
+  | A     | A1-A6 | archive stale ZW003; archive writes activity + audit and keeps the row; duplicate archive no-op; archived read-only (edit / log ZW004); list filters; reason limit |
+  | S     | S1-S5 | search by name / email / phone digits; literal wildcards; kind filter; bad filters ZW006; pagination total |
+  | P     | P1-P13| the S3 permission matrix (section 10a) |
+  | X     | X1-X5 | cross-tenant / forged ids (section 10b) |
+  | C     | C1-C4 | Core isolation (section 12) |
+
+10a. Permission matrix (SQL P1-P13, E2E sections H-K):
+
+  | # | Actor                                  | Result |
+  |---|----------------------------------------|--------|
+  | 1 | Organization Admin, Plus write         | full (create / edit / archive / log, list / read) |
+  | 2 | Dispatcher with a named Write grant    | full in their organization (P1, E2E I1/I2) |
+  | 3 | Dispatcher with a named Read grant     | list / detail / timeline / RLS read; every write ZW001; no write controls; /new and /edit redirect (P2/P3, E2E H1-H4) |
+  | 4 | Dispatcher without a grant             | ZW002 everywhere, RLS 0 rows (P4) |
+  | 5 | Revoked Dispatcher                     | ZW002 on the next call; next page request redirects (P4, E2E I3) |
+  | 6 | Deactivated Dispatcher, unrevoked grant| ZW002, RLS 0 (P5) |
+  | 7 | Driver                                 | ZW002, RLS 0; UI goes to /driver (P6, E2E K4) |
+  | 8 | Suspended organization                 | Admin and grant holder ZW002, RLS 0 (P8) |
+  | 9 | Expired Plus, Admin                    | list / read / timeline OK; every write ZW001; read-only notice, no controls (P9, E2E J1/J2) |
+  |   | Expired Plus, grant holder             | ZW002 (P10) |
+  |10 | Locked Plus                            | Admin ZW002 and RLS 0; records retained; UI redirect (P11, E2E J3) |
+  |   | No entitlement                         | ZW002 (P12) |
+  |11 | Cross-organization users               | see 10b |
+  |12 | Platform Admin without membership      | ZW002, RLS 0; UI never shows the contact (P6, E2E K5) |
+  |   | No uid                                 | ZW001 |
+  |   | anon                                   | 42501 |
+
+  Plus permissions confer no Core role: a write-grant Dispatcher is still not has_org_role(organization_admin) (C4),
+  and their membership role is unchanged (E2E I4).
+
+10b. Cross-tenant:
+  - Org B Admin with Org A's id: ZW002 for every RPC (X1).
+  - Org B Admin with Org B's id and an Org A contact id (forged): ZW002, identical to an unknown id, and the row is
+    unchanged (X2).
+  - RLS: each Admin sees only their own organization's rows (X3).
+  - c1 (Admin in A, Driver in B): A yes, B never (X4).
+  - Org B Dispatcher: nothing (X5).
+  - Composite FK: an Org B activity on an Org A contact is impossible (L7).
+  - Browser: an Org B Admin opening an Org A contact URL gets the same 404 as an unknown id, with no name or email
+    shown (E2E K1-K3).
+
+10c. Privilege contract: plus_contacts and plus_activities are registered as authenticated SELECT; 9 RPCs 'u'; 4
+  internal ''. Result: 0 of 29 violations on the dev DB, the clean isolated stack and the upgraded stack.
+  S3's C2 assertion ("no RLS policy references Plus") was narrowed to NON-Plus tables, because S4's own plus_*
+  policies legitimately call plus_can_read. Core policies stay strictly checked.
+
+10d. Concurrency: NEW supabase/tests/plus_contacts_concurrency_test.sh (real parallel psql sessions):
+  | Test    | Scenario | Result |
+  |---------|----------|--------|
+  | CONC-C1 | two edits from one version: one applies, the other ZW003, final = winner, one audit | PASS |
+  | CONC-C2 | archive vs edit from one version: exactly one applies, the other refused | PASS |
+  | CONC-C3 | the same activity submitted twice at once: exactly one row | PASS (after the fix in section 3; it FAILED before) |
+  | CONC-C4 | a log that waited for an in-flight archive is refused (ZW004); archived once | PASS |
+  4/4 on the dev DB and 4/4 on the isolated clean stack.
+
+======================================================================
+11. UNIT AND BROWSER TEST RESULTS
+======================================================================
+  | Check                          | Result                                                        |
+  |--------------------------------|---------------------------------------------------------------|
+  | tsc --noEmit                   | PASS                                                          |
+  | eslint src                     | 0 problems                                                    |
+  | npm test (node --test)         | 772/772 (762 before; +10 in contacts-core.test.mjs)           |
+  | next build                     | PASS; new routes /operations/growth/contacts, /new, /[contactId], /[contactId]/edit |
+
+Browser E2E (local, next start -p 3100, fictional seed; local GoTrue restarted between suites to reset its in-memory
+sign-in limit):
+
+  | Suite                                                    | Result |
+  |----------------------------------------------------------|--------|
+  | NEW .tmp-qa/np-p1-s4-contacts-activities-e2e.mjs         | 50/50  |
+  | np-p1-s3-named-staff-permissions (S3 regression)         | 57/57  |
+  | np-p1-s2-growth-access-navigation (S2 regression)        | 49/49  |
+  | np-p1-s1-plus-entitlement (S1 regression)                | 45/45  |
+  | p1-pilot-ux1-header-day-sheet (UX1 / Core shell)         | 46/46  |
+
+  S4 E2E coverage:
+  - A: navigation and empty state;
+  - B: create, validation and privacy notice;
+  - C: possible duplicate, then a separate contact;
+  - D: timeline, including a back-dated call;
+  - E: edit, and a stale edit refused;
+  - F: search and filters, row opens detail;
+  - G: archive;
+  - H: read grant;
+  - I: write grant, then revoke;
+  - J: expired and locked;
+  - K: cross-organization, Driver and Platform Admin;
+  - L: Core counts unchanged; 800px.
+  First S4 E2E run: 48/50. Both failures were TEST defects; no product change was made between runs:
+  - B2 compared an exact field list, but Next.js adds hidden $ACTION_* inputs;
+  - D5 submitted the next log while the previous dialog was still closing.
+  The re-run passed 50/50.
+
+======================================================================
+12. CORE REGRESSION RESULTS
+======================================================================
+Isolated clean stack (separate project NemrynS1Iso; ALL migrations from zero; reset before every suite, with the
+database VERIFIED fresh before each suite):
+  "real_fail" excludes each suite's "review PASS/FAIL lines above" footer.
+
+  | Suite                                 | Result                     |
+  |---------------------------------------|----------------------------|
+  | privilege_contract_tests              | 0 of 29 violations         |
+  | platform_admin_foundation_tests       | 58 PASS, 0 real failures   |
+  | rls_adversarial_tests                 | 33 PASS, 0                 |
+  | security_definer_exposure_tests       | 20 PASS, 0                 |
+  | function_privilege_tests              | 7 PASS, 0                  |
+  | request_decision_workflow_tests       | 60 PASS, 0                 |
+  | create_trip_tests (dispatch / trips)  | 20 PASS, 0                 |
+  | public_request_intake_tests           | 42 PASS, 0                 |
+  | public_intake_rate_limit_tests        | 8 PASS, 0                  |
+  | request_mutation_tests                | 39 PASS, 0                 |
+  | create_trip_privilege_tests           | 5 PASS, 0                  |
+  | mutation_authorization_tests          | 4 PASS, 0                  |
+  | plus_entitlement_tests (S1)           | 150/150                    |
+  | plus_access_helpers_tests (S2)        | 170/170                    |
+  | plus_entitlement_versioned_tests (R1) | 17/17                      |
+  | plus_member_grants_tests (S3)         | 76/76                      |
+  | plus_contacts_activities_tests (S4)   | 82/82                      |
+
+  Concurrency (isolated stack):
+  | Script                                       | Result                         |
+  |----------------------------------------------|--------------------------------|
+  | plus_contacts_concurrency_test (S4, NEW)     | 4/4                            |
+  | plus_member_grants_concurrency_test (S3)     | 6/6                            |
+  | plus_entitlement_versioned_concurrency_test  | 4/4                            |
+  | plus_entitlement_concurrency_test (S1)       | 5/5                            |
+  | platform_lifecycle_concurrency_test          | 2/2                            |
+  | request_decision_concurrency_test (Requests) | 0 failures                     |
+  | public_request_intake_concurrency_test       | PASS                           |
+  | mutation_concurrency_test (Core trips)       | FAIL, pre-existing (I9; also fails on the pre-S1 schema, proven in NP-P1-S2-R1) |
+
+Forward-migration compatibility:
+  - S4 applied on top of a SEEDED database at the production head 20261013160100: head becomes 20261014100000,
+    memberships 16 -> 16, contacts 0.
+  - On that upgraded database: S4 suite 82/82, contract 0/29, S3 grants suite 76/76.
+Dev DB: S1 150/150, S2 170/170, R1 17/17, S3 76/76, S4 82/82, contract 0/29, S4 concurrency 4/4.
+SQL C1 / E2E L1: no Core record was created (Requests / Passengers / Trips / Facilities counts unchanged).
+SQL C2 / C3: no Core function or Core RLS policy references Plus objects.
+Core Requests, Passengers, Trips and Driver workflows are unmodified: no file under those modules changed.
+
+Environment limitation (recorded honestly):
+  - In the first isolated attempts, the local Supabase CLI started storage and analytics despite `-x`. Under Docker
+    load (another project's 10 containers were running) they went unhealthy, and `supabase db reset` / `start` hung.
+  - Resolution: those services were disabled in the ISOLATED scratch copy's config.toml only (not the repository).
+    Each reset is bounded, and the database is verified fresh (migration head, 16 seed memberships, no Plus rows)
+    before every suite.
+
+======================================================================
+13. COMPLETE CHANGED-FILE INVENTORY (uncommitted)
+======================================================================
+Modified (10):
+  docs/data/mutation-api.md                         -- S4 Contacts + timeline section
+  docs/product/plus-domain-model.md                 -- S4 implementation notes (type subset, recorded_at, member_access_changed)
+  docs/security/database-privilege-contract.md      -- NP-P1-S4 additions
+  docs/security/plus-access-model.md                -- S4 implementation status, privacy notice, data gate
+  src/app/operations/growth/page.tsx                -- Contacts link; neutral description
+  src/components/operations/OperationsSidebar.tsx   -- "Contacts" item under Growth; Growth exact-match highlighting
+  src/design/icons.ts                               -- navIcons.contacts = AddressBook
+  src/lib/supabase/database.types.ts                -- regenerated (additive: +305 / -0 lines)
+  supabase/tests/plus_member_grants_tests.sql       -- C2 narrowed to non-Plus tables
+  supabase/tests/privilege_contract_tests.sql       -- 2 tables, 13 functions
+
+New (15, including this report):
+  supabase/migrations/20261014100000_plus_contacts_activities.sql
+  supabase/tests/plus_contacts_activities_tests.sql           -- 82 tests, rollback-only
+  supabase/tests/plus_contacts_concurrency_test.sh            -- 4 scenarios
+  src/lib/plus/contacts-core.ts
+  src/lib/plus/contacts-core.test.mjs                         -- 10 tests
+  src/lib/plus/contacts.ts                                    -- server-only reads
+  src/app/operations/growth/contacts/actions.ts               -- create / update / archive / log server actions
+  src/app/operations/growth/contacts/page.tsx
+  src/app/operations/growth/contacts/new/page.tsx
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/contacts/[contactId]/edit/page.tsx
+  src/components/growth/ContactForm.tsx
+  src/components/growth/ContactActions.tsx
+  src/components/growth/ContactsTable.tsx
+  docs/reports/NP-P1-S4-contacts-activities-implementation.txt (this report)
+
+Total S4 implementation inventory: 25 files (10 modified + 15 new). Verified against the working tree in NP-P1-S4-R1A
+(git status: exactly these 10 modified tracked files and these 14 untracked code / test files, plus this report).
+
+NP-P1-S4-R1A documentation alignment (2026-10-14; documentation only, NOT part of the 25-file implementation
+inventory):
+  - docs/product/decision-register.md: ZD-211 added. This is an ADDITIONAL modified file, so the commit total becomes
+    26 if it is included.
+  - Three files already in the inventory were further edited: docs/security/plus-access-model.md,
+    docs/product/plus-domain-model.md and this report.
+
+QA only (untracked, not for commit): .tmp-qa/np-p1-s4-contacts-activities-e2e.mjs
+
+======================================================================
+14. REMAINING DEFECTS OR SPECIFICATION INCONSISTENCIES
+======================================================================
+I1 Specification inconsistency, member_access_changed.
+   - The access model (section 2.2) says each grant change also writes a plus_activities row.
+   - The domain model requires every activity to have a subject, and in S4 only contact_id exists.
+   - So a grant change cannot be recorded as an activity. Grant changes remain in audit_events (S3), and S4 does not
+     add member_access_changed.
+   - RESOLVED by owner decision ZD-211 (NP-P1-S4-R1A, 2026-10-14):
+     - staff-access grants, changes and revocations are recorded in audit_events only;
+     - they never create contact plus_activities records;
+     - plus_activities_subject_check stays unchanged;
+     - a workspace-wide feed would need a separately approved design.
+     The access-model statement was corrected (struck through, with a ZD-211 note), and member_access_changed was
+     withdrawn from the domain model's planned types. No code change was needed: S3 and S4 already behave this way.
+I2 Contact restore (un-archive) is not implemented. Archive is one-way in S4, and an accidental archive needs a
+   later, reviewed restore action. The record is never lost.
+I3 Duplicate creation race (section 8): an advisory check by design.
+I4 Authorization is evaluated at statement time, as in every Core RPC. A grant revoked while a write is in flight can
+   let that one write complete; the next call is refused. Contact writes do not take the organization admin lock.
+I5 The contact form requires the preferred channel to be reachable (phone requires a phone, email requires an
+   email). This is an application rule, stricter than the database, which allows any channel.
+I6 The form says "use fictional test data only until Nemryn confirms Plus is cleared for real customer records". Review
+   this copy before a customer beta (section 9).
+I7 After archiving, the confirmation notice is not shown: the page re-renders without write actions, and the
+   "Archived contact" notice and timeline entry are the feedback (E2E G2).
+I8 The timeline shows the latest 100 entries (the RPC supports paging; the UI has no "older" link yet).
+I9 Pre-existing, unrelated: supabase/tests/mutation_concurrency_test.sh (direct trips lock as authenticated), as
+   recorded in NP-P1-S2-R1 / S3.
+
+======================================================================
+15. SUPABASE FREE RECOVERY LIMITATION
+======================================================================
+- Production (wyocbivzgrbekuyqdfts) is on Supabase Free. No managed backup or PITR is available.
+- The owner's private logical exports taken during S3 release preparation (schema, data, roles) exist, but they are
+  NOT a verified recovery point. Their restorability has not been demonstrated here, and this phase did not connect to
+  production to export anything.
+- S4 migration production risk: LOW and additive. It creates two empty tables, functions and types; it modifies no
+  existing row, table, function or policy, and existing data is untouched. The forward-compatibility run on a seeded
+  production-head copy applied cleanly. The real risk is AFTER release: S4 creates the first CRM business records, and
+  without PITR, operator error or corruption has no managed restore path.
+- Recommended before the S4 release, owner-run with the owner's own credentials:
+  1. Take a fresh logical export (schema + data), encrypted, stored outside the repository.
+  2. VERIFY it: restore into a scratch local Supabase project, then run the privilege contract and spot-check row
+     counts. Only a verified restore counts as a mitigation. It is still not equivalent to PITR.
+  3. Repeat this before every later Plus release that changes data.
+- Release order: migration FIRST (dry run must show exactly 20261014100000 pending), then post-migration verification
+  (contract 0/29, functions present), THEN the app.
+  - If the app ships first, every Contacts RPC is missing, the pages show their error state, and Growth itself still
+    works.
+  - The S3 app (208e7a5) is fully compatible with the S4 migration. It never calls the new objects. The only
+    pre-existing object touched is the privilege-contract test file, not production.
+- App recovery without deleting business records: roll the APP back (Vercel instant rollback to 208e7a5) and leave
+  the database as it is. The tables and their rows stay intact and are simply not exposed by the older app. Never
+  "roll back" by dropping the tables once real rows exist.
+- Limits of reversing the migration: a down-migration would have to DROP plus_activities / plus_contacts (data loss),
+  the functions and the types. That is acceptable only while the tables are empty (immediately after release). After
+  the first records exist, the only safe recovery is forward: a new migration or an app rollback.
+
+======================================================================
+16. PRODUCTION RELEASE DEPENDENCIES
+======================================================================
+  (a) Owner review and acceptance of the S4 data model deviations (section 5: recorded_at, type subset). I1 is
+      resolved by ZD-211.
+  (b) PD-10 and PD-11 stay OPEN, so production use must be limited to synthetic data (e.g. the Nemryn Pilot
+      Simulation tenant) until they close. Real customer records require those decisions first.
+  (c) Section 15: a verified logical export; migration before app; verification SQL; the S3 app stays compatible.
+  (d) A post-release smoke on the Pilot Simulation tenant only, with fictional contacts:
+      - create, duplicate warning, log, edit, archive;
+      - a read-grant Dispatcher sees no write controls;
+      - Zenward Mobility is untouched.
+  No new decision-register entry is required for the schema itself; it follows the approved blueprint. I1 was
+  decided as ZD-211.
+
+======================================================================
+17. READY FOR A CONTROLLED GIT COMMIT?
+======================================================================
+YES. The isolated-stack results in section 12 show no new failures; the only failure is the pre-existing I9.
+- Commit the 25 files in section 13 (10 modified + 15 new, including this report) by explicit path, plus
+  docs/product/decision-register.md (ZD-211, NP-P1-S4-R1A) if included, for 26 in total. Exclude
+  .tmp-qa/ and every other untracked report.
+- Suggested message: "feat(plus): add Contacts and activity timeline (NP-P1-S4)".
+
+======================================================================
+18. RECOMMENDED NEXT MILESTONE
+======================================================================
+NP-P1-S4-R1: final review, controlled commit and GitHub PR.
+- Includes the Vercel Preview check (backend identified before any data-changing test), a read-only production dry
+  run, post-migration verification SQL for S4, and a verified logical-export procedure (I1 is already decided as
+  ZD-211).
+- Then the owner-run release and the Pilot-only smoke.
+- After that, P2-S1 (Opportunities + private-pay pipeline). It must replace plus_activities_subject_check and
+  plus_activities_activity_type_check additively. Not started.
+
+STOP. Not committed, pushed, merged or deployed. No production migration, export, credential or entitlement change. No
+real customer data. NP-P2-S1 not started.
