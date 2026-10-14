@@ -113,9 +113,10 @@ begin
        and p.prosecdef and exists (select 1 from unnest(p.proconfig) c where c like 'search_path=%')) = 4);
   perform pg_temp.t('P6 no Core function references the Plus helpers or organization_modules',
     not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
-      and p.proname not in ('plus_can_read', 'plus_can_write', '_require_plus_write', '_require_plus_admin_write',
-                            '_plus_entitlement_state', 'plus_access_state', 'platform_set_organization_module',
-                            'platform_extend_plus_trial', 'platform_get_organization_module')
+      -- Plus functions themselves (plus_*, _plus_*, _require_plus_*; NP-P1-S3 adds _plus_member_access and the
+      -- plus_*_member_access RPCs) and the platform entitlement RPCs are allowed; every other function is Core.
+      and p.proname !~ '^(plus_|_plus_|_require_plus_)'
+      and p.proname not in ('platform_set_organization_module', 'platform_extend_plus_trial', 'platform_get_organization_module')
       and (p.prosrc ~ 'plus_can_(read|write)|_require_plus_|organization_modules|_plus_entitlement_state')));
 
   -- ------------------------------------------------------------------ Org A Admin across every effective state

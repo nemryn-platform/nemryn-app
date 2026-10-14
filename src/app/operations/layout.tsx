@@ -7,7 +7,7 @@ import { getActiveMemberships } from "@/lib/auth/membership";
 import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
 import { OperationsLayoutClient } from "@/components/operations/OperationsLayoutClient";
 import { getPlusAccessState } from "@/lib/plus/access";
-import { canEnterGrowth } from "@/lib/plus/access-core";
+import { canOpenGrowth } from "@/lib/plus/access-core";
 
 /**
  * Server-side authorization gate for every /operations/* route (work item
@@ -48,11 +48,12 @@ export default async function OperationsLayout({ children }: { children: ReactNo
   // Overview composition and assignment surfaces use (one call per request).
   const hasLinkedDriverProfile = (await getOperatorLinkedDriverId(organization.organizationId)) !== null;
 
-  // NP-P1-S2: whether to show "Growth" -- Organization Admins only (no RPC for any other role); the request-cached
-  // plus_access_state read the Growth guard itself uses. locked / none hide it. Navigation only: every Growth route
-  // re-checks requirePlusAccess, and the database re-checks independently.
-  const canAccessGrowth =
-    organization.role === "organization_admin" && canEnterGrowth((await getPlusAccessState(organization.organizationId)).state);
+  // NP-P1-S2 / S3: whether to show "Growth" -- the request-cached plus_access_state read the Growth guard itself uses.
+  // An Organization Admin (write / read_only) or a Dispatcher with an active named grant while Plus is writable;
+  // locked / none / no grant hide it. Navigation only: every Growth route re-checks requirePlusAccess, and the
+  // database re-checks independently.
+  const plus = await getPlusAccessState(organization.organizationId);
+  const canAccessGrowth = canOpenGrowth(plus.state, plus.capability);
 
   return (
     <OperationsLayoutClient

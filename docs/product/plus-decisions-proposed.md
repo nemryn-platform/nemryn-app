@@ -2,7 +2,7 @@
 
 **Work item:** NP-P0-A02 · **Date:** 2026-10-13
 **Revised:** NP-P0-A02R (2026-10-13). PD-02, PD-03, PD-04, PD-08 and PD-12 were changed; PD-16 to PD-20 were added.
-**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B). All others have no ZD number yet.
+**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14). All others have no ZD number yet.
 On approval, each accepted entry is copied into the register as the next ZD number, with `Status: CONFIRMED`.
 
 Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in the NP-P0-A02 brief. They still need formal recording.
@@ -47,7 +47,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
   - Admin-only Plus settings (grants, inquiry-form publishing) require `organization_admin`.
   - **A salesperson is never made an Organization Admin to reach the CRM.**
   - A growth-only role is a separate decision (PD-18).
-- **Status:** PROPOSED (OWNER-APPROVED DIRECTION; A02R moves grants earlier)
+- **Status:** **OWNER-APPROVED — RECORDED AS ZD-210** (NP-P1-S3 owner decision ratification, 2026-10-14). Approved: explicit Read / Write Nemryn Plus permissions for eligible existing Dispatchers, managed by their Organization Admin. Grants never change Core membership roles and never grant subscription-management privileges. **Approved behaviour:** an unrevoked grant becomes effective again when an inactive Dispatcher membership is reactivated, provided every other authorization and entitlement condition is satisfied. History: PROPOSED (OWNER-APPROVED DIRECTION; A02R moved grants earlier); implemented locally in NP-P1-S3.
 - **Known limitation until PD-18:** a non-admin salesperson must be a Dispatcher with a grant, which is still an operational role.
 
 ### PD-04 — Mount the Growth surface at `/operations/growth`
@@ -188,4 +188,8 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
 
 - **Category:** Data / Core change
 - **Decision:** P1-S3 adds `unique (id, organization_id)` to Core `memberships`, so `membership_module_grants` can use the tenant-isolating composite FK convention. Verified in A02R: today only PK `id` and `unique (organization_id, user_id)` exist, and no table references `memberships`. The constraint cannot fail and changes no row, policy or function.
-- **Status:** PROPOSED — needs reviewer acknowledgement as the one Core schema touch in NP-P1
+- **Status:** **OWNER-APPROVED — RECORDED AS ZD-209** (NP-P1-S3 owner decision ratification, 2026-10-14): the additive `UNIQUE (id, organization_id)` constraint on `public.memberships`, required for tenant-isolated `membership_module_grants`. History: PROPOSED — needed reviewer acknowledgement as the one Core schema touch in NP-P1.
+- **NP-P1-S3 (local implementation):**
+  - Implemented as its own migration, `20261013160000_memberships_id_organization_unique.sql`.
+  - Verified again on the local schema: PK `(id)` and `unique (organization_id, user_id)` only, no referencing table, owner `postgres`. Covered by `plus_member_grants_tests.sql` S1, S2 and S8.
+  - ~~Formal owner approval is required before this migration (and `20261013160100`, which depends on it) is released to production.~~ Approval given (ZD-209, 2026-10-14). The production release itself still follows the separate, owner-run release procedure.

@@ -350,3 +350,65 @@ Migration `20261013120000_plus_access_helpers.sql`: functions only, no table, po
 
 Tests: `supabase/tests/plus_access_helpers_tests.sql` (rollback-only, 170 cases).
 
+> **NP-P1-S3:** `plus_can_read` / `plus_can_write` are grant-aware (next section). `_require_plus_write` and `_require_plus_admin_write` keep their bodies, so a write-grant Dispatcher passes `_require_plus_write` but never `_require_plus_admin_write`.
+
+## Nemryn Plus named-staff grants (NP-P1-S3)
+
+Migrations:
+- `20261013160000_memberships_id_organization_unique.sql`: an additive Core constraint, `memberships unique (id, organization_id)` (PD-20, owner-approved and recorded as ZD-209). Grants: ZD-210.
+- `20261013160100_plus_member_grants.sql`.
+
+**Table `membership_module_grants`** (class A: RLS on, no policy, no client privilege):
+- `organization_id`, plus `membership_id` with a composite FK to `memberships (id, organization_id)`;
+- `module = 'plus'`;
+- `access` is `read` or `write`;
+- `granted_by` / `granted_at`, and `revoked_by` / `revoked_at` (NULL while active);
+- at most one active grant per membership (partial unique index);
+- rows are history and are never deleted.
+
+**Effective access** (`_plus_member_access`, internal; combined with `_plus_entitlement_state`):
+
+| Caller | Entitlement `write` | `read_only` | `locked` / `none` |
+|---|---|---|---|
+| Organization Admin (active, active organization) | read + write | read (history) | none |
+| Active Dispatcher with an active `write` grant | read + write | none | none |
+| Active Dispatcher with an active `read` grant | read | none | none |
+| Dispatcher without a grant, Driver, inactive member, suspended organization, foreign tenant, Platform Admin without membership | none | none | none |
+
+A grant is never removed by a Core change. It is inert while the membership is inactive or not a Dispatcher, and it is effective again if the membership is reactivated as a Dispatcher. An Admin can revoke it at any time.
+
+`plus_access_state(org)` gains `access` (`none` | `read` | `write`):
+- Admins: `state` unchanged (`write` / `read_only` / `locked` / `none`). `trial_ends_at` is returned to Admins only.
+- Grant holders: `state = 'write'` with their grant's access, while the entitlement is `write`; `none` otherwise.
+
+### `plus_list_member_access(p_organization_id)`
+- **Who:** an Organization Admin while Plus is `write` or `read_only`. Errors: ZW002 otherwise; ZW001 without a uid.
+- **Returns:** staff memberships (`organization_admin` and `dispatcher`; never drivers) with:
+  - `membership_id`, `display_name`, `email`, Core `role` and `status`, `is_self`;
+  - the active grant's `access`, `grant_id` and `granted_at` (NULL when there is none).
+
+### `plus_grant_member_access(p_organization_id, p_membership_id, p_access, p_expected_grant_id) → plus_member_access_result`
+- **Who:** an Organization Admin, with entitlement `write`, checked through `_require_plus_admin_write`:
+  - ZW001 when read-only;
+  - ZW002 for everyone else.
+  - The check is repeated after taking `_lock_org_admins(org)`, the same lock as `change_membership_role` and `set_membership_status`.
+- **Target:** the membership must belong to `p_organization_id` (ZW002 otherwise: forged, foreign or unknown). It must be an **active `dispatcher`** (ZW006 otherwise: admin, driver or inactive). `p_access` must be `read` or `write` (ZW006).
+- **Idempotency:** if the same access is already active, the call returns `changed = false` with no write and no audit.
+- **Concurrency:** `p_expected_grant_id` must equal the active grant's id (NULL means none), otherwise ZW003.
+- **Effect:** a change revokes the active row (`revoked_at`, `revoked_by`) and inserts a new one.
+- **Audit:** `plus_member_access_granted`, entity `membership_module_grant` with the new grant id. `before` holds the previous access and grant, or NULL; `after` holds `{module, membership_id, access, grant_id, email}`.
+
+### `plus_revoke_member_access(p_organization_id, p_membership_id, p_expected_grant_id) → plus_member_access_result`
+- **Who:** an Organization Admin while Plus is `write` or `read_only`, so stale grants can be cleaned up after Plus ends. Errors: ZW002 in `locked` / `none` and for everyone else. Uses the same lock and re-check.
+- **Target:** any membership of the organization, including inactive or re-roled members (ZW002 otherwise).
+- **Idempotency:** with no active grant, the call returns `changed = false`.
+- **Concurrency:** `p_expected_grant_id` must equal the active grant (ZW003 otherwise).
+- **Effect:** stamps `revoked_at` / `revoked_by`; the row is kept.
+- **Audit:** `plus_member_access_revoked`.
+
+Result type `plus_member_access_result`: `(membership_id, access, grant_id, changed)`. `access` and `grant_id` describe the active grant after the call.
+
+Tests:
+- `supabase/tests/plus_member_grants_tests.sql` (rollback-only);
+- `supabase/tests/plus_member_grants_concurrency_test.sh`.
+

@@ -395,6 +395,57 @@ export type Database = {
           },
         ]
       }
+      membership_module_grants: {
+        Row: {
+          access: string
+          granted_at: string
+          granted_by: string
+          id: string
+          membership_id: string
+          module: string
+          organization_id: string
+          revoked_at: string | null
+          revoked_by: string | null
+        }
+        Insert: {
+          access: string
+          granted_at?: string
+          granted_by: string
+          id?: string
+          membership_id: string
+          module: string
+          organization_id: string
+          revoked_at?: string | null
+          revoked_by?: string | null
+        }
+        Update: {
+          access?: string
+          granted_at?: string
+          granted_by?: string
+          id?: string
+          membership_id?: string
+          module?: string
+          organization_id?: string
+          revoked_at?: string | null
+          revoked_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "membership_module_grants_membership_fkey"
+            columns: ["membership_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "membership_module_grants_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       memberships: {
         Row: {
           created_at: string
@@ -1912,6 +1963,10 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_member_access: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
       _public_form_service_types: {
         Args: { p_offered: string[]; p_organization_id: string }
         Returns: string[]
@@ -2792,6 +2847,49 @@ export type Database = {
       }
       plus_can_read: { Args: { p_organization_id: string }; Returns: boolean }
       plus_can_write: { Args: { p_organization_id: string }; Returns: boolean }
+      plus_grant_member_access: {
+        Args: {
+          p_access: string
+          p_expected_grant_id: string
+          p_membership_id: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_member_access_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_member_access_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_list_member_access: {
+        Args: { p_organization_id: string }
+        Returns: {
+          access: string
+          display_name: string
+          email: string
+          grant_id: string
+          granted_at: string
+          is_self: boolean
+          membership_id: string
+          role: string
+          status: string
+        }[]
+      }
+      plus_revoke_member_access: {
+        Args: {
+          p_expected_grant_id: string
+          p_membership_id: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_member_access_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_member_access_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       publish_website_request_form: {
         Args: { p_organization_id: string }
         Returns: Database["public"]["CompositeTypes"]["website_request_form_publish_result"]
@@ -3418,6 +3516,13 @@ export type Database = {
       plus_access_state_result: {
         state: string | null
         trial_ends_at: string | null
+        access: string | null
+      }
+      plus_member_access_result: {
+        membership_id: string | null
+        access: string | null
+        grant_id: string | null
+        changed: boolean | null
       }
       public_request_submission_result: {
         accepted: boolean | null
