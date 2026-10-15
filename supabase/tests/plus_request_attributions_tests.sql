@@ -448,8 +448,9 @@ begin
   for v_n in 1..5 loop
     r_free := pg_temp.req(c_a, 'AttribReq Key ' || v_n, 'pending');
     begin
+      -- (NP-P2-S4: rebooking-shaped rows -- contact only -- since an opportunity is converted at most once)
       insert into public.plus_request_attributions (request_id, organization_id, contact_id, opportunity_id, link_method, conversion_idempotency_key, linked_by)
-      values (r_free, c_a, k2, p2, 'converted_from_opportunity',
+      values (r_free, c_a, k2, null, 'rebooking',
               case v_n when 1 then repeat('k', 7) when 2 then repeat('k', 8) when 3 then repeat('k', 200) when 4 then repeat('k', 201) else repeat('k', 8) end, c_a1);
       v := v || 'ok';
     exception when check_violation then v := v || 'ck'; when unique_violation then v := v || 'uq';
@@ -465,12 +466,15 @@ begin
   perform pg_temp.t('C1 conversion key: 8-200 characters (Core intake convention), conversion / rebooking only, unique per organization (not across organizations)',
     v = 'ckokokckuq/otherorg-ok', v);
   delete from public.plus_request_attributions where conversion_idempotency_key is not null;
-  perform pg_temp.t('C2 P2-S3 can never produce a conversion or rebooking: no function writes those link methods; every RPC-made row is linked_existing_request without a key',
+  perform pg_temp.t('C2 P2-S3 RPCs never produce a conversion or rebooking: only the NP-P2-S4 RPCs name those link methods (plus guards that compare them); every P2-S3 row is linked_existing_request without a key',
     not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
-                and p.prosrc ~ '''(converted_from_opportunity|rebooking)''')
+                and p.prosrc ~ '''(converted_from_opportunity|rebooking)'''
+                and p.proname not in ('plus_convert_opportunity_to_request', 'plus_create_rebooking_request',
+                                      'plus_update_request_attribution', '_plus_opportunity_conversion_guard'))
     and (select bool_and(link_method = 'linked_existing_request' and conversion_idempotency_key is null) from public.plus_request_attributions));
-  perform pg_temp.t('C3 no Plus function sets an opportunity stage to converted (manual attribution never converts)',
-    not exists (select 1 from pg_proc p where p.proname ~ '^(plus_|_plus_)' and p.prosrc ~* 'set[^;]*stage\s*=\s*''converted''')
+  perform pg_temp.t('C3 manual attribution never converts: only plus_convert_opportunity_to_request sets an opportunity stage to converted',
+    not exists (select 1 from pg_proc p where p.proname ~ '^(plus_|_plus_)' and p.proname <> 'plus_convert_opportunity_to_request'
+                and p.prosrc ~* 'set[^;]*stage\s*=\s*''converted''')
     and not exists (select 1 from public.plus_opportunities where stage = 'converted'));
 
   -- ============================================== B. opportunity contact consistency (NP-P2-S3-R2, owner-approved option B)

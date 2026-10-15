@@ -34,7 +34,7 @@ export const REPORTED_QUOTE_STAGE_NOTE =
   "Quote stages are recorded by your team. Nemryn hasn't created, sent or received a quote.";
 
 export const CONVERTED_RESERVED_NOTE =
-  "Converted is set only when an opportunity becomes a booking request in Operations. That step isn't available yet.";
+  "Converted is set only by “Create transportation request”, which creates a pending request for Operations to review.";
 
 export function isOpenStage(raw: unknown): raw is OpenStage {
   return typeof raw === "string" && (OPEN_STAGES as readonly string[]).includes(raw);
@@ -373,7 +373,7 @@ export function opportunityErrorMessage(code: string | undefined, op: "save" | "
           ? "Choose a reason (a note is required for Other)."
           : op === "reopen"
             ? "Choose an open stage and say why you're reopening it."
-            : "Choose one of the open stages. Lost has its own action; Converted isn't available yet.";
+            : "Choose one of the open stages. Lost has its own action; Converted is set by “Create transportation request”.";
     case "ZW001":
       return "You can view the pipeline but not change it. Ask an Organization Admin for write access.";
     case "ZW002":

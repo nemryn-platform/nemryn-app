@@ -2429,6 +2429,10 @@ export type Database = {
           status: string
         }[]
       }
+      _plus_core_request_source: {
+        Args: { p_opportunity_source: string }
+        Returns: string
+      }
       _plus_entitlement_state: {
         Args: { p_organization_id: string }
         Returns: string
@@ -2463,6 +2467,10 @@ export type Database = {
       _plus_require_core_request_read: {
         Args: { p_organization_id: string }
         Returns: undefined
+      }
+      _plus_require_idempotency_key: {
+        Args: { p_key: string }
+        Returns: string
       }
       _plus_require_task_subject: {
         Args: {
@@ -3446,6 +3454,29 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_convert_opportunity_to_request: {
+        Args: {
+          p_additional_notes: string
+          p_assistance_notes: string
+          p_destination_description: string
+          p_expected_updated_at: string
+          p_idempotency_key: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_pickup_description: string
+          p_preferred_date: string
+          p_preferred_time: string
+          p_requester_relationship: string
+          p_return_trip_needed: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_booking_request_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_booking_request_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_create_contact: {
         Args: {
           p_confirm_possible_duplicate: boolean
@@ -3484,6 +3515,29 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_create_rebooking_request: {
+        Args: {
+          p_additional_notes: string
+          p_assistance_notes: string
+          p_contact_id: string
+          p_destination_description: string
+          p_idempotency_key: string
+          p_organization_id: string
+          p_pickup_description: string
+          p_preferred_date: string
+          p_preferred_time: string
+          p_requester_relationship: string
+          p_return_trip_needed: string
+          p_source: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_booking_request_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_booking_request_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4720,6 +4774,13 @@ export type Database = {
         created: number | null
         superseded: number | null
         unchanged: number | null
+      }
+      plus_booking_request_result: {
+        request_id: string | null
+        contact_id: string | null
+        opportunity_id: string | null
+        request_state: string | null
+        changed: boolean | null
       }
       plus_contact_write_result: {
         contact_id: string | null

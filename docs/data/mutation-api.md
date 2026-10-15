@@ -585,3 +585,34 @@ Tests:
 
 Nothing in P2-S3 creates or changes a Core Request, request event, acquisition snapshot, Passenger, Trip or Recurring Care arrangement, and no opportunity stage changes.
 
+## Nemryn Plus conversion & rebooking (NP-P2-S4)
+
+Migration `20261015140000_plus_conversion_rebooking.sql` (local only; RPCs, a type, constraints and a guard trigger; **no new table**). Both RPCs create **one pending Core Request** through `log_transportation_request`, called as the signed-in staff member, so Core's own `has_org_role` check, validation, `pending` state and `request_logged` event apply. `passenger_id` is always NULL. Everything happens in **one transaction**: a later failure also rolls back the Core Request.
+
+| RPC | Access | Contract |
+|---|---|---|
+| `plus_convert_opportunity_to_request(org, opportunity_id, expected_updated_at, idempotency_key, requester_relationship, pickup_description, destination_description, return_trip_needed, preferred_date, preferred_time, assistance_notes, additional_notes)` | Plus write + Core request role | Converts an **open** private-pay opportunity. <br>• Requester name, phone and email come from its **active** primary contact (no phone gives ZW006 `contact_phone_required`; archived gives ZW006 `contact_not_active`). <br>• The Core source is mapped from the opportunity: phone, email and facility unchanged; website and web_inquiry become web; everything else becomes other. <br>• Writes a `converted_from_opportunity` attribution with the key, sets the opportunity `converted` (`converted_at`, `closed_at`), writes `request_linked` and `stage_changed`, and audits `plus_opportunity_converted` (ids only). <br>• Refusals: ZW002 unknown / foreign; ZW003 stale; ZW004 `already_converted`, `illegal_transition` (lost) or `linked_request_exists` (a P2-S3 link exists); ZW006 invalid key, a key of another operation, or invalid Core fields. <br>Returns `plus_booking_request_result(request_id, contact_id, opportunity_id, request_state, changed)` |
+| `plus_create_rebooking_request(org, contact_id, idempotency_key, requester_relationship, pickup_description, destination_description, return_trip_needed, source, preferred_date, preferred_time, assistance_notes, additional_notes)` | Plus write + Core request role | One new pending Request for an **active** contact, with the staff-chosen Core source. Writes a `rebooking` attribution (contact only) with the key, `request_linked`, and audit `plus_contact_rebooked` (ids only). No opportunity is created or changed, and nothing is copied from earlier Requests |
+
+**Idempotency:**
+- The key is 8–200 characters of `[A-Za-z0-9._:-]` and is serialized per (organization, key) with a transaction advisory lock.
+- The same key for the same operation returns the **original** Request with `changed=false` and writes nothing.
+- A key used for a different opportunity or contact gives ZW006, and never returns that Request.
+- Authority is re-checked on every call, including replays. A key is never proof of authority.
+
+**Lock order:** advisory(org, key) → opportunity `FOR UPDATE` → contact `FOR SHARE` → Core insert → Plus writes.
+
+**Database-enforced rules:**
+- `plus_request_attributions_method_shape_check`.
+- `plus_request_attributions_one_conversion_idx`: one conversion per opportunity.
+- `plus_opportunities_conversion_guard`: a deferred constraint trigger; `converted` only with its conversion attribution.
+- `plus_update_request_attribution` replaced forward-only: a conversion link is immutable (ZW004 `conversion_link_immutable`), and a rebooking link never gains an opportunity (ZW006).
+
+Internal (no client EXECUTE): `_plus_opportunity_conversion_guard`, `_plus_core_request_source`, `_plus_require_idempotency_key`.
+
+Tests:
+- `supabase/tests/plus_conversion_rebooking_tests.sql` (rollback-only);
+- `supabase/tests/plus_conversion_rebooking_concurrency_test.sh` (ten races).
+
+No Trip, Passenger, passenger link, assignment, recurring arrangement, payment or outbound message is ever created.
+

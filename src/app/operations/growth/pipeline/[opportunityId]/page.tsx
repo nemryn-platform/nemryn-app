@@ -30,6 +30,11 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { OpportunityStageControls } from "@/components/growth/OpportunityStageControls";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
+import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
+import { getContact } from "@/lib/plus/contacts";
+import { listLinkedRequests } from "@/lib/plus/attribution";
+import { coreSourceForOpportunity } from "@/lib/plus/booking-core";
+import { SOURCE_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -45,8 +50,9 @@ function historyLine(a: OpportunityActivity): string {
 /**
  * Growth -> Pipeline -> Opportunity (NP-P2-S1). Who the prospective customer is, why they got in touch, where the
  * potential booking stands, and what happened last. Server-authorized (requirePlusAccess + plus_get_opportunity); a
- * foreign, unknown or inaccessible id renders the same 404. Write controls only for Plus write capability. No
- * conversion, booking, Passenger, Trip, quote document or payment record exists here.
+ * foreign, unknown or inaccessible id renders the same 404. Write controls only for Plus write capability.
+ * NP-P2-S4: "Create transportation request" converts an open opportunity into ONE pending Operations Request (Core
+ * decides from there). No Passenger, Trip, quote document or payment record is created here.
  */
 export default async function OpportunityDetailPage({
   params,
@@ -77,6 +83,24 @@ export default async function OpportunityDetailPage({
   } catch {
     interactions = null;
   }
+  // NP-P2-S4 conversion: writers, open opportunity, active contact, and no Request already linked (a manual P2-S3 link
+  // is never turned into a second Request). The database re-checks every one of these and the Core role.
+  let linkedCount: number | null = null;
+  let customer: { name: string; phone: string | null; email: string | null } | null = null;
+  if (canWrite && open && !o.contactArchived) {
+    try {
+      linkedCount = (await listLinkedRequests(context.organizationId, { opportunityId: o.id })).total;
+    } catch {
+      linkedCount = null;
+    }
+    try {
+      const c = await getContact(context.organizationId, o.contactId);
+      customer = c ? { name: c.displayName, phone: c.phone, email: c.email } : null;
+    } catch {
+      customer = null;
+    }
+  }
+  const canConvert = canWrite && open && !o.contactArchived && linkedCount === 0 && customer !== null;
   const saved = (await searchParams).saved;
   const savedMessage = typeof saved === "string" ? SAVED[saved] : undefined;
 
@@ -88,9 +112,22 @@ export default async function OpportunityDetailPage({
         breadcrumb={[{ label: "Growth", href: "/operations/growth" }, { label: "Pipeline", href: "/operations/growth/pipeline" }, { label: o.title }]}
         actions={
           canWrite && open ? (
-            <LinkButton href={`/operations/growth/pipeline/${o.id}/edit`} variant="outline" data-testid="opportunity-edit">
-              Edit opportunity
-            </LinkButton>
+            <div className="flex flex-wrap items-center gap-2">
+              {canConvert && customer && (
+                <BookingRequestDialog
+                  mode="convert"
+                  organizationId={context.organizationId}
+                  customer={customer}
+                  opportunityId={o.id}
+                  opportunityTitle={o.title}
+                  expectedVersion={o.updatedAt}
+                  sourceLabel={selectOptionLabel(SOURCE_OPTIONS, coreSourceForOpportunity(o.source))}
+                />
+              )}
+              <LinkButton href={`/operations/growth/pipeline/${o.id}/edit`} variant="outline" data-testid="opportunity-edit">
+                Edit opportunity
+              </LinkButton>
+            </div>
           ) : undefined
         }
       />
@@ -101,6 +138,16 @@ export default async function OpportunityDetailPage({
       )}
       {isPlusReadOnly(plus.state) && (
         <AttentionState level="info" title="Nemryn Plus is not active" description="This opportunity and its history are kept and can be viewed, but not changed." />
+      )}
+      {canWrite && open && linkedCount !== null && linkedCount > 0 && (
+        <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="convert-unavailable-linked">
+          This opportunity is already linked to a transportation request (see Linked requests), so a new one isn&apos;t created from here.
+        </p>
+      )}
+      {o.stage === "converted" && (
+        <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="opportunity-converted-note">
+          Converted: a transportation request was created for Operations to review. Its status is shown under Linked requests.
+        </p>
       )}
       {o.contactArchived && (
         <AttentionState level="info" title="The contact is archived" description="The opportunity is kept. Their contact record is now read-only history." />

@@ -354,6 +354,24 @@ There is **no contact PII, no message text and no JSON** in this table. Drafts a
 >   - Each step writes `attribution_changed` history and audit rows.
 >   - **Future work needs its own reviewed design:** bulk or automatic re-pointing of attributions (e.g. a `plus_reassign_opportunity_contact` RPC).
 
+> **NP-P2-S4 implementation notes (migration `20261015140000_plus_conversion_rebooking`, local only; no new table):**
+> - `plus_convert_opportunity_to_request` and `plus_create_rebooking_request` call Core's `log_transportation_request` **as the signed-in staff member**. Core re-checks `has_org_role`, hard-codes `pending` and writes `request_logged`. `passenger_id` is always NULL.
+>   - In one transaction they also write the attribution (`converted_from_opportunity` with contact + opportunity, or `rebooking` with contact only), `request_linked` history, and an audit row (ids only).
+>   - For a conversion they also set the opportunity to `converted` (`converted_at`, `closed_at`) and write a `stage_changed` row.
+>   - Any failure rolls back the Core Request too.
+> - **Replay safety:**
+>   - The key (8–200, `[A-Za-z0-9._:-]`) is serialized per (organization, key) by a transaction advisory lock and stored on the attribution, unique per organization.
+>   - The same key for the same operation returns the original Request (`changed=false`) and writes nothing.
+>   - A key of another operation gives ZW006.
+>   - Authority is re-checked on every call, including a replay.
+> - **Database-enforced shape (additive):**
+>   - `plus_request_attributions_method_shape_check`: a conversion has contact, opportunity and key; a rebooking has contact and key, and no opportunity.
+>   - `plus_request_attributions_one_conversion_idx`: an opportunity is converted at most once.
+>   - `plus_opportunities_conversion_guard` (deferred constraint trigger): `stage = 'converted'` requires its conversion attribution at commit, so no other path can impersonate a conversion.
+>   - `plus_update_request_attribution` refuses to correct a conversion link (ZW004 `conversion_link_immutable`) and never gives a rebooking link an opportunity (ZW006).
+> - **Eligibility:** private-pay, same organization, open stage (lost ZW004 `illegal_transition`; converted ZW004 `already_converted`), current version (ZW003), no Request already linked to the opportunity (ZW004 `linked_request_exists`), and an active contact with a phone (ZW006).
+> - **Lock order:** advisory(org, key) → opportunity `FOR UPDATE` → contact `FOR SHARE` → Core insert → attribution / history. This matches every existing writer's opportunity-then-contact order. All ten concurrency races were verified (`plus_conversion_rebooking_concurrency_test.sh`).
+
 - **Consequence for named-staff access:** a Dispatcher with a Plus grant can convert, because they hold the Core role. An Admin can convert. A **growth-only member (PD-18) cannot create a Core Request by design.** They hand the opportunity to Operations. A Core change to let them log Requests would need its own decision.
 
 ## 11. Opportunity vs repeat bookings vs recurring care (unchanged)

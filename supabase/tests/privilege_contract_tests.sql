@@ -326,7 +326,13 @@ c_fn(sig, roles) as (values
   ('plus_update_request_attribution(uuid,uuid,timestamp with time zone,uuid,uuid,text)', 'u'),
   ('plus_get_request_attribution(uuid,uuid)', 'u'),
   ('plus_list_request_attributions(uuid,uuid,uuid,integer,integer)', 'u'),
-  ('plus_get_request_summaries(uuid,uuid[])', 'u')
+  ('plus_get_request_summaries(uuid,uuid[])', 'u'),
+  -- NP-P2-S4 conversion + rebooking
+  ('_plus_opportunity_conversion_guard()', ''),
+  ('_plus_core_request_source(text)', ''),
+  ('_plus_require_idempotency_key(text)', ''),
+  ('plus_convert_opportunity_to_request(uuid,uuid,timestamp with time zone,text,text,text,text,text,date,time without time zone,text,text)', 'u'),
+  ('plus_create_rebooking_request(uuid,uuid,text,text,text,text,text,text,date,time without time zone,text,text)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required
