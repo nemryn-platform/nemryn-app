@@ -1,0 +1,314 @@
+NP-P2-S3-R1 -- REQUEST ATTRIBUTION -- PRE-COMMIT SECURITY AND CONTRACT REVIEW
+Date: 2026-10-15
+Mode: TARGETED AUDIT, MINIMAL FIXES ONLY.
+- Nothing staged, committed, pushed, merged or deployed.
+- No production migration applied. P2-S4 not started.
+Input: docs/reports/NP-P2-S3-request-attribution-implementation.txt, migration 20261015130000, the P2-S3 RPCs and UI,
+and the canonical Plus product, domain and access specifications.
+
+======================================================================
+0. BASELINE (read-only)
+======================================================================
+- Branch: np-p2-s3-request-attribution. HEAD = origin/main = 671be2ff8f8b ("Merge pull request #7 ... np-p2-s2-...").
+  The P2-S2 commit 95e774a is in main.
+- Staged: 0. The working tree holds only the expected P2-S3 changes (section 7). Unrelated untracked reports and .tmp-qa
+  files are untouched.
+- Production (project wyocbivzgrbekuyqdfts, linked):
+  - remote head 20261015120000;
+  - 20261015130000 shows remote = EMPTY, so it is NOT applied.
+
+======================================================================
+1. SECURITY REVIEW -- PASS / FAIL
+======================================================================
+| Area                                                      | Result | Evidence |
+|-----------------------------------------------------------|--------|----------|
+| Plus access AND Core request-read role on every read/write | PASS   | _plus_require_core_request_read in all 5 RPCs; RLS = plus_can_read AND the exact transportation_requests policy (SQL S1); simulated Plus-without-Core user refused everywhere (Z1) |
+| Database-enforced tenant isolation                        | PASS   | composite FKs (S4, S6); org-scoped RPC predicates; L8-L10, P11, P12; E2E E4-E5 |
+| No cross-tenant relationship possible                     | PASS   | FK violation on direct Org A -> Org B links (S6); RPC ZW002 for every mixed id (L9, U6) |
+| One attribution per Request                               | PASS   | request_id PRIMARY KEY; L3/L4; CONC-A1/A2 |
+| Contact / opportunity consistency at write time           | PASS   | _plus_resolve_attribution (L5, L6, U6, U7); opportunity and contact locked FOR SHARE |
+| Consistency over time (opportunity contact change)        | GAP -> owner decision OD2 | see section 2; current behaviour pinned by test D1; option B validated, NOT applied |
+| No unauthorized direct writes                             | PASS   | no client INSERT/UPDATE/DELETE privilege or policy (S2); RPC-only |
+| Attribution cannot modify Core Requests                   | PASS   | K1 fingerprint, K2 (no Plus function writes Core), K3 (no Core row lock), L11; CONC-A4 Core Accept unaffected |
+| request_acquisition_attributions unchanged                | PASS   | K1; S4C acquisition E2E 27/27 |
+| No Passenger / Trip / Recurring Care change               | PASS   | K1; E2E F1 |
+| Growth Agent permissions unchanged                        | PASS   | no agent / dashboard function references attributions or transportation_requests (G1); agent SQL 40/40, concurrency 5/5, E2E 76/76 |
+| Append-only activity integrity                            | PASS   | A1 (no client write, no Plus UPDATE/DELETE of plus_activities) |
+| Concurrent linking and corrections                        | PASS   | CONC-A1..A4 (dev and isolated) |
+| Privilege contract                                        | PASS   | 0 violations / 29 checks |
+| Minimum-necessary Core data                               | PASS, with one documented PD-18 input (Z2) | section 5 |
+| No outbound communication / AI provider                   | PASS   | no sending, network or AI code added (grep-verified); no Send / Call / Convert control (E2E F4) |
+OVERALL: PASS. No security defect was found. One data-consistency gap (OD2) is reported for owner decision, as the
+brief requires; its fix is prepared and validated but NOT applied.
+
+======================================================================
+2. REQUEST / CONTACT / OPPORTUNITY CONSISTENCY FINDINGS
+======================================================================
+Confirmed gap.
+- P2-S1 plus_update_opportunity (20261014120000) lets an OPEN opportunity's primary_contact_id change to any active
+  contact. It does not check for linked Requests.
+- Once P2-S3 has linked a Request to that opportunity, the attribution's contact_id (the old primary contact) then
+  differs from the opportunity's primary contact. That breaks the domain rule "a private-pay opportunity's
+  primary_contact_id must equal contact_id".
+- This is not a tenant or security issue (same organization, same RLS). It is a reporting and consistency issue.
+- Pinned by SQL test D1 (CURRENT behaviour) so it cannot change silently.
+- Side effect today: "Correct link" pre-fills the old contact and the opportunity. Saving that pair now gives ZW006 (the
+  pair is inconsistent), so staff must pick the contact or the opportunity deliberately. That is safe, but unexplained in
+  the UI.
+
+Options analysed:
+  A. Preserve the original relationship as history (current behaviour).
+     - + no change to P2-S1.
+     - - The pair silently diverges. Reports by contact and by opportunity disagree. The canonical rule is broken after
+       the fact.
+  B. Prevent ordinary contact reassignment while linked Requests exist. RECOMMENDED.
+     - + Keeps the invariant at the database layer with one guarded check. No data is rewritten. Explicit, auditable
+       correction stays available.
+     - - Staff must first correct each linked Request (a deliberate, reasoned step) before moving the opportunity to
+       another person.
+  C. Automatically re-point existing attributions.
+     - - Silently rewrites Request-level history.
+     - - Mutates rows the editing user did not touch, with no per-Request reason.
+     - - Hides a real-world mistake.
+     - - Needs its own reviewed design (which Requests really belonged to whom). Not recommended without an approved
+       requirement; none exists.
+
+Smallest safe implementation of B (PREPARED AND VALIDATED; NOT APPLIED; awaiting owner approval):
+- A forward-only CREATE OR REPLACE of public.plus_update_opportunity with the IDENTICAL signature. It ships in the
+  still-unreleased P2-S3 migration or its own migration. The deployed 20261014120000 file is not modified.
+- The only change, inside the existing "contact changed" branch:
+
+    if p_contact_id is distinct from v_old.primary_contact_id then
+      perform public._plus_require_active_contact(p_organization_id, p_contact_id);
+      -- NP-P2-S3-R1 (option B)
+      if exists (select 1 from public.plus_request_attributions a
+                 where a.organization_id = p_organization_id and a.opportunity_id = v_old.id) then
+        raise exception 'linked_requests' using errcode = 'ZW004';
+      end if;
+    end if;
+
+- Preserved: _require_plus_write first; the FOR UPDATE row lock and the version check (ZW003); the closed-stage
+  ZW004; every field edit and the owner logic; the audit; SECURITY DEFINER; search_path = public, pg_temp; and the
+  grants (CREATE OR REPLACE keeps the ACL and comment).
+- The new query is organization-scoped: no cross-tenant access.
+- Concurrency: plus_link_request locks the opportunity FOR SHARE, and plus_update_opportunity holds FOR UPDATE, so a
+  link and a contact change serialize. Whichever commits second sees the first.
+- Validated on the dev database INSIDE A ROLLED-BACK TRANSACTION (the dev function is verified unchanged afterwards):
+  - B1: a contact change on a linked opportunity -> ZW004 linked_requests.
+  - B2: other fields on the linked opportunity still editable.
+  - B3: an unlinked opportunity's contact change still allowed.
+  - B4: the documented path (correct the Request link first, then change the contact) succeeds.
+  - B5: definer, search_path and grants (authenticated yes, anon no) preserved.
+- The proposal file is in the session scratchpad (p2s3r1/option-b-plus_update_opportunity.sql), not in the branch.
+- Required with B:
+  - (1) opportunityErrorMessage maps ZW004 on "save" to "This opportunity is closed", which would be wrong here. The app
+    must distinguish the 'linked_requests' message, or the RPC must use a distinct, documented code. A small app change.
+  - (2) Replace test D1 with refusal tests (B1-B4 above) and a concurrency case (link vs contact change).
+  - (3) Update domain model section 10 and the mutation API.
+- Future explicit correction of a mistaken primary contact under B:
+  - (a) open each linked Request and use "Correct link" (reason required): move it to the right contact, or remove the
+    opportunity; then edit the opportunity's contact; or
+  - (b) a later, separately approved RPC (e.g. plus_reassign_opportunity_contact) that, in one transaction with a
+    reason, moves the opportunity and re-points its attributions, writing attribution_changed history per Request.
+    That is option C made explicit and audited; it is not part of this milestone.
+
+======================================================================
+3. PROPOSED OR IMPLEMENTED CORRECTIONS
+======================================================================
+Implemented (minimal):
+  R1-1. src/components/growth/RequestGrowthControls.tsx: the correction-reason field now carries the help text
+        "Describe the linking mistake only. Don't include medical or health details." The reason was already bounded
+        3-500 (RPC) and ≤ 2000 (activity CHECK). This makes explicit that it is not approved medical-data storage
+        (PD-10 / PD-11 open). Text only.
+  R1-2. supabase/tests/plus_request_attributions_tests.sql: tests added (59 -> 64):
+        - C1-C3: the conversion-key contract (section 4).
+        - D1: characterization of the current OD2 behaviour.
+        - Z2: the PD-18 inference finding (section 5).
+Proposed, NOT implemented (owner decision):
+  - Option B above (OD2).
+No change to the migration, any RPC, RLS, grants or Core code.
+
+======================================================================
+4. CONVERSION-KEY CONTRACT VERIFICATION
+======================================================================
+- The "≤ 100" premise is NOT CONFIRMED.
+  - The domain model's "≤ 100" (plus-domain-model.md line 399) belongs to plus_inquiries.idempotency_key, the P2-S7 web
+    inquiry table: a different column in a different, future table.
+  - The canonical text for plus_request_attributions.conversion_idempotency_key (section 10, line 322) and the A02
+    blueprint specify NO length, only "unique (organization_id, conversion_idempotency_key) where not null".
+  - Nemryn Core's established idempotency-key bound is ≤ 200 (public intake: 20260919090000 / 130000 / 140000).
+  - The implemented 8-200 therefore matches the Core convention and does not contradict the canonical model.
+  - The constraint was NOT changed. If the owner prefers ≤ 100 for conversion keys, it is a one-line change before
+    release (the migration is unapplied).
+- Boundary tests added (C1, superuser fixtures in the rolled-back suite): 7 characters refused; 8 accepted; 200
+  accepted; 201 refused; a key with linked_existing_request refused; a duplicate key in the same organization refused
+  (unique); the same key in another organization accepted.
+- P2-S3 cannot write converted_from_opportunity or rebooking (C2): no database function contains either value as a
+  literal; every RPC-made row is linked_existing_request with a NULL key; the CHECK forbids a key for manual links.
+- Only the future P2-S4 RPCs can create those outcomes. They do not exist; adding them is a reviewed migration.
+- Manual attribution never marks an opportunity Converted:
+  - C3: no Plus function sets stage = 'converted';
+  - L12, G2: stages unchanged;
+  - E2E B6, D4.
+- Future idempotent conversion is supported by the schema: the nullable key, the per-organization partial unique
+  index, the reserved link methods, and request_id as PK (one Request, one attribution). It matches the access model's
+  T13 design (key + opportunity row lock).
+
+======================================================================
+5. MINIMUM-NECESSARY DATA ACCESS
+======================================================================
+- plus_get_request_summaries returns exactly the access-model allow-list (SQL R4 checks the output columns and that the
+  function source never touches requester_phone / requester_email / pickup_description / destination_description /
+  assistance_notes / additional_notes / instructions / trip notes / reason_note). Attributed Requests only; other ids
+  are omitted (R3).
+- The table's RLS requires the Core role (S1). Without it: 0 rows (Z1).
+- Request-linked activity rows. FINDING for any future PD-18 design (test Z2):
+  - plus_activities' RLS is plus_can_read only, as in S4. A Plus reader WITHOUT the Core role (simulated) can therefore
+    see request-history rows: opaque request_id, entry type, time, actor, and the staff correction reason. They can
+    infer THAT a contact or opportunity has linked Requests, and how many.
+  - They see 0 transportation_requests rows, 0 request_events, and ZW002 from every request RPC: no Core Request FACT
+    is reachable (Z1, Z2).
+  - Today no such user exists: every Plus user is an Admin or a granted Dispatcher, both holding the Core role.
+  - If PD-18 is approved, restrict request_id visibility on plus_activities (for example a column-level revoke plus an
+    RPC-only timeline, or a policy that hides request rows without the Core role). Not implemented now (PD-18 out of
+    scope).
+- No contact phone or email in the attribution or the audit: the audit rows carry ids only (A3); the table has no
+  contact-value columns (S3).
+- No unrestricted Core notes or addresses anywhere in Plus (A2, R4; E2E D2).
+- Correction reasons: bounded 3-500 by the RPC (U1) and ≤ 2000 by the CHECK; the UI warns against health details
+  (R1-1). They are NOT approved medical-data storage.
+- No outbound communication, email, SMS, voice or AI provider was added by P2-S3 (no fetch / provider / network code in
+  any P2-S3 file).
+
+======================================================================
+6. NEW AND RERUN TEST RESULTS (after R1-1 / R1-2)
+======================================================================
+Dev database:
+  - plus_request_attributions_tests 64/64 (5 new + Z2).
+  - privilege contract 0/29; rls_adversarial 33 PASS / 0.
+  - plus_opportunities 75/75 (the P2-S1 opportunity-update suite); plus_contacts_activities 82/82.
+  - plus_tasks 58/58; plus_growth_agent 40/40; website_intake_acquisition 52/52.
+  - Concurrency: attribution 4/4, opportunities 0 failures, tasks 4/4, agent 5/5, request_decision 21 / 0 failures.
+  - request_decision_workflow_tests (19 FAIL) and request_mutation_tests (8 FAIL) FAIL ON THE DEV DATABASE ONLY:
+    - Both are fixed-id, run-once suites: "Run once against a fresh `supabase db reset`".
+    - request_mutation fails on duplicate passengers_pkey / transportation_requests_pkey / trips_pkey: fixtures left by
+      earlier runs.
+    - Re-verified on a FRESH isolated reset WITH P2-S3 applied: 60/60 and 39/39. Not a code regression; dev data state
+      only.
+Isolated stack (fresh reset before each suite; P2-S3 migration applied):
+  - privilege_contract 0/29; rls_adversarial 33; request_decision_workflow 60; request_mutation 39;
+  - website_intake_acquisition 52/52. The runner's "real_fail=1" is the known false positive: it greps the PASSING
+    test named "attribution insert FAILS internally"; 0 tests actually fail.
+  - plus_opportunities 75/75; plus_growth_agent 40/40; plus_request_attributions 64/64.
+  - Concurrency: attribution 4, opportunities 6, agent 5, request_decision 21, all PASS.
+  - The upgrade path (P2-S2 head + fictional data -> P2-S3) was proven in NP-P2-S3. The migration is unchanged in R1.
+Browser (local next start -p 3100, rebuilt after R1-1):
+  - NP-P2-S3 32/32; NP-P2-S1 57/57; NP-P2-S2 76/76; P1-OPS-R1 Request decisions 52/52; S4C acquisition 27/27.
+Unit / static: 805/805; TypeScript clean; ESLint clean; next build succeeded.
+NOT passing (pre-existing, unrelated, unchanged by P2-S3; nothing claimed as passed):
+  - Core mutation_concurrency_test CONCURRENCY-1 and request_lifecycle_concurrency_test REQUEST-CONCURRENCY-1. Both fail
+    identically on a database WITHOUT P2-S3 (proven in NP-P2-S3: direct table lock as authenticated); not rerun here.
+  - .tmp-qa/s2e-request-detail-e2e.mjs: a TEST-HARNESS problem, confirmed.
+    - Its Requests 70000000-...-e1..e7 ("Wendell Ashford" etc.) exist in no migration, no supabase/seed.sql, no setup
+      script, no report and no git history (git log -S finds nothing).
+    - They were ad-hoc rows from an earlier phase, since removed from the dev database. The failures are the Core page
+      correctly answering "Request unavailable".
+    - Safe remedy, without touching production code: give the script its own fixture block that inserts clearly
+      labelled fictional Requests / passengers / trips for those ids and deletes them in `finally` (the pattern of the
+      P2 E2Es); or retire it, since its coverage now lives in P1-OPS-R1, S4C, R3 and P2-S3. Owner decision OD5.
+
+======================================================================
+7. EXACT COMPLETE FILE INVENTORY FOR CONTROLLED STAGING
+======================================================================
+New (12):
+  supabase/migrations/20261015130000_plus_request_attributions.sql
+  supabase/tests/plus_request_attributions_tests.sql
+  supabase/tests/plus_request_attributions_concurrency_test.sh
+  src/lib/plus/attribution-core.ts
+  src/lib/plus/attribution-core.test.mjs
+  src/lib/plus/attribution.ts
+  src/app/operations/growth/attribution/actions.ts
+  src/components/growth/RequestGrowthPanel.tsx
+  src/components/growth/RequestGrowthControls.tsx
+  src/components/growth/LinkedRequestsPanel.tsx
+  docs/reports/NP-P2-S3-request-attribution-implementation.txt
+  docs/reports/NP-P2-S3-R1-precommit-security-review.txt
+Modified (15):
+  docs/data/mutation-api.md
+  docs/product/plus-domain-model.md
+  docs/product/plus-product-spec.md
+  docs/security/database-privilege-contract.md
+  docs/security/plus-access-model.md
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/app/operations/requests/[requestId]/page.tsx
+  src/lib/plus/agent-core.test.mjs
+  src/lib/plus/agent-core.ts
+  src/lib/plus/contacts-core.ts
+  src/lib/supabase/database.types.ts
+  supabase/tests/plus_contacts_activities_tests.sql
+  supabase/tests/plus_opportunities_tests.sql
+  supabase/tests/privilege_contract_tests.sql
+EXCLUDE:
+  - .tmp-qa/ (incl. np-p2-s3-request-attribution-e2e.mjs and screens/);
+  - every other untracked docs/reports file;
+  - scratchpad runners and the option-B proposal file.
+If the owner approves option B BEFORE the commit, the inventory gains no new path: the change goes into the P2-S3
+migration and tests, plus the opportunity error copy in src/lib/plus/opportunities-core.ts (one more modified file).
+
+======================================================================
+8. OUTSTANDING OWNER DECISIONS
+======================================================================
+  OD2 (decide BEFORE release). Opportunity contact change while Requests are linked. Recommended: option B (validated
+      above). Alternatives: A (current, divergence allowed) or C (automatic re-pointing; not recommended).
+  OD1. Request facts require the Core role (implemented). Revisit with PD-18. Z2 shows request-history activity rows
+      would also need restriction for growth-only members.
+  OD3. Conversion-key length: keep 8-200 (Core convention, implemented) or tighten to ≤ 100 (not canonical for this
+      column).
+  OD4. A linked Request counts as recorded activity for the Growth Agent (situation key changes). Any use of Core
+      OUTCOMES by the agent is a separate design.
+  OD5. .tmp-qa/s2e-request-detail-e2e.mjs: add its own fixtures, or retire it.
+  - PD-10 and PD-11 remain OPEN. Fictional data only.
+
+======================================================================
+9. READY TO COMMIT?
+======================================================================
+CONDITIONALLY YES.
+- The security review passes; every data-layer security test passes; the inventory is exact.
+- Recommended sequence:
+  1. The owner decides OD2.
+  2. If B is approved, apply the prepared change to the unreleased migration, plus the error copy and the tests, and
+     rerun the affected suites.
+  3. If A is accepted, document it in the domain model and keep test D1.
+  4. Then a controlled commit / PR (nemryn account, section 7 inventory).
+- Committing first and handling OD2 in a follow-up migration is also safe: the gap has no security impact and is pinned
+  by D1. But it would ship the inconsistency to production synthetic data.
+
+======================================================================
+10. PRODUCTION MIGRATION DEPENDENCY AND RECOVERY RISK
+======================================================================
+- Prerequisite: production head exactly 20261015120000 (verified today). The migration depends on:
+  - Core: transportation_requests with its (id, organization_id) key, and has_org_role;
+  - P1-S4: plus_contacts and plus_activities, with their named constraints plus_activities_subject_check /
+    plus_activities_activity_type_check / plus_activities_body_required_check;
+  - P2-S1: plus_opportunities;
+  - the Plus helpers.
+  If option B is adopted, the migration also replaces plus_update_opportunity (P2-S1).
+- One transaction. Replacing the three named CHECKs re-validates all existing activity rows; they qualify (request_id
+  NULL, existing types), as proven by the upgraded isolated run. Apply the migration BEFORE deploying the app. The
+  deployed app (671be2f) does not reference the new objects.
+- Recovery:
+  - Additive objects can be dropped in reverse order, and the P2-S1 forms of the three CHECKs restored, after deleting
+    any request_linked / attribution_changed rows.
+  - With option B: restore the P2-S1 body of plus_update_opportunity from 20261014120000.
+  - Data lost on rollback: Plus attribution and request-history rows only. Core is untouched.
+- Not done: no rollback SQL file has been prepared and the production backup / PITR tier was not inspected. Prepare both
+  in the release step (NP-P1-S1-R2B pattern).
+- Post-migration checks:
+  - privilege contract 0 violations;
+  - RLS on plus_request_attributions;
+  - EXECUTE for the 5 RPCs: authenticated only;
+  - 0 invalid constraints.
+- Smoke on the Pilot Simulation tenant only; no production role mutation.
+
+STOP. Review complete. Nothing staged, committed, pushed, merged, deployed or migrated in production. P2-S4 not started.

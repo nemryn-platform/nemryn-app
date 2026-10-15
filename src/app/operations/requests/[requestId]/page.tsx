@@ -22,6 +22,7 @@ import { RequestLinkedArrangementsPanel } from "@/components/operations/requests
 import { hasRecurringIntent } from "@/lib/operations/request-recurring-prefill-core";
 import { RequestActivityPanel } from "@/components/operations/requests/RequestActivityPanel";
 import { RequestAcquisitionPanel } from "@/components/operations/requests/RequestAcquisitionPanel";
+import { RequestGrowthPanel } from "@/components/growth/RequestGrowthPanel";
 import type { NewTripPassengerOption } from "@/lib/operations/new-trip-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -260,6 +261,8 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             recurringSchedule={request.recurringSchedule}
           />
           <RequestAcquisitionPanel acquisition={acquisition} />
+          {/* NP-P2-S3: Growth link -- rendered only for people Growth admits; null (absent) for everyone else. */}
+          <RequestGrowthPanel organizationId={organization.organizationId} requestId={request.id} timezone={timezone} />
           <RequestActivityPanel events={activityEvents} timezone={timezone} />
         </div>
       </div>

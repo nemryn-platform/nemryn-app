@@ -490,7 +490,7 @@ Migration `20261014120000_plus_private_pay_opportunities.sql`.
 | `plus_get_opportunity(org, id)` | Plus read | **ZW002 for a foreign or unknown id**. Returns `owner_membership_id` (a handle) and `updated_at` (the version token) |
 | `plus_list_opportunity_activities(org, id, limit, offset)` | Plus read | Stage and owner history with from/to stage |
 | `plus_create_opportunity(org, contact_id, title, inquiry_type, service_type, source, source_detail, campaign_code, estimated_value_cents, owner_membership_id)` | Plus write | Creates in `new_inquiry`. The contact must be an **active** contact of the organization (archived gives ZW006; foreign or unknown gives ZW002), locked `FOR NO KEY UPDATE`. The campaign code is lower-cased. Values are validated (ZW006), and the owner must be an eligible writer. The same opportunity by the same person within 30 s is a no-op. Audit: `plus_opportunity_created` |
-| `plus_update_opportunity(org, id, expected_updated_at, contact_id, …, payment_reported_status, owner_membership_id)` | Plus write | **Open only** (ZW004 otherwise). Row lock and version check (ZW003). A new contact must be active. An owner change writes an `owner_changed` activity on the opportunity. Audit: `plus_opportunity_updated`, recording field **names** only |
+| `plus_update_opportunity(org, id, expected_updated_at, contact_id, …, payment_reported_status, owner_membership_id)` | Plus write | **Open only** (ZW004 otherwise). Row lock and version check (ZW003). A new contact must be active. *(NP-P2-S3-R2: the contact cannot change while Requests are linked; ZW004 `linked_requests`.)* An owner change writes an `owner_changed` activity on the opportunity. Audit: `plus_opportunity_updated`, recording field **names** only |
 | `plus_change_opportunity_stage(org, id, expected_updated_at, to_stage, note)` | Plus write | Open stages only (lost or converted gives ZW006). Already in that stage gives `changed=false`. From lost or converted gives ZW004; stale gives ZW003. Writes one `stage_changed` row |
 | `plus_mark_opportunity_lost(org, id, expected_updated_at, reason, note)` | Plus write | Reason from the closed set (`other` needs a note). Already lost gives `changed=false`; converted gives ZW004; stale gives ZW003. Sets `closed_at` |
 | `plus_reopen_opportunity(org, id, expected_updated_at, to_stage, reason)` | Plus write | Lost only (ZW004 otherwise). A reason is required. Stale gives ZW003, so a duplicate reopen is never applied twice. Clears the lost fields and `closed_at` |
@@ -545,3 +545,43 @@ Tests (rollback-only SQL):
 - `supabase/tests/plus_growth_agent_tests.sql`, `supabase/tests/plus_growth_agent_concurrency_test.sh`.
 
 Nothing in P2-S2 sends a message, places a call, changes an opportunity stage, or creates or changes a Core Request, Passenger, Trip or Recurring Care arrangement.
+
+## Nemryn Plus request attribution (NP-P2-S3)
+
+Migration `20261015130000_plus_request_attributions.sql` (local only). This is Growth's first link to Core transportation requests. **Plus references Core Requests; it never creates, changes, accepts, declines, cancels or locks them.**
+
+**`plus_request_attributions`** follows domain model §10. It is class B: authenticated `SELECT` through RLS `plus_can_read(organization_id) AND has_org_role(organization_id, [organization_admin, dispatcher])`, with no client write.
+- `request_id` is the PRIMARY KEY, so a Request is attributed at most once.
+- Dimensions are `contact_id` and `opportunity_id` (at least one), each a composite FK.
+- `link_method`: P2-S3 writes `linked_existing_request` only (the conversion values are reserved for P2-S4).
+- `updated_at` is the version token.
+
+**`plus_activities`** gains `request_id` (composite FK) and the types `request_linked` and `attribution_changed`. A correction's body is its reason.
+
+Every RPC below requires the Core request-read role in addition to the Plus check, and returns ZW002 without it.
+
+| RPC | Access | Contract |
+|---|---|---|
+| `plus_link_request(org, request_id, contact_id, opportunity_id)` | Plus write + Core read | Links an **existing** Request of the organization, in any state; the Request is read, never changed or locked. Rules: <br>• An opportunity fixes the contact to its primary contact; a different contact gives ZW006. <br>• A chosen contact must be active (ZW006); no dimension gives ZW006. <br>• An unknown or foreign Request, contact or opportunity gives ZW002. <br>• The same link again gives `changed=false`; a Request already attributed differently gives **ZW004** (use the correction). <br>Writes one `request_linked` activity and audit `plus_request_linked` (ids only). Returns `plus_request_attribution_result(request_id, contact_id, opportunity_id, updated_at, changed)` |
+| `plus_update_request_attribution(org, request_id, expected_updated_at, contact_id, opportunity_id, reason)` | Plus write + Core read | Reason 3–500 (ZW006). Row lock, then the version check (ZW003). An unattributed, unknown or foreign Request gives ZW002. Same consistency rules, except an unchanged archived contact may stay. Identical dimensions give `changed=false` and no history. Never deletes the row, and never changes `link_method`, `linked_by` or `linked_at`. Writes `attribution_changed` on the new subjects and on any subject the Request moved away from, plus audit `plus_request_attribution_changed` (old and new ids) |
+| `plus_get_request_attribution(org, request_id)` | Plus read + Core read | Contact (name, status), opportunity (title, stage), link method, who linked it and when, and the version. Zero rows when unattributed; ZW002 for an unknown or foreign Request |
+| `plus_list_request_attributions(org, contact_id, opportunity_id, limit, offset)` | Plus read + Core read | Exactly one subject (ZW006 otherwise); a foreign subject gives ZW002. Returns ids and link facts, newest first, 1–100 |
+| `plus_get_request_summaries(org, request_ids[])` | Plus read + Core read | 1–200 ids. **Attributed** Requests only; others are omitted. Returns state, source, service type, created and preferred date, passenger linked (yes/no), the latest decline/cancel reason **code**, trip counts (total / completed / cancelled-or-no-show), first completion, and recurring arrangement count + latest status. Never returns phone, email, addresses, notes or passenger fields |
+
+**Contact consistency (owner-approved option B, NP-P2-S3-R2).**
+- The same migration replaces the P2-S1 `plus_update_opportunity` forward-only, with an identical signature, grants, `SECURITY DEFINER` and `search_path`.
+- The one added rule: changing `p_contact_id` on an opportunity that has linked Requests raises **ZW004 with message `linked_requests`**, and nothing is written.
+  - The check runs after the row lock and the version check, so a stale call still returns ZW003, and a closed opportunity still returns ZW004 `illegal_transition`.
+  - All other fields remain editable.
+  - The app shows: "This opportunity has linked transportation requests. Correct those request links before changing its contact."
+- To change the contact, staff first correct each linked Request with `plus_update_request_attribution` (with a reason), then change the contact, then re-link if needed.
+- Nothing is re-pointed automatically. Bulk reassignment would be a separate reviewed design.
+
+Internal (no client EXECUTE): `_plus_require_core_request_read`, `_plus_resolve_attribution`.
+
+Tests:
+- `supabase/tests/plus_request_attributions_tests.sql` (rollback-only);
+- `supabase/tests/plus_request_attributions_concurrency_test.sh`.
+
+Nothing in P2-S3 creates or changes a Core Request, request event, acquisition snapshot, Passenger, Trip or Recurring Care arrangement, and no opportunity stage changes.
+

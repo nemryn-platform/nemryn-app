@@ -782,6 +782,7 @@ export type Database = {
           opportunity_id: string | null
           organization_id: string
           recorded_at: string
+          request_id: string | null
           to_stage: string | null
         }
         Insert: {
@@ -795,6 +796,7 @@ export type Database = {
           opportunity_id?: string | null
           organization_id: string
           recorded_at?: string
+          request_id?: string | null
           to_stage?: string | null
         }
         Update: {
@@ -808,6 +810,7 @@ export type Database = {
           opportunity_id?: string | null
           organization_id?: string
           recorded_at?: string
+          request_id?: string | null
           to_stage?: string | null
         }
         Relationships: [
@@ -831,6 +834,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_activities_request_fkey"
+            columns: ["request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
+            referencedColumns: ["id", "organization_id"]
           },
         ]
       }
@@ -1055,6 +1065,71 @@ export type Database = {
             columns: ["primary_contact_id", "organization_id"]
             isOneToOne: false
             referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      plus_request_attributions: {
+        Row: {
+          contact_id: string | null
+          conversion_idempotency_key: string | null
+          link_method: string
+          linked_at: string
+          linked_by: string
+          opportunity_id: string | null
+          organization_id: string
+          request_id: string
+          updated_at: string
+        }
+        Insert: {
+          contact_id?: string | null
+          conversion_idempotency_key?: string | null
+          link_method: string
+          linked_at?: string
+          linked_by: string
+          opportunity_id?: string | null
+          organization_id: string
+          request_id: string
+          updated_at?: string
+        }
+        Update: {
+          contact_id?: string | null
+          conversion_idempotency_key?: string | null
+          link_method?: string
+          linked_at?: string
+          linked_by?: string
+          opportunity_id?: string | null
+          organization_id?: string
+          request_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_request_attributions_contact_fkey"
+            columns: ["contact_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_request_attributions_opportunity_fkey"
+            columns: ["opportunity_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_opportunities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_request_attributions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_request_attributions_request_fkey"
+            columns: ["request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
             referencedColumns: ["id", "organization_id"]
           },
         ]
@@ -2385,6 +2460,10 @@ export type Database = {
         Args: { p_contact_id: string; p_organization_id: string }
         Returns: string
       }
+      _plus_require_core_request_read: {
+        Args: { p_organization_id: string }
+        Returns: undefined
+      }
       _plus_require_task_subject: {
         Args: {
           p_contact_id: string
@@ -2392,6 +2471,15 @@ export type Database = {
           p_organization_id: string
         }
         Returns: undefined
+      }
+      _plus_resolve_attribution: {
+        Args: {
+          p_contact_id: string
+          p_keep_contact_id: string
+          p_opportunity_id: string
+          p_organization_id: string
+        }
+        Returns: Record<string, unknown>
       }
       _plus_resolve_owner: {
         Args: { p_organization_id: string; p_owner_membership_id: string }
@@ -3496,6 +3584,41 @@ export type Database = {
           updated_at: string
         }[]
       }
+      plus_get_request_attribution: {
+        Args: { p_organization_id: string; p_request_id: string }
+        Returns: {
+          contact_id: string
+          contact_name: string
+          contact_status: string
+          link_method: string
+          linked_at: string
+          linked_by_name: string
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          request_id: string
+          updated_at: string
+        }[]
+      }
+      plus_get_request_summaries: {
+        Args: { p_organization_id: string; p_request_ids: string[] }
+        Returns: {
+          arrangement_count: number
+          arrangement_status: string
+          created_at: string
+          decision_reason_code: string
+          first_completed_at: string
+          passenger_linked: boolean
+          preferred_date: string
+          request_id: string
+          service_type: string
+          source: string
+          state: string
+          trips_cancelled: number
+          trips_completed: number
+          trips_total: number
+        }[]
+      }
       plus_get_task: {
         Args: { p_organization_id: string; p_task_id: string }
         Returns: {
@@ -3551,6 +3674,21 @@ export type Database = {
           stage_quote_accepted: number
           stage_quote_sent: number
         }[]
+      }
+      plus_link_request: {
+        Args: {
+          p_contact_id: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_request_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_request_attribution_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_request_attribution_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       plus_list_agent_recommendations: {
         Args: {
@@ -3724,6 +3862,24 @@ export type Database = {
           to_stage: string
         }[]
       }
+      plus_list_request_attributions: {
+        Args: {
+          p_contact_id: string
+          p_limit: number
+          p_offset: number
+          p_opportunity_id: string
+          p_organization_id: string
+        }
+        Returns: {
+          contact_id: string
+          link_method: string
+          linked_at: string
+          opportunity_id: string
+          opportunity_title: string
+          request_id: string
+          total_count: number
+        }[]
+      }
       plus_list_tasks: {
         Args: {
           p_assignee_membership_id: string
@@ -3884,6 +4040,23 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_update_request_attribution: {
+        Args: {
+          p_contact_id: string
+          p_expected_updated_at: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_reason: string
+          p_request_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_request_attribution_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_request_attribution_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4563,6 +4736,13 @@ export type Database = {
       plus_opportunity_write_result: {
         opportunity_id: string | null
         stage: string | null
+        updated_at: string | null
+        changed: boolean | null
+      }
+      plus_request_attribution_result: {
+        request_id: string | null
+        contact_id: string | null
+        opportunity_id: string | null
         updated_at: string | null
         changed: boolean | null
       }

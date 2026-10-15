@@ -127,3 +127,15 @@ test("error copy: plain words, no codes", () => {
   }
   assert.match(o.opportunityErrorMessage("ZW006", "stage"), /Converted isn't available yet/);
 });
+
+test("NP-P2-S3-R2: a contact change refused for linked Requests gets its own message; closed stays closed", () => {
+  assert.equal(
+    o.opportunityErrorMessage("ZW004", "save", o.LINKED_REQUESTS_REASON),
+    "This opportunity has linked transportation requests. Correct those request links before changing its contact.",
+  );
+  assert.equal(o.LINKED_REQUESTS_REASON, "linked_requests", "matches the database exception message");
+  assert.match(o.opportunityErrorMessage("ZW004", "save"), /This opportunity is closed/);
+  assert.match(o.opportunityErrorMessage("ZW004", "save", "illegal_transition"), /This opportunity is closed/);
+  assert.match(o.opportunityErrorMessage("ZW004", "reopen", o.LINKED_REQUESTS_REASON), /Only a lost opportunity can be reopened/);
+  assert.doesNotMatch(o.opportunityErrorMessage("ZW004", "stage", o.LINKED_REQUESTS_REASON), /linked transportation requests/);
+});

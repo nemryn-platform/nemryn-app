@@ -65,7 +65,9 @@ c_tables(tbl) as (values
   -- NP-P2-S2 tasks (SELECT via RLS plus_can_read; writes through RPCs only)
   ('plus_tasks'),
   -- NP-P2-S2 Growth Agent review queue (SELECT via RLS plus_can_read; writes through RPCs only)
-  ('plus_agent_recommendations')
+  ('plus_agent_recommendations'),
+  -- NP-P2-S3 request attribution (SELECT via RLS plus_can_read AND the Core request-read role; writes through RPCs only)
+  ('plus_request_attributions')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -102,7 +104,8 @@ c_auth_tbl(tbl, priv) as (values
   ('plus_activities', 'SELECT'),
   ('plus_opportunities', 'SELECT'),
   ('plus_tasks', 'SELECT'),
-  ('plus_agent_recommendations', 'SELECT')
+  ('plus_agent_recommendations', 'SELECT'),
+  ('plus_request_attributions', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -315,7 +318,15 @@ c_fn(sig, roles) as (values
   ('plus_dismiss_agent_recommendation(uuid,uuid,timestamp with time zone,text)', 'u'),
   ('plus_growth_dashboard(uuid)', 'u'),
   ('plus_list_attention_opportunities(uuid,integer)', 'u'),
-  ('plus_list_recent_activities(uuid,integer)', 'u')
+  ('plus_list_recent_activities(uuid,integer)', 'u'),
+  -- NP-P2-S3 request attribution
+  ('_plus_require_core_request_read(uuid)', ''),
+  ('_plus_resolve_attribution(uuid,uuid,uuid,uuid)', ''),
+  ('plus_link_request(uuid,uuid,uuid,uuid)', 'u'),
+  ('plus_update_request_attribution(uuid,uuid,timestamp with time zone,uuid,uuid,text)', 'u'),
+  ('plus_get_request_attribution(uuid,uuid)', 'u'),
+  ('plus_list_request_attributions(uuid,uuid,uuid,integer,integer)', 'u'),
+  ('plus_get_request_summaries(uuid,uuid[])', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

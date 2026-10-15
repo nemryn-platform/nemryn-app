@@ -1,0 +1,506 @@
+NP-P2-S3 -- REQUEST ATTRIBUTION & GROWTH-TO-OPERATIONS LINKING -- IMPLEMENTATION REPORT
+Date: 2026-10-15
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing staged, committed, pushed, PR'd, merged or deployed.
+- No production migration and no production write.
+- Fictional data only. P2-S4 not started.
+Central rule honoured: Growth REFERENCES existing Core transportation requests. It never creates, modifies, accepts,
+declines, cancels or locks them.
+
+======================================================================
+1. VERIFIED P2-S2 PRODUCTION BASELINE (read-only)
+======================================================================
+- GitHub: account nemryn (isolated GH_CONFIG_DIR, active); repository nemryn-platform/nemryn-app.
+- PR #7 (np-p2-s2-growth-workspace-agent-foundation): MERGED 2026-10-15T11:46:42Z, merge commit
+  671be2ff8f8b22aecb5e0a505004bc74c6d3f2ce. Its P2-S2 commit 95e774a is an ancestor of origin/main.
+- origin/main: 671be2f. The P2-S2-R1 approval-lock fix ("NP-P2-S2-R1" in 20261015110000) is present in main.
+- Vercel Production: deployment 7091678175, sha 671be2f, state success. app.nemryn.com/sw.js BUILD = "671be2ff8f8b".
+- Supabase linked project: wyocbivzgrbekuyqdfts.
+  - `supabase migration list --linked`: 20261015100000, 20261015110000 and 20261015120000 are applied remotely.
+  - The remote head is 20261015120000.
+- Working tree: tracked files clean, nothing staged.
+- RESULT: every release prerequisite matched. No discrepancy.
+- Not verifiable read-only: that the production function body equals the R1 file. Only the version rows were compared.
+
+======================================================================
+2. GIT BRANCH AND ANCESTRY
+======================================================================
+- np-p2-s3-request-attribution, created from origin/main 671be2f (= the verified P2-S2 merge). Not stacked.
+- No commit was made. Unrelated untracked reports and .tmp-qa files were preserved; nothing was reset or cleaned.
+
+======================================================================
+3. MIGRATION FILENAME AND SCHEMA
+======================================================================
+supabase/migrations/20261015130000_plus_request_attributions.sql (forward-only, additive, 518 lines). No earlier
+migration was edited.
+- Applied locally:
+  - dev database: head 20261015130000; every constraint validated;
+  - isolated stack: both from zero and as an upgrade (section 13).
+
+public.plus_request_attributions (domain model section 10; PD-06):
+  - Columns:
+    - request_id: uuid, PRIMARY KEY;
+    - organization_id;
+    - contact_id, opportunity_id: nullable, independent dimensions;
+    - link_method;
+    - conversion_idempotency_key: nullable, reserved;
+    - linked_by, linked_at, updated_at.
+  - NOT created: referral_account_id (P3-S1), plus_accounts, facility attribution.
+  - Triggers: set_updated_at, prevent_organization_id_change.
+  - RLS on; REVOKE ALL from public/anon/authenticated/service_role; GRANT SELECT to authenticated.
+  - One SELECT policy: plus_can_read(organization_id) AND has_org_role(organization_id, [organization_admin,
+    dispatcher]). The second half is the exact transportation_requests read policy.
+
+plus_activities (additive; every S4 / P2-S1 / P2-S2 row validates unchanged):
+  - + request_id: uuid, with a composite FK to transportation_requests.
+  - plus_activities_subject_check replaced with num_nonnulls(contact_id, opportunity_id, request_id) >= 1.
+  - plus_activities_activity_type_check replaced: + request_linked, attribution_changed.
+  - + plus_activities_request_subject_check: those two types require request_id.
+  - plus_activities_body_required_check replaced: attribution_changed requires a body (the staff reason).
+  - + index (organization_id, request_id, occurred_at desc, recorded_at desc) where request_id is not null.
+
+======================================================================
+4. FOREIGN KEYS AND CONSTRAINTS
+======================================================================
+Verified BEFORE writing SQL: transportation_requests has `transportation_requests_id_organization_id_key UNIQUE (id,
+organization_id)`. Its read policy is has_org_role(organization_id, [organization_admin, dispatcher]).
+  - plus_request_attributions_request_fkey: (request_id, organization_id) -> transportation_requests (id, organization_id).
+  - plus_request_attributions_contact_fkey: (contact_id, organization_id) -> plus_contacts (id, organization_id).
+  - plus_request_attributions_opportunity_fkey: (opportunity_id, organization_id) -> plus_opportunities (id, organization_id).
+  - plus_request_attributions_subject_check: num_nonnulls(contact_id, opportunity_id) >= 1.
+  - plus_request_attributions_link_method_check: converted_from_opportunity | linked_existing_request | rebooking.
+  - plus_request_attributions_idempotency_check: the key is allowed only for converted_from_opportunity / rebooking
+    (8-200 characters).
+  - Indexes:
+    - PK request_id, so a Request has at most one attribution;
+    - partial unique (organization_id, conversion_idempotency_key);
+    - partial (organization_id, contact_id, linked_at desc);
+    - partial (organization_id, opportunity_id, linked_at desc).
+  - plus_activities_request_fkey: (request_id, organization_id) -> transportation_requests (id, organization_id).
+  - SQL S4/S6 prove every FK target and that Org A rows can never reference Org B Requests, contacts or opportunities.
+
+======================================================================
+5. NEW RPC INVENTORY
+======================================================================
+All are SECURITY DEFINER with search_path = public, pg_temp. Every request-scoped RPC requires Plus AND the Core
+request-read role (ZW002 without it).
+  - plus_link_request(org, request_id, contact_id, opportunity_id) [Plus write]
+    -> plus_request_attribution_result(request_id, contact_id, opportunity_id, updated_at, changed)
+  - plus_update_request_attribution(org, request_id, expected_updated_at, contact_id, opportunity_id, reason)
+    [Plus write] -> the same result type.
+  - plus_get_request_attribution(org, request_id) [Plus read]: zero rows when unattributed.
+  - plus_list_request_attributions(org, contact_id, opportunity_id, limit, offset) [Plus read]: exactly one subject.
+  - plus_get_request_summaries(org, request_ids[1-200]) [Plus read]: attributed Requests only.
+  - Internal, no client EXECUTE (REVOKE ALL incl. service_role):
+    - _plus_require_core_request_read(org);
+    - _plus_resolve_attribution(org, contact, opportunity, keep_contact).
+  - Privilege contract: 0 violations of 29. The table is class B; the 5 RPCs are 'u' (authenticated only); the 2
+    internals have no roles.
+  - Reused, unchanged: plus_list_contacts (picker search, active only); plus_list_opportunities (the chosen contact's
+    opportunities).
+Error contract:
+  - ZW001: read-only or read grant; no uid.
+  - ZW002: unknown or foreign Request / contact / opportunity, no Plus, or no Core role. Indistinguishable.
+  - ZW003: stale correction.
+  - ZW004: Request already attributed differently.
+  - ZW006: invalid pair, archived contact, no dimension, reason length, list bounds.
+
+======================================================================
+6. ATTRIBUTION CONSISTENCY RULES
+======================================================================
+  1. One Core Request has at most one attribution (PK). Requests without one remain fully valid; nothing in Core
+     references Plus.
+  2. The Request must exist in the caller's organization. It may be in any state (pending / accepted / declined /
+     cancelled) and is never changed. A link records the relationship; it does not rewrite history.
+  3. The browser-supplied organization id is never trusted. The RPCs check membership, grant and role for THAT id,
+     and the server action also binds it to the session workspace.
+  4. Opportunity given: it must be a private-pay opportunity of the organization, in any stage. The contact dimension
+     is ALWAYS its primary contact; a different contact gives ZW006.
+  5. Contact only: it must be an ACTIVE contact of the organization (archived gives ZW006). A correction may keep an
+     unchanged archived contact (history).
+  6. Nothing is created or merged: no contact, opportunity, Request, Passenger or Trip. The picker searches existing
+     active contacts only.
+  7. The same link repeated returns changed=false (double click safe; concurrent proven). A different link on an
+     attributed Request gives ZW004, pointing to "Correct link".
+  8. Corrections:
+     - require a reason (3-500), a row lock and the version (ZW003);
+     - never delete the row;
+     - never change link_method / linked_by / linked_at, so a manual correction never impersonates a conversion;
+     - identical dimensions give changed=false with no history.
+  9. Linking is NOT conversion: no opportunity stage changes (SQL L12, G2; E2E B6, D4). 'converted' remains P2-S4.
+  10. Contact and opportunity rows are locked FOR SHARE during a link or correction, so they cannot be archived or
+      re-pointed underneath it. The Core Request row is NEVER locked (SQL K3).
+
+======================================================================
+7. CORE REQUEST PERMISSIONS
+======================================================================
+- Request Hub access is unchanged: requireOperationsAccess (Admin, Dispatcher). Driver -> /driver.
+- Every attribution read and write requires:
+  - Plus: plus_can_read; plus _require_plus_write for mutations;
+  - AND the Core request-read role, has_org_role(org, [organization_admin, dispatcher]): the same expression as the
+    transportation_requests SELECT policy. SQL S1 asserts the policy contains it verbatim.
+- Today every Plus user (Admin, or a Dispatcher with a grant) holds that Core role. SQL Z1 simulates a Plus WRITER
+  WITHOUT the Core role (inside the rolled-back transaction) and proves every read and write returns ZW002 / 0 rows.
+- Summaries expose only the access-model allow-list:
+  - state, source, service type, created / preferred date, passenger linked (yes/no);
+  - the latest decline / cancel reason CODE;
+  - trip counts (total / completed / cancelled or no-show), first completion;
+  - recurring arrangement count + latest status.
+  Never: requester phone or email, pickup or destination, assistance or additional notes, reason_note, trip
+  instructions or notes, or passenger fields (SQL R4 checks the column list and the function source).
+- Status is derived LIVE from Core at read time. There is no copy and no synchronisation trigger: no trigger on
+  transportation_requests mentions Plus (SQL R5; E2E D3).
+
+======================================================================
+8. REQUEST HUB GROWTH PANEL
+======================================================================
+src/components/growth/RequestGrowthPanel.tsx (server) and RequestGrowthControls.tsx (client), inserted in
+src/app/operations/requests/[requestId]/page.tsx directly after RequestAcquisitionPanel. No other line of that page
+changed.
+- Visibility: getPlusAccessState (non-redirecting, fails closed) and canOpenGrowth.
+  - Without Plus access the component returns null: no heading, placeholder, disabled button or data (E2E A3, A4, E4).
+- Unattributed:
+  - "Not linked to a Growth contact or opportunity."
+  - Writers get "Track in Plus": search existing active contacts, then an optional "Opportunity" select listing only
+    that contact's private-pay opportunities with their stage, then "Link request".
+  - The copy states the link doesn't change the request, its decision or trips, nor mark the opportunity converted.
+  - No match: "No active contact matches. Add the person in Growth → Contacts first; nothing is created from here."
+- Attributed:
+  - the contact (link to Growth, Archived badge if archived);
+  - the opportunity (link + stage) or "None";
+  - "Linked to an existing request by <name>, <time>".
+  - Writers get "Correct link" (same picker, required reason).
+- Read-only (read grant, or read-only Plus): the details with no controls (E2E A5, E1, E3).
+- Unchanged: Accept / Decline / Cancel controls, passenger linking, trip and recurring creation, dispatch, the
+  existing acquisition section, Core navigation and the shell (E2E A2; the P1-OPS-R1 decision E2E 52/52; the S4C
+  acquisition E2E 27/27).
+- Server actions (src/app/operations/growth/attribution/actions.ts) re-check requirePlusAccess, the posted
+  organization against the session workspace, and write capability. The RPC remains the authority.
+- Screenshot: .tmp-qa/screens/p2s3-request-growth-panel.png (local, untracked, fictional).
+
+======================================================================
+9. CONTACT AND OPPORTUNITY DETAIL CHANGES
+======================================================================
+src/components/growth/LinkedRequestsPanel.tsx, inserted after the Tasks panel on both detail pages
+(data-testid contact-requests / opportunity-requests).
+- Each linked Request shows:
+  - its real Core status badge (Pending / Accepted / Declined / Cancelled);
+  - the service type and logged time, linked to Operations;
+  - an outcome line from Core facts ("Waiting for an Operations decision", "3 trips · 2 completed", "recurring care
+    active") plus the decline / cancel reason label;
+  - the link method; on contacts, the opportunity title.
+- It never infers status from the opportunity stage, never says "converted" or "sale", and copies no Core text
+  (E2E D1-D4).
+- Empty state: "No requests linked yet. Link one from Operations → Requests (“Track in Plus”)."
+- Many Requests per contact over time are supported. A repeat booking does not create a new opportunity.
+
+======================================================================
+10. ACTIVITY TIMELINE CHANGES
+======================================================================
+- request_linked: one row with request_id plus the linked contact and opportunity. Body NULL: no Core text copied.
+  Labelled "Operations request linked" on contact, opportunity and dashboard timelines.
+- attribution_changed:
+  - one row on the NEW subjects, plus one row on any contact or opportunity the Request moved AWAY from, so both
+    timelines stay truthful and an unchanged contact gets a single row (SQL U5, U7, U9);
+  - body = the staff reason; labelled "Request link corrected".
+- Append-only is preserved: no client write, and no Plus function updates or deletes plus_activities (SQL A1).
+- Old and new ids go to audit_events only (plus_request_linked, plus_request_attribution_changed), with ids only:
+  no names, phone, email or addresses (SQL A3). audit_events stays separate from the customer timeline; no JSON
+  column was added to plus_activities.
+- Growth Agent compatibility:
+  - the agent never reads or writes attributions or transportation_requests (SQL G1);
+  - a request_linked row counts as "recorded activity" for "no recent recorded activity" and changes the situation
+    key (a pending recommendation is superseded and re-evaluated on the next review). It is NOT an interaction and
+    NOT treated as a conversion;
+  - to keep the explanation truthful, the "new inquiry waiting" reason now reads "no note, call, email or meeting
+    recorded since it came in" instead of "nothing recorded". Wording only; unit-tested;
+  - review, approval and history are intact: the P2-S2 SQL suites, concurrency tests and 76-check E2E all pass.
+
+======================================================================
+11. TENANT-ISOLATION TEST EVIDENCE (supabase/tests/plus_request_attributions_tests.sql -- 59/59 PASS)
+======================================================================
+Brief section 9 -> tests:
+  - cross-tenant Core Request lookup: L8, P11, E2E E4/E5;
+  - cross-tenant contact / opportunity: L9, U6, S6;
+  - mixed-tenant id injection: L9, L10;
+  - valid Request + invalid contact: L9;
+  - valid contact + mismatched opportunity: L6, U6;
+  - Request does not exist: L8, U8, R1;
+  - already linked: L4 (ZW004), E2E B7;
+  - stale version: U2, E2E C5;
+  - revoked Dispatcher grant: P3;
+  - Plus read vs write: P1, P2;
+  - expired Plus: P7;
+  - locked Plus: P8;
+  - suspended organization: P10;
+  - Driver refusal: P5;
+  - Platform Admin without membership: P5;
+  - Plus without Core request access: Z1 (simulated, rolled back);
+  - append-only: A1;
+  - request_acquisition_attributions unchanged: K1;
+  - no Core Request mutation: L11, K1, K2, K3;
+  - no Passenger / Trip / Recurring Care change: K1.
+Also covered:
+  - schema and privileges: S1-S9;
+  - link: L1-L12;
+  - correction: U1-U10;
+  - reads and minimisation: R1-R7;
+  - audit minimisation: A2, A3;
+  - Agent: G1, G2;
+  - multi-org: P12.
+Existing suites updated deliberately: their forward-looking checks asserted that request_id and the Core FK did not
+exist yet.
+  - plus_contacts_activities_tests.sql K7 / K8 / K9: the request_id column, the transportation_requests FK target and
+    the widened subject check.
+  - plus_opportunities_tests.sql Q5 / Q9: plus_request_attributions now exists; the subject check accepts the widened
+    form.
+  - Both are back to 82/82 and 75/75.
+
+======================================================================
+12. CONCURRENCY TEST EVIDENCE (supabase/tests/plus_request_attributions_concurrency_test.sh -- 4/4 PASS)
+======================================================================
+Separate psql sessions, each holding locks ~1 s:
+  - CONC-A1: two different links of one Request at once -> 1 row, 1 request_linked; the other ZW004.
+  - CONC-A2: the same link twice at once -> 1 row, 1 history entry; the other changed=false.
+  - CONC-A3: two corrections from one version -> one applies; the other ZW003; history written once.
+  - CONC-A4: a link racing a Core Accept on the same Request -> both succeed. The Request is accepted by Core and
+    the attribution exists. Plus never blocks or alters a Core decision.
+P2-S2 concurrency scripts after the migration: tasks 4/4 and agent 5/5 (G1-G5), dev and isolated.
+
+======================================================================
+13. CORE REQUEST REGRESSION EVIDENCE
+======================================================================
+Isolated stack (separate project NemrynS1Iso; database VERIFIED fresh before each suite):
+  (a) UPGRADE path: P2-S3 on a SEEDED P2-S2 head 20261015120000.
+      - Seed: an active Plus entitlement, a contact, a qualified opportunity, a note and a stage_changed activity, an
+        open task, and a pending Growth Agent recommendation.
+      - `supabase migration up`: 20261015130000 applied, rc 0.
+      - Preserved: contact / opportunity / activities / task / recommendation = 1/1/2/1/1; 0 invalid constraints.
+      - Linking an existing seed Request to the old opportunity on the upgraded data works (changed = t).
+      - On the upgraded database:
+        - plus_request_attributions 59/59, plus_tasks 58/58, plus_growth_agent 40/40, plus_opportunities 75/75,
+          plus_contacts_activities 82/82;
+        - privilege contract 0/29;
+        - concurrency: attribution 4/4, tasks 4/4, agent 5/5.
+  (b) FRESH path: a reset from zero before EACH suite (database verified fresh), 29 suites, all 0 real failures.
+      Core security and Request:
+        - privilege_contract 0/29, platform_admin_foundation 58, rls_adversarial 33, security_definer_exposure 20,
+          function_privilege 7, client_privilege_surface 21, mutation_privilege 7;
+        - request_decision_workflow 60, request_mutation 39, request_mutation_privilege 23,
+          request_mutation_atomicity 4;
+        - request_trip_passenger_integrity 11, request_recurring_care 42;
+        - create_trip 20, create_trip_atomicity 2, create_trip_privilege 5, mutation_authorization 4;
+        - public_request_intake 42, public_intake_rate_limit 8, website_intake_acquisition 52/52. The runner's
+          "real_fail=1" there is a false positive: it matched the PASSING test named "attribution insert FAILS
+          internally ...".
+      Plus:
+        - plus_entitlement 150, plus_access_helpers 170, plus_entitlement_versioned 17, plus_member_grants 76;
+        - plus_contacts_activities 82, plus_opportunities 75, plus_tasks 58, plus_growth_agent 40;
+        - plus_request_attributions 59 (new).
+  (c) CONCURRENCY (fresh):
+      - PASS: attribution 4, tasks 4, agent 5, opportunities 6, contacts 4, member_grants 6, entitlement_versioned 4,
+        entitlement 5, platform_lifecycle 2, request_decision 21, public_request_intake 1,
+        website_intake_acquisition 1.
+      - PRE-EXISTING, UNRELATED (identified separately; no Core permission changed):
+        - request_lifecycle_concurrency_test REQUEST-CONCURRENCY-1 and mutation_concurrency_test CONCURRENCY-1 both
+          FAIL.
+        - BOTH fail identically on a database reset to the P2-S2 head WITHOUT the P2-S3 migration
+          (plus_request_attributions absent): elapsed_B ~0.13 s, no blocking observed.
+        - Both take a direct table lock as `authenticated`, which the retired direct-write privileges no longer
+          permit. This is the same harness pattern recorded as K4 / I9 in NP-P2-S1 / NP-P1-S4.
+Browser (local next start -p 3100):
+  - P1-OPS-R1 Request decision E2E (Accept / Decline / Cancel, Hub, Request detail): 52 PASS, 0 FAIL.
+  - P1-PILOT-S4C acquisition E2E (the panel adjacent to Growth): 27 PASS, 0 FAIL.
+  - P1-PILOT-R3 Request -> Recurring Care E2E: 57 PASS, 0 FAIL. This was a rerun: the first run had no server
+    because the S4C script `pkill`s and later stops its own `next start -p 3100`. That is a harness ordering effect,
+    not a defect.
+  - P1-PILOT-UX1 header and day sheet E2E: 46 PASS, 0 FAIL (rerun for the same reason).
+  - PRE-EXISTING HARNESS DEPENDENCY, reported separately and not caused by P2-S3: .tmp-qa/s2e-request-detail-e2e.mjs
+    gave 15 PASS, 27 FAIL.
+    - It hard-codes ad-hoc fixture Requests 70000000-...-e1..e7 that are not in supabase/seed.sql or any setup
+      script. They no longer exist in the dev database (only 2 of the 70000000-... ids remain).
+    - Every failure is the Core page correctly showing "Request unavailable" for a missing id.
+    - Its queue -> detail navigation checks pass.
+    - No Core permission or code was changed to satisfy it. Request detail behaviour is covered by the P1-OPS-R1,
+      S4C, R3 and P2-S3 E2Es above.
+    - Recommendation: give that script its own fixture setup or retire it (owner decision).
+
+======================================================================
+14. EXISTING PLUS REGRESSION RESULTS
+======================================================================
+SQL (dev, after the migration):
+  - plus_entitlement 150/150, plus_access_helpers 170/170, plus_entitlement_versioned 17/17, plus_member_grants 76/76;
+  - plus_contacts_activities 82/82, plus_opportunities 75/75, plus_tasks 58/58, plus_growth_agent 40/40;
+  - privilege contract 0/29.
+Browser E2E:
+  - NP-P1-S1 45/45; NP-P1-S2 49/49; NP-P1-S3 57/57; NP-P1-S4 50/50;
+  - NP-P2-S1 57/57; NP-P2-S2 76/76.
+  All 0 FAIL.
+Unit: 805/805 (6 new attribution-core tests and 1 new agent wording test). TypeScript clean. ESLint clean. next build
+succeeded.
+
+======================================================================
+15. BROWSER E2E RESULTS (.tmp-qa/np-p2-s3-request-attribution-e2e.mjs -- 32 PASS, 0 FAIL)
+======================================================================
+  - A. Visibility (A1-A5):
+    - an Admin with Plus sees the panel and "Track in Plus";
+    - Core Accept / Decline still present;
+    - no Plus -> panel absent, page intact;
+    - Dispatcher without a grant -> absent;
+    - read grant -> read-only.
+  - B. Track in Plus (B1-B7):
+    - no-match message, nothing created;
+    - search finds the contact; only their opportunities are offered, with stage;
+    - linked contact + opportunity, linked_existing_request;
+    - Core Request state, version and passenger untouched;
+    - panel shows links and "Linked to an existing request by …";
+    - opportunity stage unchanged;
+    - a second, different link -> ZW004.
+  - C. Correction (C1-C5): reason required (server); corrected with link method unchanged; truthful history on both
+    contacts; Request untouched; stale correction refused (ZW003).
+  - D. Growth side (D1-D5):
+    - Contact lists both Requests with real Core status and reason label;
+    - no Core text leaks;
+    - a Core Accept shows immediately;
+    - Opportunity lists its Request and stays New inquiry;
+    - the correction reason appears on the timeline.
+  - E. Permissions and tenancy (E1-E5):
+    - read grant -> read-only, and the database refuses with ZW001;
+    - expired Plus -> read-only;
+    - Org B cannot open Org A's Request (Core "unavailable", no panel);
+    - Org B cannot link to Org A contacts or read Org A summaries (ZW002).
+  - F. Boundary (F1-F4):
+    - no Passenger, Trip, Recurring Care, acquisition or Request created or removed;
+    - the only Core change is the deliberate Accept made by Core;
+    - the Agent still runs and creates no attribution;
+    - no Send / Call / Convert control.
+  - Cleanup: every fixture removed (0 left).
+  - Screenshots (local, untracked): .tmp-qa/screens/p2s3-request-growth-panel.png and
+    p2s3-opportunity-linked-requests.png.
+
+======================================================================
+16. COMPLETE CHANGED-FILE INVENTORY (uncommitted; nothing staged)
+======================================================================
+New (11):
+  supabase/migrations/20261015130000_plus_request_attributions.sql
+  supabase/tests/plus_request_attributions_tests.sql
+  supabase/tests/plus_request_attributions_concurrency_test.sh
+  src/lib/plus/attribution-core.ts
+  src/lib/plus/attribution-core.test.mjs
+  src/lib/plus/attribution.ts
+  src/app/operations/growth/attribution/actions.ts
+  src/components/growth/RequestGrowthPanel.tsx
+  src/components/growth/RequestGrowthControls.tsx
+  src/components/growth/LinkedRequestsPanel.tsx
+  docs/reports/NP-P2-S3-request-attribution-implementation.txt (this report)
+Modified (15):
+  - src/app/operations/requests/[requestId]/page.tsx: one import and one panel line after RequestAcquisitionPanel.
+  - src/app/operations/growth/contacts/[contactId]/page.tsx and src/app/operations/growth/pipeline/[opportunityId]/page.tsx:
+    the Linked requests panel.
+  - src/lib/plus/contacts-core.ts: the two activity labels.
+  - src/lib/plus/agent-core.ts: "new inquiry waiting" reason wording. src/lib/plus/agent-core.test.mjs: one assertion.
+  - src/lib/supabase/database.types.ts: regenerated; 180 additions only.
+  - supabase/tests/privilege_contract_tests.sql: P2-S3 registrations.
+  - supabase/tests/plus_contacts_activities_tests.sql (K7-K9) and plus_opportunities_tests.sql (Q5, Q9): the
+    forward-looking checks.
+  - docs/product/plus-product-spec.md: section 7.4 notes and the roadmap row.
+  - docs/product/plus-domain-model.md: section 7 and section 10 notes.
+  - docs/security/plus-access-model.md: P2-S3 status, the Core-role decision, T32.
+  - docs/data/mutation-api.md: the new P2-S3 section.
+  - docs/security/database-privilege-contract.md: the P2-S3 additions.
+Local QA only (untracked, not for commit): .tmp-qa/np-p2-s3-request-attribution-e2e.mjs, .tmp-qa/screens/p2s3-*.png;
+the scratchpad isolated runner run-p2s3.sh.
+
+======================================================================
+17. KNOWN LIMITATIONS AND OWNER DECISIONS
+======================================================================
+Owner decisions:
+  OD1. Request facts require the Core role. The summaries, the attribution reads and the table's RLS require both Plus
+       and the Core request-read role, as this brief directs. This is stricter than the access-model note for
+       growth-only members (PD-18, still PROPOSED). If PD-18 is approved, decide whether growth-only members may see
+       the minimum-necessary summaries without the Core role.
+  OD2. Opportunity contact changes after linking. P2-S1's plus_update_opportunity can move an OPEN opportunity to a
+       different contact. An existing attribution keeps the contact it was linked with until staff correct it.
+       Options: (a) accept as history (current); (b) block the opportunity's contact change while attributions exist;
+       (c) re-point attributions automatically. (b) and (c) would change a P2-S1 function in a later migration.
+  OD3. Reserved link_method values. The CHECK already admits converted_from_opportunity and rebooking (no P2-S3 RPC
+       writes them), so P2-S4 needs no constraint change. Confirm or prefer adding them in P2-S4.
+  OD4. A linked Request supersedes Growth Agent situations. A request_linked activity counts as recorded activity for
+       the agent's "no recent activity" signal and changes the situation key. Considering verified Core OUTCOMES in
+       the agent remains a separate, reviewed design.
+  OD5. .tmp-qa/s2e-request-detail-e2e.mjs depends on missing ad-hoc fixtures (section 13): re-seed or retire it.
+  - PD-10 and PD-11 remain OPEN. No real data.
+Limitations:
+  - The "Track in Plus" search returns up to 20 active contacts. There is no inline contact creation, by design.
+  - Linked requests show up to 50 per contact or opportunity, with no pagination UI.
+  - The existing contact and opportunity timeline RPCs do not return request_id. Timeline rows say
+    "Operations request linked" / "Request link corrected" with the reason; the Linked requests panel carries the
+    links.
+  - No attribution UI in the Request Hub queue (list), and no reporting or counting (P2-S8).
+
+======================================================================
+18. EXPLICIT CONFIRMATION -- NO CORE CHANGE BY ATTRIBUTION
+======================================================================
+CONFIRMED.
+- No Core transportation request, request event, request_acquisition_attributions row, Passenger, Trip, trip
+  assignment or Recurring Care arrangement is created, changed, deleted or locked by any P2-S3 function, action or UI.
+- Evidence:
+  - SQL K1: a fingerprint of all of those tables is unchanged across every link and correction;
+  - SQL L11: request state and version are unchanged;
+  - SQL K2: no Plus function writes a Core table, and no Core function or policy references Plus;
+  - SQL K3: no Plus function locks a Core row;
+  - E2E B4, C4, F1, F2;
+  - CONC-A4: a Core Accept racing a link succeeds normally.
+- The only Core change in the E2E run was a deliberate Accept performed through Core's own RPC.
+- No Core object (table, function, policy or grant) was modified by the migration.
+
+======================================================================
+19. READY FOR CONTROLLED GIT COMMIT?
+======================================================================
+YES -- ready for a controlled Git commit and PR, as a separate, owner-approved step (e.g. NP-P2-S3-R1), using the
+section 16 inventory exactly and the nemryn GitHub account.
+- All data-layer security tests pass on dev, from zero and upgraded:
+  - new suite 59/59; concurrency 4/4; privilege contract 0/29;
+  - every Plus and Core Request suite.
+- Browser E2E pass: P2-S3 32/32, every Plus E2E, and the Core decision / acquisition / R3 / UX1 suites.
+- Recommended before the commit: the owner reviews OD1-OD5, and an independent pre-commit security review like
+  NP-P2-S2-R1.
+- Excluded from the commit: .tmp-qa/ and screenshots.
+- Not ready for real customer data: PD-10 / PD-11 gate.
+
+======================================================================
+20. PRODUCTION MIGRATION AND RECOVERY CONSIDERATIONS
+======================================================================
+- Prerequisite: the production head must be exactly 20261015120000 (verified today). The migration depends on:
+  - Core: transportation_requests and its (id, organization_id) key; has_org_role;
+  - P1-S4: plus_contacts and plus_activities, with their named constraints plus_activities_subject_check,
+    plus_activities_activity_type_check and plus_activities_body_required_check;
+  - P2-S1: plus_opportunities;
+  - the Plus helpers.
+- One migration in one transaction:
+  - The DROP/ADD of the three named activity CHECKs validates every existing activity row. All existing rows qualify
+    (request_id is NULL, existing types unchanged), as proven by the upgraded isolated run.
+  - The FK on the new nullable column validates instantly.
+  - At pilot volume the lock on plus_activities is brief.
+- Order: apply the migration first, then deploy the app. The new panels call the new RPCs. The currently deployed
+  app (671be2f) does not reference them and keeps working after the migration.
+- Rollback, if needed before any production use, in one transaction:
+  - drop the five RPCs, the two internals and the result type;
+  - drop plus_request_attributions;
+  - drop index plus_activities_org_request_idx and the constraints plus_activities_request_subject_check /
+    plus_activities_request_fkey;
+  - restore the P2-S1 forms of the three named CHECKs (they fail only if request rows exist: delete request_linked /
+    attribution_changed rows first); drop plus_activities.request_id;
+  - delete the schema_migrations row.
+  No Core object is involved. Data at risk on rollback: only attribution rows and request-history activities (Plus
+  data); Core Requests are unaffected.
+- Not done here: no rollback SQL file was prepared and the production backup / PITR tier was not inspected. Prepare a
+  reviewed rollback and post-migration check package in the release step, as for NP-P1-S1-R2B.
+- Post-migration checks:
+  - the privilege contract;
+  - RLS on plus_request_attributions;
+  - EXECUTE grants for the 5 RPCs (authenticated only) and none for the internals;
+  - zero invalid constraints.
+- Smoke only on the Pilot Simulation tenant with fictional Requests. Do not mutate production roles.
+
+STOP. P2-S4 not started.

@@ -184,20 +184,21 @@ begin
     (select string_agg(column_name, ',' order by ordinal_position) from information_schema.columns where table_schema = 'public' and table_name = 'plus_contacts')
     = 'id,organization_id,display_name,phone,email,contact_kind,job_title,preferred_channel,do_not_contact,owner_user_id,status,created_by,created_at,updated_at');
   -- K7-K9 describe the CURRENT shape: S4 columns plus the additive P2-S1 opportunity subject (20261014120000).
-  perform pg_temp.t('K7 activity columns: contact + opportunity subjects only (no request / account yet), no metadata json',
+  perform pg_temp.t('K7 activity columns: contact + opportunity + request subjects only (no account yet), no metadata json',
     (select string_agg(column_name, ',' order by ordinal_position) from information_schema.columns where table_schema = 'public' and table_name = 'plus_activities')
-    = 'id,organization_id,contact_id,activity_type,body,from_stage,to_stage,actor_user_id,occurred_at,recorded_at,opportunity_id'
+    = 'id,organization_id,contact_id,activity_type,body,from_stage,to_stage,actor_user_id,occurred_at,recorded_at,opportunity_id,request_id'
     and not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name in ('plus_contacts', 'plus_activities') and data_type in ('json', 'jsonb')));
-  perform pg_temp.t('K8 no dependency on future tables: every FK targets organizations, auth.users, plus_contacts or plus_opportunities',
+  perform pg_temp.t('K8 no dependency on future tables: every FK targets organizations, auth.users, plus_contacts, plus_opportunities or (NP-P2-S3) transportation_requests',
     (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts',
-                                                   'plus_opportunities', 'public.plus_opportunities'))
+                                                   'plus_opportunities', 'public.plus_opportunities',
+                                                   'transportation_requests', 'public.transportation_requests'))
        from pg_constraint where contype = 'f' and conrelid in ('public.plus_contacts'::regclass, 'public.plus_activities'::regclass))
     -- (plus_tasks ships in NP-P2-S2; accounts remain future)
     and to_regclass('public.plus_accounts') is null);
-  perform pg_temp.t('K9 named constraints for deterministic additive replacement exist (subject check widened by P2-S1)',
+  perform pg_temp.t('K9 named constraints for deterministic additive replacement exist (subject check widened by P2-S1 and P2-S3)',
     (select count(*) from pg_constraint where conrelid = 'public.plus_activities'::regclass
        and conname in ('plus_activities_subject_check', 'plus_activities_activity_type_check', 'plus_activities_contact_fkey')) = 3
-    and exists (select 1 from pg_constraint where conname = 'plus_activities_subject_check' and pg_get_constraintdef(oid) ~ 'num_nonnulls\(contact_id, opportunity_id\) >= 1'));
+    and exists (select 1 from pg_constraint where conname = 'plus_activities_subject_check' and pg_get_constraintdef(oid) ~ 'num_nonnulls\(contact_id, opportunity_id, request_id\) >= 1'));
 
   -- =================================================== create + validation + normalisation (Admin, Plus active)
   v := pg_temp.mk(c_a1, c_a, '  Dana Fictional  ', ' (404) 555-0100 ', '  Dana.F@Example.TEST ', 'family_caregiver', ' Daughter ');

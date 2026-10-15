@@ -274,6 +274,16 @@ Every list page has these shared states:
   - Hidden entirely for everyone else.
 - No change to the Request Hub queue, its decisions or its permissions.
 
+> **NP-P2-S3 implementation notes (local):**
+> - **Request detail → Growth panel** (`RequestGrowthPanel`) sits under the existing Acquisition section. It renders only when Growth admits the person (Plus entitlement plus Organization Admin or a Dispatcher's named grant). For everyone else it is absent: no placeholder, no disabled control, no Growth data.
+>   - **Unlinked:** "Not linked to a Growth contact or opportunity", plus **Track in Plus** for writers. Writers search existing **active** contacts, then optionally pick one of that contact's private-pay opportunities. Nothing is created or merged from here.
+>   - **Linked:** the contact and the opportunity (with its stage), linked to their Growth pages, and "Linked to an existing request by … , date". Writers get **Correct link**, which requires a reason.
+>   - **Read-only:** read-grant staff and an Organization Admin in read-only Plus see the link with no controls.
+>   - Request decisions (Accept / Decline / Cancel), passenger linking, trip and recurring-care creation, dispatch and the acquisition section are unchanged.
+> - **Contact and Opportunity detail → Linked requests.** Each attributed Request shows its **real Core status**, derived live at read time (pending / accepted / declined / cancelled, trip counts, recurring care, decline or cancel reason *code*), with a link to Operations. There is no copied Core text and no requester contact details.
+> - **Linking is not a conversion.** The opportunity stage never changes on link or correction. "Converted" stays reserved for the P2-S4 conversion workflow, and a linked Request is never labelled a sale.
+> - Timelines show "Operations request linked" and "Request link corrected" (with the staff reason).
+
 ### 7.5 Exports
 
 - **Organization Admin only**, in the `write` and `read_only` states (not `locked`): CSV export of contacts, accounts, opportunities, quotes, tasks, activities and inquiries.
@@ -341,7 +351,7 @@ Each slice ships independently: its own additive migration (if any), app change,
 |---|---|---|---|---|---|---|
 | **P2-S1 Opportunities + pipeline** | `plus_opportunities` (private-pay only), stage RPCs, Pipeline private-pay tab, Opportunity detail; `plus_activities.opportunity_id` | 1 table + 1 additive column, check replaced | Stage rules; lost reason; ZW003 on a stale token; facility channel refused (CHECK) | P1-S4 | none in Core | facility channel |
 | **P2-S2 Tasks, Dashboard, nested nav, supervised Growth Agent** *(implemented locally — NP-P2-S2)* | `plus_tasks` (contact / opportunity), Tasks page, due/overdue; nested Growth navigation; Growth Dashboard (first Overview); `plus_agent_recommendations` + staff-run review / approve / dismiss; draft-only templates | 2 tables + read RPCs | Exactly one subject; assignee must have Plus write; approval creates a task only; stale recommendations revalidated; nothing sent | P2-S1 | sidebar (Core UI): Core nav E2E re-run | reminder emails, scheduler, any sending, external AI |
-| **P2-S3 Request attribution** | `plus_request_attributions` (contact / opportunity), `plus_link_request`, `plus_update_request_attribution`, `plus_get_request_summaries`; Request-detail Growth panel; `plus_activities.request_id` | 1 table + 1 additive column | T12, T14, T15, T16; the panel is invisible without Plus | P2-S1 | Request detail page (Core UI): Dispatcher E2E | referral account |
+| **P2-S3 Request attribution** *(implemented locally — NP-P2-S3)* | `plus_request_attributions` (contact / opportunity), `plus_link_request`, `plus_update_request_attribution`, `plus_get_request_summaries`; Request-detail Growth panel; `plus_activities.request_id` | 1 table + 1 additive column | T12, T14, T15, T16; the panel is invisible without Plus | P2-S1 | Request detail page (Core UI): Dispatcher E2E | referral account |
 | **P2-S4 Conversion + rebooking** | `plus_convert_opportunity_to_request`, `plus_create_rebooking_request` | RPCs only | T13, T17; one `pending` Request; Core request suites unchanged | P2-S3 | calls Core request creation | Trip creation (never) |
 | **P2-S5 Staff estimates & quotes (Q1)** | `plus_quotes` (staff-entered lines, server-computed total, immutable when sent, supersede); Opportunity quotes panel; printable estimate | 1 table | T28; labels never say invoice/payment; stage auto → quote_sent | P2-S1 | — | pricing rules (Q2), payments (Q3), emailing quotes (P4) |
 | **P2-S6 Consent ledger** *(moved from NP-P4)* | `plus_communication_consents`; record / revoke consent on Contact detail | 1 table | T20 (append-only); latest-row semantics; `do_not_contact` overrides | P1-S4 | — | any sending |
