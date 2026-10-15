@@ -1,0 +1,361 @@
+NP-P2-S2-R1 -- GROWTH WORKSPACE & AGENT -- PRE-COMMIT SECURITY AND RELEASE REVIEW
+Date: 2026-10-15
+Mode: TARGETED REVIEW, MINIMAL FIXES ONLY.
+- Nothing staged, committed, pushed, merged or deployed.
+- No production migration applied.
+- Fictional data only; no scope added.
+Input: docs/reports/NP-P2-S2-growth-workspace-agent-foundation-implementation.txt, the three P2-S2 migrations, the
+P2-S2 app code, and the canonical Plus product, domain, access, mutation-API and privilege-contract documents.
+
+======================================================================
+0. BASELINE (verified read-only)
+======================================================================
+- Branch: np-p2-s2-growth-workspace-agent-foundation. HEAD = origin/main = ef76529a0bb0444bf801814e496b4822b88a6093
+  ("Merge pull request #6 ... np-p2-s1-private-pay-pipeline"). PR #6 MERGED; no P2-S2 PR exists.
+- Staged files: 0. Every P2-S2 change is uncommitted working-tree change (inventory in section 6).
+- Production (project wyocbivzgrbekuyqdfts, linked):
+  - `supabase migration list --linked` shows 20261014100000 and 20261014120000 applied remotely;
+  - 20261015100000, 20261015110000 and 20261015120000 show remote = EMPTY.
+  - CONFIRMED: no P2-S2 migration has been applied in production.
+- Unrelated untracked reports and .tmp-qa files were preserved; nothing was reset, cleaned or overwritten.
+
+======================================================================
+1. PASS / FAIL BY REVIEW CATEGORY
+======================================================================
+| Category                                        | Result | Notes |
+|-------------------------------------------------|--------|-------|
+| Tenant isolation                                | PASS   | Every RPC filters by p_organization_id after plus_can_read / _require_plus_write; composite FKs; RLS org-scoped. Org B tests (SQL T1-T4, P4; E2E E5-E8) |
+| RLS deny-by-default                             | PASS   | Both tables: RLS on; REVOKE ALL from public/anon/authenticated/service_role; GRANT SELECT to authenticated only; one SELECT policy plus_can_read(organization_id); no INSERT/UPDATE/DELETE policy |
+| Composite foreign keys                          | PASS   | plus_tasks -> plus_contacts / plus_opportunities (id, organization_id); recommendations -> plus_opportunities and plus_tasks (id, organization_id) |
+| RPC authorization                               | PASS   | Reads: auth.uid() + plus_can_read (ZW001/ZW002). Writes: _require_plus_write first, every call |
+| SECURITY DEFINER search_path and privileges     | PASS   | Every function pins search_path = public, pg_temp. 14 RPCs: authenticated EXECUTE only; 6 internals: no client EXECUTE. Privilege contract 0/29 violations |
+| Plus read/write permissions                     | PASS   | SQL P1-P12 (tasks), P1-P6 (agent); E2E E1-E4 |
+| Suspended / expired / locked organizations      | PASS   | Suspended -> ZW002; expired -> Admin read-only, every write ZW001; locked / none -> ZW002, rows retained |
+| Revoked staff access                            | PASS   | Revoked / no grant -> ZW002, RLS 0 rows; the S3/S4/P2-S1 regression E2Es also pass |
+| Task assignee eligibility                       | PASS   | _plus_resolve_owner at assignment time (read grant, revoked, inactive, driver, foreign -> ZW006); an unchanged assignee is not silently swapped |
+| Approval concurrency and replay safety          | PASS after FIX R1-1 | Replay and double approval were already safe (one task). A stale-input race was found and fixed (section 3) |
+| Agent recommendation uniqueness                 | PASS   | unique (org, opp, type, condition_key); one pending per opportunity; unique approved_task_id; advisory-locked review |
+| Protection from stale recommendations           | PASS after FIX R1-1 | Revalidation now runs after locking the opportunity and contact |
+| No direct client writes                         | PASS   | No client write grant or policy; the app uses only the session-scoped RPCs listed in section 2 |
+| No Core data mutation                           | PASS   | SQL K1/K2 in both suites; E2E F1; no Core object changed |
+| No outbound customer communication              | PASS   | Section 5 |
+| Agent behaviour (section 2)                     | PASS   | |
+| Dashboard and UX                                | PASS   | One documentation inconsistency corrected (FIX R1-2) |
+| Privilege-contract conformance                  | PASS   | 0 violations of 29 checks (dev, fresh reset and upgraded) |
+| Test reproducibility                            | PASS, with a recommendation | Section 4 |
+
+======================================================================
+2. SECURITY AND AGENT-BOUNDARY FINDINGS
+======================================================================
+Database (migrations 20261015100000 / 110000 / 120000):
+- plus_tasks:
+  - Exactly one subject (CHECK). Subjects are validated under FOR NO KEY UPDATE: an active contact or an open
+    opportunity.
+  - Title CHECK (trimmed, 1-200); completion consistency CHECK.
+  - Write RPCs: write-entitlement check, then row lock, then version (ZW003), then state (ZW004). Idempotent no-ops
+    write no audit row.
+  - Audit rows record field names, subject kind and booleans only; no title or contact data.
+- plus_agent_recommendations:
+  - Structured codes only, CHECK-limited: type, status, proposed_action ('create_follow_up_task' only) and
+    generation_source ('staff_review' only).
+  - No PII, no message text, no JSON column. The review check ties reviewer and time to the status.
+- Internals (_plus_agent_threshold, _plus_agent_candidates, _plus_agent_review, _plus_org_day_bounds,
+  _plus_require_task_subject, _plus_insert_task): REVOKE ALL including service_role. They are reachable only from the
+  gated RPCs. No scheduler, cron, pg_cron, pg_net, http or dblink anywhere (agent tests S5).
+- Dashboard reads (plus_growth_dashboard, plus_list_attention_opportunities, plus_list_recent_activities):
+  - uid and plus_can_read required; aggregates over the caller's organization only;
+  - recent activity returns no bodies and hides redacted contacts;
+  - limits are bounded (1-50).
+- plus_list_agent_recommendations returns contact PREFERENCES (do-not-contact, preferred channel, has phone/email),
+  never phone or email values.
+
+App (server actions and pages):
+- Every task and agent write is a server action that re-checks:
+  - requirePlusAccess;
+  - the posted organizationId equals the session organization;
+  - canWriteGrowth.
+  It then calls the RPC with the session-scoped client. The RPC remains the authority.
+- No service role, admin client, fetch, email, SMS or AI SDK in any P2-S2 file (grep-verified).
+- RPCs called by the app: plus_list_tasks, plus_get_task, plus_create_task, plus_update_task, plus_reassign_task,
+  plus_complete_task, plus_cancel_task, plus_run_growth_agent_review, plus_list_agent_recommendations,
+  plus_approve_agent_recommendation, plus_dismiss_agent_recommendation, plus_growth_dashboard,
+  plus_list_attention_opportunities, plus_list_recent_activities. All are in the contract as 'u'.
+- Write controls render only for writers and only on open items. Read-grant staff and read-only Plus see none
+  (E2E E1-E4, E9-E10). The database refuses regardless (ZW001).
+
+Growth Agent behaviour:
+- Permitted data only:
+  - detection reads one organization's Plus tables;
+  - every entry point is behind plus_can_read or _require_plus_write;
+  - cross-tenant reads, runs and approvals are refused (agent P4; E2E E7-E8).
+- Explains each recommendation: type, signal days, last recorded activity, proposed action, and who generated it.
+- Missing reply != refusal:
+  - the reason text says "This doesn't mean the person ignored it -- only that no reply was logged" (unit-tested);
+  - nothing is ever marked lost.
+- Never contacts customers, sends email or SMS, places calls, or calls external AI:
+  - no such code path in the database or the app;
+  - drafts are a local fixed template, rendered at display time, never stored and never sent.
+- Never marks lost, changes a stage, creates bookings or quotes, or writes Core (agent R4, A5, K1, K2; E2E D5, D14).
+- Cannot approve the same task twice:
+  - a replay returns already_approved with the same task;
+  - concurrent approvals produce one task (CONC-G1);
+  - approved_task_id is unique.
+- Withdraws stale recommendations:
+  - on the next review (agent A6, A8);
+  - on approval (E2E D18; now also under concurrency, CONC-G4/G5).
+- Respects do_not_contact: no draft; a "Do not contact" badge; the suggested task becomes
+  "Review (do not contact): ..." and the proposed action says no outreach.
+- Never claims consent: every draft states "Nemryn has no consent record for this person yet ..." (P2-S6 not built).
+- Records the responsible staff member: generated_by (who ran the review); reviewed_by and reviewed_at (who decided
+  and when); actor_user_id on every audit row.
+- Thresholds 2 / 5 / 10 days and the 1-day suggested due date are explicitly INTERNAL-TEST in three places:
+  - the database function comment ("NOT approved production policy");
+  - agent-core.ts;
+  - the staff-facing agent page ("These thresholds are for testing, not final policy").
+  No scheduler or production automation exists or was enabled.
+
+Dashboard and UX:
+- Navigation (unchanged by this review; E2E A1-A18 pass):
+  - the Growth label links to /operations/growth;
+  - the chevron is a separate aria-expanded button that never navigates;
+  - Dashboard, Pipeline, Contacts and Tasks are nested;
+  - auto-expand on Growth routes and on back/forward; one aria-current child;
+  - the rail flyout opens with Enter/Space and closes with Escape, outside click or Tab-out.
+  - Every Core nav item and route still works (UX1, S2 and P2-S1 E2Es pass).
+- Dashboard figures are real aggregates of authorized records; zero states have no fabricated figures (E2E B1-B4).
+- Timezone: storage is UTC; "today" uses the organization's IANA timezone (_plus_org_day_bounds; tests D1-D6); a
+  date-only due means 23:59 local.
+- Due-today and overdue are defined identically in plus_list_tasks, plus_growth_dashboard and the UI. One
+  documentation line was inaccurate (FIX R1-2).
+- Canonical Nemryn styling was preserved; no UI file was changed by this review.
+
+======================================================================
+3. CODE CORRECTIONS AND REASONS
+======================================================================
+FIX R1-1 (genuine defect, concurrency; low severity, no security impact). File:
+supabase/migrations/20261015110000_plus_growth_agent.sql, function plus_approve_agent_recommendation.
+- Defect:
+  - The approval revalidated the recommendation's situation BEFORE locking the opportunity, and never locked the
+    contact.
+  - A task, stage change or logged activity committed concurrently by another staff member was not seen. The
+    approval then created a redundant task (two follow-ups) or a task from a stale recommendation.
+- Reproduced before the fix with two new concurrency scenarios:
+  - CONC-G4: approval racing a manual task on the same opportunity -> 2 tasks, recommendation "approved" (FAIL);
+  - CONC-G5: approval racing a logged activity on the contact -> task created from a stale recommendation (FAIL).
+- Fix: after the version check and before revalidation, take FOR NO KEY UPDATE locks on the opportunity, then on its
+  primary contact. This is the same lock mode and order the existing writers use:
+  - plus_create_task locks its subject;
+  - plus_log_contact_activity locks the contact;
+  - stage changes lock the opportunity;
+  - contact edit and archive lock only the contact;
+  - plus_update_opportunity locks the opportunity, then the contact.
+  So no lock-order inversion is introduced. Each competing write either committed already, and the revalidation
+  (a new READ COMMITTED snapshot) sees it, or it waits for the approval.
+- After the fix:
+  - CONC-G4 -> recommendation superseded, exactly 1 task (the manual one);
+  - CONC-G5 -> superseded, 0 tasks;
+  - G1-G3 unchanged. 5/5 PASS on three consecutive dev runs, plus the fresh and upgraded isolated runs.
+- The migration is UNAPPLIED in production, so the file was corrected in place; no new migration is needed. The
+  local dev database was updated with CREATE OR REPLACE of the same signature; grants and comment were kept.
+- Test added: supabase/tests/plus_growth_agent_concurrency_test.sh, scenarios 4 and 5 (CONC-G4, CONC-G5), and a
+  fourth fixture opportunity (CONC-G2 now expects 4 recommendations).
+- Docs: docs/data/mutation-api.md approval contract now states the lock order.
+
+FIX R1-2 (documentation consistency; no behaviour change).
+- Defect: the header comment in supabase/migrations/20261015100000_plus_tasks.sql said "overdue" is evaluated in the
+  organization timezone. The code (and test D1) defines overdue as due_at < now(), a timezone-independent instant;
+  only "today" uses the organization timezone.
+- Fixed:
+  - the comment now states the canonical definitions;
+  - product spec section 7.3 lists the same definitions once (overdue / due today / upcoming / no due date), noting
+    that a task due earlier today is overdue, not due today.
+- No SQL statement changed.
+
+No other change was made. No improvement was invented.
+
+======================================================================
+4. TEST RERUN RESULTS (after both fixes)
+======================================================================
+Dev database (local):
+  - plus_tasks_tests 58/58; plus_growth_agent_tests 40/40.
+  - plus_opportunities_tests 75/75; plus_contacts_activities_tests 82/82.
+  - privilege_contract_tests: 0 violations / 29.
+  - plus_tasks_concurrency_test: 0 failures (4).
+  - plus_growth_agent_concurrency_test: 5/5 PASS on 3 consecutive runs. Before the fix, G4 and G5 failed.
+Isolated stack (NemrynS1Iso; edited migrations synced):
+  - UPGRADE from a seeded P2-S1 head 20261014120000: all three migrations applied (rc 0).
+    - P2-S1 rows preserved 1/1/1; detection on old data correct.
+    - plus_tasks 58/58, plus_growth_agent 40/40, plus_opportunities 75/75, plus_contacts_activities 82/82.
+    - Contract 0/29; both new concurrency scripts 0 failures.
+  - FRESH reset before each suite (database verified fresh): all PASS with 0 real failures.
+    - privilege_contract_tests 0/29.
+    - rls_adversarial 33, security_definer_exposure 20, function_privilege 7.
+    - plus_access_helpers 170/170, plus_member_grants 76/76.
+    - plus_contacts_activities 82/82, plus_opportunities 75/75.
+    - plus_tasks 58/58, plus_growth_agent 40/40.
+  - Concurrency: plus_tasks 4, plus_growth_agent 5, plus_opportunities 6, plus_contacts 4, request_decision 21, all
+    PASS.
+  - The full Core suite list was run in NP-P2-S2 and is unaffected by these SQL-only fixes. The pre-existing,
+    unrelated Core mutation_concurrency_test CONCURRENCY-1 failure (K4/I9) is unchanged and was not rerun here.
+Browser E2E (local `next start -p 3100`; app code unchanged since the NP-P2-S2 build):
+  - .tmp-qa/np-p2-s2-growth-workspace-e2e.mjs: 76/76 PASS (includes the approval, stale-withdrawal and replay flows).
+Unit: 799/799 PASS. No TypeScript or app code changed in R1, so tsc, ESLint and the build results from NP-P2-S2
+stand.
+
+Test reproducibility (category 5):
+- The security-critical behaviour IS reproducible from tracked files:
+  - SQL suites plus_tasks_tests.sql (58) and plus_growth_agent_tests.sql (40): tenant, permission, state machine,
+    agent boundary, dashboard counts, no-Core and no-outbound;
+  - two bash concurrency scripts;
+  - privilege-contract registration;
+  - three unit test files (tasks-core, agent-core, growth-nav-core).
+  All of these are in the commit inventory and run against any local stack.
+- The 76 browser tests depend on untracked .tmp-qa files: the E2E script and local-helper.mjs. Its only credential is
+  the PUBLIC local seed password already tracked in supabase/seed.sql; it refuses any URL except
+  localhost:3100.
+- The UI-only scenarios exist ONLY there:
+  - nested nav keyboard / flyout / back-forward;
+  - dialog prefill and timezone display;
+  - NOT SENT draft rendering;
+  - absence of Send controls.
+- RECOMMENDATION (no framework redesign):
+  - keep the browser E2E out of this commit, consistent with every previous Plus slice;
+  - do NOT commit .tmp-qa/screens/ or any run logs;
+  - in a later, separately approved change, promote a sanitized copy (seed-password-only, no screenshots, no
+    production identities) to a tracked folder such as tests/e2e/, using the existing local helper, with fixtures
+    created and deleted per run as it already does;
+  - until then, the scenario list is recorded in the NP-P2-S2 report section 13 and here.
+
+======================================================================
+5. CUSTOMER SENDING REMAINS DISABLED -- EXPLICIT CONFIRMATION
+======================================================================
+CONFIRMED. After this review:
+- No code path in the database or the application sends email or SMS, places a call, or contacts a customer.
+- No external AI or model API is called, and no customer record leaves Nemryn.
+- No background job, scheduler or automatic trigger exists. generation_source admits only 'staff_review'.
+- The only effect of the Growth Agent is a staff-approved INTERNAL plus_tasks row.
+- Drafts are labelled "Draft — NOT SENT", are never stored, and are not offered for do-not-contact contacts.
+- There is no Send / Call / Text control anywhere (E2E C20, D11).
+- PD-10 and PD-11 remain OPEN. Consent-gated automation remains a separate, future owner decision.
+
+======================================================================
+6. EXACT FILE INVENTORY FOR A FUTURE COMMIT (nothing staged now)
+======================================================================
+New (27 files):
+  supabase/migrations/20261015100000_plus_tasks.sql
+  supabase/migrations/20261015110000_plus_growth_agent.sql
+  supabase/migrations/20261015120000_plus_growth_dashboard.sql
+  supabase/tests/plus_tasks_tests.sql
+  supabase/tests/plus_tasks_concurrency_test.sh
+  supabase/tests/plus_growth_agent_tests.sql
+  supabase/tests/plus_growth_agent_concurrency_test.sh
+  src/app/operations/growth/tasks/page.tsx
+  src/app/operations/growth/tasks/actions.ts
+  src/app/operations/growth/agent/page.tsx
+  src/app/operations/growth/agent/actions.ts
+  src/components/growth/GrowthAgent.tsx
+  src/components/growth/SubjectTasksPanel.tsx
+  src/components/growth/TaskDialog.tsx
+  src/components/growth/TaskList.tsx
+  src/components/operations/GrowthNavGroup.tsx
+  src/lib/plus/agent.ts
+  src/lib/plus/agent-core.ts
+  src/lib/plus/agent-core.test.mjs
+  src/lib/plus/agent-view.ts
+  src/lib/plus/growth-nav-core.ts
+  src/lib/plus/growth-nav-core.test.mjs
+  src/lib/plus/tasks.ts
+  src/lib/plus/tasks-core.ts
+  src/lib/plus/tasks-core.test.mjs
+  docs/reports/NP-P2-S2-growth-workspace-agent-foundation-implementation.txt
+  docs/reports/NP-P2-S2-R1-precommit-security-review.txt
+Modified (15 files):
+  docs/data/mutation-api.md
+  docs/product/plus-domain-model.md
+  docs/product/plus-product-spec.md
+  docs/security/database-privilege-contract.md
+  docs/security/plus-access-model.md
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/components/operations/OperationsSidebar.tsx
+  src/design/icons.ts
+  src/lib/plus/contacts-core.ts
+  src/lib/supabase/database.types.ts
+  supabase/tests/plus_contacts_activities_tests.sql
+  supabase/tests/plus_opportunities_tests.sql
+  supabase/tests/privilege_contract_tests.sql
+EXCLUDE from the commit:
+  - all of .tmp-qa/, including the P2-S2 E2E, screens/ and the edited S1/S2/S4/P2-S1 E2E scripts;
+  - every other untracked docs/reports file from earlier phases;
+  - scratchpad runners and logs.
+database.types.ts was regenerated against the dev database. R1 changed no function signature, so it is still current.
+
+======================================================================
+7. OUTSTANDING OWNER DECISIONS
+======================================================================
+  1. Confirm that the 2 / 5 / 10-day thresholds and the 1-day suggested due date stay INTERNAL-TEST, and approve or
+     replace them before any real-customer use. They are changed by a reviewed migration.
+  2. Any scheduler for reviews (the _plus_agent_review boundary exists; nothing calls it automatically).
+  3. Any AI draft provider: requires PD-10 (HIPAA/BAA), a vendor review, and the GrowthAgentDraftProvider seam.
+  4. Consent-gated sending: the P2-S6 consent ledger, then the NP-P4 sending gates. PD-10 and PD-11 remain OPEN.
+  5. Decisions D1-D8 in the NP-P2-S2 report, notably:
+     - D2: tasks are not timeline entries;
+     - D7: any open task suppresses recommendations.
+  6. Whether to promote a sanitized browser E2E to a tracked folder (section 4); a separate change.
+
+======================================================================
+8. READY FOR CONTROLLED GIT COMMIT AND PR?
+======================================================================
+YES -- ready for a controlled commit and PR (a separate step, NP-P2-S2-R2 or similar), with the section 6 inventory
+exactly and the nemryn GitHub account. Conditions:
+  - The commit must include the R1-corrected 20261015110000 migration and the 5-scenario concurrency script.
+  - No production migration or deploy as part of the commit/PR step. The release needs its own owner approval and
+    the read-only pre-checks used for P2-S1.
+Not ready for real customer data: it is gated on PD-10 and PD-11 like every Plus slice.
+
+======================================================================
+9. PRODUCTION MIGRATION DEPENDENCIES AND SAFE ORDER
+======================================================================
+Prerequisite: the production head must be exactly 20261014120000 (P2-S1). Verified today. P2-S1 provides
+plus_opportunities, _plus_require_active_contact, _plus_resolve_owner, _plus_staff_name, _plus_user_can_write,
+plus_can_read and _require_plus_write.
+  1. 20261015100000_plus_tasks.sql. Depends on plus_contacts, plus_opportunities and the Plus helpers. Creates
+     plus_tasks, _plus_org_day_bounds, _plus_require_task_subject, _plus_insert_task and the task RPCs.
+  2. 20261015110000_plus_growth_agent.sql. Depends on (1):
+     - an FK to plus_tasks;
+     - calls _plus_insert_task and _plus_require_task_subject.
+     Creates the queue table, detection and agent RPCs.
+  3. 20261015120000_plus_growth_dashboard.sql. Depends on (1) and (2): uses _plus_org_day_bounds, plus_tasks,
+     plus_agent_recommendations and _plus_agent_candidates.
+Apply strictly in this order, each in its own transaction, as the CLI does.
+- Then run the privilege-contract check and a read-only object check against production.
+- Then deploy the app. The new pages call the new RPCs, so the app must follow the migrations.
+- The migrations are purely additive: the currently deployed app (ef76529) keeps working after them, and before the
+  app deploy.
+- Smoke only on the Pilot Simulation tenant. Do not mutate production roles; the role checks stay MANUAL.
+
+======================================================================
+10. REMAINING BACKUP / RECOVERY RISK
+======================================================================
+- The change is additive: two new tables, new functions and types, and no ALTER of any existing object.
+- Rollback is possible by dropping the P2-S2 objects in reverse order, in one transaction:
+  - dashboard functions;
+  - agent RPCs, then the queue table and types, then detection and threshold;
+  - task RPCs, then plus_tasks and types, then helpers;
+  - the three schema_migrations rows.
+  No Core or earlier-Plus data is affected.
+- Data at risk: only P2-S2 rows (tasks and recommendations) created after release; production holds synthetic
+  Pilot-Simulation data only. A rollback after use loses those rows unless exported first.
+- NOT done in this review:
+  - The production backup / point-in-time-recovery tier was not inspected (no production access was used beyond the
+    read-only migration list). Confirm a fresh backup or PITR window before applying.
+  - No rollback script was prepared for P2-S2. As for NP-P1-S1-R2B, prepare a reviewed emergency-rollback SQL and a
+    post-migration privilege/state check package in the release step.
+- Residual operational risk:
+  - A failed migration rolls back its own transaction. Applying (1) without (2) and (3) leaves a consistent, usable
+    state for the current app. The new app must not be deployed until all three are applied.
+  - Low: the agent detection runs on demand over one organization's open opportunities. At pilot volumes this is
+    small. If tenants grow large, review query cost before any scheduler is approved.
+
+STOP. Review complete. Nothing staged, committed, pushed, merged, deployed or migrated in production.

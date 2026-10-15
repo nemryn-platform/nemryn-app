@@ -192,7 +192,8 @@ begin
     (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts',
                                                    'plus_opportunities', 'public.plus_opportunities'))
        from pg_constraint where contype = 'f' and conrelid in ('public.plus_contacts'::regclass, 'public.plus_activities'::regclass))
-    and to_regclass('public.plus_accounts') is null and to_regclass('public.plus_tasks') is null);
+    -- (plus_tasks ships in NP-P2-S2; accounts remain future)
+    and to_regclass('public.plus_accounts') is null);
   perform pg_temp.t('K9 named constraints for deterministic additive replacement exist (subject check widened by P2-S1)',
     (select count(*) from pg_constraint where conrelid = 'public.plus_activities'::regclass
        and conname in ('plus_activities_subject_check', 'plus_activities_activity_type_check', 'plus_activities_contact_fkey')) = 3

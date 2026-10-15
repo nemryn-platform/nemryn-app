@@ -61,7 +61,11 @@ c_tables(tbl) as (values
   ('plus_contacts'),
   ('plus_activities'),
   -- NP-P2-S1 private-pay opportunities (SELECT via RLS plus_can_read; writes through RPCs only)
-  ('plus_opportunities')
+  ('plus_opportunities'),
+  -- NP-P2-S2 tasks (SELECT via RLS plus_can_read; writes through RPCs only)
+  ('plus_tasks'),
+  -- NP-P2-S2 Growth Agent review queue (SELECT via RLS plus_can_read; writes through RPCs only)
+  ('plus_agent_recommendations')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -96,7 +100,9 @@ c_auth_tbl(tbl, priv) as (values
   ('vehicle_unavailability_windows', 'SELECT'),
   ('plus_contacts', 'SELECT'),
   ('plus_activities', 'SELECT'),
-  ('plus_opportunities', 'SELECT')
+  ('plus_opportunities', 'SELECT'),
+  ('plus_tasks', 'SELECT'),
+  ('plus_agent_recommendations', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -287,7 +293,29 @@ c_fn(sig, roles) as (values
   ('plus_update_opportunity(uuid,uuid,timestamp with time zone,uuid,text,text,text,text,text,text,bigint,text,uuid)', 'u'),
   ('plus_change_opportunity_stage(uuid,uuid,timestamp with time zone,text,text)', 'u'),
   ('plus_mark_opportunity_lost(uuid,uuid,timestamp with time zone,text,text)', 'u'),
-  ('plus_reopen_opportunity(uuid,uuid,timestamp with time zone,text,text)', 'u')
+  ('plus_reopen_opportunity(uuid,uuid,timestamp with time zone,text,text)', 'u'),
+  -- NP-P2-S2 tasks
+  ('_plus_org_day_bounds(uuid)', ''),
+  ('_plus_require_task_subject(uuid,uuid,uuid)', ''),
+  ('_plus_insert_task(uuid,text,timestamp with time zone,uuid,uuid,uuid,uuid)', ''),
+  ('plus_list_tasks(uuid,text,text,uuid,uuid,uuid,integer,integer)', 'u'),
+  ('plus_get_task(uuid,uuid)', 'u'),
+  ('plus_create_task(uuid,text,timestamp with time zone,uuid,uuid,uuid)', 'u'),
+  ('plus_update_task(uuid,uuid,timestamp with time zone,text,timestamp with time zone,uuid)', 'u'),
+  ('plus_reassign_task(uuid,uuid,timestamp with time zone,uuid)', 'u'),
+  ('plus_complete_task(uuid,uuid,timestamp with time zone)', 'u'),
+  ('plus_cancel_task(uuid,uuid,timestamp with time zone)', 'u'),
+  -- NP-P2-S2 Growth Agent + dashboard
+  ('_plus_agent_threshold(text)', ''),
+  ('_plus_agent_candidates(uuid,uuid)', ''),
+  ('_plus_agent_review(uuid,uuid,text)', ''),
+  ('plus_run_growth_agent_review(uuid)', 'u'),
+  ('plus_list_agent_recommendations(uuid,text,integer,integer)', 'u'),
+  ('plus_approve_agent_recommendation(uuid,uuid,timestamp with time zone,text,timestamp with time zone,uuid)', 'u'),
+  ('plus_dismiss_agent_recommendation(uuid,uuid,timestamp with time zone,text)', 'u'),
+  ('plus_growth_dashboard(uuid)', 'u'),
+  ('plus_list_attention_opportunities(uuid,integer)', 'u'),
+  ('plus_list_recent_activities(uuid,integer)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

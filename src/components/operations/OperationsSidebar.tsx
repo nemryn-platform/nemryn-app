@@ -10,6 +10,10 @@ import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 import { Avatar } from "@/components/ui/Avatar";
 import { IconButton } from "@/components/ui/IconButton";
+import { GrowthNavGroup } from "@/components/operations/GrowthNavGroup";
+
+/** Placeholder marking where the Growth group sits in the item order. */
+const GROWTH_SLOT = { key: "growth" as const, label: "Growth", href: "/operations/growth" };
 
 // P1-UX-R2: local-only UI preference — never a database column, never a
 // per-user profile field, never synced across devices (see this file's
@@ -113,17 +117,11 @@ export function OperationsSidebar({
   // any existing item — Operations nav stays the same 7 items for
   // everyone, plus this one additional, conditional item for a genuine
   // dual-hat owner-operator. Same platform, no forked nav structure.
-  const navItems = [
-    ...NAV_ITEMS,
-    // NP-P1-S2 / S4: Nemryn Plus (Growth) -- after the Core operational modules and before Drive / Settings, only for
-    // callers the server already authorised. Growth (overview) + Pipeline (P2-S1) + Contacts (S4); no separate group shell.
-    ...(canAccessGrowth
-      ? [
-          { key: "growth" as const, label: "Growth", href: "/operations/growth" },
-          { key: "pipeline" as const, label: "Pipeline", href: "/operations/growth/pipeline" },
-          { key: "contacts" as const, label: "Contacts", href: "/operations/growth/contacts" },
-        ]
-      : []),
+  // NP-P2-S2: Nemryn Plus (Growth) is ONE collapsible group (Dashboard, Pipeline, Contacts, Tasks) rendered between
+  // the Core operational modules and Drive / Settings -- only for callers the server already authorised
+  // (canAccessGrowth). See GrowthNavGroup. The Core items and their order are unchanged.
+  const navItems = [...NAV_ITEMS];
+  const tailItems = [
     ...(hasLinkedDriverProfile ? [{ key: "drive" as const, label: "Drive", href: "/driver" }] : []),
     // P1-PILOT-S4B-R4A: tenant administration, Organization Admin only,
     // always last -- below the operational modules it configures.
@@ -235,11 +233,11 @@ export function OperationsSidebar({
 
       <nav aria-label="Primary" className="flex-1 overflow-y-auto px-2 py-3 lg:px-3">
         <ul className="flex flex-col gap-1">
-          {navItems.map((item) => {
+          {[...navItems, ...(canAccessGrowth ? [GROWTH_SLOT] : []), ...tailItems].map((item) => {
+            if (item === GROWTH_SLOT) return <GrowthNavGroup key="growth-group" pathname={pathname} collapsed={collapsed} />;
             const Icon = navIcons[item.key];
-            // "/operations" and the Growth overview match exactly (their sub-routes have their own items).
-            const isActive =
-              item.href === "/operations" || item.href === "/operations/growth" ? pathname === item.href : pathname.startsWith(item.href);
+            // "/operations" matches exactly (its sub-routes have their own items).
+            const isActive = item.href === "/operations" ? pathname === item.href : pathname.startsWith(item.href);
             return (
               <li key={item.key}>
                 <Link

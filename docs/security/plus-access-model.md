@@ -96,6 +96,12 @@ Recommended option: add `growth` to the `memberships.role` CHECK **and** the `st
 > - `plus_opportunities` follows section 3.2 in the same way: RLS `plus_can_read`, `SELECT` only, and writes only through `_require_plus_write` RPCs.
 > - Admins and write-grant Dispatchers have full pipeline access. Read-grant Dispatchers can read only. In `read_only` Plus, the Admin can read only; in `locked`, `none` or a suspended organization, nobody has access.
 > - No conversion and no Core write exist yet.
+>
+> **Implementation status (NP-P2-S2, migrations `20261015100000` / `20261015110000` / `20261015120000`, local only):**
+> - `plus_tasks` and `plus_agent_recommendations` follow section 3.2 in the same way: RLS `plus_can_read`, `SELECT` only to `authenticated`, and writes only through `_require_plus_write` RPCs.
+> - Task assignees must be eligible Plus writers at assignment time (`_plus_resolve_owner`), so a read-grant Dispatcher can never be assigned.
+> - The dashboard and attention reads (`plus_growth_dashboard`, `plus_list_attention_opportunities`, `plus_list_recent_activities`) are `plus_can_read`-gated and return only the caller's organization. The recent-activity read returns no note bodies.
+> - Server actions re-check the organization binding and write capability before calling an RPC. The RPC is the authority.
 
 ### 3.1a Entitlement states — behaviour summary
 
@@ -180,6 +186,16 @@ create policy <t>_select_plus on … for select to authenticated
     A follow-up consent never implies marketing consent.
 4. **SMS** additionally requires a TCPA/10DLC review, a provider decision and a BAA determination before activation.
 5. **Revocation** takes effect on the next send check (a ledger row, no cache).
+5a. **Growth Agent boundary (NP-P2-S2).** The supervised Growth Agent is **not** a sending system.
+    - It detects deterministically in the database and proposes internal follow-up tasks only.
+    - Staff approve, dismiss or mark not relevant. Approval creates one `plus_tasks` row after revalidating the situation.
+    - Optional drafts come from a local template, are labelled NOT SENT, and are never stored or sent.
+    - No draft is offered for `do_not_contact` contacts or without a usable preferred channel. No consent is claimed, because the P2-S6 ledger does not exist yet.
+    - No external AI or model API is called, and no contact record leaves Nemryn.
+    - There is no scheduler or background job; `generation_source` allows only `staff_review`.
+    - It never sends, calls, changes a stage, marks lost, creates quotes or writes Core.
+
+    Any automated outreach, scheduled review or AI provider (`GrowthAgentDraftProvider`) is a **separate owner decision with its own schema and security review**, gated on P2-S6 consent, the NP-P4 sending gates and PD-10/PD-11. This milestone closes neither PD-10 nor PD-11.
 6. **Sender identity:** reuse the Resend platform-sender boundary (`src/lib/email/send.ts`). Per-tenant sender domains remain a deferred white-label capability, as that file documents.
 
 ## 6b. Plus public inquiry boundary (P2-S7) — security requirements
@@ -241,6 +257,8 @@ Harness: the existing `pg_temp.try_as(role, uid, stmt)` pattern (`supabase/tests
 | T26 | Core public intake regression (T18) re-run after P2-S7 with no diff to any Core intake function | pass |
 | T27 | Forward-FK safety: each Plus migration applies on top of the previous slice alone (fresh reset to that point), and later additive migrations validate every existing row | apply cleanly |
 | T28 | Quotes: totals computed server-side; a `sent` quote is immutable; no quote state changes `payment_reported_status`, a Request or any Core row | as stated |
+| T30 | Tasks (NP-P2-S2; `plus_tasks_tests.sql`, `plus_tasks_concurrency_test.sh`): exactly one subject; foreign or archived subject; non-writer assignee; stale token; concurrent complete/cancel/edit | ZW002 / ZW006 / ZW003 / exactly one wins |
+| T31 | Growth Agent (NP-P2-S2; `plus_growth_agent_tests.sql`, `plus_growth_agent_concurrency_test.sh`): deterministic detection; dedupe; supersede on change; approval creates one task only and changes no stage, Core row or activity; concurrent review/approval; read-grant and cross-tenant refused | as stated |
 | T29 | Concurrent Platform Admin entitlement changes from the same rendered version (NP-P1-S2-R1; `plus_entitlement_versioned_tests.sql`, `plus_entitlement_versioned_concurrency_test.sh`) | exactly one applies; the other ZW003, nothing written, no audit |
 
 ## 9. Compliance and vendor gates (unresolved — do not claim compliance)

@@ -503,3 +503,45 @@ Tests:
 
 Nothing in P2-S1 creates or changes a Core Request, Passenger, Trip or Recurring Care arrangement.
 
+## Nemryn Plus tasks, Growth Agent and Dashboard (NP-P2-S2)
+
+Migrations `20261015100000_plus_tasks.sql`, `20261015110000_plus_growth_agent.sql` and `20261015120000_plus_growth_dashboard.sql` (local only).
+
+**`plus_tasks`** follows domain model §9. It is class B: authenticated `SELECT` through `plus_can_read`, with no client write.
+- It has exactly one subject (`plus_tasks_subject_check`), a contact or an opportunity, through composite FKs. There is no account or request subject.
+- `due_at` is stored in UTC. The app converts workspace-local input, and a date without a time means 23:59 workspace time.
+- Tasks write **no** `plus_activities` rows.
+
+| RPC | Access | Contract |
+|---|---|---|
+| `plus_list_tasks(org, view, search, assignee_membership_id, contact_id, opportunity_id, limit, offset)` | Plus read | `view`: open, mine, overdue (`due_at < now()`), today (now to the end of the workspace day), upcoming, no_date, done, cancelled, history; anything else gives ZW006. A contact filter includes that contact's opportunity tasks. Returns `is_overdue`, `is_due_today`, an assignee handle and name, subject names, and `updated_at` (the version token), plus `total_count`. 1–200 rows |
+| `plus_get_task(org, id)` | Plus read | ZW002 for a foreign or unknown id |
+| `plus_create_task(org, title, due_at, assignee_membership_id, contact_id, opportunity_id)` | Plus write | Exactly one subject; an archived contact or a closed opportunity gives ZW006, and a foreign or unknown one gives ZW002. The subject is locked `FOR NO KEY UPDATE`. The title is 1–200 characters, trimmed. The assignee must be an eligible Plus writer now (ZW006). The same task by the same person within 30 s is a no-op. Audit: `plus_task_created` |
+| `plus_update_task(org, id, expected_updated_at, title, due_at, assignee_membership_id)` | Plus write | **Open only** (ZW004). A stale token gives ZW003. Identical values give `changed=false`. An unchanged assignee is kept even if that person lost access; a new assignee must be eligible. Audit: `plus_task_updated`, recording field names only |
+| `plus_reassign_task(org, id, expected_updated_at, assignee_membership_id)` | Plus write | Open only; the assignee must be eligible; the same assignee gives `changed=false` |
+| `plus_complete_task(org, id, expected_updated_at)` | Plus write | Sets `done`, `completed_at` and `completed_by`. Already done gives `changed=false`; cancelled gives ZW004; stale gives ZW003. Audit: `plus_task_completed` |
+| `plus_cancel_task(org, id, expected_updated_at)` | Plus write | Kept as history. Already cancelled gives `changed=false`; done gives ZW004. Audit: `plus_task_cancelled` |
+
+All write RPCs return `plus_task_write_result(task_id, status, updated_at, changed)`.
+
+**Growth Agent.** This is staff-supervised; see product spec §7.6 and domain model §9a.
+
+| RPC | Access | Contract |
+|---|---|---|
+| `plus_run_growth_agent_review(org)` | Plus write | Runs one deterministic review under a per-organization advisory lock. It inserts a `pending` recommendation for each new situation and supersedes pending ones whose situation changed. Unchanged situations are never repeated. It creates **no** task, activity, stage change or Core row. Returns `plus_agent_review_result(created, superseded, unchanged)`. Audit: `plus_agent_review_run`, with counts only |
+| `plus_list_agent_recommendations(org, view, limit, offset)` | Plus read | `view`: pending, reviewed or all. Returns the opportunity, stage, contact name, the contact's **preferences only** (do-not-contact, preferred channel, has phone, has email), the last activity type and time, who generated it, and who reviewed it and when |
+| `plus_approve_agent_recommendation(org, id, expected_updated_at, task_title, due_at, assignee_membership_id)` | Plus write | Takes a row lock. Already approved gives `already_approved` with the same task. Superseded gives a `superseded` no-op. Dismissed or not relevant gives ZW004; stale gives ZW003. It then locks the opportunity and its contact (`FOR NO KEY UPDATE`, opportunity first, the order every other writer uses; NP-P2-S2-R1) and **revalidates** the situation, so a task, stage change or activity committed concurrently is always seen: if the situation changed, the recommendation is superseded and no task is created. Otherwise it creates one open task on the opportunity and records the reviewer and time. Returns `plus_agent_review_outcome(recommendation_id, outcome, task_id, changed)`. Audit: `plus_agent_recommendation_approved` |
+| `plus_dismiss_agent_recommendation(org, id, expected_updated_at, outcome)` | Plus write | `outcome` is `dismissed` or `not_relevant`; anything else gives ZW006. Repeating the same outcome gives `changed=false`; a different outcome after review gives ZW004 |
+
+**Dashboard reads** (Plus read, own organization only):
+- `plus_growth_dashboard(org)` returns one row: active opportunities, counts per open stage, active contacts, open, overdue, due-today and caller-owned tasks, pending recommendations, and attention opportunities.
+- `plus_list_attention_opportunities(org, limit 1–50)` returns the agent detection, longest-waiting first.
+- `plus_list_recent_activities(org, limit 1–50)` returns type, subject, actor and time, with **no note bodies**.
+
+Internal (no client EXECUTE): `_plus_org_day_bounds`, `_plus_require_task_subject`, `_plus_insert_task`, `_plus_agent_threshold`, `_plus_agent_candidates`, `_plus_agent_review`.
+
+Tests (rollback-only SQL):
+- `supabase/tests/plus_tasks_tests.sql`, `supabase/tests/plus_tasks_concurrency_test.sh`;
+- `supabase/tests/plus_growth_agent_tests.sql`, `supabase/tests/plus_growth_agent_concurrency_test.sh`.
+
+Nothing in P2-S2 sends a message, places a call, changes an opportunity stage, or creates or changes a Core Request, Passenger, Trip or Recurring Care arrangement.

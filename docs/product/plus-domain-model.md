@@ -48,6 +48,7 @@ organizations ─┬─ organization_modules (module='plus')                    
                ├─ plus_activities (append-only timeline)                     P1-S4  (+opportunity P2-S1, +account P3-S1)
                ├─ plus_opportunities (private_pay | facility)                P2-S1  (+inquiry_id P2-S7, +accounts P3-S1)
                ├─ plus_tasks                                                 P2-S2  (+account_id P3-S1)
+               ├─ plus_agent_recommendations (Growth Agent review queue)     P2-S2  (extension; no PII)
                ├─ plus_request_attributions ── transportation_requests       P2-S3  (+referral_account_id P3-S1)
                ├─ plus_quotes (staff estimates; later rule-priced)           P2-S5  (+pricing_rule_version Q2)
                ├─ plus_communication_consents (append-only ledger)           P2-S6
@@ -277,6 +278,36 @@ There is no update or delete RPC and no `metadata jsonb` column.
 
 Same shape as A02: `title`, `due_at`, `assignee_user_id`, `status open|done|cancelled`, `completed_at`, `completed_by`. Subjects are typed FKs, with `plus_tasks_subject_check` per §3.2. The assignee must hold Plus write access (an Admin, or an active write grant) at assignment time.
 **Indexes:** `(organization_id, status, due_at)`, `(organization_id, assignee_user_id, status, due_at)`.
+
+> **NP-P2-S2 implementation notes (migration `20261015100000_plus_tasks`, local only):**
+> - **Columns:** `id`, `organization_id`, `title` (1–200 characters, trimmed), `due_at` (timestamptz, UTC, nullable), `assignee_user_id`, `contact_id`, `opportunity_id`, `status` (`open|done|cancelled`), `completed_at`, `completed_by`, `created_by`, `created_at`, `updated_at`.
+> - **No `account_id` and no `request_id`.** Accounts arrive in P3-S1, which will replace the subject check additively. Request-linked tasks are not planned.
+> - **Subjects:** composite FKs `plus_tasks_contact_fkey (contact_id, organization_id)` and `plus_tasks_opportunity_fkey (opportunity_id, organization_id)`. `plus_tasks_subject_check` is `num_nonnulls(contact_id, opportunity_id) = 1`.
+> - **Creation rules:** a new task needs an **active** contact or an **open** opportunity, checked and locked under the write.
+> - **Completion consistency:** `plus_tasks_completion_check`. `done` carries `completed_at` and `completed_by`; `open` and `cancelled` carry neither.
+> - **Extra indexes:** `(organization_id, contact_id)` and `(organization_id, opportunity_id)`, both partial.
+> - **Assignee:** passed as a **membership handle** and resolved by `_plus_resolve_owner` to a user who can write Plus **at assignment time**; otherwise ZW006. An unchanged assignee is kept on edit even if that person's access later lapses (no silent reassignment).
+> - **Concurrency:** `updated_at` is the optimistic concurrency token, so a stale write gets ZW003. Repeating a completion is a no-op (`changed=false`); completing a cancelled task, or editing a closed one, gets ZW004.
+> - **No timeline rows:** tasks are not written to `plus_activities`. History is the task itself, plus `audit_events` (`plus_task_created`, `plus_task_updated`, `plus_task_completed`, `plus_task_cancelled`), which record field names only.
+> - **Day boundaries:** "today" uses the organization timezone (`_plus_org_day_bounds`).
+
+## 9a. `plus_agent_recommendations` (P2-S2 extension — Growth Agent review queue)
+
+Migration `20261015110000_plus_growth_agent` (local only). This is a tenant-owned queue of staff-reviewable suggestions, one row per detected **situation**.
+
+| Column | Notes |
+|---|---|
+| `organization_id`, `opportunity_id` | composite FK to `plus_opportunities` |
+| `recommendation_type` | `new_inquiry_waiting`, `awaiting_response`, `no_recent_activity` |
+| `proposed_action` | `create_follow_up_task` only (CHECK) |
+| `condition_key` | situation fingerprint `type:stage:last_activity_id`; `unique (organization_id, opportunity_id, recommendation_type, condition_key)`, so an unchanged situation is never recommended twice |
+| `signal_days`, `last_activity_at` | the explanation inputs |
+| `status` | `pending`, `approved`, `dismissed`, `not_relevant`, `superseded`; at most one `pending` per opportunity (partial unique index) |
+| `generation_source` | `staff_review` only. `scheduler` is reserved for a future, separately approved scheduler |
+| `generated_by`, `reviewed_by`, `reviewed_at` | who ran the review, and who decided and when (`plus_agent_recommendations_review_check`) |
+| `approved_task_id` | composite FK to `plus_tasks`, unique: one task per approval |
+
+There is **no contact PII, no message text and no JSON** in this table. Drafts are generated on the page from a fixed template and never stored. RLS uses `plus_can_read`. Writes happen only through `plus_run_growth_agent_review`, `plus_approve_agent_recommendation` and `plus_dismiss_agent_recommendation`. **It is not an outbox: nothing in it is ever sent.**
 
 ## 10. `plus_request_attributions` (P2-S3; `referral_account_id` in P3-S1)
 

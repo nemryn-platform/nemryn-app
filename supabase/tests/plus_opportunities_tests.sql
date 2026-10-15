@@ -193,7 +193,8 @@ begin
   perform pg_temp.t('Q5 no dependency on future tables; every FK targets organizations, auth.users or plus_contacts',
     (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts'))
        from pg_constraint where contype = 'f' and conrelid = 'public.plus_opportunities'::regclass)
-    and to_regclass('public.plus_accounts') is null and to_regclass('public.plus_tasks') is null and to_regclass('public.plus_quotes') is null
+    -- (plus_tasks ships in NP-P2-S2; accounts / quotes / inquiries / attributions remain future)
+    and to_regclass('public.plus_accounts') is null and to_regclass('public.plus_quotes') is null
     and to_regclass('public.plus_inquiries') is null and to_regclass('public.plus_request_attributions') is null);
   begin
     insert into public.plus_opportunities (organization_id, title, primary_contact_id, source, created_by) values (c_a, 'X', ct_b, 'phone', c_a1);

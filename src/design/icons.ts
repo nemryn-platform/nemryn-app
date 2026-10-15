@@ -1,5 +1,6 @@
 import {
   AddressBook,
+  CheckSquare,
   Kanban,
   SquaresFour,
   Tray,
@@ -58,6 +59,7 @@ export const navIcons: Record<string, Icon> = {
   growth: TrendUp,
   contacts: AddressBook,
   pipeline: Kanban,
+  tasks: CheckSquare,
 };
 
 export type NavIconKey = keyof typeof navIcons;
