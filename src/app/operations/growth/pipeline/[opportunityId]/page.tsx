@@ -28,6 +28,7 @@ import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { OpportunityStageControls } from "@/components/growth/OpportunityStageControls";
+import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -154,6 +155,8 @@ export default async function OpportunityDetailPage({
           <OpportunityStageControls organizationId={context.organizationId} opportunityId={o.id} expectedVersion={o.updatedAt} stage={o.stage} />
         </Panel>
       )}
+
+      <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id, label: o.title }} canWrite={canWrite && open} />
 
       <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
         <div className="flex flex-col gap-zw-md">

@@ -1,0 +1,564 @@
+NP-P2-S2 -- GROWTH DASHBOARD, TASKS, NESTED NAVIGATION & SUPERVISED GROWTH AGENT -- IMPLEMENTATION REPORT
+Date: 2026-10-15
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing is staged, committed, pushed, merged or deployed.
+- No production migration and no production or customer record change.
+- Fictional data only. P2-S3 and later functionality not started.
+- No message sent, no call placed, no external AI or model API used, no background job created.
+
+======================================================================
+1. VERIFIED BASELINE (read-only, before any change)
+======================================================================
+- Repository: https://github.com/nemryn-platform/nemryn-app. GitHub identity: nemryn (isolated GH_CONFIG_DIR, active).
+- PR #6 (np-p2-s1-private-pay-pipeline): MERGED 2026-10-15T05:35:13Z.
+  - Merge commit: ef76529a0bb0444bf801814e496b4822b88a6093. Its P2-S1 commit 35b9136 is an ancestor of origin/main.
+- origin/main: ef76529, "Merge pull request #6 from nemryn-platform/np-p2-s1-private-pay-pipeline".
+- Supabase (project wyocbivzgrbekuyqdfts, linked):
+  - `supabase migration list --linked` shows 20261014100000 (S4) and 20261014120000 (P2-S1) applied remotely;
+  - the remote head is 20261014120000.
+- Vercel Production: deployment 7084794524, sha ef76529, state success. The served service worker reports
+  BUILD = "ef76529a0bb0".
+- The tracked working tree was clean (0 modified tracked files). The P2-S1-R1A lost-reason vocabulary is present in
+  main (chose_competitor x2 in the P2-S1 migration).
+- RESULT: no discrepancy. The baseline matches "P2-S1 merged, migrated and deployed", so implementation proceeded.
+- Untracked reports and .tmp-qa scripts were preserved; nothing was reset, cleaned or overwritten.
+
+======================================================================
+2. BRANCH
+======================================================================
+- np-p2-s2-growth-workspace-agent-foundation, created from origin/main ef76529. Not stacked.
+- No commit was made on it; all changes are uncommitted working-tree changes (inventory in section 15).
+
+======================================================================
+3. SCHEMA (three forward-only, additive migrations; applied to the LOCAL dev database only)
+======================================================================
+3.1 supabase/migrations/20261015100000_plus_tasks.sql
+  public.plus_tasks:
+    - Columns:
+      - id, organization_id;
+      - title: text, 1-200 characters, trimmed (CHECK);
+      - due_at: timestamptz, UTC, nullable;
+      - assignee_user_id;
+      - contact_id, opportunity_id;
+      - status: open | done | cancelled;
+      - completed_at, completed_by;
+      - created_by, created_at, updated_at.
+    - NO account_id and NO request_id (asserted by plus_tasks_tests S3).
+    - Constraints:
+      - plus_tasks_contact_fkey (contact_id, organization_id) -> plus_contacts (composite);
+      - plus_tasks_opportunity_fkey (opportunity_id, organization_id) -> plus_opportunities (composite);
+      - plus_tasks_subject_check: num_nonnulls(contact_id, opportunity_id) = 1;
+      - plus_tasks_completion_check: done <=> completed_at and completed_by are set;
+      - FKs to organizations and auth.users.
+    - Indexes:
+      - (organization_id, status, due_at);
+      - (organization_id, assignee_user_id, status, due_at);
+      - partial (organization_id, contact_id);
+      - partial (organization_id, opportunity_id).
+    - Triggers: set_updated_at, prevent_organization_id_change.
+    - Security: RLS on, one SELECT policy TO authenticated USING plus_can_read(organization_id). Only SELECT is
+      granted to authenticated; no client write privilege or policy.
+  Internals (no client EXECUTE):
+    - _plus_org_day_bounds(org): the organization's local day [start, end) in its timezone;
+    - _plus_require_task_subject(org, contact, opp): requires an ACTIVE contact or an OPEN opportunity, locked
+      FOR NO KEY UPDATE;
+    - _plus_insert_task(...): the one task writer; audits plus_task_created.
+  Type: plus_task_write_result(task_id, status, updated_at, changed).
+
+3.2 supabase/migrations/20261015110000_plus_growth_agent.sql
+  - _plus_agent_threshold(key), immutable. Internal-test values:
+    - new_inquiry_waiting_days 2;
+    - awaiting_response_days 5;
+    - no_recent_activity_days 10;
+    - suggested_due_days 1.
+  - _plus_agent_candidates(org, opp): the deterministic detection (section 8).
+  - public.plus_agent_recommendations (the review queue).
+    - Columns:
+      - id, organization_id, opportunity_id;
+      - recommendation_type, proposed_action ('create_follow_up_task' only), condition_key;
+      - signal_days, last_activity_at;
+      - status: pending | approved | dismissed | not_relevant | superseded;
+      - generation_source: 'staff_review' only;
+      - generated_by, reviewed_by, reviewed_at;
+      - approved_task_id;
+      - created_at, updated_at.
+    - Constraints:
+      - composite FK -> plus_opportunities; composite FK approved_task_id -> plus_tasks;
+      - review consistency check: reviewed states carry reviewer and time; only an approval carries a task.
+    - Unique keys:
+      - (organization_id, opportunity_id, recommendation_type, condition_key): dedupe;
+      - partial unique: one pending per opportunity;
+      - partial unique: approved_task_id.
+    - No contact PII, no message text, no draft, no JSON column (asserted by agent tests S2).
+    - Security: RLS with plus_can_read; SELECT granted to authenticated only.
+  - _plus_agent_review(org, actor, source): the review core, behind a per-organization advisory lock. This is the
+    boundary a future scheduler would call. Nothing calls it except the staff RPC.
+  - RPCs:
+    - plus_run_growth_agent_review;
+    - plus_list_agent_recommendations;
+    - plus_approve_agent_recommendation;
+    - plus_dismiss_agent_recommendation.
+  - Types: plus_agent_review_result(created, superseded, unchanged) and
+    plus_agent_review_outcome(recommendation_id, outcome, task_id, changed).
+
+3.3 supabase/migrations/20261015120000_plus_growth_dashboard.sql
+  - Read RPCs only:
+    - plus_growth_dashboard;
+    - plus_list_attention_opportunities;
+    - plus_list_recent_activities.
+  - No table.
+
+No Core table, function, policy or grant was changed. database.types.ts was regenerated from the local database.
+
+======================================================================
+4. RPCs (all SECURITY DEFINER, search_path pinned, authenticated EXECUTE only)
+======================================================================
+Tasks:
+  - plus_list_tasks(org, view, search, assignee_membership_id, contact_id, opportunity_id, limit, offset) [read]
+    - Views: open, mine, overdue (due_at < now()), today (now .. end of the workspace day), upcoming, no_date, done,
+      cancelled, history. An unknown view gives ZW006.
+    - Returns:
+      - is_overdue and is_due_today;
+      - the assignee membership handle and name, and assignee_is_self;
+      - subject ids and names;
+      - completed_at and completed_by name;
+      - updated_at (the version token);
+      - total_count.
+  - plus_get_task(org, id) [read]: foreign or unknown id gives ZW002.
+  - plus_create_task(org, title, due_at, assignee_membership_id, contact_id, opportunity_id) [write]
+    - Exactly one subject.
+    - Archived contact, closed opportunity, both or neither subject gives ZW006. A foreign or unknown subject gives
+      ZW002.
+    - Title 1-200 characters.
+    - The assignee must be an eligible writer now (ZW006).
+    - A duplicate within 30 seconds is a no-op.
+  - plus_update_task(org, id, expected, title, due_at, assignee) [write]
+    - Open only (ZW004); stale gives ZW003; identical values give changed=false.
+    - An unchanged assignee is kept; a new assignee must be eligible.
+  - plus_reassign_task(org, id, expected, assignee) [write]: open only; the same assignee gives changed=false.
+  - plus_complete_task(org, id, expected) [write]: already done gives a no-op; cancelled gives ZW004.
+  - plus_cancel_task(org, id, expected) [write]: already cancelled gives a no-op; done gives ZW004.
+  Audits record field names only: plus_task_created, plus_task_updated, plus_task_completed, plus_task_cancelled.
+Growth Agent:
+  - plus_run_growth_agent_review(org) [write]
+    - Returns (created, superseded, unchanged).
+    - Audits plus_agent_review_run with counts only.
+  - plus_list_agent_recommendations(org, view pending|reviewed|all, limit, offset) [read]
+    - Returns the contact's PREFERENCES only (do_not_contact, preferred_channel, has_phone, has_email) and the last
+      activity type. No phone or email values.
+  - plus_approve_agent_recommendation(org, id, expected, task_title, due_at, assignee) [write]: see section 9.
+  - plus_dismiss_agent_recommendation(org, id, expected, 'dismissed'|'not_relevant') [write]: see section 9.
+Dashboard [read]:
+  - plus_growth_dashboard(org): one row with active_opportunities, stage_new_inquiry, stage_contacted,
+    stage_qualified, stage_quote_sent, stage_quote_accepted, active_contacts, open_tasks, overdue_tasks,
+    due_today_tasks, my_open_tasks, pending_recommendations, attention_opportunities.
+  - plus_list_attention_opportunities(org, limit 1-50).
+  - plus_list_recent_activities(org, limit 1-50): no bodies.
+Error contract: ZW001 unauthorized/read-only, ZW002 not found (no existence oracle), ZW003 stale, ZW004 illegal
+transition, ZW006 invalid input.
+
+======================================================================
+5. TASK PERMISSIONS
+======================================================================
+SQL P1-P12 and T1-T4 in plus_tasks_tests.sql; browser E2E sections C' and E.
+  - Organization Admin, Plus active or trial: read and write.
+  - Dispatcher with a WRITE grant: read and write; can be an assignee.
+  - Dispatcher with a READ grant: lists and details only. Every mutation gives ZW001; never offered or accepted as
+    an assignee (ZW006).
+  - No grant or revoked grant: ZW002, RLS returns 0 rows.
+  - Inactive membership, Driver, no-membership user, Platform Admin without membership: no access.
+  - Expired Plus (read-only): the Admin keeps read; every mutation gives ZW001; write-grant Dispatchers get ZW002.
+  - Locked or no entitlement: ZW002, RLS 0, rows retained.
+  - Suspended organization: ZW002.
+  - Cross-tenant: an Org B Admin with Org A ids, or forged ids under Org B, gets ZW002 or 0 rows. A multi-org user
+    reaches only the organization where they hold the role.
+  - Assignee eligibility is evaluated AT ASSIGNMENT TIME (_plus_resolve_owner). An existing assignee who later
+    loses access is not silently changed on edit, but cannot be newly assigned (U4).
+  - UI: write controls (New task, Mark done, Assign to me, Edit, Cancel task) render only for writers and only on
+    open tasks. Server actions re-check the organization binding and write capability; the RPC is the authority.
+
+======================================================================
+6. DASHBOARD DATA SOURCES (/operations/growth)
+======================================================================
+Every figure is a real aggregate from the caller's own organization (plus_can_read). Nothing is invented.
+  A. Summary:
+     - active opportunities, new inquiries (stage new_inquiry), contacts (active), open tasks, overdue tasks;
+     - source: plus_growth_dashboard;
+     - each tile links to its filtered view.
+  B. Private-pay pipeline overview: the five open stages from plus_growth_dashboard, each linked to
+     /operations/growth/pipeline?stage=<stage>&layout=list.
+  C. Needs attention:
+     - overdue and due-today tasks: plus_list_tasks views overdue and today, 5 each, with counts from the dashboard;
+     - "Opportunities that may need follow-up": plus_list_attention_opportunities, which uses the SAME detection as
+       the Growth Agent (no new without recent activity, awaiting a recorded reply, no recent activity).
+     Opportunities "awaiting staff action" are those with no open task and a waiting signal.
+  D. Recent activity: plus_list_recent_activities (8 rows) shows type, subject, actor and time. No note bodies.
+  E. Quick actions:
+     - New opportunity, New contact, New task: writers only;
+     - Open Pipeline, Open Tasks: everyone with read access.
+  F. Growth Agent preview: pending-recommendation count, "View recommendations", and "Review opportunities"
+     (writers only).
+  Kept from S1/S2: the "Plus: <status>" badge, trial end / active line (plus-trial-end / plus-active), the
+  read-only AttentionState, and "Your access" (plus-my-access).
+  Zero states: an empty workspace shows 0 everywhere and plain sentences ("Nothing is overdue.", "Nothing recorded
+  yet."). If loading fails, a fail-visible AttentionState with Retry is shown.
+  NOT shown (no source yet): conversion, booking, revenue, quote outcome, win rate, period filters.
+  B4 of the E2E asserts no "revenue / conversion rate / win rate / booked / $n / n%" text.
+
+======================================================================
+7. NAVIGATION
+======================================================================
+Components: src/components/operations/GrowthNavGroup.tsx (client), with rules in src/lib/plus/growth-nav-core.ts
+(pure, unit-tested). OperationsSidebar renders the group in the Growth slot only when the server authorized Growth
+(canAccessGrowth: entitlement plus grant). The shell, sidebar style, typography and logo are unchanged.
+  - Order: Operations items (unchanged), then Growth, then Drive (when linked), then Settings.
+  - Growth children: Dashboard (/operations/growth), Pipeline, Contacts, Tasks.
+  - Expanded sidebar:
+    - the Growth LABEL is a link to the Dashboard and also expands the group;
+    - the CHEVRON is a separate <button> with aria-expanded, aria-controls and a "Expand/Collapse Growth" label; it
+      only toggles the children and never navigates.
+  - Any Growth route auto-expands the group. Implemented with React's "adjust state when a prop changes" pattern
+    (no setState-in-effect), so browser Back and Forward re-expand and re-highlight.
+  - Active state: exactly one child carries aria-current="page". The Growth Agent page highlights Dashboard; Core
+    routes highlight no Growth child.
+  - Icon-only rail (below lg, or a collapsed sidebar):
+    - the Growth icon is a disclosure button (aria-label "Growth", aria-expanded, aria-controls);
+    - it opens a fixed-position flyout (role=group, labelled) with the four links;
+    - Enter/Space opens it and focuses the first link; Escape closes it and returns focus to the button;
+    - Tab-out, an outside pointer, resize or scroll close it;
+    - it is never hover-only.
+  - Visibility is still governed by entitlement and grant. The S2/S3/S4/P2-S1 regression E2Es confirm hidden for
+    no-Plus, locked, no-grant and revoked, and visible for read-only Admins and grant holders.
+  - icons.ts gains `tasks: CheckSquare`.
+
+======================================================================
+8. GROWTH AGENT RULES (deterministic, explainable; database: _plus_agent_candidates)
+======================================================================
+Scope:
+  - open private-pay opportunities (new_inquiry .. quote_accepted);
+  - of an ACTIVE contact;
+  - with NO open task on the opportunity or its contact (staff already have a follow-up planned).
+Signals, first match wins:
+  1. new_inquiry_waiting: stage new_inquiry; the stage was never changed; no note, call, email or meeting logged
+     since creation; created more than 2 days ago.
+  2. awaiting_response: the latest interaction is a LOGGED call or email; it is also the latest entry of any kind;
+     it is older than 5 days. The text says plainly that this does NOT mean the person ignored it, only that no
+     reply was logged.
+  3. no_recent_activity: nothing recorded on the opportunity or its contact for 10 days.
+Explanation: signal_days, last recorded activity type and time, plus who ran the review, all shown on the card.
+Dedupe:
+  - condition_key = type:stage:last_activity_id;
+  - an unchanged situation is never recommended twice, whatever its review outcome;
+  - at most one pending recommendation per opportunity.
+Supersede: a pending recommendation whose situation no longer matches is withdrawn ('superseded') by the next
+review or by an approval attempt.
+Thresholds:
+  - the values above are INTERNAL-TEST values, shown to staff on the agent page, and NOT approved production policy;
+  - changing them is a reviewed migration;
+  - the example Day 3 / Day 7 / Day 14 cadence was NOT adopted.
+Overdue tasks are deliberately not an agent signal: the dashboard already covers them, and a task-on-a-task would
+duplicate work.
+Trigger: staff click "Review opportunities" (dashboard or /operations/growth/agent). There is no scheduler, cron,
+pg_cron or background job. generation_source accepts only 'staff_review'.
+
+======================================================================
+9. APPROVE / REJECT
+======================================================================
+plus_approve_agent_recommendation(org, rec, expected, task_title, due_at, assignee):
+  - Locks the recommendation FOR UPDATE, then:
+    - already approved: outcome already_approved with the SAME task (replay-safe; no second task);
+    - superseded: a superseded no-op;
+    - dismissed or not_relevant: ZW004;
+    - stale token: ZW003.
+  - REVALIDATION: re-runs the detection for that one opportunity. If the situation changed (an activity was
+    logged, a task was added, the stage moved, the contact was archived), the recommendation is superseded and NO
+    task is created. The UI says "out of date ... withdrawn. No task was created."
+  - Otherwise it creates ONE open internal task on the opportunity via _plus_insert_task:
+    - the staff-edited title, due date/time (workspace timezone) and eligible assignee;
+    - it records reviewed_by, reviewed_at and approved_task_id, and audits plus_agent_recommendation_approved.
+  - It never changes a stage, marks lost, writes an activity or a Core row, or sends anything.
+plus_dismiss_agent_recommendation: 'dismissed' or 'not_relevant'.
+  - Records the reviewer and time.
+  - The same outcome again gives changed=false; a different outcome after review gives ZW004; stale gives ZW003.
+  - A dismissed situation is not re-recommended while unchanged.
+Concurrency:
+  - simultaneous approvals: exactly one task (CONC-G1);
+  - simultaneous reviews: serialized by the advisory lock (CONC-G2);
+  - approve vs dismiss: exactly one outcome (CONC-G3).
+
+======================================================================
+10. OUTBOUND RESTRICTIONS
+======================================================================
+  - No Send, Call, Text or "Email now" control exists anywhere. E2E D11 and C20 scan every button and link.
+  - Drafts:
+    - produced by the LOCAL templateDraftProvider ("template-v1"): first name plus workspace name, fixed wording;
+    - no price, appointment, availability, medical detail or consent claim (unit-tested);
+    - editable in a textarea that is never saved (E2E D12: edits are not persisted anywhere);
+    - labelled "Draft — NOT SENT", with the caveat "Nemryn has no consent record for this person yet. Use this draft
+      only if they agreed to be contacted this way."
+  - No draft is offered when:
+    - the contact is do_not_contact (the card shows a "Do not contact" badge and the suggested task becomes
+      "Review (do not contact): ...");
+    - the preferred channel is none or unclear;
+    - the matching phone or email is missing.
+  - No external AI: agent-core.ts has no imports and no network code (unit-tested). No contact record leaves Nemryn.
+    GrowthAgentDraftProvider is the documented seam for a future, separately reviewed provider.
+  - Database: no agent or dashboard function references pg_net, http, dblink, email or SMS (agent tests S5).
+    E2E F2 confirms no outbound-type audit action was recorded during the run.
+  - Never: send email or SMS, place calls, access personal email, change stages, mark lost, create quotes, or create
+    or modify Core requests, passengers or trips (agent tests R4, A5, K1, K2; E2E D5, D14, F1).
+  - PD-10 and PD-11 remain OPEN. Future consent-gated automation is documented as a separate decision.
+
+======================================================================
+11. TENANT-ISOLATION AND CONCURRENCY TESTS
+======================================================================
+SQL (rollback-only, dev database):
+  - plus_tasks_tests.sql: 58/58 PASS.
+    - Schema and privileges: S1-S10.
+    - Create: C1-C6.
+    - Assignee: A1-A3.
+    - Views and timezone: D1-D9.
+    - Update: U1-U5.
+    - Complete and cancel: X1-X7.
+    - Permissions: P1-P12.
+    - Tenant: T1-T4.
+    - Core: K1-K2.
+  - plus_growth_agent_tests.sql: 40/40 PASS.
+    - Schema: S1-S6.
+    - Detection: D1-D3.
+    - Review: R1-R5.
+    - Dismiss: X1-X3.
+    - Approve: A1-A8.
+    - Permissions: P1-P6.
+    - Dashboard: B1-B7.
+    - Core: K1-K2.
+  - privilege_contract_tests.sql: 0 violations of 29 checks. Both new tables are registered as class B; the 14 RPCs
+    are 'u' and the 6 internals ''.
+Concurrency (parallel psql processes holding locks ~1 s):
+  - plus_tasks_concurrency_test.sh: CONC-T1 complete vs cancel, T2 double complete, T3 two edits from one version,
+    T4 double submit. 0 failures.
+  - plus_growth_agent_concurrency_test.sh: CONC-G1 simultaneous approvals, G2 simultaneous reviews, G3 approve vs
+    dismiss. 0 failures.
+Browser isolation (E2E section E): Org B's Dashboard shows zeros, and its Tasks and agent queue never list Org A
+records. Org B gets 0 rows / ZW00x on Org A rows through the database.
+Isolated stack (separate project NemrynS1Iso; database VERIFIED fresh before each suite): see section 12.
+
+======================================================================
+12. CORE REGRESSION
+======================================================================
+Isolated stack, run-p2s2.sh:
+  (a) UPGRADE path: P2-S2 applied on top of a SEEDED P2-S1 head 20261014120000.
+    - Applied with `supabase migration up`: 20261015100000, 110000 and 120000 all applied, rc 0; head 20261015120000.
+    - Pre-existing P2-S1 data preserved: contact, qualified opportunity and note = 1/1/1. New tables were empty
+      (0/0).
+    - Detection on the upgraded data found the old opportunity: no_recent_activity, 20 days.
+    - A superuser probe of plus_growth_dashboard was refused with "unauthorized". That is the intended no-session
+      refusal (ZW001); the dashboard is covered under real sessions by agent tests B1-B7.
+    - On the upgraded database:
+      - plus_tasks_tests 58/58, plus_growth_agent_tests 40/40, plus_opportunities_tests 75/75,
+        plus_contacts_activities_tests 82/82;
+      - privilege contract: 0 violations of 29 checks;
+      - both new concurrency scripts: 0 failures.
+  (b) FRESH path: a full reset from zero before EACH suite, with the database verified fresh (head, 16 memberships,
+      no Plus rows):
+    | privilege_contract_tests          | 0 violations / 29 |  | plus_entitlement_tests            | 150/150 |
+    | platform_admin_foundation_tests   | 58 PASS, 0 fail   |  | plus_access_helpers_tests         | 170/170 |
+    | rls_adversarial_tests             | 33 PASS, 0 fail   |  | plus_entitlement_versioned_tests  | 17/17   |
+    | security_definer_exposure_tests   | 20 PASS, 0 fail   |  | plus_member_grants_tests          | 76/76   |
+    | function_privilege_tests          | 7 PASS, 0 fail    |  | plus_contacts_activities_tests    | 82/82   |
+    | request_decision_workflow_tests   | 60 PASS, 0 fail   |  | plus_opportunities_tests          | 75/75   |
+    | create_trip_tests                 | 20 PASS, 0 fail   |  | plus_tasks_tests (NEW)            | 58/58   |
+    | public_request_intake_tests       | 42 PASS, 0 fail   |  | plus_growth_agent_tests (NEW)     | 40/40   |
+    | public_intake_rate_limit_tests    | 8 PASS, 0 fail    |  | request_mutation_tests            | 39, 0 fail |
+    | create_trip_privilege_tests       | 5 PASS, 0 fail    |  | mutation_authorization_tests      | 4, 0 fail  |
+  (c) CONCURRENCY:
+    - All scripts pass with 0 failures, including:
+      - plus_tasks (4) and plus_growth_agent (3), both new;
+      - plus_opportunities (6), plus_contacts (4), plus_member_grants (6);
+      - plus_entitlement_versioned (4), plus_entitlement (5);
+      - platform_lifecycle (2), request_decision (21), public_request_intake (1).
+    - EXCEPTION, PRE-EXISTING and UNRELATED: mutation_concurrency_test CONCURRENCY-1 (Core trips, a direct trips
+      lock as authenticated) FAILS, exactly as recorded in NP-P1-S4 (I9) and NP-P2-S1 (K4).
+      - It was shown to fail on the pre-S1 schema in NP-P1-S2-R1.
+      - P2-S2 touches no Core table or function (SQL K1/K2).
+Browser regression E2Es (local, `next start -p 3100`, fictional Org A / Org B):
+  - NP-P1-S1 entitlement: 45 PASS, 0 FAIL.
+  - NP-P1-S2 growth access and navigation: 49 PASS, 0 FAIL.
+  - NP-P1-S3 named staff permissions: 57 PASS, 0 FAIL.
+  - NP-P1-S4 contacts and activities: 50 PASS, 0 FAIL.
+  - NP-P2-S1 private-pay pipeline: 57 PASS, 0 FAIL.
+  - P1-PILOT-UX1 header and day sheet (Core): 46 PASS, 0 FAIL.
+Deliberate, recorded E2E updates. These track intended UI changes; they are not behaviour regressions:
+  - S1 B6 and B8, S2 C6: /operations/growth is now the Dashboard.
+    - The S1 placeholder sentence is gone, so B6 now asserts the dashboard renders.
+    - "opportunity/contact/customer" words are legitimate there. B8 and C6 now forbid FABRICATED OUTCOME FIGURES
+      (revenue, conversion rate, win rate, booked, $n, n%), and C6 also asserts every count is 0 with no records.
+  - S2 C4: the active Growth item is now the Dashboard child (aria-current), not the group label.
+  - P2-S1 A1: nav order is now label, Dashboard, Pipeline, Contacts, Tasks.
+  - S4 and P2-S1 cleanup now deletes plus_agent_recommendations and plus_tasks before opportunities and contacts
+    (FK order).
+  - One P2-S1 attempt timed out on its first setup docker exec (60 s, before any browser step). A clean rerun
+    passed 57/57.
+Core: every E2E asserts Request/Passenger/Trip/Recurring counts are unchanged by Growth actions (P2-S2 F1). SQL K1
+and K2 in both new suites assert no Core write and no Core reference.
+
+======================================================================
+13. E2E (.tmp-qa/np-p2-s2-growth-workspace-e2e.mjs) -- 76 PASS, 0 FAIL
+======================================================================
+Local dev Supabase plus `next start -p 3100`; fictional Org A / Org B; every record created and removed by the run
+(cleanup check passes: 0 tasks, recommendations, opportunities, contacts, activities or entitlements left).
+  - A. Nested navigation, expanded sidebar (A1-A13):
+    - order and children;
+    - collapsed off-Growth;
+    - chevron aria wiring; click and keyboard Enter/Space toggle without navigating;
+    - the label opens the Dashboard and expands;
+    - one active child; collapse holds;
+    - Back/Forward re-expand and re-highlight;
+    - agent page -> Dashboard; Core route -> none.
+  - A'. Rail at 820 px (A14-A18): disclosure button; Enter opens and focuses the first link; Escape closes and
+    returns focus; outside click closes; a link navigates and closes; the rail icon is active.
+  - B. Dashboard zero states (B1-B6): all metrics and stages 0; empty sentences; no fabricated figures; writer quick
+    actions; status, access and badge kept; metric links.
+  - C. Tasks (C1-C21):
+    - creation from Opportunity and Contact detail: a date-only due becomes 23:59 New York; an explicit 09:00 is
+      stored as UTC;
+    - audited, with NO activity row;
+    - views: overdue, today, no date, search, mine, history;
+    - dashboard counts equal the database;
+    - assignee eligibility: read-grant user not offered; ZW006 in the database; accepted after a write grant;
+    - Assign to me; stale edit refused; Mark done; Cancel kept as history; no controls on closed tasks; never shown
+      as a communication; ZW004 on complete-after-cancel.
+  - D. Growth Agent (D1-D18):
+    - attention list with signals; detection creates nothing;
+    - explainer; review creates exactly 2;
+    - no task, activity, stage or Core change; audited; no repeats;
+    - card explains why, the proposed action, last activity and provenance;
+    - NOT SENT editable draft with the consent caveat; DNC gives no draft; no Send/Call/Text control;
+    - draft edits not persisted;
+    - approval creates one task with "Nothing was sent"; reviewer recorded; replay returns the same task;
+    - dismiss moves it to reviewed;
+    - a stale recommendation is superseded on approval with no task.
+  - E. Read-only and tenancy (E1-E10):
+    - read-grant: dashboard, tasks and queue visible, no write controls, ZW001 in the database;
+    - Org B: isolated in the UI and the database;
+    - expired Plus: read-only notice, figures kept, no write controls.
+  - F. Core (F1-F2): Operations loads; Core counts unchanged; nothing outbound.
+
+======================================================================
+14. SCREENSHOTS / PREVIEW REFERENCES (local, untracked; fictional data)
+======================================================================
+  - .tmp-qa/screens/p2s2-nav-expanded.png: the Growth group expanded in the existing sidebar.
+  - .tmp-qa/screens/p2s2-nav-rail-flyout.png: the 820 px icon rail with the keyboard-opened Growth flyout.
+  - .tmp-qa/screens/p2s2-dashboard.png: the Dashboard with real counts, Needs attention (overdue and due-today),
+    Agent preview and Quick actions.
+  - .tmp-qa/screens/p2s2-agent-queue.png: the recommendation queue with a NOT SENT draft and a do-not-contact card.
+Reviewed visually: same chrome, typography and sidebar style. The children are indented under Growth with the
+existing active treatment.
+
+======================================================================
+15. INVENTORY (uncommitted; nothing staged)
+======================================================================
+New:
+  supabase/migrations/20261015100000_plus_tasks.sql                    (572 lines)
+  supabase/migrations/20261015110000_plus_growth_agent.sql             (463 lines)
+  supabase/migrations/20261015120000_plus_growth_dashboard.sql         (159 lines)
+  supabase/tests/plus_tasks_tests.sql
+  supabase/tests/plus_tasks_concurrency_test.sh
+  supabase/tests/plus_growth_agent_tests.sql
+  supabase/tests/plus_growth_agent_concurrency_test.sh
+  src/lib/plus/tasks-core.ts, tasks-core.test.mjs, tasks.ts
+  src/lib/plus/agent-core.ts, agent-core.test.mjs, agent.ts, agent-view.ts
+  src/lib/plus/growth-nav-core.ts, growth-nav-core.test.mjs
+  src/app/operations/growth/tasks/page.tsx, actions.ts
+  src/app/operations/growth/agent/page.tsx, actions.ts
+  src/components/growth/TaskDialog.tsx, TaskList.tsx, SubjectTasksPanel.tsx, GrowthAgent.tsx
+  src/components/operations/GrowthNavGroup.tsx
+  docs/reports/NP-P2-S2-growth-workspace-agent-foundation-implementation.txt (this report)
+Modified:
+  - src/app/operations/growth/page.tsx: rewritten as the Dashboard.
+  - src/app/operations/growth/contacts/[contactId]/page.tsx: Tasks panel.
+  - src/app/operations/growth/pipeline/[opportunityId]/page.tsx: Tasks panel.
+  - src/components/operations/OperationsSidebar.tsx: the Growth slot renders GrowthNavGroup.
+  - src/design/icons.ts: the tasks icon.
+  - src/lib/plus/contacts-core.ts: the "Stage changed" activity label.
+  - src/lib/supabase/database.types.ts: regenerated.
+  - supabase/tests/privilege_contract_tests.sql: P2-S2 registrations.
+  - supabase/tests/plus_contacts_activities_tests.sql (K8) and plus_opportunities_tests.sql (Q5): plus_tasks now
+    exists; removed from their "future table" checks.
+  - docs/product/plus-product-spec.md: §7.1 nav implemented, §7.3 Dashboard/Tasks notes, new §7.6 Growth Agent,
+    roadmap row.
+  - docs/product/plus-domain-model.md: §2 overview, §9 task notes, new §9a recommendations.
+  - docs/security/plus-access-model.md: P2-S2 status, §6 item 5a agent boundary, T30/T31.
+  - docs/data/mutation-api.md: new P2-S2 section.
+  - docs/security/database-privilege-contract.md: P2-S2 additions.
+Local QA (untracked, .tmp-qa):
+  - np-p2-s2-growth-workspace-e2e.mjs and screens/;
+  - the edits to the S1/S2/S4/P2-S1 E2E scripts listed in section 12.
+Isolated runner (scratchpad, outside the repo): iso-s1/run-p2s2.sh.
+
+======================================================================
+16. LIMITATIONS
+======================================================================
+  - The task subject picker on the Tasks page offers open opportunities plus the first 25 active contacts. Any
+    contact can still get a task from its own detail page. A searchable picker is a follow-up.
+  - Lists cap at 100 tasks per view (TASKS_PAGE_SIZE) and the pipeline at 200; there is no pagination UI yet.
+  - Overdue tasks are not an agent signal (by design; see section 8).
+  - Consent is always "unknown" before P2-S6, so every draft carries the no-consent caveat. Drafts are copy aids
+    only.
+  - A grant revoked while a write is in flight is decided by the database at commit time. The UI shows the refusal
+    on the next action; there is no live push.
+  - Reviews run only when staff ask. There are no reminders and no scheduler (NP-P4 scope).
+  - The Dashboard has no period filter, conversion, booking or quote figures (P2-S3/S4/S5/S8).
+  - Draft text edits are deliberately not saved; a reload restores the template.
+
+======================================================================
+17. DECISIONS (taken within the brief; flagged for owner review)
+======================================================================
+  D1. "Dashboard" is the child label for /operations/growth, which is the Growth Overview. The Agent page lives under
+      it in navigation terms.
+  D2. Tasks never write plus_activities (no duplicate history). Task history is the task row plus audit_events.
+  D3. A date-only due date means 23:59 in the workspace timezone; "today" is the workspace day.
+  D4. Agent thresholds are internal-test values 2 / 5 / 10 days, plus a suggested due date 1 day out. They are
+      shown to staff and NOT production policy.
+  D5. The agent proposes ONLY internal follow-up tasks (CHECK-enforced). Any other proposal type needs a reviewed
+      migration.
+  D6. Approval revalidates and withdraws stale recommendations instead of creating tasks for them.
+  D7. An opportunity with ANY open task (on it or its contact) is not flagged: staff already have a plan.
+  D8. Drafts come from a local template only. No provider integration; the seam is GrowthAgentDraftProvider.
+  OUTSTANDING owner decisions (not taken here):
+    - production agent thresholds and cadence;
+    - any scheduler;
+    - any AI provider (BAA, data sharing);
+    - consent-gated sending (P2-S6, NP-P4);
+    - PD-10 and PD-11, which remain OPEN.
+
+======================================================================
+18. READINESS
+======================================================================
+  - Local implementation complete and verified:
+    - tsc clean; ESLint clean;
+    - 799/799 unit tests (17 new);
+    - next build succeeds (all Growth routes);
+    - SQL, privilege, adversarial and concurrency suites pass on dev and on the isolated stack (fresh and upgraded),
+      except the pre-existing, unrelated Core mutation_concurrency_test CONCURRENCY-1 (section 12);
+    - P2-S2 E2E 76/76; regression E2Es all pass.
+  - NOT released.
+  - Before release:
+    - code review;
+    - a schema/security review of the two new tables and the agent boundary;
+    - owner approval of thresholds as test-only;
+    - commit/PR with the nemryn GH account;
+    - a production migration package for 20261015100000 / 110000 / 120000 (order matters: tasks before agent);
+    - a Vercel deploy;
+    - Pilot-Simulation-tenant smoke only. Do not mutate prod roles; the role check is MANUAL.
+  - Release-order dependency: the app must deploy AFTER the migrations, because the new pages call the new RPCs.
+    The migrations are additive, so the currently deployed app is unaffected by them.
+
+======================================================================
+19. NEXT STEPS (not started)
+======================================================================
+  1. Owner review of this report and decisions D1-D8; confirm the thresholds stay test-only.
+  2. Controlled commit and PR (NP-P2-S2-R1), then a production release with the read-only pre-checks used for P2-S1.
+  3. P2-S3 Request attribution (not begun).
+  4. Later, as separate decisions: a scheduler for reviews; consent ledger (P2-S6) before any sending; an AI draft
+     provider only after PD-10/PD-11 and a vendor/BAA review.

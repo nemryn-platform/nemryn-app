@@ -22,6 +22,7 @@ import { ContactWriteActions } from "@/components/growth/ContactActions";
 import { listOpportunities, type OpportunityListRow } from "@/lib/plus/opportunities";
 import { stageDisplayLabel, stageTone } from "@/lib/plus/opportunities-core";
 import Link from "next/link";
+import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -130,6 +131,8 @@ export default async function ContactDetailPage({
           ]}
         />
       </Panel>
+
+      <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "contact", id: contact.id, label: contact.displayName }} canWrite={canWrite} />
 
       <div className="flex flex-col gap-zw-md" data-testid="contact-opportunities">
         <SectionHeader

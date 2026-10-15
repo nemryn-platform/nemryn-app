@@ -101,6 +101,14 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
   * D gains eight RPCs: `plus_list_opportunities`, `plus_get_opportunity`, `plus_list_opportunity_activities`, `plus_create_opportunity`, `plus_update_opportunity`, `plus_change_opportunity_stage`, `plus_mark_opportunity_lost`, `plus_reopen_opportunity`.
   * A gains `_plus_require_active_contact` and the trigger function `_plus_opportunity_channel_immutable`.
   * `plus_activities` gains `opportunity_id`, with its privileges unchanged.
+* **NP-P2-S2 additions:**
+  * Tables `plus_tasks` and `plus_agent_recommendations` are class **B**: authenticated `SELECT` only, through the single policy `plus_can_read(organization_id)`. There is no client write privilege or policy.
+  * D gains 14 RPCs:
+    * tasks: `plus_list_tasks`, `plus_get_task`, `plus_create_task`, `plus_update_task`, `plus_reassign_task`, `plus_complete_task`, `plus_cancel_task`;
+    * Growth Agent: `plus_run_growth_agent_review`, `plus_list_agent_recommendations`, `plus_approve_agent_recommendation`, `plus_dismiss_agent_recommendation`;
+    * dashboard: `plus_growth_dashboard`, `plus_list_attention_opportunities`, `plus_list_recent_activities`.
+  * A gains six internals: `_plus_org_day_bounds`, `_plus_require_task_subject`, `_plus_insert_task`, `_plus_agent_threshold`, `_plus_agent_candidates`, `_plus_agent_review`. `_plus_agent_review` is the boundary a future, separately approved scheduler would call; no scheduler or job exists and none holds EXECUTE.
+  * No Core object is changed. No agent or dashboard function uses `pg_net`, `http`, `dblink`, email or SMS (asserted by `plus_growth_agent_tests.sql` S5).
 * **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C; `_validate_request_decision_reason`, P1-OPS-R1), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
 * Every SECURITY DEFINER function pins `search_path` (contract check 19). Functions executable by clients that contain no inline `auth.uid()` / role check are: the three service-only RPCs (validate the integration / dispatch event themselves), the six `driver_*` transition wrappers (delegate to `_driver_execute_trip_transition`, which authorises), the two anon previews (token-scoped), and `is_valid_iana_timezone` (pure).
 

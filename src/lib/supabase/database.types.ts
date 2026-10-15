@@ -834,6 +834,85 @@ export type Database = {
           },
         ]
       }
+      plus_agent_recommendations: {
+        Row: {
+          approved_task_id: string | null
+          condition_key: string
+          created_at: string
+          generated_by: string
+          generation_source: string
+          id: string
+          last_activity_at: string | null
+          opportunity_id: string
+          organization_id: string
+          proposed_action: string
+          recommendation_type: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          signal_days: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          approved_task_id?: string | null
+          condition_key: string
+          created_at?: string
+          generated_by: string
+          generation_source?: string
+          id?: string
+          last_activity_at?: string | null
+          opportunity_id: string
+          organization_id: string
+          proposed_action?: string
+          recommendation_type: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          signal_days: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          approved_task_id?: string | null
+          condition_key?: string
+          created_at?: string
+          generated_by?: string
+          generation_source?: string
+          id?: string
+          last_activity_at?: string | null
+          opportunity_id?: string
+          organization_id?: string
+          proposed_action?: string
+          recommendation_type?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          signal_days?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_agent_recommendations_opportunity_fkey"
+            columns: ["opportunity_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_opportunities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_agent_recommendations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_agent_recommendations_task_fkey"
+            columns: ["approved_task_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_tasks"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       plus_contacts: {
         Row: {
           contact_kind: string
@@ -977,6 +1056,76 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "plus_contacts"
             referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      plus_tasks: {
+        Row: {
+          assignee_user_id: string | null
+          completed_at: string | null
+          completed_by: string | null
+          contact_id: string | null
+          created_at: string
+          created_by: string
+          due_at: string | null
+          id: string
+          opportunity_id: string | null
+          organization_id: string
+          status: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          assignee_user_id?: string | null
+          completed_at?: string | null
+          completed_by?: string | null
+          contact_id?: string | null
+          created_at?: string
+          created_by: string
+          due_at?: string | null
+          id?: string
+          opportunity_id?: string | null
+          organization_id: string
+          status?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          assignee_user_id?: string | null
+          completed_at?: string | null
+          completed_by?: string | null
+          contact_id?: string | null
+          created_at?: string
+          created_by?: string
+          due_at?: string | null
+          id?: string
+          opportunity_id?: string | null
+          organization_id?: string
+          status?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_tasks_contact_fkey"
+            columns: ["contact_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_tasks_opportunity_fkey"
+            columns: ["opportunity_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_opportunities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_tasks_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -2169,6 +2318,27 @@ export type Database = {
           utc: string
         }[]
       }
+      _plus_agent_candidates: {
+        Args: { p_opportunity_id: string; p_organization_id: string }
+        Returns: {
+          condition_key: string
+          last_activity_at: string
+          opportunity_id: string
+          recommendation_type: string
+          signal_days: number
+        }[]
+      }
+      _plus_agent_review: {
+        Args: { p_actor: string; p_organization_id: string; p_source: string }
+        Returns: Database["public"]["CompositeTypes"]["plus_agent_review_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_agent_review_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _plus_agent_threshold: { Args: { p_key: string }; Returns: number }
       _plus_contact_matches: {
         Args: {
           p_display_name: string
@@ -2188,13 +2358,40 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_insert_task: {
+        Args: {
+          p_actor: string
+          p_assignee_user_id: string
+          p_contact_id: string
+          p_due_at: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_title: string
+        }
+        Returns: string
+      }
       _plus_member_access: {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_org_day_bounds: {
+        Args: { p_organization_id: string }
+        Returns: {
+          day_end: string
+          day_start: string
+        }[]
+      }
       _plus_require_active_contact: {
         Args: { p_contact_id: string; p_organization_id: string }
         Returns: string
+      }
+      _plus_require_task_subject: {
+        Args: {
+          p_contact_id: string
+          p_opportunity_id: string
+          p_organization_id: string
+        }
+        Returns: undefined
       }
       _plus_resolve_owner: {
         Args: { p_organization_id: string; p_owner_membership_id: string }
@@ -3083,6 +3280,23 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_approve_agent_recommendation: {
+        Args: {
+          p_assignee_membership_id: string
+          p_due_at: string
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_recommendation_id: string
+          p_task_title: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_agent_review_outcome"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_agent_review_outcome"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_archive_contact: {
         Args: {
           p_contact_id: string
@@ -3100,6 +3314,20 @@ export type Database = {
       }
       plus_can_read: { Args: { p_organization_id: string }; Returns: boolean }
       plus_can_write: { Args: { p_organization_id: string }; Returns: boolean }
+      plus_cancel_task: {
+        Args: {
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_task_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_task_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_task_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_change_opportunity_stage: {
         Args: {
           p_expected_updated_at: string
@@ -3112,6 +3340,20 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_complete_task: {
+        Args: {
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_task_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_task_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_task_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3154,6 +3396,38 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_create_task: {
+        Args: {
+          p_assignee_membership_id: string
+          p_contact_id: string
+          p_due_at: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_title: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_task_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_task_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_dismiss_agent_recommendation: {
+        Args: {
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_outcome: string
+          p_recommendation_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_agent_review_outcome"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_agent_review_outcome"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3222,6 +3496,29 @@ export type Database = {
           updated_at: string
         }[]
       }
+      plus_get_task: {
+        Args: { p_organization_id: string; p_task_id: string }
+        Returns: {
+          assignee_can_write: boolean
+          assignee_membership_id: string
+          assignee_name: string
+          completed_at: string
+          completed_by_name: string
+          contact_id: string
+          contact_name: string
+          created_at: string
+          created_by_name: string
+          due_at: string
+          is_overdue: boolean
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          status: string
+          task_id: string
+          title: string
+          updated_at: string
+        }[]
+      }
       plus_grant_member_access: {
         Args: {
           p_access: string
@@ -3236,6 +3533,69 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      plus_growth_dashboard: {
+        Args: { p_organization_id: string }
+        Returns: {
+          active_contacts: number
+          active_opportunities: number
+          attention_opportunities: number
+          due_today_tasks: number
+          my_open_tasks: number
+          open_tasks: number
+          overdue_tasks: number
+          pending_recommendations: number
+          stage_contacted: number
+          stage_new_inquiry: number
+          stage_qualified: number
+          stage_quote_accepted: number
+          stage_quote_sent: number
+        }[]
+      }
+      plus_list_agent_recommendations: {
+        Args: {
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_view: string
+        }
+        Returns: {
+          approved_task_id: string
+          contact_do_not_contact: boolean
+          contact_has_email: boolean
+          contact_has_phone: boolean
+          contact_id: string
+          contact_name: string
+          contact_preferred_channel: string
+          created_at: string
+          generated_by_name: string
+          last_activity_at: string
+          last_activity_type: string
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          proposed_action: string
+          recommendation_id: string
+          recommendation_type: string
+          reviewed_at: string
+          reviewed_by_name: string
+          signal_days: number
+          status: string
+          total_count: number
+          updated_at: string
+        }[]
+      }
+      plus_list_attention_opportunities: {
+        Args: { p_limit: number; p_organization_id: string }
+        Returns: {
+          attention_type: string
+          contact_name: string
+          last_activity_at: string
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          signal_days: number
+        }[]
       }
       plus_list_contact_activities: {
         Args: {
@@ -3349,6 +3709,52 @@ export type Database = {
           total_count: number
         }[]
       }
+      plus_list_recent_activities: {
+        Args: { p_limit: number; p_organization_id: string }
+        Returns: {
+          activity_id: string
+          activity_type: string
+          actor_name: string
+          contact_id: string
+          contact_name: string
+          from_stage: string
+          occurred_at: string
+          opportunity_id: string
+          opportunity_title: string
+          to_stage: string
+        }[]
+      }
+      plus_list_tasks: {
+        Args: {
+          p_assignee_membership_id: string
+          p_contact_id: string
+          p_limit: number
+          p_offset: number
+          p_opportunity_id: string
+          p_organization_id: string
+          p_search: string
+          p_view: string
+        }
+        Returns: {
+          assignee_is_self: boolean
+          assignee_membership_id: string
+          assignee_name: string
+          completed_at: string
+          completed_by_name: string
+          contact_id: string
+          contact_name: string
+          due_at: string
+          is_due_today: boolean
+          is_overdue: boolean
+          opportunity_id: string
+          opportunity_title: string
+          status: string
+          task_id: string
+          title: string
+          total_count: number
+          updated_at: string
+        }[]
+      }
       plus_log_contact_activity: {
         Args: {
           p_activity_type: string
@@ -3381,6 +3787,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_reassign_task: {
+        Args: {
+          p_assignee_membership_id: string
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_task_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_task_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_task_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_reopen_opportunity: {
         Args: {
           p_expected_updated_at: string
@@ -3407,6 +3828,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_member_access_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_run_growth_agent_review: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["plus_agent_review_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_agent_review_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3453,6 +3884,23 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_update_task: {
+        Args: {
+          p_assignee_membership_id: string
+          p_due_at: string
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_task_id: string
+          p_title: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_task_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_task_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4089,6 +4537,17 @@ export type Database = {
         activity_id: string | null
         changed: boolean | null
       }
+      plus_agent_review_outcome: {
+        recommendation_id: string | null
+        outcome: string | null
+        task_id: string | null
+        changed: boolean | null
+      }
+      plus_agent_review_result: {
+        created: number | null
+        superseded: number | null
+        unchanged: number | null
+      }
       plus_contact_write_result: {
         contact_id: string | null
         updated_at: string | null
@@ -4104,6 +4563,12 @@ export type Database = {
       plus_opportunity_write_result: {
         opportunity_id: string | null
         stage: string | null
+        updated_at: string | null
+        changed: boolean | null
+      }
+      plus_task_write_result: {
+        task_id: string | null
+        status: string | null
         updated_at: string | null
         changed: boolean | null
       }

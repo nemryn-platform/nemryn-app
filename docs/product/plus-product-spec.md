@@ -202,13 +202,14 @@ Design system, shell and brand are unchanged. The pages reuse existing primitive
   - **Contacts** `/operations/growth/contacts`
   - **Tasks** `/operations/growth/tasks`
 - Route mount: PD-04. Icons come from `navIcons` (`src/design/icons.ts`), with new keys added there and not imported ad hoc.
-- **Required NP-P2-S2 deliverable (registered in NP-P2-S1-R1A).** Through P2-S1, Growth, Pipeline and Contacts render as sibling top-level items. In P2-S2, Growth becomes a collapsible, accessible group inside the existing sidebar:
-  - Child items, indented: **Growth Overview**, **Pipeline**, **Contacts**, and **Tasks** once implemented.
-  - The group expands automatically on any active Growth route, and child links carry correct active states.
-  - Collapsing and expanding works from the keyboard.
+- **Implemented in NP-P2-S2 (local; registered in NP-P2-S1-R1A).** Growth is a collapsible, accessible group inside the existing sidebar (`src/components/operations/GrowthNavGroup.tsx`, rules in `src/lib/plus/growth-nav-core.ts`):
+  - Child items, indented: **Dashboard** (`/operations/growth`, the Growth Overview), **Pipeline**, **Contacts**, **Tasks**. Accounts joins in P3.
+  - The **Growth label** is a link to the Dashboard and also expands the group. The **chevron** is a separate button (`aria-expanded`, `aria-controls`) that only expands or collapses the children and never navigates.
+  - The group expands automatically on any Growth route, including browser back and forward. Exactly one child carries `aria-current="page"`; the Growth Agent page highlights Dashboard.
+  - Icon-only rail (tablet width or a collapsed sidebar): the Growth icon is a disclosure button that opens a small flyout with the same links. Enter or Space opens it and focuses the first link; Escape closes it and returns focus; Tab-out or an outside click also closes it. It is never hover-only.
   - Order: the Operations items (unchanged), then the Growth group, then Drive, then Settings.
-  - No additional sidebar or app shell is introduced.
-  - Every Growth link remains governed by the same server-side authorization.
+  - No additional sidebar or app shell is introduced. Shell, sidebar style, typography and logo are unchanged.
+  - The group renders only when the server authorized Growth for this person (entitlement plus named-staff grant). Every Growth route and RPC re-checks access.
   - Core navigation and permissions are unchanged.
 - Operations → Facilities stays the list of **locations**. Growth → Accounts is the list of **businesses**. Each links to the other, so there are no duplicate records.
 
@@ -243,6 +244,28 @@ Every list page has these shared states:
 | **Contact detail** | One person's relationship | Edit, rebook, add task, log, archive, **record consent (P2-S6)** | — | Booking history with derived outcomes; linked Recurring Care status; current consent per channel/purpose | n/a |
 | **Tasks** | Follow-ups | New task; complete; reassign (later); open subject | Due: overdue / today / upcoming / no date; status; subject type | Open / Done / Cancelled | "No follow-ups. Add a task from any contact, account or opportunity." |
 
+> **NP-P2-S2 implementation notes (local):**
+> - **Dashboard** (`/operations/growth`) is the first, honest version of Growth Overview. It has six sections:
+>   - **(A) summary:** active opportunities, new inquiries, contacts, open tasks, overdue tasks. Each tile links to its filtered view.
+>   - **(B) private-pay stage overview:** the five open stages, linked to the Pipeline list.
+>   - **(C) needs attention:** overdue and due-today tasks, plus the Growth Agent's deterministic list of opportunities that may need follow-up.
+>   - **(D) recent activity:** type, subject and actor only; no note bodies.
+>   - **(E) quick actions:** write controls for writers only.
+>   - **(F) Growth Agent preview.**
+>
+>   Every figure comes from one server aggregate, `plus_growth_dashboard`. Empty organizations show zeros and plain empty states. **No** conversion, booking, revenue, quote outcome or period filter is shown yet; those arrive with P2-S3/S4/S5/S8.
+> - **Tasks** (`/operations/growth/tasks`):
+>   - views: All open, My tasks, Overdue, Due today, Upcoming, No due date, Completed & cancelled;
+>   - search and an assignee filter; every row links to its subject;
+>   - contextual creation and lists on Contact and Opportunity detail.
+>
+>   "Today" and display use the **workspace timezone**, and storage is UTC; a date without a time means 23:59 workspace time.
+>   Definitions, used identically by the Tasks views, the Dashboard counts and the database:
+>   - **Overdue:** open, and the due instant is before now.
+>   - **Due today:** open, and due from now until the end of today in the workspace timezone. A task due earlier today is overdue, not due today.
+>   - **Upcoming:** open, and due after today.
+>   - **No due date:** open, with no due date. Tasks are internal work: they are never written to the activity timeline (no duplicate history) and never presented as a customer communication. Reassignment is included: "Assign to me" and the Edit dialog.
+
 ### 7.4 Request Hub touchpoints (Core pages, minimal additions)
 
 - **Request detail:** a small **Growth** panel, shown only to users with Plus access, next to the existing `RequestAcquisitionPanel`.
@@ -257,6 +280,24 @@ Every list page has these shared states:
 - Plus columns only. It never includes Core request or trip text.
 - It reuses the UX1 Day Sheet CSV writer, including its spreadsheet formula-injection neutralisation (`csvField` in `src/lib/operations/day-sheet-core.ts`, repaired in P1-PILOT-UX1-CLOSEOUT). Contact and inquiry text is public-origin input.
 - It depends on the UX1 commit landing first.
+
+### 7.6 Growth Agent — staff-supervised (direction; foundation in NP-P2-S2)
+
+**Direction.** The Growth Agent is an assistant to staff, not an autonomous actor. It notices private-pay opportunities that may need follow-up, explains why in plain words, and proposes **one internal follow-up task**. A staff member approves, edits, dismisses or marks it not relevant. Staff decide.
+
+**Foundation shipped in NP-P2-S2 (local; synthetic data only):**
+- **Detection is deterministic and explainable.** It lives in the database (`_plus_agent_candidates`) and considers open private-pay opportunities of an active contact that have no open task on the opportunity or contact. There are three signals:
+  - *New inquiry waiting:* still New inquiry, nothing recorded since creation, older than 2 days.
+  - *No reply recorded after outreach:* the last recorded item is a logged call or email with nothing after it, older than 5 days. This is never described as the person ignoring anyone.
+  - *No recent recorded activity:* nothing recorded for 10 days.
+  These thresholds are **internal-test values**, shown to staff, and **not approved production policy**. Changing them is a reviewed migration. The illustrative Day 3/7/14 cadence is **not** adopted.
+- **"Review opportunities"** is a staff-initiated action (`plus_run_growth_agent_review`). It creates recommendations only. An unchanged situation is never recommended twice, and a recommendation is withdrawn ("superseded") when its situation changes. The internal function is designed so a future, separately approved **scheduler** could call the same review. **No background job exists.**
+- **Approval creates an internal task only.** The database revalidates the situation first: a stale recommendation is withdrawn and creates nothing. Approval is concurrency-safe and idempotent (one task per recommendation).
+- **Drafts are draft-only.** An optional message draft comes from a fixed local template (`templateDraftProvider`, first name and workspace name only). It is editable on the page, labelled **"Draft — NOT SENT"**, never saved and never sent. No draft is offered when the contact is `do_not_contact`, has no preferred channel, or lacks the matching phone or email. Every draft carries a caveat that Nemryn holds **no consent record** (P2-S6 is not built), so no consent is claimed.
+- **No external AI.** No contact record is sent to any model or provider. `GrowthAgentDraftProvider` is the seam a future, separately reviewed provider could implement.
+- **Never** sends email or SMS, places calls, changes a stage, marks an opportunity lost, creates quotes, or writes any Core record. There is no Send control anywhere.
+
+**Future consent-gated automation is a separate decision.** Automatic outreach (email, SMS or AI voice), scheduled reviews, and AI-generated drafts each require their own owner decision and security review. They also depend on the P2-S6 consent ledger, the NP-P4 sending gates, and the resolution of **PD-10** (HIPAA/BAA) and **PD-11** (retention). This milestone does **not** close PD-10 or PD-11 and does not authorize any of them.
 
 ---
 
@@ -299,7 +340,7 @@ Each slice ships independently: its own additive migration (if any), app change,
 | Slice | Purpose & deliverables | DB impact | Key acceptance / tests | Depends on | Regression risk | Excluded |
 |---|---|---|---|---|---|---|
 | **P2-S1 Opportunities + pipeline** | `plus_opportunities` (private-pay only), stage RPCs, Pipeline private-pay tab, Opportunity detail; `plus_activities.opportunity_id` | 1 table + 1 additive column, check replaced | Stage rules; lost reason; ZW003 on a stale token; facility channel refused (CHECK) | P1-S4 | none in Core | facility channel |
-| **P2-S2 Tasks** | `plus_tasks` (contact / opportunity), Tasks page, due/overdue | 1 table | Exactly one subject; assignee must have Plus write | P2-S1 | — | reminder emails |
+| **P2-S2 Tasks, Dashboard, nested nav, supervised Growth Agent** *(implemented locally — NP-P2-S2)* | `plus_tasks` (contact / opportunity), Tasks page, due/overdue; nested Growth navigation; Growth Dashboard (first Overview); `plus_agent_recommendations` + staff-run review / approve / dismiss; draft-only templates | 2 tables + read RPCs | Exactly one subject; assignee must have Plus write; approval creates a task only; stale recommendations revalidated; nothing sent | P2-S1 | sidebar (Core UI): Core nav E2E re-run | reminder emails, scheduler, any sending, external AI |
 | **P2-S3 Request attribution** | `plus_request_attributions` (contact / opportunity), `plus_link_request`, `plus_update_request_attribution`, `plus_get_request_summaries`; Request-detail Growth panel; `plus_activities.request_id` | 1 table + 1 additive column | T12, T14, T15, T16; the panel is invisible without Plus | P2-S1 | Request detail page (Core UI): Dispatcher E2E | referral account |
 | **P2-S4 Conversion + rebooking** | `plus_convert_opportunity_to_request`, `plus_create_rebooking_request` | RPCs only | T13, T17; one `pending` Request; Core request suites unchanged | P2-S3 | calls Core request creation | Trip creation (never) |
 | **P2-S5 Staff estimates & quotes (Q1)** | `plus_quotes` (staff-entered lines, server-computed total, immutable when sent, supersede); Opportunity quotes panel; printable estimate | 1 table | T28; labels never say invoice/payment; stage auto → quote_sent | P2-S1 | — | pricing rules (Q2), payments (Q3), emailing quotes (P4) |
