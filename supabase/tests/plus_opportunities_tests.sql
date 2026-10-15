@@ -195,7 +195,7 @@ begin
        from pg_constraint where contype = 'f' and conrelid = 'public.plus_opportunities'::regclass)
     -- (plus_tasks ships in NP-P2-S2; accounts / quotes / inquiries / attributions remain future)
     and to_regclass('public.plus_accounts') is null and to_regclass('public.plus_quotes') is null
-    and to_regclass('public.plus_inquiries') is null and to_regclass('public.plus_request_attributions') is null);
+    and to_regclass('public.plus_inquiries') is null);   -- (plus_request_attributions ships in NP-P2-S3)
   begin
     insert into public.plus_opportunities (organization_id, title, primary_contact_id, source, created_by) values (c_a, 'X', ct_b, 'phone', c_a1);
     perform pg_temp.t('Q6 composite FK: an Org A opportunity can never reference an Org B contact', false);
@@ -211,8 +211,8 @@ begin
     perform pg_temp.t('Q8 a private-pay opportunity requires a contact', false);
   exception when check_violation then perform pg_temp.t('Q8 a private-pay opportunity requires a contact', true);
   end;
-  perform pg_temp.t('Q9 activity subject widened additively: num_nonnulls(contact_id, opportunity_id) >= 1; stage_changed needs an opportunity; S4 rows intact',
-    exists (select 1 from pg_constraint where conname = 'plus_activities_subject_check' and pg_get_constraintdef(oid) ~ 'num_nonnulls\(contact_id, opportunity_id\) >= 1')
+  perform pg_temp.t('Q9 activity subject widened additively (P2-S1, then P2-S3 adds request_id); stage_changed needs an opportunity; S4 rows intact',
+    exists (select 1 from pg_constraint where conname = 'plus_activities_subject_check' and pg_get_constraintdef(oid) ~ 'num_nonnulls\(contact_id, opportunity_id(, request_id)?\) >= 1')
     and exists (select 1 from pg_constraint where conname = 'plus_activities_stage_subject_check')
     and exists (select 1 from pg_constraint where conname = 'plus_activities_opportunity_fkey'
                 and pg_get_constraintdef(oid) = 'FOREIGN KEY (opportunity_id, organization_id) REFERENCES plus_opportunities(id, organization_id)')

@@ -215,6 +215,13 @@ Each step ships as its own migration with its own privilege-contract update and 
 
 There is no update or delete RPC and no `metadata jsonb` column.
 
+> **NP-P2-S3:**
+> - `request_id` is added (composite FK → `transportation_requests`), and `plus_activities_subject_check` becomes `num_nonnulls(contact_id, opportunity_id, request_id) >= 1`. Every earlier row validates unchanged.
+> - `request_linked` and `attribution_changed` join the type CHECK. `plus_activities_request_subject_check` requires a `request_id` for them.
+> - `attribution_changed` requires a body: the staff correction reason. A link has no body, and no Core request text is ever copied.
+> - A link writes one row (request plus the linked contact / opportunity). A correction writes one row on the new subjects, plus one on any subject the Request moved away from, so every timeline stays truthful.
+> - Old and new ids are recorded only in `audit_events`.
+
 > **NP-P1-S4 implementation notes:**
 > - The S4 `activity_type` CHECK lists only the types S4 actually produces: `note`, `call_logged`, `email_logged`, `meeting_logged`, `owner_changed` and `record_archived`. Every other canonical type is added by its own slice, which replaces the named CHECK additively.
 > - S4 adds one column to the canonical shape: `recorded_at` (when the row was written). `occurred_at` can be earlier for an interaction logged after the fact.
@@ -322,6 +329,31 @@ There is **no contact PII, no message text and no JSON** in this table. Drafts a
   - idempotency key on the attribution;
   - Core `log_transportation_request` re-checks the Core role (`has_org_role(org, [organization_admin, dispatcher])`);
   - `passenger_id` is always NULL; no Trip is created.
+> **NP-P2-S3 implementation notes (migration `20261015130000_plus_request_attributions`, local only):**
+> - **Keys and dimensions:** `request_id` is the PRIMARY KEY, with composite FK `plus_request_attributions_request_fkey (request_id, organization_id)` → `transportation_requests`. That table's `(id, organization_id)` unique key was verified to exist.
+>   - The dimensions are `contact_id` and `opportunity_id`, each with a composite FK. `plus_request_attributions_subject_check` is `num_nonnulls(contact_id, opportunity_id) >= 1`.
+>   - There is **no** `referral_account_id`; P3-S1 adds it and replaces the check.
+> - **`link_method`** CHECK reserves all three canonical values, so P2-S4 needs no constraint change. P2-S3 RPCs write `linked_existing_request` only.
+>   - `conversion_idempotency_key` is allowed only for `converted_from_opportunity` / `rebooking` (`plus_request_attributions_idempotency_check`), with a partial unique key `(organization_id, conversion_idempotency_key)`.
+>   - A correction never changes `link_method`, `linked_by` or `linked_at`.
+> - **Consistency** (enforced by `_plus_resolve_attribution`):
+>   - an opportunity fixes the contact dimension to its `primary_contact_id`, and a different contact gives ZW006;
+>   - an explicitly chosen contact must be active, except an unchanged contact on a correction;
+>   - foreign or unknown records give ZW002.
+> - **Read access:** RLS requires `plus_can_read(organization_id) AND has_org_role(organization_id, [organization_admin, dispatcher])`, the exact `transportation_requests` read policy. The request-scoped RPCs require the same Core role.
+> - **Core boundary:** Plus never locks or writes a Core row. A Core decision racing a link is unaffected (concurrency test CONC-A4). Request status is always derived live (`plus_get_request_summaries`), with no copy and no sync trigger.
+> - **Contact consistency over time (owner-approved option B, NP-P2-S3-R2):**
+>   - An opportunity's `primary_contact_id` **cannot change while any Request is linked to it**. `plus_update_opportunity` is replaced forward-only in `20261015130000`; P2-S1's own migration is unchanged.
+>   - The refusal is ZW004 with message `linked_requests`. Nothing is written: no update, no audit. Every other field stays editable, and an opportunity without linked Requests changes contact normally.
+>   - The check runs after the opportunity's `FOR UPDATE` row lock. A concurrent link (which locks the opportunity `FOR SHARE`) is therefore either seen, or waits and then validates against the new contact.
+>   - **No attribution history is ever rewritten silently.** To fix a mistaken contact, staff:
+>     1. open each linked Request in Operations and use **Correct link**, recording the reason;
+>     2. remove the opportunity from that Request's link, or move the link to another suitable existing opportunity;
+>     3. once no Request remains linked, change the opportunity's contact;
+>     4. if needed, re-link the Requests explicitly with Correct link.
+>   - Each step writes `attribution_changed` history and audit rows.
+>   - **Future work needs its own reviewed design:** bulk or automatic re-pointing of attributions (e.g. a `plus_reassign_opportunity_contact` RPC).
+
 - **Consequence for named-staff access:** a Dispatcher with a Plus grant can convert, because they hold the Core role. An Admin can convert. A **growth-only member (PD-18) cannot create a Core Request by design.** They hand the opportunity to Operations. A Core change to let them log Requests would need its own decision.
 
 ## 11. Opportunity vs repeat bookings vs recurring care (unchanged)

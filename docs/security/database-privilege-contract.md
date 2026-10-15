@@ -109,6 +109,12 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
     * dashboard: `plus_growth_dashboard`, `plus_list_attention_opportunities`, `plus_list_recent_activities`.
   * A gains six internals: `_plus_org_day_bounds`, `_plus_require_task_subject`, `_plus_insert_task`, `_plus_agent_threshold`, `_plus_agent_candidates`, `_plus_agent_review`. `_plus_agent_review` is the boundary a future, separately approved scheduler would call; no scheduler or job exists and none holds EXECUTE.
   * No Core object is changed. No agent or dashboard function uses `pg_net`, `http`, `dblink`, email or SMS (asserted by `plus_growth_agent_tests.sql` S5).
+* **NP-P2-S3 additions:**
+  * Table `plus_request_attributions` is class **B**: authenticated `SELECT` only, through the single policy `plus_can_read(organization_id) AND has_org_role(organization_id, [organization_admin, dispatcher])`. There is no client write privilege or policy.
+  * D gains five RPCs: `plus_link_request`, `plus_update_request_attribution`, `plus_get_request_attribution`, `plus_list_request_attributions`, `plus_get_request_summaries`.
+  * A gains `_plus_require_core_request_read` and `_plus_resolve_attribution`.
+  * `plus_activities` gains `request_id` (composite FK to `transportation_requests`), with its privileges unchanged.
+  * No Core object is changed. No Core function or policy references a Plus object, and no Plus function writes or locks a Core table (`plus_request_attributions_tests.sql` K1-K3).
 * **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C; `_validate_request_decision_reason`, P1-OPS-R1), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
 * Every SECURITY DEFINER function pins `search_path` (contract check 19). Functions executable by clients that contain no inline `auth.uid()` / role check are: the three service-only RPCs (validate the integration / dispatch event themselves), the six `driver_*` transition wrappers (delegate to `_driver_execute_trip_transition`, which authorises), the two anon previews (token-scoped), and `is_valid_iana_timezone` (pure).
 

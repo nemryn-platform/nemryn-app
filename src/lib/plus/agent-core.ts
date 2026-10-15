@@ -48,7 +48,7 @@ export function recommendationTitle(type: string): string {
 export function recommendationReason(type: string, signalDays: number): string {
   switch (type) {
     case "new_inquiry_waiting":
-      return `Still a new inquiry after ${plural(signalDays, "day")}, with nothing recorded since it came in.`;
+      return `Still a new inquiry after ${plural(signalDays, "day")}, with no note, call, email or meeting recorded since it came in.`;
     case "awaiting_response":
       return `Your team's last recorded outreach (a logged call or email) was ${plural(signalDays, "day")} ago, and nothing has been recorded since. This doesn't mean the person ignored it — only that no reply was logged.`;
     case "no_recent_activity":

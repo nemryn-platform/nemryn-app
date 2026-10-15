@@ -125,7 +125,7 @@ export async function updateOpportunityAction(_prev: OpportunityFormState, formD
   });
   if (error || !data) {
     console.error("[plus] update opportunity failed", error?.code ?? "no_data");
-    return { status: "error", message: opportunityErrorMessage(error?.code, "save"), values };
+    return { status: "error", message: opportunityErrorMessage(error?.code, "save", error?.message), values };
   }
   revalidatePath(PIPELINE);
   revalidatePath(`${PIPELINE}/${opportunityId}`);

@@ -158,6 +158,14 @@ create policy <t>_select_plus on … for select to authenticated
 >
 > **Conversion requires a Core role.** `log_transportation_request` re-checks `has_org_role(org, [organization_admin, dispatcher])`, so a growth-only member gets ZW002 and hands the opportunity to Operations. That is intentional: only operations staff create Core work.
 
+> **Implementation status (NP-P2-S3, migration `20261015130000`, local only):**
+> - **Link:** `plus_request_attributions` and `plus_activities.request_id` reference Core Requests through composite FKs. Plus never writes, decides or locks a Core Request, Passenger, Trip, Recurring Care arrangement or acquisition snapshot.
+> - **Read:** `plus_get_request_summaries(p_org, p_request_ids)` returns exactly the allow-listed facts above, live from Core, for **attributed** Requests only. Unattributed, foreign and unknown ids are omitted. "A passenger is linked" is returned as yes/no only. The free-text decision `reason_note` is never returned.
+> - **Core role required today (NP-P2-S3 decision, OWNER REVIEW):** the summaries, the attribution reads, the attribution table's RLS and both write RPCs require **both** Plus access **and** the Core request-read role, `has_org_role(org, [organization_admin, dispatcher])`. That is the exact `transportation_requests` SELECT policy, so Growth never shows a Request fact to someone Core would not.
+>   - This is stricter than the note above for future growth-only members (PD-18, still PROPOSED). No such member exists today, because every Plus user is an Admin or a granted Dispatcher.
+>   - If PD-18 is approved, whether growth-only members may see these minimum facts without the Core role is a separate, reviewed change. The data-minimisation boundary already exists for it.
+> - Tested in `plus_request_attributions_tests.sql`, including a simulated Plus user **without** the Core role (Z1), which is refused everywhere.
+
 **Passenger identity:** Plus never matches a contact to a Passenger by name, phone or email. The Passenger link is made only by staff in Core (`link_request_passenger`) and is visible to Plus only as "a passenger is linked: yes/no".
 
 ## 5. Data categories
@@ -259,6 +267,7 @@ Harness: the existing `pg_temp.try_as(role, uid, stmt)` pattern (`supabase/tests
 | T28 | Quotes: totals computed server-side; a `sent` quote is immutable; no quote state changes `payment_reported_status`, a Request or any Core row | as stated |
 | T30 | Tasks (NP-P2-S2; `plus_tasks_tests.sql`, `plus_tasks_concurrency_test.sh`): exactly one subject; foreign or archived subject; non-writer assignee; stale token; concurrent complete/cancel/edit | ZW002 / ZW006 / ZW003 / exactly one wins |
 | T31 | Growth Agent (NP-P2-S2; `plus_growth_agent_tests.sql`, `plus_growth_agent_concurrency_test.sh`): deterministic detection; dedupe; supersede on change; approval creates one task only and changes no stage, Core row or activity; concurrent review/approval; read-grant and cross-tenant refused | as stated |
+| T32 | Request attribution (NP-P2-S3; `plus_request_attributions_tests.sql`, `plus_request_attributions_concurrency_test.sh`): covers T12 (cross-tenant Request / contact / opportunity, mixed-tenant ids), T14 (already attributed → ZW004), T15 (opportunity/contact mismatch → ZW006) and T16 (summary columns allow-listed). Also: stale correction ZW003; concurrent links and corrections; Plus without the Core role refused; no Core mutation | as stated |
 | T29 | Concurrent Platform Admin entitlement changes from the same rendered version (NP-P1-S2-R1; `plus_entitlement_versioned_tests.sql`, `plus_entitlement_versioned_concurrency_test.sh`) | exactly one applies; the other ZW003, nothing written, no audit |
 
 ## 9. Compliance and vendor gates (unresolved — do not claim compliance)

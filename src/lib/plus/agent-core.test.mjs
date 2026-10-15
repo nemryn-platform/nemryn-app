@@ -61,6 +61,8 @@ test("labels: NOT SENT, the agent never sends, and the consent caveat makes no c
   assert.match(a.CONSENT_CAVEAT, /no consent record/i);
   assert.match(a.recommendationReason("awaiting_response", 6), /doesn't mean the person ignored it/);
   assert.match(a.recommendationReason("no_recent_activity", 1), /1 day\./);
+  // NP-P2-S3: a linked request is recorded activity, so "new inquiry waiting" names the interactions it means
+  assert.match(a.recommendationReason("new_inquiry_waiting", 3), /no note, call, email or meeting recorded/);
 });
 
 test("module is network-free: no fetch / http / provider SDK in agent-core", () => {

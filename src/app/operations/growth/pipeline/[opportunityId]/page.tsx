@@ -29,6 +29,7 @@ import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { OpportunityStageControls } from "@/components/growth/OpportunityStageControls";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
+import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -157,6 +158,7 @@ export default async function OpportunityDetailPage({
       )}
 
       <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id, label: o.title }} canWrite={canWrite && open} />
+      <LinkedRequestsPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id }} />
 
       <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
         <div className="flex flex-col gap-zw-md">

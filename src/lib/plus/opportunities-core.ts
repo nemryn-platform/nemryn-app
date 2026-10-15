@@ -348,11 +348,21 @@ export function pipelineHref(p: PipelineParams, overrides: Partial<PipelineParam
   return `/operations/growth/pipeline${s ? `?${s}` : ""}`;
 }
 
-export function opportunityErrorMessage(code: string | undefined, op: "save" | "stage" | "lost" | "reopen"): string {
+/** The database's ZW004 reason when a contact change is refused because Requests are linked (NP-P2-S3-R2). */
+export const LINKED_REQUESTS_REASON = "linked_requests";
+
+/**
+ * Plain-words error copy. `reason` is the database exception message; it distinguishes the two ZW004 refusals of a save:
+ * a closed opportunity vs a contact change while transportation Requests are linked (NP-P2-S3-R2, option B).
+ */
+export function opportunityErrorMessage(code: string | undefined, op: "save" | "stage" | "lost" | "reopen", reason?: string): string {
   switch (code) {
     case "ZW003":
       return "This opportunity changed since you opened it. Reload the page to see the latest, then try again.";
     case "ZW004":
+      if (op === "save" && reason === LINKED_REQUESTS_REASON) {
+        return "This opportunity has linked transportation requests. Correct those request links before changing its contact.";
+      }
       return op === "reopen"
         ? "Only a lost opportunity can be reopened."
         : "This opportunity is closed. Reopen it first if the conversation started again.";
