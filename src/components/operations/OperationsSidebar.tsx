@@ -116,10 +116,11 @@ export function OperationsSidebar({
   const navItems = [
     ...NAV_ITEMS,
     // NP-P1-S2 / S4: Nemryn Plus (Growth) -- after the Core operational modules and before Drive / Settings, only for
-    // callers the server already authorised. Growth (overview) + Contacts (S4); no separate group shell.
+    // callers the server already authorised. Growth (overview) + Pipeline (P2-S1) + Contacts (S4); no separate group shell.
     ...(canAccessGrowth
       ? [
           { key: "growth" as const, label: "Growth", href: "/operations/growth" },
+          { key: "pipeline" as const, label: "Pipeline", href: "/operations/growth/pipeline" },
           { key: "contacts" as const, label: "Contacts", href: "/operations/growth/contacts" },
         ]
       : []),

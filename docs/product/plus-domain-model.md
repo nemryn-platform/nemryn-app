@@ -236,7 +236,7 @@ There is no update or delete RPC and no `metadata jsonb` column.
 | `campaign_code` | text | ≤ 64, `^[a-z0-9][a-z0-9_-]*$` |
 | `estimated_value_cents` | bigint | ≥ 0; an **estimate**, never revenue |
 | `payment_reported_status` | text not null default `'none'` | private-pay: `none`, `deposit_reported`, `paid_reported`, `refund_reported`; staff-reported, **not** settlement (PD-09) |
-| `lost_reason`, `lost_note` | | closed set; the note is required for `other` |
+| `lost_reason`, `lost_note` | | closed set (owner-approved, NP-P2-S1-R1A): `no_response`, `price`, `chose_competitor`, `outside_service_area`, `service_not_offered`, `no_availability`, `not_a_fit`, `duplicate`, `other`; the note is required for `other` |
 | `owner_user_id`, `converted_at`, `closed_at` | | |
 | `created_by`, `created_at`, `updated_at` | | `updated_at` is the concurrency token |
 | *(P2-S7)* `inquiry_id` | uuid | composite FK → `plus_inquiries`; `unique` where not null (one inquiry → at most one opportunity) |
@@ -257,6 +257,21 @@ There is no update or delete RPC and no `metadata jsonb` column.
 - **Private-pay (stored):** `new_inquiry → contacted → qualified → quote_sent → quote_accepted → converted`, plus terminal `lost`. After conversion, the displayed outcome (Booking pending / Booked / Served / Declined by operator / Cancelled) is **derived** from Core at read time and never stored (PD-05).
 - **Facility (stored, P3):** `identified → contacted → discovery → proposal → negotiation → won`, plus terminal `lost`. Trip outcomes never move facility stages (PD-07).
 - `quote_sent` is set automatically when a `plus_quotes` row moves to `sent` (P2-S5), or manually before that.
+
+> **NP-P2-S1 implementation notes:**
+> - Private-pay only.
+> - Stage moves are unrestricted among the five open stages (forward and back).
+> - `lost` has its own RPC with a reason; reopening a lost opportunity needs a reason.
+> - `converted` is unreachable until P2-S4. Before P2-S5, quote stages are staff-reported and labelled "(reported)".
+> - Lost reasons, the **owner-approved canonical vocabulary** (NP-P2-S1-R1A): no_response, price, chose_competitor, outside_service_area, service_not_offered, no_availability, not_a_fit, duplicate, other. A note is required for `other`. This replaced a draft set used only in the unreleased P2-S1 working tree.
+> - **Implementation decisions confirmed (NP-P2-S1-R1A):**
+>   - forward and backward moves are allowed among the open stages;
+>   - Lost requires a reason, and reopening a Lost opportunity requires an explicit reason;
+>   - Converted cannot be set manually;
+>   - archiving a contact does not delete or automatically close its opportunities;
+>   - new opportunities cannot be created for archived contacts.
+> - Opportunity history rows carry `opportunity_id` only, so the contact timeline stays contact-only.
+> - Archiving a contact leaves its opportunities intact and workable, but no new opportunity can be created for, or switched to, an archived contact.
 
 ## 9. `plus_tasks` (P2-S2; `account_id` in P3-S1)
 

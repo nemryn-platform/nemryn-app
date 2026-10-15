@@ -59,7 +59,9 @@ c_tables(tbl) as (values
   ('membership_module_grants'),
   -- NP-P1-S4 Plus contacts + append-only activities (SELECT via RLS plus_can_read; writes through RPCs only)
   ('plus_contacts'),
-  ('plus_activities')
+  ('plus_activities'),
+  -- NP-P2-S1 private-pay opportunities (SELECT via RLS plus_can_read; writes through RPCs only)
+  ('plus_opportunities')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -93,7 +95,8 @@ c_auth_tbl(tbl, priv) as (values
   ('driver_unavailability_windows', 'SELECT'),
   ('vehicle_unavailability_windows', 'SELECT'),
   ('plus_contacts', 'SELECT'),
-  ('plus_activities', 'SELECT')
+  ('plus_activities', 'SELECT'),
+  ('plus_opportunities', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -273,7 +276,18 @@ c_fn(sig, roles) as (values
   ('plus_create_contact(uuid,text,text,text,text,text,text,boolean,uuid,boolean)', 'u'),
   ('plus_update_contact(uuid,uuid,timestamp with time zone,text,text,text,text,text,text,boolean,uuid)', 'u'),
   ('plus_archive_contact(uuid,uuid,timestamp with time zone,text)', 'u'),
-  ('plus_log_contact_activity(uuid,uuid,text,text,timestamp with time zone)', 'u')
+  ('plus_log_contact_activity(uuid,uuid,text,text,timestamp with time zone)', 'u'),
+  -- NP-P2-S1 private-pay opportunities
+  ('_plus_opportunity_channel_immutable()', ''),
+  ('_plus_require_active_contact(uuid,uuid)', ''),
+  ('plus_list_opportunities(uuid,text,text,text,text,uuid,uuid,integer,integer)', 'u'),
+  ('plus_get_opportunity(uuid,uuid)', 'u'),
+  ('plus_list_opportunity_activities(uuid,uuid,integer,integer)', 'u'),
+  ('plus_create_opportunity(uuid,uuid,text,text,text,text,text,text,bigint,uuid)', 'u'),
+  ('plus_update_opportunity(uuid,uuid,timestamp with time zone,uuid,text,text,text,text,text,text,bigint,text,uuid)', 'u'),
+  ('plus_change_opportunity_stage(uuid,uuid,timestamp with time zone,text,text)', 'u'),
+  ('plus_mark_opportunity_lost(uuid,uuid,timestamp with time zone,text,text)', 'u'),
+  ('plus_reopen_opportunity(uuid,uuid,timestamp with time zone,text,text)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

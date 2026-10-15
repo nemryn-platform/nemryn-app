@@ -1,0 +1,201 @@
+NP-P2-S1-R1A -- PIPELINE SPECIFICATION ALIGNMENT & NEXT-PHASE NAVIGATION REQUIREMENT
+Date: 2026-10-14
+Mode: TARGETED CORRECTION, LOCAL ONLY.
+- Branch np-p2-s1-private-pay-pipeline (from main 3488895).
+- Nothing staged, committed, pushed, merged or deployed. No production migration. P2-S2 not started.
+
+======================================================================
+1. LOST-REASON RECONCILIATION
+======================================================================
+Source check (before changing anything):
+- The repository's A02R domain model, docs/product/plus-domain-model.md section 8, says only "closed set; the note is
+  required for other". This is true both locally and on origin/main.
+- No document, report, migration or commit in any branch (git log --all -S) contains chose_competitor or not_a_fit.
+- So the vocabulary in the brief is NOT written in the repository's A02R documents. The owner's R1A brief is its only
+  source.
+- No owner-approved decision overrides it either: the P2-S1 draft set was explicitly marked "pending owner
+  confirmation" (P2-S1 report, D1). So there was no conflicting approved contract to stop on.
+- The owner-stated vocabulary was therefore adopted as the approved canonical list and is now WRITTEN INTO the domain
+  model (section 8 table + P2-S1 notes), so the repository has one source of truth.
+- Cross-check: A01 says "lost reasons mirror Core decline reasons". Core's decline codes include outside_service_area
+  and no_availability, which are retained here.
+
+Before (P2-S1 draft, local and uncommitted only; never released):
+  price, chose_another_provider, no_availability, outside_service_area, service_not_offered, no_response,
+  no_longer_needed, other
+After (owner-approved canonical vocabulary, canonical order):
+  no_response, price, chose_competitor, outside_service_area, service_not_offered, no_availability, not_a_fit,
+  duplicate, other
+
+Differences:
+  removed:   chose_another_provider -> replaced by chose_competitor; no_longer_needed
+  added:     chose_competitor, not_a_fit, duplicate
+  unchanged: no_response, price, outside_service_area, service_not_offered, no_availability, other
+  rule unchanged: a note (<= 500) is required for other.
+UI labels (new):
+  - chose_competitor = "Chose a competitor"
+  - not_a_fit = "Not a fit"
+  - duplicate = "Duplicate inquiry"
+  - the others keep their P2-S1 labels.
+
+Where it changed:
+  - supabase/migrations/20261014120000_plus_private_pay_opportunities.sql: plus_opportunities_lost_reason_check and the
+    validation in plus_mark_opportunity_lost. This is the unreleased P2-S1 migration; no earlier or production
+    migration was touched.
+  - src/lib/plus/opportunities-core.ts: LOST_REASONS and labels (the UI select and server-action validation derive
+    from them).
+  - Tests and docs (section 3).
+  - Dev DB: the constraint and function were replaced in place (0 rows held a retired value). Isolated stacks were
+    rebuilt from the edited migration.
+
+======================================================================
+2. STAGE-RULE CONFIRMATION (implementation decisions; no P2-S4 expansion)
+======================================================================
+Each rule was confirmed against code and tests:
+  - Forward AND backward moves among the open stages are permitted. plus_change_opportunity_stage accepts any other
+    open stage. (SQL T1 forward skip, T2 backward; E2E D3 / D5.)
+  - Lost requires a reason, from the canonical set; `other` requires a note. (SQL L1, L11 / L12; E2E F0-F2b.)
+  - Reopening Lost requires an explicit reason (3-500) and an open target stage. (SQL L6-L9; E2E F5 / F6;
+    CONC-O3.)
+  - Converted cannot be set manually.
+    - Change stage refuses it with ZW006.
+    - No Plus function assigns it (source scan T7).
+    - The UI never offers it and shows no Convert control. (SQL T4 / T7; E2E D1 / B7 / N2.)
+  - Archiving a contact does not delete or automatically close its opportunities. They stay open and workable, with
+    an "archived contact" notice. (SQL H5; E2E M1.)
+  - New opportunities cannot be created for archived contacts (ZW006), and an opportunity cannot be switched to one.
+    (SQL C4 / U5 / H5; E2E M2; CONC-O6.)
+These are now recorded as implementation decisions in plus-domain-model.md (section 8.1 notes). In the P2-S1 report,
+D1, D2 and D3 are marked RESOLVED.
+
+======================================================================
+3. FILES CHANGED IN R1A
+======================================================================
+Code / SQL (P2-S1 files, still uncommitted):
+  supabase/migrations/20261014120000_plus_private_pay_opportunities.sql  -- lost-reason CHECK + plus_mark_opportunity_lost
+  src/lib/plus/opportunities-core.ts                                     -- LOST_REASONS + labels
+  src/lib/plus/opportunities-core.test.mjs                               -- exact canonical set; retired values refused
+  supabase/tests/plus_opportunities_tests.sql                            -- + L11 (CHECK is exactly the set), L12 (each value accepted; retired refused)
+Documentation:
+  docs/product/plus-domain-model.md                       -- section 8 lost_reason values; R1A stage decisions in the 8.1 notes
+  docs/data/mutation-api.md                               -- canonical lost-reason set
+  docs/product/plus-product-spec.md                       -- P2-S2 navigation requirement (section 7.1)  [NEWLY MODIFIED in R1A]
+  docs/reports/NP-P2-S1-private-pay-pipeline-implementation.txt -- lost reasons, D1-D3 resolved, test count, next steps
+  docs/reports/NP-P2-S1-R1A-pipeline-contract-alignment.txt     -- this report (new)
+QA (untracked, not for commit):
+  .tmp-qa/np-p2-s1-private-pay-pipeline-e2e.mjs -- + F2b (the dialog lists exactly the canonical reasons); F3 uses
+  chose_competitor.
+
+======================================================================
+4. TEST OUTCOMES
+======================================================================
+  | Check | Result |
+  |-------|--------|
+  | plus_opportunities_tests (dev DB) | 75/75 (73 + L11 / L12) |
+  | plus_opportunities_tests (isolated, fresh from zero) | 75/75 |
+  | plus_opportunities_tests (isolated, upgraded from the S4 head) | 75/75 |
+  | plus_contacts_activities_tests (S4): dev / fresh / upgraded | 82/82 each |
+  | privilege_contract_tests: dev / fresh / upgraded | 0 of 29 violations each |
+  | plus_opportunities_concurrency_test: dev / isolated | 6/6 each (TOTAL FAILURES 0) |
+  | Unit tests (npm test, incl. stage-validation and lost-reason tests) | 782/782 |
+  | tsc --noEmit, eslint src | PASS / 0 problems |
+  | next build | PASS |
+  | Pipeline browser E2E (.tmp-qa/np-p2-s1-private-pay-pipeline-e2e.mjs) | 57/57 (56 + F2b), first run |
+
+Upgrade path: an S4-head database with an existing S4 contact and its note was upgraded with `supabase migration up`.
+The migration applied and the S4 row was preserved (opportunity_id NULL, contact subject intact).
+- The CLI exited with rc=1, but its log shows "Migrations applied" followed by a CLI telemetry error ("Timeout while
+  shutting down PostHog"). That is not a database or migration failure, and the head and the post-upgrade suites
+  confirm it.
+
+Additive / no new Core dependency (re-verified on the edited migration):
+  - DDL: CREATE of one table, ten functions, one type, four indexes, three triggers and one policy. On the Plus table
+    plus_activities: ADD COLUMN opportunity_id plus FK, an index, and the two named Plus CHECKs dropped and
+    immediately re-added in widened form, plus one new CHECK.
+  - No other DROP. No Core table, function, policy or privilege is altered.
+  - FK targets: organizations, auth.users, plus_contacts, plus_opportunities only.
+  - No function writes a Core table.
+Not re-run in R1A (unaffected by a CHECK-value change; full results are in the P2-S1 report): the Core suites and the
+S1-S3 Plus suites, and the S1 / S2 / S3 / S4 / UX1 browser regressions.
+
+======================================================================
+5. P2-S2 NAVIGATION REQUIREMENT (REGISTERED; NOT IMPLEMENTED NOW)
+======================================================================
+Current state (inspected src/components/operations/OperationsSidebar.tsx): when Plus is accessible, Growth, Pipeline
+and Contacts are three flat SIBLING items in navItems, after the Operations items and before Drive / Settings. This
+matches the owner's report.
+
+Required NP-P2-S2 deliverable (also written into docs/product/plus-product-spec.md section 7.1):
+  Operations navigation (unchanged)
+  Growth                       <- collapsible, accessible group in the EXISTING sidebar
+    Growth Overview            (indented child; /operations/growth)
+    Pipeline                   (indented child)
+    Contacts                   (indented child)
+    Tasks                      (joins the group when P2-S2 ships it)
+  Drive
+  Settings
+  Requirements:
+  - preserve Nemryn's canonical shell and design, with no additional sidebar or app shell;
+  - expand automatically on an active Growth route, with correct child active states;
+  - keyboard-accessible collapse and expansion;
+  - authorization still governs every Growth link (the group renders only for server-authorized callers);
+  - no change to Core navigation or permissions.
+  Design note for P2-S2: the sidebar also has a collapsed (icon-only) rail mode at md. The group's behaviour in that
+  mode, for example a single Growth icon expanding on hover or focus, must be specified and tested in P2-S2.
+
+======================================================================
+6. UPDATED CONTROLLED-COMMIT FILE INVENTORY (NP-P2-S1 incl. R1A)
+======================================================================
+Verified against `git status`.
+
+Modified (12):
+  docs/data/mutation-api.md
+  docs/product/plus-domain-model.md
+  docs/product/plus-product-spec.md                        <- added by R1A
+  docs/security/database-privilege-contract.md
+  docs/security/plus-access-model.md
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/page.tsx
+  src/components/operations/OperationsSidebar.tsx
+  src/design/icons.ts
+  src/lib/supabase/database.types.ts
+  supabase/tests/plus_contacts_activities_tests.sql
+  supabase/tests/privilege_contract_tests.sql
+New (15):
+  supabase/migrations/20261014120000_plus_private_pay_opportunities.sql
+  supabase/tests/plus_opportunities_tests.sql
+  supabase/tests/plus_opportunities_concurrency_test.sh
+  src/lib/plus/opportunities-core.ts
+  src/lib/plus/opportunities-core.test.mjs
+  src/lib/plus/opportunities.ts
+  src/app/operations/growth/pipeline/actions.ts
+  src/app/operations/growth/pipeline/page.tsx
+  src/app/operations/growth/pipeline/new/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/edit/page.tsx
+  src/components/growth/OpportunityForm.tsx
+  src/components/growth/OpportunityStageControls.tsx
+  docs/reports/NP-P2-S1-private-pay-pipeline-implementation.txt
+  docs/reports/NP-P2-S1-R1A-pipeline-contract-alignment.txt  <- added by R1A
+Total: 27 files (12 modified + 15 new). The P2-S1 report's section 13 lists the pre-R1A 25; this inventory
+supersedes it. Exclude .tmp-qa/ and every other untracked report.
+- database.types.ts needs no change for R1A: the lost-reason set is a CHECK, not a Postgres enum, so the generated
+  types are unaffected.
+
+======================================================================
+7. REMAINING BLOCKERS
+======================================================================
+  B1 Owner review and the separate release approval for P2-S1 (review, controlled commit, PR, Vercel Preview with its
+     backend identified, read-only production dry run showing exactly 20261014120000 pending).
+  B2 Verified logical export before the release (Supabase Free: no managed backup / PITR; existing exports are not
+     verified until a restore is tested).
+  B3 Provenance note for the owner: the canonical lost-reason list exists in the repository only from R1A onward (it
+     was not in the committed A02R documents). If another external A02R copy differs, reconcile it.
+  B4 PD-10 / PD-11 still open: fictional data only.
+  Not blockers, carried over: K1 (the edit form's contact selector shows the first 25 active contacts), K2 (the
+  pipeline shows the 200 most recent per view), K4 (the pre-existing mutation_concurrency_test.sh failure), K5 (the
+  unrelated long-running next-server noted in the P2-S1 report).
+  The P2-S2 Growth navigation group (section 5) is a P2-S2 deliverable, not a P2-S1 blocker.
+
+STOP. Targeted correction and report complete. Nothing staged, committed, pushed, merged or deployed. No production
+migration. P2-S2 not started.

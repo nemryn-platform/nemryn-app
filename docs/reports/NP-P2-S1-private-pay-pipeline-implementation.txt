@@ -1,0 +1,476 @@
+NP-P2-S1 -- PRIVATE-PAY OPPORTUNITIES & PIPELINE -- IMPLEMENTATION REPORT
+Date: 2026-10-14
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing is staged, committed, pushed, merged or deployed.
+- No production migration and no production or customer record change.
+- Fictional data only. P2-S2 not started.
+
+======================================================================
+1. VERIFIED GIT BASELINE AND BRANCH ANCESTRY
+======================================================================
+- Repository: https://github.com/nemryn-platform/nemryn-app. GitHub identity: nemryn (isolated GH_CONFIG_DIR, active).
+- origin/main: 348889529e9b92bb12ba357354dc5d7ec9e482bb, "Merge pull request #5 from
+  nemryn-platform/np-p1-s4-contacts-activities". Its S4 commit is 0fcb7f0.
+- The local np-p1-s4-contacts-activities branch was at 0fcb7f0, equal to PR #5's head. The tracked tree was clean.
+- New branch: np-p2-s1-private-pay-pipeline, created from origin/main 3488895.
+  - It is NOT stacked: S4 was already merged and released (section 2), so per the brief it branches from the verified
+    latest main.
+- Untracked reports and .tmp-qa scripts were preserved untouched.
+
+======================================================================
+2. S4 PR STATUS AND RELEASE DEPENDENCY
+======================================================================
+The state has changed since the last confirmed check, and was verified read-only:
+- PR #5: MERGED 2026-10-14T07:57:00Z, merge commit 3488895.
+- Supabase (project wyocbivzgrbekuyqdfts, linked): `supabase migration list --linked` shows 20261014100000
+  (S4) applied remotely. The remote head is 20261014100000.
+- Vercel Production: deployment 7059986878, sha 3488895, state success. https://app.nemryn.com/sw.js shows
+  BUILD = "348889529e9b".
+- Main contains ZD-211 (decision register and access model).
+- Release dependencies 1 and 2 of the brief (S4 migration applied, S4 merged and deployed) are therefore SATISFIED.
+  Still outstanding: P2-S1's own review / PR / migration verification, and the owner's separate release approval.
+
+======================================================================
+3. EXACT MIGRATION FILENAME AND SQL OBJECTS
+======================================================================
+supabase/migrations/20261014120000_plus_private_pay_opportunities.sql (forward-only, additive). It creates:
+  - table public.plus_opportunities, with:
+    - its constraints (section 4);
+    - 3 indexes (canonical);
+    - triggers set_updated_at, prevent_organization_id_change and plus_opportunities_channel_immutable;
+    - RLS, SELECT for authenticated, and the policy plus_opportunities_select_plus (plus_can_read);
+  - function _plus_opportunity_channel_immutable() (trigger; no client EXECUTE);
+  - on plus_activities:
+    - ADD COLUMN opportunity_id;
+    - constraint plus_activities_opportunity_fkey (composite);
+    - plus_activities_subject_check REPLACED: num_nonnulls(contact_id, opportunity_id) >= 1;
+    - plus_activities_activity_type_check REPLACED: S4 types + stage_changed;
+    - NEW plus_activities_stage_subject_check (stage_changed requires an opportunity);
+    - index plus_activities_org_opportunity_idx;
+  - type plus_opportunity_write_result;
+  - functions: plus_list_opportunities, plus_get_opportunity, plus_list_opportunity_activities,
+    _plus_require_active_contact (internal), plus_create_opportunity, plus_update_opportunity,
+    plus_change_opportunity_stage, plus_mark_opportunity_lost, plus_reopen_opportunity.
+  (NP-P2-S1-R1A: the lost-reason CHECK and plus_mark_opportunity_lost now use the canonical vocabulary.)
+
+It references only Core and earlier Plus objects: organizations, auth.users, memberships, plus_contacts,
+plus_activities and the S1-S4 helpers. NO plus_accounts, plus_tasks, plus_quotes, plus_inquiries or
+plus_request_attributions, and no forward FK. No S4 or earlier migration was edited, and no Core object changed.
+
+======================================================================
+4. OPPORTUNITY SCHEMA (public.plus_opportunities) -- domain model section 8
+======================================================================
+  | Column                  | Rule |
+  |-------------------------|------|
+  | id                      | uuid pk |
+  | organization_id         | not null, FK organizations; unique (id, organization_id) |
+  | channel                 | not null default 'private_pay'; CHECK private_pay only (P3-S1 widens); IMMUTABLE (trigger) |
+  | title                   | trimmed, 1-200 |
+  | stage                   | new_inquiry, contacted, qualified, quote_sent, quote_accepted, converted, lost; default new_inquiry |
+  | primary_contact_id      | composite FK (primary_contact_id, organization_id) -> plus_contacts; required for private_pay (plus_opportunities_private_pay_contact_check) |
+  | inquiry_type            | quote, availability, service_question, booking, other (nullable) |
+  | service_type            | the Core closed set (nullable) |
+  | source                  | not null: phone, website, web_inquiry, email, referral, facility, walk_in, event, advertising, other |
+  | source_detail           | trimmed, 1-120 |
+  | campaign_code           | <= 64, ^[a-z0-9][a-z0-9_-]*$ (the RPC lower-cases it) |
+  | estimated_value_cents   | bigint, 0..100,000,000; an ESTIMATE, never revenue |
+  | payment_reported_status | not null default 'none': none, deposit_reported, paid_reported, refund_reported; STAFF-REPORTED, never settlement (PD-09) |
+  | lost_reason / lost_note | the reason is required exactly when stage = lost; closed set (section 5); the note (<= 500) is only for lost and required for other |
+  | owner_user_id           | FK auth.users; the RPC requires an eligible Plus writer of the organization |
+  | converted_at            | set exactly when stage = converted (unreachable in P2-S1) |
+  | closed_at               | set exactly when stage in (lost, converted) |
+  | created_by              |  |
+  | created_at, updated_at  | updated_at is the concurrency token |
+
+- Indexes: (organization_id, channel, stage, updated_at desc); (organization_id, primary_contact_id);
+  (organization_id, owner_user_id) WHERE closed_at IS NULL.
+- Deliberately absent (verified, SQL Q4): account_id, referral_account_id, inquiry_id, health / insurance / address /
+  passenger / trip fields, and JSON.
+
+======================================================================
+5. STAGE MACHINE AND TERMINAL-STATE RULES
+======================================================================
+- Created in new_inquiry.
+- OPEN stages: new_inquiry, contacted, qualified, quote_sent, quote_accepted.
+  - plus_change_opportunity_stage moves an open opportunity to ANY other open stage: forward skips and backward moves
+    are both allowed (product spec 4.3).
+  - The same stage gives changed = false (no history row).
+- LOST (terminal): only via plus_mark_opportunity_lost, with a required reason from the closed set. `other` requires
+  a note. Already lost gives changed = false. Change stage / edit while lost gives ZW004.
+- REOPEN: only via plus_reopen_opportunity, from lost, with a required reason (3-500) and an open target stage. It
+  clears the lost fields and closed_at. Not lost gives ZW004; stale gives ZW003, so a duplicate reopen is never
+  applied twice.
+- CONVERTED (terminal): RESERVED.
+  - No P2-S1 function can set it. Change stage refuses it (ZW006), and a source scan proves no Plus function assigns
+    it (SQL T7).
+  - Only the later P2-S4 Core conversion RPC may set it. No Convert control exists anywhere in the UI (E2E B7, N2).
+- quote_sent / quote_accepted: STAFF-REPORTED sales stages. The UI labels them "Quote sent (reported)" /
+  "Quote accepted (reported)" with "Nemryn hasn't created, sent or received a quote." No quote record, table or
+  document exists (SQL T8; no plus_quotes table).
+- Lost-reason closed set: the OWNER-APPROVED CANONICAL VOCABULARY, aligned in NP-P2-S1-R1A:
+    no_response, price, chose_competitor, outside_service_area, service_not_offered, no_availability, not_a_fit,
+    duplicate, other.
+  All are non-medical. The draft set first used here was replaced before any commit (see NP-P2-S1-R1A).
+
+======================================================================
+6. RPC INVENTORY
+======================================================================
+Every RPC is SECURITY DEFINER with search_path pinned to (public, pg_temp), authenticated EXECUTE only, with ZW codes
+per mutation-api.md. Organization binding comes from the server session.
+
+Read (plus_can_read; ZW002 without access, ZW001 without a uid):
+  - plus_list_opportunities(org, search, view, stage, source, owner_membership_id, contact_id, limit, offset)
+    - view: open (default), lost, converted or all; search covers the title and the contact name (wildcards
+      literal); 1-200 rows; most recently updated first;
+    - returns the contact's name, status and do-not-contact flag; a foreign owner handle matches nothing.
+  - plus_get_opportunity(org, id): ZW002 for a foreign or unknown id (no existence oracle).
+  - plus_list_opportunity_activities(org, id, limit, offset): stage / owner history.
+Write (_require_plus_write: ZW002 when the caller cannot read, ZW001 when they can read but not write):
+  - plus_create_opportunity(...):
+    - the contact must be an ACTIVE contact of the organization (archived ZW006; foreign / unknown / NULL ZW002), and
+      is locked FOR NO KEY UPDATE, so creation serializes with an archive;
+    - a 30-second duplicate-submission guard;
+    - audit: plus_opportunity_created (no contact data).
+  - plus_update_opportunity(..., expected_updated_at, ...):
+    - open only; FOR UPDATE then version check (ZW003);
+    - a new contact must be active; a new owner must be eligible; an unchanged ineligible owner is kept;
+    - an owner change writes an owner_changed activity;
+    - audit: plus_opportunity_updated, with field NAMES only.
+  - plus_change_opportunity_stage, plus_mark_opportunity_lost, plus_reopen_opportunity: section 5.
+Internal: _plus_require_active_contact, _plus_opportunity_channel_immutable.
+Not implemented, by design: conversion, Request / Passenger / Trip / Recurring Care creation, request attribution,
+and Core status synchronization.
+
+======================================================================
+7. ACTIVITY SCHEMA EXTENSIONS
+======================================================================
+- plus_activities.opportunity_id: nullable, with a composite FK to plus_opportunities.
+- Subject check widened to num_nonnulls(contact_id, opportunity_id) >= 1 (canonical domain model 3.2).
+- Type check gains stage_changed, constrained to opportunity rows by plus_activities_stage_subject_check. Fake
+  quote / task / consent / request types are still refused (SQL Q11).
+- Every successful stage transition (change, lost, reopen) writes exactly ONE truthful, append-only stage_changed row:
+  from_stage, to_stage, actor and an optional note (the lost note or reopen reason). No-ops write nothing.
+- Opportunity history rows carry opportunity_id ONLY (contact_id NULL), so S4 contact timelines and the S4 contact
+  RPCs are unchanged (SQL H2 / H3).
+- All S4 rows stay valid. This was proven by upgrading a database that already held S4 contact activity rows (section
+  12).
+- No update / delete path exists (SQL H4). There is no metadata JSON.
+- ZD-211 intact: staff-access changes are never written as activities (SQL H6).
+- S4 suite adjustments (deliberate, documented): K7, K8 and K9 asserted the S4-era shape (no opportunity column; the
+  subject check `= 1`; plus_opportunities absent). They now assert the post-P2-S1 shape with the same intent: no
+  request / account columns, no JSON, and no FK to tables that don't exist yet. The S4 suite is 82/82 afterwards.
+
+======================================================================
+8. UI PAGES AND INTERACTIONS
+======================================================================
+All pages use the existing Operations shell and design system (PageHeader, Panel, DataTable, Select, Input, Textarea,
+Dialog, StatusBadge, AttentionState, EmptyState, LinkButton). No drag-and-drop dependency was added.
+
+Navigation: "Pipeline" (Kanban icon, from navIcons) between Growth and Contacts, matching the canonical order, for
+server-authorized callers only. The Growth page links to Pipeline.
+
+/operations/growth/pipeline:
+  - title and description;
+  - "Private-pay" scope, with "Facility pipeline arrives in a later release" as text, not a tab;
+  - Open / Lost / All views;
+  - Board (the five open-stage columns with counts; scrolls inside its own container) and List toggle;
+  - search (title, contact name); stage / source / owner filters (owner filter for writers);
+  - cards and rows: title, contact (archived marker), Do not contact badge, source, estimate, owner;
+  - empty states: "No private-pay inquiries yet." / "No opportunities match these filters." / "No lost
+    opportunities.";
+  - error state with Retry;
+  - read-only notice while Plus is not active;
+  - count line (the 200 most recently updated are shown; narrow the filters for more).
+/operations/growth/pipeline/new:
+  - Plus write only.
+  - Step 1: choose an ACTIVE contact of this workspace (search). A foreign or archived ?contactId= is refused with
+    "That contact can't be used".
+  - Step 2: form (title, inquiry type, service, source + detail, owner, campaign code, estimate).
+  - It can be preselected from Contact detail, which gains an "Opportunities" panel and a "New opportunity" shortcut
+    for writers.
+/operations/growth/pipeline/[opportunityId]:
+  - title; linked contact; stage badge; inquiry type; service; source and detail; owner (flagged if no longer a
+    writer); campaign code;
+  - "$X (estimate)" with "not revenue";
+  - "Payment (reported by staff)" with "not a settlement record";
+  - lost reason / note; created by and when;
+  - writers get a Stage panel: an accessible direct stage selector plus an optional note, Mark as lost (dialog with a
+    required reason), Reopen (stage + required reason). Converted is explained as unavailable;
+  - History (stage / owner changes, from -> to, actor, note);
+  - "Latest with this contact": the contact's 5 most recent logged interactions, answering what happened last;
+  - archived-contact and read-only notices.
+  - Read-only viewers see no controls. A foreign or unknown id renders the standard 404.
+/operations/growth/pipeline/[opportunityId]/edit:
+  - Plus write and open opportunities only; lost / converted redirect to the detail;
+  - carries the version (ZW003 on a concurrent change);
+  - the staff-reported payment status is editable here.
+
+There are no fabricated cards, metrics, bookings, trips, quotes or financial outcomes, and no dead buttons.
+
+======================================================================
+9. PLUS PERMISSION MATRIX (SQL P1-P12, E2E sections I-L)
+======================================================================
+  | Actor                                             | Result |
+  |---------------------------------------------------|--------|
+  | Organization Admin, Plus write                    | full Pipeline |
+  | Dispatcher with a named Write grant               | full Pipeline (P1, E2E J1) |
+  | Dispatcher with a named Read grant                | list / detail / history / RLS read; every write ZW001; no write controls; /new and /edit redirect (P2/P3, E2E I1-I4) |
+  | Dispatcher without a grant, or revoked            | ZW002, RLS 0; the next page request loses the Pipeline (P4, E2E J2) |
+  | Inactive Dispatcher (grant unrevoked)             | ZW002, RLS 0 (P5) |
+  | Driver                                            | ZW002, RLS 0; UI goes to /driver (P6, E2E L3) |
+  | Platform Admin without tenant membership          | ZW002, RLS 0; never sees tenant data (P6, E2E L4) |
+  | Suspended organization                            | ZW002 for the Admin and grant holders (P8) |
+  | Expired Plus, Admin                               | read only (list / detail / history), every write ZW001; read-only notice (P9, E2E K1) |
+  | Expired Plus, grant holder                        | ZW002 (P10) |
+  | Locked Plus                                       | ZW002, RLS 0, records retained; UI redirect (P11, E2E K2) |
+  | No entitlement                                    | ZW002 (P12) |
+  | No uid / anon                                     | ZW001 / 42501 (P7) |
+
+Core membership permissions are not altered.
+
+======================================================================
+10. TENANT-ISOLATION AND CONCURRENCY EVIDENCE
+======================================================================
+Tenant isolation (SQL):
+  - Q6: composite FK, so an Org A opportunity can never reference an Org B contact.
+  - X6: an Org A activity can never reference an Org B opportunity.
+  - X1: an Org B Admin with Org A's id gets ZW002 for all 8 RPCs.
+  - X2: forged Org A opportunity / contact ids under Org B's own id get ZW002, identical to an unknown id, with nothing
+    changed.
+  - X3: RLS per organization.
+  - X4: a multi-organization identity is isolated.
+  - X5: an Org B Dispatcher without a grant sees nothing.
+  - C4: a foreign contact on create gives ZW002.
+  - U5: switching to a foreign contact gives ZW002.
+  - F3: a foreign owner handle matches nothing.
+Browser:
+  - an Org B Admin opening an Org A opportunity gets a 404 with nothing revealed (L1/L2);
+  - a foreign contact id on /new is refused (C4).
+
+NEW supabase/tests/plus_opportunities_concurrency_test.sh (real parallel psql sessions):
+  | Test    | Scenario | Result |
+  |---------|----------|--------|
+  | CONC-O1 | two stage changes from one version: one applies, the other ZW003, one history row, final = winner | PASS |
+  | CONC-O2 | mark lost vs stage change from one version: exactly one applies, the other refused | PASS |
+  | CONC-O3 | two reopens from one version: one applies, the other ZW003, one reopen row | PASS |
+  | CONC-O4 | the same new opportunity submitted twice at once: exactly one row | PASS |
+  | CONC-O5 | owner change vs stage change from one version: one applies, the other ZW003 | PASS |
+  | CONC-O6 | archive the contact vs create an opportunity for it: the create that waited is refused (ZW006); no opportunity for an archived contact | PASS |
+  6/6 on the dev DB and 6/6 on the isolated clean stack.
+
+Duplicate mutation requests:
+  - create: 30-second guard plus the contact lock (C3, CONC-O4);
+  - same-stage change: no-op (T3);
+  - duplicate lost: no-op (L4);
+  - duplicate reopen: refused (L9, CONC-O3).
+
+======================================================================
+11. UNIT, SQL AND BROWSER TEST COUNTS
+======================================================================
+  | Check                                             | Result |
+  |---------------------------------------------------|--------|
+  | NEW supabase/tests/plus_opportunities_tests.sql (rollback-only) | 73/73 at P2-S1; 75/75 after NP-P2-S1-R1A (+L11 / L12: exact canonical lost-reason vocabulary) |
+  | NEW plus_opportunities_concurrency_test.sh        | 6/6 |
+  | tsc --noEmit                                      | PASS |
+  | eslint src                                        | 0 problems |
+  | npm test                                          | 782/782 (772 before; +10 in opportunities-core.test.mjs, including service types mirroring Core exactly) |
+  | next build                                        | PASS (routes /operations/growth/pipeline, /new, /[opportunityId], /[opportunityId]/edit) |
+
+  SQL group coverage:
+  - Q: schema / privileges / minimization / FKs / channel / contact requirement / activity subject;
+  - C: create and validation;
+  - T: stage machine;
+  - L: lost / reopen;
+  - U: update / concurrency token / channel immutable;
+  - H: history, S4 compatibility, contact archival, ZD-211;
+  - F: list / filters;
+  - P: permissions;
+  - X: cross-tenant;
+  - K: Core isolation.
+  First run of the new SQL suite: 69/73. All four failures were TEST defects:
+  - T7's regex matched comparisons, not assignments;
+  - L4 / L9 used miscounted expected history rows;
+  - H1 assumed an order among rows sharing one transaction's now().
+  L9's single-transaction behaviour is correct (ZW004); ZW003 across real transactions is proven by CONC-O3.
+
+Browser E2E (local, next start -p 3100, fictional data; local GoTrue restarted between suites):
+  | Suite                                                    | Result |
+  |----------------------------------------------------------|--------|
+  | NEW .tmp-qa/np-p2-s1-private-pay-pipeline-e2e.mjs        | 56/56  |
+  | np-p1-s4-contacts-activities (S4)                        | 50/50  |
+  | np-p1-s3-named-staff-permissions (S3)                    | 57/57  |
+  | np-p1-s2-growth-access-navigation (S2)                   | 49/49  |
+  | np-p1-s1-plus-entitlement (S1)                           | 45/45  |
+  | p1-pilot-ux1-header-day-sheet (UX1 / Core shell)         | 46/46  |
+
+  P2-S1 E2E attempts (no product code changed between them):
+  - #1: the harness took psql's "INSERT 0 1" status line as part of an id.
+  - #2: a Chrome tab stopped responding mid-run under machine load (load average ~49; exit 13 after 21 PASS).
+  - #3: 55/56. F1 submitted a dialog whose reason select is `required`, so the browser correctly blocked it before the
+    server; the test now asserts the `required` attribute and removes it to exercise the server check.
+  - #4: 56/56.
+
+======================================================================
+12. CORE REGRESSION EVIDENCE
+======================================================================
+Isolated clean stack (separate project NemrynS1Iso; ALL migrations from zero; database VERIFIED fresh before every
+suite):
+  "real_fail" excludes each suite's "review PASS/FAIL lines above" footer.
+
+  | Suite                                   | Result                       |
+  |-----------------------------------------|------------------------------|
+  | privilege_contract_tests                | 0 of 29 violations           |
+  | platform_admin_foundation_tests         | 58 PASS, 0 real failures     |
+  | rls_adversarial_tests                   | 33 PASS, 0                   |
+  | security_definer_exposure_tests         | 20 PASS, 0                   |
+  | function_privilege_tests                | 7 PASS, 0                    |
+  | request_decision_workflow_tests         | 60 PASS, 0 (Core Requests)   |
+  | create_trip_tests                       | 20 PASS, 0 (dispatch / trips)|
+  | public_request_intake_tests             | 42 PASS, 0                   |
+  | public_intake_rate_limit_tests          | 8 PASS, 0                    |
+  | request_mutation_tests                  | 39 PASS, 0                   |
+  | create_trip_privilege_tests             | 5 PASS, 0                    |
+  | mutation_authorization_tests            | 4 PASS, 0 (roles)            |
+  | plus_entitlement_tests (S1)             | 150/150                      |
+  | plus_access_helpers_tests (S2)          | 170/170                      |
+  | plus_entitlement_versioned_tests (R1)   | 17/17                        |
+  | plus_member_grants_tests (S3)           | 76/76                        |
+  | plus_contacts_activities_tests (S4)     | 82/82                        |
+  | plus_opportunities_tests (P2-S1, NEW)   | 73/73                        |
+
+  Concurrency (isolated stack):
+  | Script                                       | Result                         |
+  |----------------------------------------------|--------------------------------|
+  | plus_opportunities_concurrency_test (NEW)    | 6/6                            |
+  | plus_contacts_concurrency_test (S4)          | 4/4                            |
+  | plus_member_grants_concurrency_test (S3)     | 6/6                            |
+  | plus_entitlement_versioned_concurrency_test  | 4/4                            |
+  | plus_entitlement_concurrency_test (S1)       | 5/5                            |
+  | platform_lifecycle_concurrency_test          | 2/2                            |
+  | request_decision_concurrency_test            | 0 failures                     |
+  | public_request_intake_concurrency_test       | PASS                           |
+  | mutation_concurrency_test (Core trips)       | FAIL, pre-existing (K4) -- not caused by P2-S1 |
+
+  Real failures introduced by P2-S1: NONE. The only failing check is the pre-existing harness issue K4.
+  The isolated scratch copy keeps the storage / analytics / studio / realtime / edge-runtime services disabled in its
+  own config.toml (local Docker-load workaround from NP-P1-S4; the repository config is unchanged).
+
+Upgrade from the S4 head (test migrations against a database upgraded from the S4 head):
+  - reset to 20261014100000 with seed data, plus an S4 contact and its note;
+  - `supabase migration up` applies 20261014120000;
+  - head 20261014120000; the S4 row is preserved unchanged (opportunity_id NULL, contact subject intact);
+  - on that upgraded database: P2-S1 suite 73/73, S4 suite 82/82, contract 0/29.
+SQL K1 / E2E N1: no Core Request, Passenger, Trip or Recurring Care arrangement was written.
+SQL K2 / K3: no Core function or Core RLS policy references Plus objects, and no Plus function writes Core tables.
+Core Requests, Passengers, Trips and Driver workflows are unmodified: no file under those modules changed.
+
+======================================================================
+13. COMPLETE CHANGED-FILE INVENTORY (uncommitted; nothing staged)
+======================================================================
+Modified (11):
+  docs/data/mutation-api.md                                -- P2-S1 opportunities section
+  docs/product/plus-domain-model.md                        -- P2-S1 implementation notes (stage rules, lost reasons pending)
+  docs/security/database-privilege-contract.md             -- NP-P2-S1 additions
+  docs/security/plus-access-model.md                       -- P2-S1 implementation status
+  src/app/operations/growth/contacts/[contactId]/page.tsx  -- Opportunities panel + New opportunity shortcut
+  src/app/operations/growth/page.tsx                       -- Pipeline link
+  src/components/operations/OperationsSidebar.tsx          -- "Pipeline" nav item
+  src/design/icons.ts                                      -- navIcons.pipeline = Kanban
+  src/lib/supabase/database.types.ts                       -- regenerated (additive only: 0 removed lines)
+  supabase/tests/plus_contacts_activities_tests.sql        -- K7 / K8 / K9 updated to the post-P2-S1 shape
+  supabase/tests/privilege_contract_tests.sql              -- 1 table, 10 functions
+
+New (14):
+  supabase/migrations/20261014120000_plus_private_pay_opportunities.sql
+  supabase/tests/plus_opportunities_tests.sql              -- 73 tests, rollback-only
+  supabase/tests/plus_opportunities_concurrency_test.sh    -- 6 scenarios
+  src/lib/plus/opportunities-core.ts
+  src/lib/plus/opportunities-core.test.mjs                 -- 10 tests
+  src/lib/plus/opportunities.ts                            -- server-only reads
+  src/app/operations/growth/pipeline/actions.ts
+  src/app/operations/growth/pipeline/page.tsx
+  src/app/operations/growth/pipeline/new/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/edit/page.tsx
+  src/components/growth/OpportunityForm.tsx
+  src/components/growth/OpportunityStageControls.tsx
+  docs/reports/NP-P2-S1-private-pay-pipeline-implementation.txt (this report)
+
+Total: 25 files (11 modified + 14 new, including this report), verified against `git status`.
+QA only (untracked, not for commit): .tmp-qa/np-p2-s1-private-pay-pipeline-e2e.mjs
+
+======================================================================
+14. KNOWN ISSUES AND UNRESOLVED DECISIONS
+======================================================================
+D1 RESOLVED (NP-P2-S1-R1A): lost reasons aligned to the owner-approved canonical vocabulary.
+D2 RESOLVED (NP-P2-S1-R1A): forward and backward moves among the open stages are confirmed as the implemented rule.
+D3 RESOLVED (NP-P2-S1-R1A): contact archival leaves existing opportunities intact and open; new opportunities require
+   an active contact. Confirmed.
+K1 The edit form's contact selector lists the first 25 active contacts alphabetically, plus the current contact.
+   Switching to a contact beyond that needs a searchable picker (follow-up). Creation uses a full search step.
+K2 The pipeline shows the 200 most recently updated opportunities per view / filter set, with no paging control (the
+   page says so). Adequate for internal testing.
+K3 Authorization is evaluated at statement time, as in every Core RPC. A grant revoked during an in-flight write can
+   let that one write finish.
+K4 Pre-existing and unrelated: supabase/tests/mutation_concurrency_test.sh (direct trips lock as authenticated),
+   recorded since NP-P1-S2-R1.
+K5 Environment: the machine was heavily loaded during testing (load average up to ~49).
+   - A long-running `next-server` (v16.3.7, cwd this repository, parent `npm exec next start --port 3100`, using no
+     port) was consuming CPU. This repository's own server is v16.3.3, so it is NOT a process this session started.
+   - I sent it one SIGTERM after briefly misidentifying it as my own orphan. It ignored the signal and is still
+     running. Nothing else was touched. The owner may want to check what started it.
+K6 The board columns scroll horizontally inside their own container below ~60rem, and the page itself does not
+   overflow (E2E N3). Below md, the existing narrow-screen guard applies.
+
+======================================================================
+15. SUPABASE FREE RECOVERY LIMITATION
+======================================================================
+- Production is on Supabase Free. No managed backup or PITR is available.
+- The owner's private logical exports are NOT a verified full backup until a restore has been tested.
+- P2-S1 migration risk: additive.
+  - It creates one empty table, functions, a type and a trigger.
+  - It adds a nullable column and three constraints to plus_activities. Replacing the two named CHECKs validates
+    every existing S4 row (proven on an upgraded copy).
+  - It locks plus_activities briefly while the constraints are replaced (tiny table).
+- After release, opportunities become CRM business records with no managed restore path.
+- Recommended before release, owner-run with the owner's own credentials:
+  1. Take a fresh logical export.
+  2. Verify it by restoring into a scratch local project, then run the privilege contract and spot-check counts.
+  3. Repeat this before each data-bearing release.
+- Release order: migration first (the dry run must show exactly 20261014120000 pending), then verification (contract
+  0/29, objects present), then the app.
+  - The S4 app (3488895) is compatible with the P2-S1 migration: it never references the new objects, and its contact
+    timeline query filters on contact_id.
+- App recovery: Vercel instant rollback to 3488895. Keep the tables. Never drop plus_opportunities once real rows
+  exist.
+- Reversing the migration: dropping the table, column and constraints, and restoring the S4 CHECKs, is only possible
+  while no opportunity rows exist. After that, recovery is forward-only.
+- No production command was run in write mode. The only production touch was read-only: `migration list`,
+  `projects list`, the deployment API and sw.js.
+
+======================================================================
+16. READY FOR A CONTROLLED COMMIT?
+======================================================================
+YES. The isolated-stack results in section 12 show no new failures; the only failure is the pre-existing K4.
+- Commit the 25 files in section 13 by explicit path. Exclude .tmp-qa/ and every other untracked report.
+- Suggested message: "feat(plus): add private-pay opportunities and pipeline (NP-P2-S1)".
+
+======================================================================
+17. RECOMMENDED NEXT RELEASE STEPS
+======================================================================
+  1. D1-D3 are resolved by NP-P2-S1-R1A. The P2-S2 Growth navigation group is a required P2-S2 deliverable (R1A report).
+  2. NP-P2-S1-R1: review, controlled commit, PR. Then the Vercel Preview check (identify the backend before any
+     data-changing test) and a read-only production dry run (exactly 20261014120000 pending).
+  3. A verified logical export (section 15).
+  4. With owner approval: `supabase db push --linked`; verification (contract 0/29, the 10 new functions,
+     plus_activities constraints).
+  5. Merge; verify Vercel Production plus sw.js.
+  6. Smoke on the Nemryn Pilot Simulation tenant only, with fictional data:
+     - create an opportunity from a contact;
+     - move stage, mark lost, reopen;
+     - a read-grant Dispatcher sees no controls;
+     - Zenward is untouched.
+  7. Then P2-S2 (tasks). Not started.
+
+STOP. Not staged, committed, pushed, merged or deployed. No production migration, export, credential or record
+change. Fictional data only. P2-S2 not started.

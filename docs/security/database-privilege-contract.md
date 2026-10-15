@@ -96,6 +96,11 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
   * D gains nine RPCs, authenticated EXECUTE only, each re-checking Plus read or write inside: `plus_list_contacts`, `plus_get_contact`, `plus_list_contact_activities`, `plus_find_contact_matches`, `plus_list_contact_owner_options`, `plus_create_contact`, `plus_update_contact`, `plus_archive_contact`, `plus_log_contact_activity`.
   * A gains `_plus_user_can_write`, `_plus_contact_matches`, `_plus_staff_name` and `_plus_resolve_owner`.
   * No Core object is changed.
+* **NP-P2-S1 additions:**
+  * Table `plus_opportunities` is class **B**: authenticated `SELECT` only, through the policy `plus_can_read(organization_id)`. There is no client write privilege or policy.
+  * D gains eight RPCs: `plus_list_opportunities`, `plus_get_opportunity`, `plus_list_opportunity_activities`, `plus_create_opportunity`, `plus_update_opportunity`, `plus_change_opportunity_stage`, `plus_mark_opportunity_lost`, `plus_reopen_opportunity`.
+  * A gains `_plus_require_active_contact` and the trigger function `_plus_opportunity_channel_immutable`.
+  * `plus_activities` gains `opportunity_id`, with its privileges unchanged.
 * **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C; `_validate_request_decision_reason`, P1-OPS-R1), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
 * Every SECURITY DEFINER function pins `search_path` (contract check 19). Functions executable by clients that contain no inline `auth.uid()` / role check are: the three service-only RPCs (validate the integration / dispatch event themselves), the six `driver_*` transition wrappers (delegate to `_driver_execute_trip_transition`, which authorises), the two anon previews (token-scoped), and `is_valid_iana_timezone` (pure).
 

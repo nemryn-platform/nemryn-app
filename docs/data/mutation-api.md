@@ -458,3 +458,48 @@ Tests:
 - `supabase/tests/plus_contacts_activities_tests.sql` (rollback-only);
 - `supabase/tests/plus_contacts_concurrency_test.sh`.
 
+## Nemryn Plus private-pay opportunities + pipeline (NP-P2-S1)
+
+Migration `20261014120000_plus_private_pay_opportunities.sql`.
+
+**`plus_opportunities`** follows the domain-model §8 columns. Like contacts it is class B: authenticated `SELECT` through `plus_can_read(organization_id)`, with no client insert, update or delete.
+- `channel`: `plus_opportunities_channel_check` allows `private_pay` only (P3-S1 widens it). A trigger keeps the channel immutable.
+- `primary_contact_id` is a required composite FK to `plus_contacts` (`plus_opportunities_private_pay_contact_check`).
+- `stage`: new_inquiry, contacted, qualified, quote_sent, quote_accepted, converted, lost.
+- Closed sets for `inquiry_type`, `service_type` (Core's set), `source` and `payment_reported_status` (staff-reported only, PD-09).
+- `lost_reason` uses the owner-approved canonical closed set (NP-P2-S1-R1A): no_response, price, chose_competitor, outside_service_area, service_not_offered, no_availability, not_a_fit, duplicate, other. `lost_note` ≤ 500 is required for `other`.
+- `closed_at` is set exactly when the stage is lost or converted, and `converted_at` exactly when converted.
+- There is no `account_id`, `referral_account_id` or `inquiry_id` yet.
+
+**`plus_activities`** gains `opportunity_id`, a composite FK.
+- `plus_activities_subject_check` becomes `num_nonnulls(contact_id, opportunity_id) >= 1`.
+- `stage_changed` joins the type CHECK, and `plus_activities_stage_subject_check` requires an opportunity for it.
+- Opportunity history rows (stage and owner changes) carry `opportunity_id` only, so S4 contact timelines are unchanged.
+- ZD-211 is unchanged: staff-access changes stay in `audit_events`.
+
+**Stage rules:**
+- Open stages can move to any other open stage, so forward skips and backward moves are both allowed.
+- `lost` is reached only through `plus_mark_opportunity_lost`, which requires a reason.
+- A lost opportunity is reopened only through `plus_reopen_opportunity`, with a reason (3–500) and an open target stage.
+- **`converted` is unreachable in P2-S1.** It is reserved for the P2-S4 Core conversion.
+- `quote_sent` and `quote_accepted` are stages **reported by staff**. No quote document exists before P2-S5.
+
+| RPC | Access | Contract |
+|---|---|---|
+| `plus_list_opportunities(org, search, view, stage, source, owner_membership_id, contact_id, limit, offset)` | Plus read | `view`: open (default), lost, converted or all. Search covers the title and the contact name. A foreign owner handle matches nothing. Returns the contact's name, status and do-not-contact flag. 1–200 rows, most recently updated first |
+| `plus_get_opportunity(org, id)` | Plus read | **ZW002 for a foreign or unknown id**. Returns `owner_membership_id` (a handle) and `updated_at` (the version token) |
+| `plus_list_opportunity_activities(org, id, limit, offset)` | Plus read | Stage and owner history with from/to stage |
+| `plus_create_opportunity(org, contact_id, title, inquiry_type, service_type, source, source_detail, campaign_code, estimated_value_cents, owner_membership_id)` | Plus write | Creates in `new_inquiry`. The contact must be an **active** contact of the organization (archived gives ZW006; foreign or unknown gives ZW002), locked `FOR NO KEY UPDATE`. The campaign code is lower-cased. Values are validated (ZW006), and the owner must be an eligible writer. The same opportunity by the same person within 30 s is a no-op. Audit: `plus_opportunity_created` |
+| `plus_update_opportunity(org, id, expected_updated_at, contact_id, …, payment_reported_status, owner_membership_id)` | Plus write | **Open only** (ZW004 otherwise). Row lock and version check (ZW003). A new contact must be active. An owner change writes an `owner_changed` activity on the opportunity. Audit: `plus_opportunity_updated`, recording field **names** only |
+| `plus_change_opportunity_stage(org, id, expected_updated_at, to_stage, note)` | Plus write | Open stages only (lost or converted gives ZW006). Already in that stage gives `changed=false`. From lost or converted gives ZW004; stale gives ZW003. Writes one `stage_changed` row |
+| `plus_mark_opportunity_lost(org, id, expected_updated_at, reason, note)` | Plus write | Reason from the closed set (`other` needs a note). Already lost gives `changed=false`; converted gives ZW004; stale gives ZW003. Sets `closed_at` |
+| `plus_reopen_opportunity(org, id, expected_updated_at, to_stage, reason)` | Plus write | Lost only (ZW004 otherwise). A reason is required. Stale gives ZW003, so a duplicate reopen is never applied twice. Clears the lost fields and `closed_at` |
+
+Internal (no client EXECUTE): `_plus_require_active_contact(org, contact)` and `_plus_opportunity_channel_immutable()` (a trigger function).
+
+Tests:
+- `supabase/tests/plus_opportunities_tests.sql` (rollback-only);
+- `supabase/tests/plus_opportunities_concurrency_test.sh`.
+
+Nothing in P2-S1 creates or changes a Core Request, Passenger, Trip or Recurring Care arrangement.
+

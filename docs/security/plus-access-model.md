@@ -91,6 +91,11 @@ Recommended option: add `growth` to the `memberships.role` CHECK **and** the `st
 > - Free text (notes, logged interactions, archive reasons) carries the C6 notice "Don't record medical…". It is a reminder, not a control.
 > - Nothing is sent, called or scheduled. `do_not_contact` is stored for future outreach to enforce.
 > - **Gate:** synthetic data only until PD-10 and PD-11 are resolved.
+>
+> **Implementation status (NP-P2-S1, migration `20261014120000`, local only):**
+> - `plus_opportunities` follows section 3.2 in the same way: RLS `plus_can_read`, `SELECT` only, and writes only through `_require_plus_write` RPCs.
+> - Admins and write-grant Dispatchers have full pipeline access. Read-grant Dispatchers can read only. In `read_only` Plus, the Admin can read only; in `locked`, `none` or a suspended organization, nobody has access.
+> - No conversion and no Core write exist yet.
 
 ### 3.1a Entitlement states — behaviour summary
 
