@@ -202,6 +202,14 @@ Design system, shell and brand are unchanged. The pages reuse existing primitive
   - **Contacts** `/operations/growth/contacts`
   - **Tasks** `/operations/growth/tasks`
 - Route mount: PD-04. Icons come from `navIcons` (`src/design/icons.ts`), with new keys added there and not imported ad hoc.
+- **Required NP-P2-S2 deliverable (registered in NP-P2-S1-R1A).** Through P2-S1, Growth, Pipeline and Contacts render as sibling top-level items. In P2-S2, Growth becomes a collapsible, accessible group inside the existing sidebar:
+  - Child items, indented: **Growth Overview**, **Pipeline**, **Contacts**, and **Tasks** once implemented.
+  - The group expands automatically on any active Growth route, and child links carry correct active states.
+  - Collapsing and expanding works from the keyboard.
+  - Order: the Operations items (unchanged), then the Growth group, then Drive, then Settings.
+  - No additional sidebar or app shell is introduced.
+  - Every Growth link remains governed by the same server-side authorization.
+  - Core navigation and permissions are unchanged.
 - Operations → Facilities stays the list of **locations**. Growth → Accounts is the list of **businesses**. Each links to the other, so there are no duplicate records.
 
 ### 7.2 Access behaviour

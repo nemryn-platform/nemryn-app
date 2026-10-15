@@ -779,6 +779,7 @@ export type Database = {
           from_stage: string | null
           id: string
           occurred_at: string
+          opportunity_id: string | null
           organization_id: string
           recorded_at: string
           to_stage: string | null
@@ -791,6 +792,7 @@ export type Database = {
           from_stage?: string | null
           id?: string
           occurred_at?: string
+          opportunity_id?: string | null
           organization_id: string
           recorded_at?: string
           to_stage?: string | null
@@ -803,6 +805,7 @@ export type Database = {
           from_stage?: string | null
           id?: string
           occurred_at?: string
+          opportunity_id?: string | null
           organization_id?: string
           recorded_at?: string
           to_stage?: string | null
@@ -813,6 +816,13 @@ export type Database = {
             columns: ["contact_id", "organization_id"]
             isOneToOne: false
             referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_activities_opportunity_fkey"
+            columns: ["opportunity_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_opportunities"
             referencedColumns: ["id", "organization_id"]
           },
           {
@@ -880,6 +890,93 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      plus_opportunities: {
+        Row: {
+          campaign_code: string | null
+          channel: string
+          closed_at: string | null
+          converted_at: string | null
+          created_at: string
+          created_by: string
+          estimated_value_cents: number | null
+          id: string
+          inquiry_type: string | null
+          lost_note: string | null
+          lost_reason: string | null
+          organization_id: string
+          owner_user_id: string | null
+          payment_reported_status: string
+          primary_contact_id: string | null
+          service_type: string | null
+          source: string
+          source_detail: string | null
+          stage: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          campaign_code?: string | null
+          channel?: string
+          closed_at?: string | null
+          converted_at?: string | null
+          created_at?: string
+          created_by: string
+          estimated_value_cents?: number | null
+          id?: string
+          inquiry_type?: string | null
+          lost_note?: string | null
+          lost_reason?: string | null
+          organization_id: string
+          owner_user_id?: string | null
+          payment_reported_status?: string
+          primary_contact_id?: string | null
+          service_type?: string | null
+          source: string
+          source_detail?: string | null
+          stage?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          campaign_code?: string | null
+          channel?: string
+          closed_at?: string | null
+          converted_at?: string | null
+          created_at?: string
+          created_by?: string
+          estimated_value_cents?: number | null
+          id?: string
+          inquiry_type?: string | null
+          lost_note?: string | null
+          lost_reason?: string | null
+          organization_id?: string
+          owner_user_id?: string | null
+          payment_reported_status?: string
+          primary_contact_id?: string | null
+          service_type?: string | null
+          source?: string
+          source_detail?: string | null
+          stage?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_opportunities_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_opportunities_primary_contact_fkey"
+            columns: ["primary_contact_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
           },
         ]
       }
@@ -2095,6 +2192,10 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_require_active_contact: {
+        Args: { p_contact_id: string; p_organization_id: string }
+        Returns: string
+      }
       _plus_resolve_owner: {
         Args: { p_organization_id: string; p_owner_membership_id: string }
         Returns: string
@@ -2999,6 +3100,22 @@ export type Database = {
       }
       plus_can_read: { Args: { p_organization_id: string }; Returns: boolean }
       plus_can_write: { Args: { p_organization_id: string }; Returns: boolean }
+      plus_change_opportunity_stage: {
+        Args: {
+          p_expected_updated_at: string
+          p_note: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_to_stage: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_opportunity_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_create_contact: {
         Args: {
           p_confirm_possible_duplicate: boolean
@@ -3016,6 +3133,27 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_contact_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_create_opportunity: {
+        Args: {
+          p_campaign_code: string
+          p_contact_id: string
+          p_estimated_value_cents: number
+          p_inquiry_type: string
+          p_organization_id: string
+          p_owner_membership_id: string
+          p_service_type: string
+          p_source: string
+          p_source_detail: string
+          p_title: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_opportunity_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_opportunity_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3052,6 +3190,35 @@ export type Database = {
           phone: string
           preferred_channel: string
           status: string
+          updated_at: string
+        }[]
+      }
+      plus_get_opportunity: {
+        Args: { p_opportunity_id: string; p_organization_id: string }
+        Returns: {
+          campaign_code: string
+          channel: string
+          closed_at: string
+          contact_do_not_contact: boolean
+          contact_id: string
+          contact_name: string
+          contact_status: string
+          created_at: string
+          created_by_name: string
+          estimated_value_cents: number
+          inquiry_type: string
+          lost_note: string
+          lost_reason: string
+          opportunity_id: string
+          owner_can_write: boolean
+          owner_membership_id: string
+          owner_name: string
+          payment_reported_status: string
+          service_type: string
+          source: string
+          source_detail: string
+          stage: string
+          title: string
           updated_at: string
         }[]
       }
@@ -3133,6 +3300,55 @@ export type Database = {
           status: string
         }[]
       }
+      plus_list_opportunities: {
+        Args: {
+          p_contact_id: string
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_owner_membership_id: string
+          p_search: string
+          p_source: string
+          p_stage: string
+          p_view: string
+        }
+        Returns: {
+          closed_at: string
+          contact_do_not_contact: boolean
+          contact_id: string
+          contact_name: string
+          contact_status: string
+          estimated_value_cents: number
+          inquiry_type: string
+          opportunity_id: string
+          owner_name: string
+          service_type: string
+          source: string
+          stage: string
+          title: string
+          total_count: number
+          updated_at: string
+        }[]
+      }
+      plus_list_opportunity_activities: {
+        Args: {
+          p_limit: number
+          p_offset: number
+          p_opportunity_id: string
+          p_organization_id: string
+        }
+        Returns: {
+          activity_id: string
+          activity_type: string
+          actor_name: string
+          body: string
+          from_stage: string
+          occurred_at: string
+          recorded_at: string
+          to_stage: string
+          total_count: number
+        }[]
+      }
       plus_log_contact_activity: {
         Args: {
           p_activity_type: string
@@ -3145,6 +3361,38 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_activity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_mark_opportunity_lost: {
+        Args: {
+          p_expected_updated_at: string
+          p_lost_note: string
+          p_lost_reason: string
+          p_opportunity_id: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_opportunity_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_reopen_opportunity: {
+        Args: {
+          p_expected_updated_at: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_reason: string
+          p_to_stage: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_opportunity_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_opportunity_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3181,6 +3429,30 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_contact_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_update_opportunity: {
+        Args: {
+          p_campaign_code: string
+          p_contact_id: string
+          p_estimated_value_cents: number
+          p_expected_updated_at: string
+          p_inquiry_type: string
+          p_opportunity_id: string
+          p_organization_id: string
+          p_owner_membership_id: string
+          p_payment_reported_status: string
+          p_service_type: string
+          p_source: string
+          p_source_detail: string
+          p_title: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_opportunity_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_opportunity_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3827,6 +4099,12 @@ export type Database = {
         membership_id: string | null
         access: string | null
         grant_id: string | null
+        changed: boolean | null
+      }
+      plus_opportunity_write_result: {
+        opportunity_id: string | null
+        stage: string | null
+        updated_at: string | null
         changed: boolean | null
       }
       public_request_submission_result: {

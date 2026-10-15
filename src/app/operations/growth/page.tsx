@@ -50,6 +50,14 @@ export default async function GrowthPage() {
           {status.message}
         </p>
       )}
+      <Panel className="flex flex-col gap-1" data-testid="growth-pipeline-link">
+        <Link href="/operations/growth/pipeline" className={cn(typography.subsectionHeading, "text-text-link hover:underline")}>
+          Pipeline
+        </Link>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>
+          Private-pay inquiries and where each conversation stands, from new inquiry to an accepted quote.
+        </p>
+      </Panel>
       <Panel className="flex flex-col gap-1" data-testid="growth-contacts-link">
         <Link href="/operations/growth/contacts" className={cn(typography.subsectionHeading, "text-text-link hover:underline")}>
           Contacts

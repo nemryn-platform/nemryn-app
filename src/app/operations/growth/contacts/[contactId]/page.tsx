@@ -19,6 +19,9 @@ import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ContactWriteActions } from "@/components/growth/ContactActions";
+import { listOpportunities, type OpportunityListRow } from "@/lib/plus/opportunities";
+import { stageDisplayLabel, stageTone } from "@/lib/plus/opportunities-core";
+import Link from "next/link";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -57,6 +60,14 @@ export default async function ContactDetailPage({
     activities = (await listContactActivities(context.organizationId, contactId)).rows;
   } catch {
     activities = null;
+  }
+
+  // NP-P2-S1: this contact's private-pay opportunities (Plus read, re-checked by the database).
+  let opportunities: OpportunityListRow[] | null = null;
+  try {
+    opportunities = (await listOpportunities(context.organizationId, { search: "", view: "all", stage: null, source: null, owner: null, contactId })).rows;
+  } catch {
+    opportunities = null;
   }
 
   const tz = context.organizationTimezone;
@@ -119,6 +130,38 @@ export default async function ContactDetailPage({
           ]}
         />
       </Panel>
+
+      <div className="flex flex-col gap-zw-md" data-testid="contact-opportunities">
+        <SectionHeader
+          title="Opportunities"
+          description="Private-pay sales conversations with this contact."
+          actions={
+            canWrite ? (
+              <LinkButton href={`/operations/growth/pipeline/new?contactId=${contact.id}`} size="sm" variant="outline" data-testid="contact-new-opportunity">
+                New opportunity
+              </LinkButton>
+            ) : undefined
+          }
+        />
+        {opportunities === null ? (
+          <AttentionState level="critical" title="Opportunities couldn't be loaded" description="Reload the page to try again." />
+        ) : opportunities.length === 0 ? (
+          <p className={cn(typography.bodySmall, "text-text-secondary")}>No opportunities yet.</p>
+        ) : (
+          <Panel>
+            <ul aria-label="Opportunities" className="divide-y divide-border-subtle">
+              {opportunities.map((o) => (
+                <li key={o.id} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0">
+                  <Link href={`/operations/growth/pipeline/${o.id}`} className={cn(typography.bodySmall, "font-medium text-text-link hover:underline")}>
+                    {o.title}
+                  </Link>
+                  <StatusBadge label={stageDisplayLabel(o.stage)} category={stageTone(o.stage)} />
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
+      </div>
 
       <div className="flex flex-col gap-zw-md">
         <SectionHeader title="Timeline" description="Notes and the calls, emails and meetings your team logged. Entries can't be edited or deleted." />
