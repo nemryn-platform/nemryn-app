@@ -1,6 +1,7 @@
 // Focused unit tests for the pure Website Requests product model (P1-COMM-D1).
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const core = await import("./website-requests-core.ts");
 const { SERVICE_OFFERING_OPTIONS } = await import("./organization-services-core.ts");
@@ -115,10 +116,24 @@ test("hosted URL / embed snippet / iframe fallback: opaque key only, no credenti
 });
 
 
-test("service list parity: form, Services & Intake and the intake allow-list are the same closed set", () => {
-  assert.deepEqual([...FORM_SERVICE_VALUES], SERVICE_OFFERING_OPTIONS.map((o) => o.value));
-  assert.deepEqual([...FORM_SERVICE_VALUES], [...SERVICE_TYPE_VALUES]);
-  for (const o of SERVICE_OFFERING_OPTIONS) assert.equal(core.FORM_SERVICE_LABELS[o.value], o.label);
+// NC-INTAKE-AIRPORT-S1: Services & Intake and the trusted intake allow-list are ONE closed set (nine values). Nemryn-
+// hosted forms offer that set EXCEPT airport_transportation -- a deliberate, documented exception (offering Airport on
+// hosted forms is a separate product decision). Any other drift still fails here.
+const HOSTED_FORM_EXCLUSIONS = ["airport_transportation"];
+test("service list parity: Services & Intake = intake allow-list; hosted forms = the same set minus the documented exclusion", () => {
+  assert.deepEqual(SERVICE_OFFERING_OPTIONS.map((o) => o.value), [...SERVICE_TYPE_VALUES]);
+  assert.deepEqual([...FORM_SERVICE_VALUES], [...SERVICE_TYPE_VALUES].filter((v) => !HOSTED_FORM_EXCLUSIONS.includes(v)));
+  for (const v of FORM_SERVICE_VALUES) assert.equal(core.FORM_SERVICE_LABELS[v], SERVICE_OFFERING_OPTIONS.find((o) => o.value === v).label);
+});
+
+test("NC-INTAKE-AIRPORT-S1: an organization that enables Airport does not get it on its hosted form (filtered, never an invalid save)", () => {
+  assert.deepEqual(effectiveFormServices(["dialysis", "airport_transportation"], null), ["dialysis"]);
+  assert.equal(FORM_SERVICE_VALUES.includes("airport_transportation"), false);
+});
+
+test("NC-INTAKE-AIRPORT-S1: the developer integration guide lists airport_transportation as an accepted serviceType", () => {
+  const src = readFileSync(new URL("./website-requests-core.ts", import.meta.url), "utf8");
+  assert.match(src, /senior_medical \| wheelchair_transportation \| other \| airport_transportation/);
 });
 
 test("form state is independent of connection status; version label is stable and safe", () => {

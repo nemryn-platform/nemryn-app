@@ -38,8 +38,10 @@ test("quote stages are always labelled as staff-reported; no quote is implied", 
   assert.match(o.CONVERTED_RESERVED_NOTE, /isn't available yet/);
 });
 
-test("service types mirror Core's closed set and labels exactly", () => {
-  assert.deepEqual([...o.SERVICE_TYPES], [...core.SERVICE_TYPE_VALUES]);
+// NC-INTAKE-AIRPORT-S1: Core intake added airport_transportation; Plus opportunity service types are unchanged (Plus is
+// out of that slice's scope). They mirror Core's set minus that one documented addition.
+test("service types mirror Core's closed set (minus Core's airport_transportation) and labels exactly", () => {
+  assert.deepEqual([...o.SERVICE_TYPES], [...core.SERVICE_TYPE_VALUES].filter((v) => v !== "airport_transportation"));
   for (const v of o.SERVICE_TYPES) assert.equal(o.serviceTypeLabel(v), core.SERVICE_TYPE_LABELS[v]);
 });
 

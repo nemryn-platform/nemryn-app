@@ -42,6 +42,8 @@ export const SERVICE_TYPE_VALUES = [
   "senior_medical",
   "wheelchair_transportation",
   "other",
+  // NC-INTAKE-AIRPORT-S1: pre-arranged travel to or from airports. Not a medical service; never remapped to "other".
+  "airport_transportation",
 ] as const;
 
 /** Lowercase weekday NAME strings — the wire contract, matching Zenward-Web's own `Weekday` type exactly. The RPC converts these to canonical ISO weekday numbers (1=Monday..7=Sunday) for storage; this module never does that conversion itself (server-authoritative, per this schema's own established discipline). */
@@ -487,6 +489,7 @@ export const SERVICE_TYPE_LABELS: Record<ServiceType, string> = {
   senior_medical: "Senior medical transportation",
   wheelchair_transportation: "Wheelchair transportation",
   other: "Other",
+  airport_transportation: "Airport transportation",
 };
 
 /** Short weekday labels keyed by the canonical ISO weekday number (1=Monday..7=Sunday) `transportation_requests.recurring_days_of_week` stores — for rendering a REQUESTED schedule's days on Request Detail. */

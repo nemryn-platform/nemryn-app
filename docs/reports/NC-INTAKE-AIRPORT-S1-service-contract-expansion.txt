@@ -1,0 +1,362 @@
+NC-INTAKE-AIRPORT-S1 -- AIRPORT TRANSPORTATION PUBLIC INTAKE CONTRACT EXPANSION
+Date: 2026-10-15
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing staged, committed, pushed, merged or deployed.
+- No production migration and no production write.
+- Zenward-Web not modified. Uncommitted P2-S4 work untouched.
+Goal: Nemryn Core's existing TRUSTED website intake accepts serviceType "airport_transportation" (Zenward Mobility's
+Airport Transportation). It reuses the existing architecture and Request Hub; no new intake, booking or CRM path.
+
+======================================================================
+1. VERIFIED BASELINE
+======================================================================
+- Main checkout /Users/datamatics/Nemryn: branch np-p2-s4-conversion-rebooking at 1355c75, with UNCOMMITTED P2-S4 work
+  (13 modified tracked files plus untracked files).
+  - It was not reset, stashed, cleaned, switched or modified at any point. After the work: same branch, 13 modified
+    files.
+- origin/main: 1355c75 (Merge PR #8, NP-P2-S3). Vercel Production serves 1355c75.
+- Production Supabase (wyocbivzgrbekuyqdfts, read-only `migration list --linked`): head 20261015130000. P2-S4
+  20261015140000 is not applied; no airport migration exists remotely.
+- Production schema, read-only pg_dump of `public` taken earlier this session: _create_public_request,
+  set_organization_service_offerings, transportation_requests_service_type_check and
+  organization_service_offerings_service_type_check are byte-identical to the origin/main definitions this change
+  builds on.
+- Documented contract vs implementation: NO discrepancy. The same eight values (medical_appointment, dialysis,
+  rehabilitation, hospital_discharge, recurring_care, senior_medical, wheelchair_transportation, other) are enforced in:
+  - the TypeScript validator, SERVICE_TYPE_VALUES (src/lib/public-intake/website-intake-core.ts);
+  - the database CHECK transportation_requests_service_type_check;
+  - the trusted-intake core _create_public_request;
+  - the tenant Services list (CHECK, set_organization_service_offerings, SERVICE_OFFERING_OPTIONS);
+  - Nemryn-hosted forms;
+  - Plus opportunities.
+  Text CHECKs only: there is no enum anywhere.
+- Zenward-Web (read-only), HEAD b7b9cee "Add Airport Transportation behind intake contract gate": airport is gated in
+  CONTRACT_PENDING_SERVICE_LABELS, exactly as its ZW-WEB-04C1 report describes.
+
+======================================================================
+2. SAFE ISOLATION USED
+======================================================================
+- A separate git worktree, /Users/datamatics/Nemryn-nc-intake-airport, on NEW branch nc-intake-airport-service-contract,
+  created from verified origin/main 1355c75 (`git worktree add`). It shares only the object store; the P2-S4 working
+  tree was never touched.
+- Local-only, git-ignored helpers in the worktree:
+  - node_modules: an APFS copy-on-write clone; Turbopack refuses a symlink;
+  - .env.local: a copy;
+  - .env.production.local: points the worktree build at the ISOLATED stack.
+- Databases:
+  - every DB test ran on the isolated stack NemrynS1Iso, synced from the worktree (origin/main + this migration);
+  - the shared dev database, which carries the P2-S4 migration, was only READ for comparisons; this migration was
+    NOT applied there;
+  - production was only read.
+
+======================================================================
+3. ACTUAL CORE VALIDATION LOCATIONS
+======================================================================
+Trusted website intake path (Zenward-Web adapter -> Nemryn):
+  1. Route POST /api/public-intake/website (src/app/api/public-intake/website/route.ts):
+     - 8 KB cap, JSON, Origin / CORS resolution;
+     - validateWebsiteIntakePayload (src/lib/public-intake/website-intake-core.ts): closed fields; serviceType must be
+       in SERVICE_TYPE_VALUES;
+     - durable rate limit (verified connection bucket or per-IP);
+     - then the service-role RPC.
+  2. submit_public_transportation_request (service_role only) -> _create_public_request (SECURITY DEFINER; no client
+     EXECUTE). The integration is resolved from integrationExternalId: it decides the organization; active /
+     not-retired; Origin binding. Then field validation, the service allow-list, and the tenant Services rule:
+     **when an organization has configured Services, the service must be one of them**. Then recurring-schedule
+     validation; idempotent INSERT ... ON CONFLICT (intake_integration_id, external_submission_ref) DO NOTHING;
+     request_logged event; acquisition snapshot; notification.
+  3. transportation_requests_service_type_check: the column CHECK.
+Display:
+  - Operations -> Request detail: SERVICE_TYPE_LABELS (RequestDetailsPanel).
+  - New-request notification: the Services labels (serviceLabel).
+  - Plus Linked requests: SERVICE_TYPE_LABELS, with a safe fallback.
+Tenant Services: Settings -> Services (SERVICE_OFFERING_OPTIONS), set_organization_service_offerings and
+organization_service_offerings_service_type_check.
+
+======================================================================
+4. DATABASE MIGRATION
+======================================================================
+supabase/migrations/20261015135000_core_intake_airport_service_type.sql: forward-only, additive, 333 lines. No earlier
+migration modified; no new table, column, function, type or grant. In one transaction:
+  1. transportation_requests_service_type_check: DROP / ADD with the eight values + 'airport_transportation'.
+     service_type IS NULL is still allowed. Every existing row satisfies the narrower list, so validation cannot fail.
+  2. organization_service_offerings_service_type_check: DROP / ADD with the same nine values.
+  3. CREATE OR REPLACE _create_public_request:
+     - same signature;
+     - body BYTE-IDENTICAL to the deployed definition (20260921150000, equal to production) except the allow-list line
+       (+ 'airport_transportation');
+     - SECURITY DEFINER, search_path, ACL (no client EXECUTE) and comment are kept by CREATE OR REPLACE.
+  4. CREATE OR REPLACE set_organization_service_offerings: the same; allow-list only; ACL kept.
+- No enum, so no special PostgreSQL transaction handling (no ALTER TYPE ... ADD VALUE) is needed.
+- Ordering: 20261015135000 sorts after the production head 20261015130000 and BEFORE the unreleased Plus P2-S4
+  migration 20261015140000. They are independent (no shared object).
+  - If this ships first, P2-S4 still applies in order.
+  - If P2-S4 ships first, rename this file to a timestamp after 20261015140000 before release; the content needs no
+    change.
+- Deliberately NOT changed:
+  - Nemryn-HOSTED website request forms (website_request_forms / publications CHECKs, save_website_request_form,
+    _public_form_service_types): offering Airport on hosted forms is a separate product decision. They filter by
+    their own list, so an organization that enables Airport simply doesn't see it on its hosted form; nothing breaks.
+  - Plus opportunity service types (plus_opportunities): Plus is out of scope, and P2-S4 is in flight.
+
+======================================================================
+5. EXACT NEW SERVICE TYPE CONTRACT
+======================================================================
+Wire value: "airport_transportation" (exact; case-sensitive; no trimming tolerance; no fuzzy matching).
+Accepted set, nine values: medical_appointment, dialysis, rehabilitation, hospital_discharge, recurring_care,
+senior_medical, wheelchair_transportation, other, airport_transportation. serviceType stays OPTIONAL (null / absent is
+still accepted).
+Operations label: "Airport transportation". Nemryn's existing sentence-case style; Zenward-Web's public label is
+"Airport Transportation".
+- Note: Zenward-Web already uses different public labels for the existing services (e.g. "Wheelchair-Accessible
+  Transportation" vs Nemryn's "Wheelchair transportation"), despite a "word-for-word" code comment. That drift
+  predates this slice and was not changed.
+Semantics:
+  - It is NOT a medical service. It is never remapped to "other", and never prefills wheelchair (only
+    wheelchair_transportation does).
+  - It promises nothing: no flight tracking, meet-and-greet, terminal escort, baggage, curbside guarantee,
+    availability, pricing, 24/7 or permits.
+  - The existing intake fields carry the request (pickup, destination, date / time, notes); no airport-specific fields
+    were added.
+Developer integration guide (Settings -> Website Requests, website-requests-core.ts): the serviceType line now lists
+airport_transportation.
+
+======================================================================
+6. EXISTING SERVICE COMPATIBILITY
+======================================================================
+- All eight existing values are still accepted and stored exactly (SQL I1; unit tests for each value).
+- Unknown values and near-misses are still rejected: "airport", "Airport_Transportation", "airport-transportation",
+  "limousine" (SQL I4; unit; E2E A4).
+- Wheelchair and recurring submissions are unchanged (SQL O2, R1; E2E A5, A6).
+- A NULL service type is still accepted (SQL B3).
+- Parity tests updated DELIBERATELY:
+  - website-requests-core.test.mjs: Services = intake allow-list (nine values); hosted forms = that set minus the
+    documented exclusion airport_transportation. A new test asserts Airport is filtered from hosted forms.
+  - opportunities-core.test.mjs: Plus types = Core's set minus airport_transportation.
+  Any other drift still fails.
+
+======================================================================
+7. TENANT ISOLATION AND AUTHORIZATION EVIDENCE
+======================================================================
+- The integration decides the organization; the payload cannot (SQL T1; E2E A7). An extra field such as organizationId
+  is rejected by the closed contract (E2E A8).
+- Inactive integration, unknown integration and disallowed Origin -> generic refusal, nothing stored (SQL T2; E2E A9).
+  The bound Origin is accepted (SQL T3).
+- anon cannot call the intake RPC (42501, SQL T4). Only the server route's service-role client can. Client roles have
+  no INSERT on transportation_requests (SQL S4).
+- The replaced functions keep their single signature, SECURITY DEFINER, pinned search_path and ACLs (SQL S3). The
+  privilege contract has 0 violations (section 10).
+- Tenant Services rule: an organization that configured Services WITHOUT Airport rejects airport (SQL O1). After
+  enabling it, airport is accepted (SQL O2). Unknown Services values are still rejected (SQL O3).
+- Operations: Org A staff see the Request; Org B staff get Core's "Request unavailable" (E2E B4, B5).
+- No Plus subscription is needed: Org A had no organization_modules row and received every airport Request (SQL B2;
+  E2E A11).
+
+======================================================================
+8. IDEMPOTENCY AND RATE-LIMIT EVIDENCE
+======================================================================
+- A valid retry (same integration + key) returns the SAME Request (replay), and no second Request, event or
+  notification is created (SQL I5, I7; E2E A3).
+- Same key + conflicting payload follows the EXISTING contract: the first Request is returned unchanged (service and
+  pickup kept); nothing new (SQL I6).
+- Rate limits are unchanged (no rate-limit code or SQL touched): public_intake_rate_limit_tests and the rate-limit
+  concurrency test pass (section 10). The route classifies verified connections exactly as before.
+
+======================================================================
+9. CORE REQUEST PERSISTENCE AND DISPLAY
+======================================================================
+An accepted airport submission:
+  1. is recognized as Airport Transportation;
+  2. reaches only the integration's organization;
+  3. creates ONE 'pending' transportation request (source web) through the existing _create_public_request, with
+     service_type 'airport_transportation', the request_logged event, the existing new-request notification and the
+     acquisition snapshot (SQL I2, I3, I7, A1; E2E A1, A2, A10);
+  4. is visible to the organization's dispatch staff in the Request Hub (E2E B4);
+  5. is labelled "Airport transportation" on Request detail (E2E B1; screenshot);
+  6. awaits normal review: Accept / Decline present, "No trips yet" (E2E B2).
+It does NOT:
+  - confirm availability;
+  - create a Trip, assignment, Passenger or recurring arrangement;
+  - create a Plus contact, opportunity, attribution, task or recommendation;
+  - trigger the Growth Agent;
+  - send a customer message;
+  - create a quote or payment.
+(SQL B1; E2E A11: all counts unchanged.)
+
+======================================================================
+10. TEST RESULTS
+======================================================================
+New SQL suite supabase/tests/core_intake_airport_tests.sql (rollback-only; the REAL trusted path,
+submit_public_transportation_request as service_role): 24/24 on the isolated stack.
+- Schema: S1-S4.
+- Intake: I1-I7.
+- Tenancy: T1-T4.
+- Services: O1-O3.
+- Recurring: R1-R2.
+- Acquisition: A1.
+- Boundary: B1-B3.
+Brief items 1-16 map to:
+  1: I1.
+  2: I2.
+  3: I4.
+  4: I3.
+  5: I2, T1.
+  6: T1, T2.
+  7: I5.
+  8: I6.
+  9: O2, E2E A5.
+  10: R1, E2E A6.
+  11: I2, B1.
+  12: B1.
+  13: E2E B1.
+  14: A1, E2E A10.
+  15: T2, T4, plus the rate-limit suites.
+  16: B2, E2E A11.
+Isolated stack:
+  (a) UPGRADE from the PRODUCTION head 20261015130000 with existing fictional data:
+      - Seed: 9 Requests covering all eight existing service types plus a NULL service type; an intake integration;
+        a tenant with configured Services (dialysis, wheelchair).
+      - `supabase migration up` applied 20261015135000, rc 0.
+      - All 9 Requests are unchanged (service type and state compared before / after). The configured Services are
+        kept.
+      - The only NOT VALID constraint in the database is Core's pre-existing request_events_decision_reason_required
+        (created NOT VALID by an earlier migration; untouched here).
+      - An airport submission through submit_public_transportation_request on the upgraded database is accepted.
+      - Upgraded-database suites: core_intake_airport 24/24, public_request_intake 42 / 0 fail, website_intake_acquisition
+        52 / 0, team_services_operations 106 / 0, privilege contract 0 violations of 29.
+      - (A first upgrade attempt had a broken seed; my fixture built a NULL requester_name. It was fixed and rerun; only
+        the valid rerun is reported here.)
+  (b) FRESH reset before EACH suite (database verified fresh), 23 suites, 0 failures:
+      - core_intake_airport 24/24, privilege_contract 0/29;
+      - rls_adversarial 33, security_definer_exposure 20, function_privilege 7, client_privilege_surface 21;
+      - public_request_intake 42, public_intake_rate_limit 8, website_intake_acquisition 52;
+      - website_integration_self_service 72, website_connection_lifecycle 36, website_requests_form 37,
+        website_request_form_publication 50, team_services_operations 106;
+      - request_decision_workflow 60, request_mutation 39, request_mutation_privilege 23,
+        request_trip_passenger_integrity 11, request_recurring_care 42;
+      - create_trip 20, create_trip_privilege 5;
+      - plus_request_attributions 73/73, plus_opportunities 75/75.
+  (c) CONCURRENCY (fresh), all 0 failures:
+      - public_request_intake 1, public_intake_rate_limit 1, website_intake_acquisition 1, website_integration 3;
+      - website_connection_lifecycle 15, website_requests_form 37, website_request_form_publication 29;
+      - request_decision 21, plus_request_attributions 6.
+      - The runner's "FAIL_lines=1" on three of them is its grep matching their own "=== FAIL_COUNT=0 ===" summary
+        line.
+      - Not run here, and unrelated: the two known pre-existing direct-lock Core scripts (mutation_concurrency_test,
+        request_lifecycle_concurrency_test). Earlier reports show they fail identically on unmodified schemas.
+Browser / route end-to-end (worktree build on :3200 -> isolated stack; .tmp-qa/nc-intake-airport-e2e.mjs in the
+worktree, untracked): 21/21 PASS.
+- A1-A11 are the real HTTP route:
+  - accept; exact persistence; idempotent retry; unknown values -> generic 400;
+  - wheelchair and recurring still work;
+  - organization binding; closed contract; Origin binding; acquisition snapshot;
+  - no side records and no Plus requirement.
+- B1-B5 are Operations: the label, Pending, review controls, no airport promises, the Hub listing, and Org B
+  isolation.
+- Cleanup removes all fixtures.
+- Screenshot (local, untracked): worktree .tmp-qa/screens/airport-request-detail.png.
+Unit: 817/817 (12 new / updated). TypeScript clean. ESLint clean. next build succeeded.
+Cross-branch: a three-way `git merge-file` dry run of all six touched source / test files against the uncommitted
+P2-S4 versions gives 0 conflicts.
+
+======================================================================
+11. EXACT CHANGED-FILE INVENTORY (worktree nc-intake-airport-service-contract; nothing staged)
+======================================================================
+New (3):
+  supabase/migrations/20261015135000_core_intake_airport_service_type.sql
+  supabase/tests/core_intake_airport_tests.sql
+  docs/reports/NC-INTAKE-AIRPORT-S1-service-contract-expansion.txt (this report)
+Modified (6):
+  src/lib/public-intake/website-intake-core.ts       (SERVICE_TYPE_VALUES + airport; SERVICE_TYPE_LABELS + label)
+  src/lib/operations/organization-services-core.ts   (SERVICE_OFFERING_OPTIONS + airport; comment)
+  src/lib/operations/website-requests-core.ts        (developer guide serviceType list; FORM_SERVICE_VALUES comment)
+  src/lib/public-intake/website-intake-core.test.mjs (airport tests)
+  src/lib/operations/website-requests-core.test.mjs  (parity with the documented hosted-form exclusion; new tests)
+  src/lib/plus/opportunities-core.test.mjs           (parity: Plus = Core minus airport)
+EXCLUDE: the worktree's .tmp-qa/, node_modules, .env.local and .env.production.local (all local-only; the env files
+and node_modules are git-ignored).
+
+======================================================================
+12. PRODUCTION RELEASE DEPENDENCIES
+======================================================================
+- Migration required: YES (20261015135000). It widens two CHECKs and replaces two functions' allow-lists.
+- Old-app compatibility: the deployed app (1355c75) keeps working after the migration. Its route still REJECTS airport
+  (its TypeScript validator runs before the database), so no airport Request can arrive until the new app is
+  deployed. Nothing else in the old app changes behaviour.
+- App deployment MUST precede website activation: the route-level validator is in the app.
+- Tenant setting: if Zenward's organization has configured Services, its Admin must enable "Airport transportation"
+  in Settings -> Services after the deploy. Otherwise Core rejects airport by the existing offerings rule (SQL O1).
+  Whether Zenward has configured Services was NOT checked (production data was not read). Verify it in the UI during
+  the release.
+- Release sequence (not executed):
+  1. Review this backend change (an independent review recommended).
+  2. Commit and open a PR under owner control.
+  3. Prepare backup and rollback (below) and confirm the PITR / backup tier.
+  4. Apply the approved migration: confirm head 20261015130000 first, or rename if P2-S4 shipped first.
+  5. Merge / deploy the Nemryn app.
+  6. Verify deployed acceptance: read-only checks of the function bodies; then an explicitly authorized synthetic
+     submission on the Pilot Simulation tenant's integration, not Zenward's live one; decline it through Core.
+  7. Zenward Admin enables Airport in Settings -> Services, if Services are configured.
+  8. ONLY THEN activate Airport Transportation on Zenward-Web (section 13).
+  9. Run an explicitly authorized synthetic end-to-end request from Zenward-Web and verify it in Zenward's own
+     Request Hub.
+- Rollback, in one transaction:
+  - restore the eight-value CHECKs and the two prior function bodies (from 20261015130000-era definitions:
+    20260921150000 / 20260920110000).
+  - PRECONDITION: no row may hold airport_transportation. Once airport Requests or Services rows exist, rolling back
+    the CHECKs would fail. Those Requests are legitimate Core records and must not be deleted, so prefer a forward
+    fix after go-live.
+  - Deactivate the website side first (re-gate Airport) if ever needed.
+
+======================================================================
+13. REQUIRED ZENWARD-WEB ACTIVATION (after Nemryn is released; NOT done here)
+======================================================================
+In src/lib/request-intake/service-types.ts:
+  - add "airport_transportation" to SERVICE_TYPES and to PUBLIC_SERVICE_TYPES;
+  - add the label to SERVICE_TYPE_LABELS: airport_transportation: "Airport Transportation";
+  - add airport_transportation: "airport_transportation" to PUBLIC_SERVICE_PARAMS;
+  - remove airport_transportation from CONTRACT_PENDING_SERVICE_LABELS, leaving the gate mechanism for future
+    services.
+In src/lib/service-catalog.ts: mark the airport entry's intake "live".
+Enable /request-transportation?service=airport_transportation; it is preselected via PUBLIC_SERVICE_PARAMS. Remove the
+temporary "choose Other" intake note on the airport page.
+Tests:
+  - nemryn-mapping.test.mjs: the SERVICE_TYPES-equals-Nemryn parity becomes nine values;
+  - contract-gate.test.mjs: Airport is no longer pending;
+  - service-catalog tests: Airport is live.
+Docs: update docs/architecture/nemryn-trusted-request-intake-contract.md to the nine-value enum and the new Nemryn
+release.
+NO adapter rewrite is required (verified, read-only):
+  - nemryn-mapping.ts passes serviceType through verbatim (`serviceType: input.serviceType`);
+  - adapter.ts is value-agnostic (URL, integration id, Origin header, idempotency key = meta.submissionId).
+Keep the website's existing guardrails: no flight-tracking, meet-and-greet, baggage, 24/7, pricing or permit claims
+(the ZW-WEB-04C1 scan already shows zero).
+
+======================================================================
+14. REMAINING BLOCKERS
+======================================================================
+None for a controlled commit. Release items to settle:
+  - Zenward's Services configuration (section 12): enable Airport if configured.
+  - Owner decision: whether Nemryn-HOSTED request forms and Plus opportunities should also offer Airport. Not needed
+    for Zenward-Web, and excluded deliberately.
+  - Edge case, documented: an organization whose ONLY enabled service is Airport would show no service choices on a
+    Nemryn-hosted form until hosted forms support Airport.
+  - Ordering with P2-S4's migration (section 4).
+  - Pre-existing Core harness failures elsewhere are unrelated and unchanged (see section 10 for this run).
+
+======================================================================
+15. READY FOR CONTROLLED COMMIT?
+======================================================================
+YES -- ready for a controlled commit on branch nc-intake-airport-service-contract (worktree
+/Users/datamatics/Nemryn-nc-intake-airport), using the section 11 inventory exactly (9 paths), after owner review.
+- The change is minimal and additive:
+  - the 9-value allow-list in two CHECKs and two functions (bodies otherwise identical to production);
+  - the TypeScript validator, labels and Services option;
+  - the developer guide line;
+  - deliberate, documented parity-test updates.
+- Every test passes: unit; SQL fresh and upgraded; concurrency; the real-route and browser E2E; TypeScript, ESLint and
+  the build.
+- No security boundary was weakened.
+- It must ship as migration -> app deploy -> Zenward Services check -> Zenward-Web activation (section 12).
+
+STOP. Zenward-Web not modified; P2-S4 not interrupted.
