@@ -3,8 +3,8 @@
  * unit-testable under plain Node (organization-services-core.test.mjs).
  *
  * The canonical service identifiers are the platform's existing list -- the
- * same eight values as `transportation_requests_service_type_check`, the
- * public-intake function and `SERVICE_TYPE_VALUES`
+ * same nine values as `transportation_requests_service_type_check`, the
+ * public-intake function and `SERVICE_TYPE_VALUES` (eight + airport_transportation, NC-INTAKE-AIRPORT-S1)
  * (src/lib/public-intake/website-intake-core.ts). A test pins this list to
  * that one, so a ninth type added there cannot silently go missing here.
  * Tenant data stores identifiers only; the human labels live in code.
@@ -19,6 +19,8 @@ export const SERVICE_OFFERING_OPTIONS: { value: string; label: string }[] = [
   { value: "senior_medical", label: "Senior medical transportation" },
   { value: "wheelchair_transportation", label: "Wheelchair transportation" },
   { value: "other", label: "Other" },
+  // NC-INTAKE-AIRPORT-S1: pre-arranged travel to or from airports (not a medical service)
+  { value: "airport_transportation", label: "Airport transportation" },
 ];
 
 export function serviceLabel(value: string): string {

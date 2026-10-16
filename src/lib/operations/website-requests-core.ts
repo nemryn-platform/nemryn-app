@@ -323,7 +323,12 @@ export function buildIframeFallback(origin: string, publicKey: string): string {
 // ---------------------------------------------------------------------------
 export const FORM_LIMITS = { title: 120, intro: 600, submitLabel: 40, confirmation: 400 } as const;
 
-/** Canonical closed service list -- identical to the database CHECK, the intake allow-list and Services & Intake (asserted by the unit tests). */
+/**
+ * Services a Nemryn-HOSTED website request form can offer -- the database CHECK on website_request_forms / publications.
+ * Equal to the intake allow-list and Services & Intake EXCEPT airport_transportation (NC-INTAKE-AIRPORT-S1): Airport is
+ * accepted through trusted website intake, but offering it on Nemryn-hosted forms is a separate product decision. An
+ * organization that enables Airport simply does not see it on its hosted form (asserted by the unit tests).
+ */
 export const FORM_SERVICE_VALUES = [
   "medical_appointment",
   "dialysis",
@@ -807,7 +812,7 @@ export function buildDeveloperPackage(input: DeveloperPackageInput): string {
     "    preferredDate           YYYY-MM-DD",
     "    preferredTime           HH:MM",
     "    assistanceNotes, additionalNotes (text, up to 4000 characters)",
-    "    serviceType             medical_appointment | dialysis | rehabilitation | hospital_discharge | recurring_care | senior_medical | wheelchair_transportation | other",
+    "    serviceType             medical_appointment | dialysis | rehabilitation | hospital_discharge | recurring_care | senior_medical | wheelchair_transportation | other | airport_transportation",
     "                            (only services the organization has enabled in Nemryn are accepted)",
     "    recurringSchedule       { daysOfWeek: [\"monday\", ...], startDate, endDate, appointmentTime, returnTripExpected }",
     "    acquisition             see below",

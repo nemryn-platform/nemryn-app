@@ -257,6 +257,38 @@ for (const value of SERVICE_TYPES) {
   });
 }
 
+// ---- NC-INTAKE-AIRPORT-S1: airport_transportation (ninth structured service) ----
+test("validateWebsiteIntakePayload — serviceType \"airport_transportation\" is accepted and preserved EXACTLY (never remapped to other)", () => {
+  const result = validateWebsiteIntakePayload(validPayload({ serviceType: "airport_transportation" }));
+  assert.equal(result.ok, true);
+  assert.equal(result.value.serviceType, "airport_transportation");
+  assert.notEqual(result.value.serviceType, "other");
+});
+
+test("NC-INTAKE-AIRPORT-S1: the allow-list is the eight existing values plus airport_transportation, in order; nothing else", async () => {
+  const { SERVICE_TYPE_VALUES } = await import("./website-intake-core.ts");
+  assert.deepEqual([...SERVICE_TYPE_VALUES], [...SERVICE_TYPES, "airport_transportation"]);
+});
+
+test("NC-INTAKE-AIRPORT-S1: Airport is labelled as itself in Operations, not as a medical service", () => {
+  assert.equal(SERVICE_TYPE_LABELS.airport_transportation, "Airport transportation");
+  assert.doesNotMatch(SERVICE_TYPE_LABELS.airport_transportation, /medical|dialysis|discharge|wheelchair|other/i);
+});
+
+for (const value of ["airport", "Airport_Transportation", "airport-transportation", "airport_transport", " airport_transportation"]) {
+  test(`validateWebsiteIntakePayload — near-miss serviceType "${value}" -> invalid_request (no fuzzy matching)`, () => {
+    const result = validateWebsiteIntakePayload(validPayload({ serviceType: value }));
+    assert.equal(result.ok, false);
+  });
+}
+
+test("NC-INTAKE-AIRPORT-S1: an airport request with a recurringSchedule follows the existing recurring rules unchanged", () => {
+  const ok = validateWebsiteIntakePayload(validPayload({ serviceType: "airport_transportation",
+    recurringSchedule: { daysOfWeek: ["monday"], startDate: "2026-11-02", endDate: "2026-11-30", appointmentTime: "06:30", returnTripExpected: true } }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.value.serviceType, "airport_transportation");
+});
+
 test("validateWebsiteIntakePayload — missing serviceType is accepted (optional, backward compatible)", () => {
   const result = validateWebsiteIntakePayload(validPayload());
   assert.equal(result.ok, true);
