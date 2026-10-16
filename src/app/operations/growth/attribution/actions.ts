@@ -128,7 +128,7 @@ export async function correctAttributionAction(_prev: AttributionActionState, fo
   });
   if (error || !data) {
     console.error("[plus] attribution correction failed", error?.code ?? "no_data");
-    return { status: "error", message: attributionErrorMessage(error?.code) };
+    return { status: "error", message: attributionErrorMessage(error?.code, error?.message) };
   }
   refresh(requestId);
   return { status: "success", message: data.changed ? "Link corrected. The request itself is unchanged." : "Nothing changed: the link already matches." };

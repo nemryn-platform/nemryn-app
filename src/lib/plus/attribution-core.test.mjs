@@ -59,3 +59,29 @@ test("decision reasons: codes only, never the free-text note", () => {
   assert.doesNotMatch(src, /^import /m, "runtime-import-free");
   assert.doesNotMatch(src, /reason_note|reasonNote/);
 });
+
+test("NP-P2-S4-R5-F1: conversion links are not correctable; manual links and rebookings stay correctable", () => {
+  assert.equal(a.isLinkCorrectable("converted_from_opportunity"), false);
+  assert.equal(a.isLinkCorrectable("linked_existing_request"), true);
+  assert.equal(a.isLinkCorrectable("rebooking"), true);
+  assert.equal(a.linkMethodLabel("converted_from_opportunity"), "Created from an opportunity");
+  assert.equal(a.CONVERSION_LINK_NOTE, "This request was created from this opportunity, so the link can't be changed.");
+  assert.doesNotMatch(a.CONVERSION_LINK_NOTE, /Correct link|edit/i);
+});
+
+test("NP-P2-S4-R5-F1: conversion_link_immutable has its own message; other ZW004s keep the existing one", () => {
+  assert.equal(a.attributionErrorMessage("ZW004", "conversion_link_immutable"), "A request created from an opportunity stays linked to it.");
+  assert.doesNotMatch(a.attributionErrorMessage("ZW004", "conversion_link_immutable"), /Correct link/);
+  assert.match(a.attributionErrorMessage("ZW004", "already_linked"), /already linked.*Correct link/);
+  assert.match(a.attributionErrorMessage("ZW004"), /already linked/);
+  // the reason only refines ZW004; it never changes another code's message
+  assert.equal(a.attributionErrorMessage("ZW006", "conversion_link_immutable"), a.attributionErrorMessage("ZW006"));
+});
+
+test("NP-P2-S4-R5-F1: the panel hides the controls for a conversion link; the correction action passes the database reason", () => {
+  const panel = readFileSync(new URL("../../components/growth/RequestGrowthPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /!isLinkCorrectable\(attribution\.linkMethod\)/);
+  assert.match(panel, /request-growth-conversion-note/);
+  const actions = readFileSync(new URL("../../app/operations/growth/attribution/actions.ts", import.meta.url), "utf8");
+  assert.match(actions, /attributionErrorMessage\(error\?\.code, error\?\.message\)/);
+});

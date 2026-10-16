@@ -6,7 +6,7 @@ import { RequestGrowthControls } from "@/components/growth/RequestGrowthControls
 import { getPlusAccessState } from "@/lib/plus/access";
 import { canOpenGrowth, canWriteGrowth } from "@/lib/plus/access-core";
 import { getRequestAttribution, type RequestAttribution } from "@/lib/plus/attribution";
-import { linkMethodLabel } from "@/lib/plus/attribution-core";
+import { CONVERSION_LINK_NOTE, isLinkCorrectable, linkMethodLabel } from "@/lib/plus/attribution-core";
 import { formatContactTime } from "@/lib/plus/contacts-core";
 import { stageDisplayLabel } from "@/lib/plus/opportunities-core";
 import { typography } from "@/design/typography";
@@ -81,7 +81,12 @@ export async function RequestGrowthPanel({ organizationId, requestId, timezone }
                 },
               ]}
             />
-            {canWrite && (
+            {!isLinkCorrectable(attribution.linkMethod) ? (
+              // NP-P2-S4-R5-F1: a conversion link is permanent (the database refuses changes); say so, offer no control
+              <p className={cn(typography.metadata, "text-text-secondary")} data-testid="request-growth-conversion-note">
+                {CONVERSION_LINK_NOTE}
+              </p>
+            ) : canWrite && (
               <RequestGrowthControls
                 organizationId={organizationId}
                 requestId={requestId}

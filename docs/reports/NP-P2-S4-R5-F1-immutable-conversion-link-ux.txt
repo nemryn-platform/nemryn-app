@@ -1,0 +1,161 @@
+NP-P2-S4-R5-F1 -- IMMUTABLE CONVERSION LINK UX
+Nemryn Plus P2-S4 follow-up to the R5 production smoke test (finding R5-F1)
+Date: 2026-10-16
+Mode: CONTROLLED LOCAL IMPLEMENTATION ONLY.
+- No migration, table, column, trigger or database function.
+- No production change and no live Request.
+- No worktree; nothing staged, committed, pushed, merged or deployed.
+Test infrastructure: the isolated Supabase stack NemrynS1Iso. Fictional data only.
+
+======================================================================
+1. PROBLEM (from R5)
+======================================================================
+- On a Request created by "Create transportation request", the Request detail Growth panel still offered "Correct
+  link".
+- The database already refuses any change to a conversion link (plus_update_request_attribution: ZW004
+  conversion_link_immutable).
+- But the UI mapped every ZW004 to "This request is already linked in Growth. Use 'Correct link' to change it.", a
+  misleading message.
+
+======================================================================
+2. CHANGE (UI and message mapping only)
+======================================================================
+1. src/lib/plus/attribution-core.ts
+   - isLinkCorrectable(linkMethod): false only for converted_from_opportunity. linked_existing_request and rebooking
+     stay correctable, exactly as before.
+   - CONVERSION_LINK_NOTE = "This request was created from this opportunity, so the link can't be changed."
+   - CONVERSION_LINK_IMMUTABLE_MESSAGE = "A request created from an opportunity stays linked to it."
+   - attributionErrorMessage(code, reason?): ZW004 with reason conversion_link_immutable -> the message above. Every
+     other ZW004, and every other code, keeps its existing message. The reason only refines ZW004.
+2. src/components/growth/RequestGrowthPanel.tsx
+   - For a conversion link, the panel renders the permanence note (data-testid request-growth-conversion-note)
+     INSTEAD OF the write controls.
+   - The note shows for every Growth viewer, including read-only, since it is informational.
+   - Contact, opportunity (with its stage, "Converted") and "Link: Created from an opportunity by <staff>, <time>" are
+     displayed unchanged, with working links.
+   - Manual and rebooking links keep "Correct link" for writers, as before. The unlinked state keeps "Track in Plus".
+3. src/app/operations/growth/attribution/actions.ts
+   - correctAttributionAction passes the database's reason: attributionErrorMessage(error?.code, error?.message).
+     That keeps the message right even if a stale page or a direct POST attempts a conversion-link correction.
+   - Authorization, validation and the RPC call are unchanged.
+4. src/lib/plus/attribution-core.test.mjs: 3 new unit tests (section 4).
+
+Unchanged:
+- every RPC, migration, grant and RLS rule; the database safeguards;
+- the conversion and rebooking workflow (booking actions, dialog, retry key, OD-6 notice);
+- RequestGrowthControls.tsx;
+- tenant authorization (canOpenGrowth / canWriteGrowth, server re-checks).
+
+======================================================================
+3. EXACT FILES CHANGED (working tree, unstaged)
+======================================================================
+Modified (4):
+  src/lib/plus/attribution-core.ts                  (+13 / -1)
+  src/lib/plus/attribution-core.test.mjs            (+26)
+  src/components/growth/RequestGrowthPanel.tsx      (+7 / -2)
+  src/app/operations/growth/attribution/actions.ts  (+1 / -1)
+New (report, to commit):
+  docs/reports/NP-P2-S4-R5-F1-immutable-conversion-link-ux.txt
+New QA script (untracked; do NOT commit):
+  .tmp-qa/np-p2-s4-r5-f1-conversion-link-e2e.mjs
+Total diff: 4 files, 47 insertions, 4 deletions. No schema or database file touched.
+
+======================================================================
+4. TEST RESULTS (all executed in this phase)
+======================================================================
+Unit (node --test):
+- 829/829 (826 + 3 new). attribution-core 9/9. The new tests cover:
+  - isLinkCorrectable: conversion false; manual and rebooking true;
+  - exact note copy, with no "Correct link" or edit wording;
+  - conversion_link_immutable maps to "A request created from an opportunity stays linked to it.";
+  - other ZW004s keep "already linked … Correct link";
+  - the reason never alters another code's message;
+  - source checks that the panel gates on isLinkCorrectable and that the correction action passes error.message.
+TypeScript `tsc --noEmit`: 0 errors.
+ESLint: 0 errors. All 107 warnings are in untracked .tmp-qa scripts; the changed files are clean.
+Production `next build`: succeeded (against the isolated stack for E2E, and again for dev afterwards).
+
+Browser E2E (production build, `next start -p 3100`, fresh isolated database):
+- NEW .tmp-qa/np-p2-s4-r5-f1-conversion-link-e2e.mjs: 19/19.
+  - Setup through the real RPCs: a conversion, a P2-S3 manual link and a rebooking for the same fictional contact.
+  - Conversion Request:
+    - 1a: the panel still shows the contact, the originating opportunity (Converted) and "Created from an
+      opportunity";
+    - 1b: the permanence note is shown;
+    - 1c: no "Correct link" and no "Track in Plus" control;
+    - 1d: the contact and opportunity links work;
+    - 1e: the database still refuses a correction (ZW004 conversion_link_immutable); the link is unchanged.
+  - Manual link:
+    - 2a: "Correct link" is offered, with no note;
+    - 2b: a correction (remove the opportunity, with a reason) saves "Link corrected…"; the Request itself is
+      unchanged.
+  - Rebooking:
+    - 3a: "Correct link" is offered, with no note;
+    - 3b: a correction to ANOTHER contact (found through search) saves; the Request itself is unchanged;
+    - 3c: the database still refuses giving a rebooking an opportunity (ZW006; rule unchanged).
+  - Authorization and tenancy:
+    - 4a: a READ-grant Dispatcher sees the conversion link and the note, with no controls;
+    - 4b: a READ-grant Dispatcher has no "Correct link" on a manual link (unchanged);
+    - 4c: the database refuses that Dispatcher's correction (ZW001);
+    - 4d: a Dispatcher WITHOUT a Plus grant sees no Growth panel at all;
+    - 4e: the Org B admin cannot open Org A's Request ("Request unavailable"), and no Growth data is shown;
+    - 4f: the Org B database correction attempt is refused (ZW002);
+    - 4g: the conversion link is still exactly as created.
+  - Cleanup verified.
+  - Harness note: the first two runs failed only 3b. That was a race in the TEST script: it searched before the
+    editor had finished pre-filling the current contact, so the pre-fill overwrote the search and the app correctly
+    answered "Nothing changed". The script now waits for the pre-fill, as the P2-S3 E2E does. The rerun passed 19/19.
+    No product code was changed for this.
+- Regression (unchanged scripts):
+  - NP-P2-S3 request attribution 34/34: link, search, correct with reason, concurrency message, read-only and expired
+    states;
+  - NP-P2-S4 conversion & rebooking 31/31, including A9 "Created from an opportunity" on the Request and the C4 / C5
+    retry key;
+  - NP-P2-S4-R3 OD-6 do-not-contact 14/14.
+Isolated SQL, each from a fresh reset:
+- plus_request_attributions 73/73; plus_conversion_rebooking 44/44; privilege contract 0/29 violations.
+
+======================================================================
+5. SECURITY REVIEW
+======================================================================
+- Presentation only. Hiding the control removes an action that the database already refuses. No path gains
+  capability.
+- Server authorization is unchanged: correctAttributionAction still runs the Plus write guard, input validation and
+  plus_update_request_attribution, which re-checks Plus WRITE, the Core role, tenancy, version and immutability.
+- Tenant isolation is unchanged (E2E 4d-4f).
+- The new note reveals nothing beyond what the panel already displayed to the same viewer.
+- No service-role use. The temporary local .env.production.local used for the isolated E2E was removed.
+
+======================================================================
+6. CONTROLLED COMMIT INVENTORY (proposed; nothing staged)
+======================================================================
+Branch np-p2-s4-conversion-rebooking at c563cff. Its tree equals origin/main 687acb2.
+Proposed commit (follow-up PR to main), 7 paths:
+  src/lib/plus/attribution-core.ts
+  src/lib/plus/attribution-core.test.mjs
+  src/components/growth/RequestGrowthPanel.tsx
+  src/app/operations/growth/attribution/actions.ts
+  docs/reports/NP-P2-S4-R5-F1-immutable-conversion-link-ux.txt
+  docs/reports/NP-P2-S4-R4-production-verification.txt          (still untracked; owner to decide)
+  docs/reports/NP-P2-S4-R5-production-smoke-test-signoff.txt    (still untracked; owner to decide)
+EXCLUDE:
+  - .tmp-qa/, including np-p2-s4-r5-f1-conversion-link-e2e.mjs and np-p2-s4-r5-prod-smoke.mjs;
+  - screens and scratchpad;
+  - other untracked reports.
+Release note:
+- App-only change (no migration). Deploy through the normal PR to main and Vercel.
+- Post-deploy check: as the SIM Admin on Pilot Simulation, open the declined smoke Request
+  5e395701-3b4a-4240-ae3a-e24ada4978e7 (read-only view). It should show the permanence note and no "Correct link".
+
+======================================================================
+7. VERDICT
+======================================================================
+R5-F1 is RESOLVED locally:
+- no "Correct link" on conversion links;
+- a clear permanence note;
+- the accurate conversion_link_immutable message;
+- correction unchanged for manual and rebooking links;
+- authorization, tenancy and the database safeguards unchanged.
+All executed tests pass. READY for a controlled commit and PR, on owner approval.
+
+STOP. Implementation, testing and reporting complete. Nothing staged, committed, pushed, merged or deployed.
