@@ -28,6 +28,17 @@ export function linkMethodLabel(method: string): string {
   }
 }
 
+/**
+ * NP-P2-S4-R5-F1: a link made by "Create transportation request" is permanent (the database refuses any change with
+ * ZW004 conversion_link_immutable), so no "Correct link" is offered for it. Manual links and rebookings stay
+ * correctable as before (the database keeps its own rules for each).
+ */
+export const CONVERSION_LINK_NOTE = "This request was created from this opportunity, so the link can't be changed.";
+export const CONVERSION_LINK_IMMUTABLE_MESSAGE = "A request created from an opportunity stays linked to it.";
+export function isLinkCorrectable(method: string): boolean {
+  return method !== "converted_from_opportunity";
+}
+
 export interface AttributionChoice {
   contactId: string | null;
   opportunityId: string | null;
@@ -50,9 +61,10 @@ export function validateCorrectionReason(raw: unknown): { ok: true; value: strin
   return { ok: true, value: v };
 }
 
-export function attributionErrorMessage(code: string | undefined): string {
+export function attributionErrorMessage(code: string | undefined, reason?: string): string {
   switch (code) {
     case "ZW004":
+      if (reason === "conversion_link_immutable") return CONVERSION_LINK_IMMUTABLE_MESSAGE;
       return "This request is already linked in Growth. Use “Correct link” to change it.";
     case "ZW003":
       return "This link changed since you opened it. Reload the page to see the latest, then try again.";
