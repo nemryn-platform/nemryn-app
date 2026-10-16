@@ -1,0 +1,368 @@
+NP-P2-S4-R2 -- POST-MERGE INTEGRATION, REGRESSION & SECURITY REVIEW
+Opportunity Conversion & Rebooking (Nemryn Plus) after merging Core Airport Transportation intake (PR #9)
+Date: 2026-10-16
+Mode: CONTROLLED VERIFICATION, LOCAL ONLY.
+- Nothing staged, committed, pushed, merged or deployed.
+- No production write and no production migration.
+- No other worktree or branch created; no reset, stash or clean of the repository.
+- The shared dev database was not reset or migrated.
+Test infrastructure: the isolated Supabase stack NemrynS1Iso (ports 54361/54362). Fictional seed data only.
+
+======================================================================
+1. VERIFIED GIT BASELINE
+======================================================================
+- Branch: np-p2-s4-conversion-rebooking. HEAD = 91474fc ("Merge remote-tracking branch 'origin/main' into
+  np-p2-s4-conversion-rebooking"), parents 2bd3317 + a0a65aa.
+- origin/main = a0a65aa = "Merge pull request #9 from nemryn-platform/nc-intake-airport-local". PR #9 is MERGED
+  (2026-10-15T23:03:45Z). The branch contains origin/main (ancestor check passed).
+- The P2-S4 implementation commit 2bd3317 is in history.
+- Start of review: 0 tracked changes, 0 staged. Untracked QA scripts and reports preserved.
+- Merge resolution: the only conflict-resolved file is src/lib/plus/opportunities-core.test.mjs. It keeps both
+  intents, and is correct:
+  - P2-S4: the converted-stage note now points to "Create transportation request".
+  - Airport: the Plus opportunity service types equal Core's set minus airport_transportation. Plus is unchanged by
+    the airport slice.
+- Since 2bd3317, no other P2-S4 path changed. The NP-P2-S4-R1 sessionStorage retry-key fix is intact in
+  src/components/growth/BookingRequestDialog.tsx.
+- Production, read-only:
+  - Supabase migration list: remote head 20261015135000 (airport applied); 20261015140000 remote = EMPTY (NOT
+    applied).
+  - GitHub Production deployment: a0a65aa (2026-10-15T23:04Z).
+- The separate worktree /Users/datamatics/Nemryn-nc-intake-airport (pre-existing) is untouched: 1355c75, 9
+  uncommitted paths, as before.
+
+======================================================================
+2. MIGRATION COMPATIBILITY FINDINGS
+======================================================================
+Order: 20261015135000_core_intake_airport_service_type.sql (Core) precedes 20261015140000_plus_conversion_rebooking.sql
+(Plus). Production already holds 135000, so a release applies only 140000 on top of it.
+
+Object sets are disjoint:
+- Airport (Core): drops and re-adds transportation_requests_service_type_check and
+  organization_service_offerings_service_type_check (now 9 values); CREATE OR REPLACE _create_public_request and
+  set_organization_service_offerings. No UPDATE of existing rows. Plus objects untouched.
+- P2-S4 (Plus): plus_request_attributions CHECK + partial unique index; deferred constraint trigger
+  plus_opportunities_conversion_guard; 3 internals, 1 type, 2 RPCs; CREATE OR REPLACE plus_update_request_attribution
+  (same signature).
+- P2-S4 does NOT touch transportation_requests, its service CHECK, _create_public_request, set_organization_service_
+  offerings or log_transportation_request. It therefore cannot revert Core's nine-service contract.
+
+Isolated upgrade test, in release order. Production head 20261015130000, seeded with:
+- 9 fictional Requests (all 8 pre-existing service types + NULL);
+- Org B Services restricted to dialysis + wheelchair;
+- website integrations for Org A and Org B;
+- Plus entitlement, contact, 2 opportunities (one manually linked to an accepted Request).
+`supabase migration up` then applied 135000 -> 140000 (applied_order 20261015130000 > 20261015135000 > 20261015140000).
+Results:
+- Existing Requests: unchanged. An all-columns md5 over every transportation_requests row is identical before and
+  after.
+- Existing Plus rows and Services offerings: unchanged (md5 identical).
+- Function signature, SECURITY DEFINER, ACL and search_path are identical before and after, for:
+  - _create_public_request (postgres only);
+  - submit_public_transportation_request (service_role only);
+  - set_organization_service_offerings, log_transportation_request, accept_ / decline_transportation_request and
+    plus_update_request_attribution (authenticated only);
+  - every one with search_path = public, pg_temp.
+- Both service CHECKs list exactly the 9 values (the 8 existing + airport_transportation).
+- No new not-validated constraint. The only NOT VALID constraint is request_events_decision_reason_required, which
+  is pre-existing and NOT VALID by design (20260924091000).
+- New P2-S4 functions:
+  - plus_convert_opportunity_to_request / plus_create_rebooking_request: SECURITY DEFINER, EXECUTE authenticated
+    only;
+  - the internals: no client EXECUTE (postgres only).
+  - Guard trigger: deferrable, initially deferred.
+- Post-upgrade probes (each rolled back):
+  - airport via the trusted RPC for Org A (no Services restriction): accepted;
+  - airport for Org B (Services exclude airport): generic invalid_input;
+  - convert the old open opportunity: pending Request, service_type NULL;
+  - convert the old manually linked opportunity: ZW004 linked_request_exists;
+  - rebook the old contact: pending Request.
+- Upgraded-database suites, all pass:
+  - core_intake_airport 24/24; plus_conversion_rebooking 44/44; plus_request_attributions 73/73;
+    plus_opportunities 75/75;
+  - public_request_intake 42; website_intake_acquisition 52; team_services_operations 106; privilege contract 0/29.
+FINDING: compatible. No change needed.
+
+======================================================================
+3. OPPORTUNITY CONVERSION RESULTS (merged tree)
+======================================================================
+| Requirement                                                     | Result | Evidence |
+|-----------------------------------------------------------------|--------|----------|
+| Eligible opportunity -> ONE pending Core Request                | PASS   | SQL plus_conversion_rebooking; E2E A5/A6 (double click -> one Request) |
+| Uses Core's approved creation path (log_transportation_request as the caller) | PASS | migration source; E2E E2 (Core's own request_logged event by the staff member) |
+| No Trip / Passenger / assignment / recurring arrangement        | PASS   | SQL G5; E2E E1 (counts unchanged) |
+| Correct organization and contact (requester from the active primary contact) | PASS | E2E A6/A7; SQL |
+| Attribution converted_from_opportunity (contact + opportunity)   | PASS   | E2E A7 |
+| Activity history: one request_linked + one stage change; audit ids only; no transport text copied into Plus | PASS | E2E A7/A8 |
+| Stage change is transactional (one function = one transaction; a failure after Core creation rolls the Request back) | PASS | SQL F1/F3; CONC-C10 |
+| Duplicate conversion prevented                                   | PASS   | partial unique index + ZW004 already_converted (SQL I2, X4; CONC-C3) |
+| Manually linked opportunity: refused (approved behaviour OD-1)  | PASS   | ZW004 linked_request_exists; E2E B1/B2; upgrade probe |
+| Conversion link cannot be reassigned                             | PASS   | plus_update_request_attribution: ZW004 conversion_link_immutable (SQL) |
+| Insufficient staff permission blocks it (UI + database)          | PASS   | E2E D1/D2 (READ grant: no control; database ZW001); D3 (WRITE grant + Core role converts) |
+| Plus entitlement and Core role enforced server-side and in the database | PASS | SQL P-series; _require_plus_write + Core role check BEFORE key validation and replay |
+| Stale opportunity refused, no Request                            | PASS   | E2E B4 (ZW003) |
+| Same key retry -> same Request, changed=false, no writes         | PASS   | E2E A13; SQL I1, X1 |
+
+======================================================================
+4. REBOOKING RESULTS (merged tree)
+======================================================================
+| Requirement                                                     | Result | Evidence |
+|-----------------------------------------------------------------|--------|----------|
+| Eligible contact -> ONE new pending Core Request                 | PASS   | E2E C2; SQL R1-R3 |
+| No opportunity created or changed; earlier Requests untouched    | PASS   | E2E C2 |
+| Rebooking attribution (contact only, no opportunity; correct source) | PASS | E2E C2 (source email), C3 |
+| Idempotent retry                                                  | PASS   | SQL I-series; CONC-C2/C8 |
+| R1 sessionStorage retry key survives the merge                   | PASS   | code unchanged since 2bd3317; E2E C4/C5 on the merged build |
+| Reload after an ambiguous failure reuses the key (same tab)      | PASS   | E2E C4 (form says it is continuing), C5 (original Request returned, no second one, key cleared) |
+| Archived contact, no phone, invalid source, unknown or foreign contact | PASS | SQL R5; E2E B3, D4 |
+| No automated customer communication                              | PASS   | E2E E4 (no Send / Call / Text control); nothing in P2-S4 sends anything |
+Documented limit, NOT solved (unchanged from R1, OD-8):
+- sessionStorage belongs to one browser tab. A retry from ANOTHER tab, browser or device after an ambiguous timeout
+  uses a new key, and can create a second pending Request.
+- Mitigation: staff see the earlier Request in the contact's Linked requests, and Operations can decline a duplicate.
+- Closing this would need a server-side duplicate guard (owner decision OD-8).
+
+======================================================================
+5. AIRPORT INTAKE REGRESSION RESULTS (merged tree)
+======================================================================
+| Requirement                                                     | Result | Evidence |
+|-----------------------------------------------------------------|--------|----------|
+| airport_transportation accepted on the trusted website intake    | PASS   | SQL core_intake_airport 24/24; E2E A1 (real /api/public-intake/website route, merged build) |
+| Airport Requests stay Pending; source web; no passenger          | PASS   | E2E A2 |
+| Labelled "Airport transportation" in Operations; normal Accept / Decline; no unapproved claims | PASS | E2E B1-B4 |
+| The 8 existing service types still accepted                      | PASS   | SQL; E2E A5 (wheelchair), A6 (recurring) |
+| Core-only organization receives airport Requests                 | PASS   | E2E A11 (Org A has no Plus entitlement in that run); upgrade probe |
+| Plus does not intercept or modify Core intake                    | PASS   | no Plus object in the intake path; E2E A11 (no Plus row created) |
+| Tenant Services restrictions still enforced                      | PASS   | upgrade probe (Org B: generic invalid_input); team_services_operations 106/106 |
+| No automatic Opportunity / Trip / Passenger / assignment         | PASS   | E2E A11 |
+| Tenant isolation and closed contract (extra field, foreign Origin, cross-organization) | PASS | E2E A7-A9, B5 |
+service_type in conversion and rebooking: NOT added (as instructed).
+- Both RPCs call log_transportation_request, which has no service-type parameter, so Requests created from Plus
+  carry service_type NULL, like every staff-logged Core Request.
+- No service field exists in the booking action, core or dialog.
+- Future dependency, a separate owner-approved slice: NC-REQUEST-SERVICE-TYPE (Core).
+  - Replace log_transportation_request with a trailing `p_service_type text default null`, as DROP + CREATE in one
+    migration, to avoid overload ambiguity.
+  - Validate against the Core CHECK, which now already includes airport_transportation.
+  - Update the privilege contract, mutation-api.md and database.types.ts.
+  - Then a small Plus follow-up passes opportunity.service_type (conversion) or a staff choice (rebooking).
+  - The airport dependency is now satisfied: it is in main and in production.
+  - Dependency order: NC-REQUEST-SERVICE-TYPE -> Plus follow-up. P2-S4 can ship before both.
+  - Note: Plus opportunity service types do not include airport_transportation. Adding it is a separate Plus product
+    decision.
+
+======================================================================
+6. SECURITY AND TENANT-ISOLATION RESULTS
+======================================================================
+| Area                                                            | Result | Evidence |
+|-----------------------------------------------------------------|--------|----------|
+| Cross-tenant opportunity / contact access                        | PASS   | E2E D4 (ZW002); rls_adversarial 33/33; plus_contacts_activities 82/82; plus_opportunities 75/75 |
+| Cross-tenant attribution                                         | PASS   | composite FKs (SQL X3); plus_request_attributions 73/73 |
+| Unauthorized conversion / rebooking (no grant, READ grant, no Core role, other org) | PASS | SQL P-series; E2E D1/D2/D4 |
+| Plus entitlement checks                                          | PASS   | plus_entitlement 150/150; plus_access_helpers 170/170; plus_entitlement_versioned 17/17; plus_member_grants 76/76 |
+| Core dispatcher / admin role requirement                         | PASS   | E2E D3; log_transportation_request re-checks the Core role |
+| RLS and privilege contract                                       | PASS   | privilege contract 0/29 violations; privilege_baseline_behavior 30; client_privilege_surface 21; function_privilege 7 |
+| SECURITY DEFINER exposure                                        | PASS   | security_definer_exposure 20/20; ACL comparison (section 2) |
+| Idempotency and concurrency controls                             | PASS   | conversion 11 races, attribution 6, opportunities 6, contacts 4, agent 5, tasks 4 |
+| Invalid or deleted (archived) contact                            | PASS   | SQL R5; E2E B3 |
+| Inactive opportunity (lost / converted) and duplicate conversion | PASS   | SQL (ZW004 illegal_transition / already_converted) |
+| Atomicity of Request creation and attribution                    | PASS   | SQL F1/F3; CONC-C10 |
+| No client-side bypass                                            | PASS   | no client write grant on Plus tables; the stage RPC refuses converted; the deferred guard; server actions call only the RPCs |
+| Deny-by-default; no service-role key in client code              | PASS   | the service-role key is server-only (intake route); no NEXT_PUBLIC service key; RPC EXECUTE authenticated only, internals none |
+No unresolved security issue.
+
+======================================================================
+7. TEST COUNTS AND FAILURES (all executed in this review on the merged tree; nothing reported unexecuted)
+======================================================================
+Isolated database, upgrade path: section 2 (8 suites, all pass).
+
+Isolated database, EVERY SQL suite in supabase/tests from a fresh reset, verified fresh before each: 64 suites, 2,256
+PASS lines.
+- 62 suites pass with 0 failures, including:
+  - core_intake_airport 24, plus_conversion_rebooking 44, plus_request_attributions 73, plus_opportunities 75,
+    plus_contacts_activities 82, plus_tasks 58, plus_growth_agent 40;
+  - privilege contract 0/29, rls_adversarial 33, security_definer_exposure 20;
+  - request_decision_workflow 60, request_mutation 39, request_recurring_care 42,
+    request_trip_passenger_integrity 11;
+  - public_request_intake 42, public_intake_rate_limit 8, website_intake_acquisition 52,
+    website_integration_self_service 72, website_connection_lifecycle 36, website_requests_form 37,
+    website_request_form_publication 50, team_services_operations 106;
+  - create_trip 20, the mutation_* suites, the driver_* suites, the recurring_* suites, the trip_* suites,
+    platform_admin 58 and tenant_settings 51.
+- 2 suites with failures; both are harness issues, neither is related to P2-S4 or airport (section 7a).
+
+Isolated concurrency, every *_test.sh, 26 scripts: 24 pass, 2 known pre-existing failures (section 7a).
+- Passing: conversion 11, attribution 6, opportunities 6, contacts 4, agent 5, tasks 4, entitlement 5 / 4,
+  member grants 6, request decision 21, team last admin 14, website connection 15, website requests form 37,
+  form publication 29, intake / rate limit / acquisition / integration, recurring, tenant org creation, driver
+  invite, notification claim, platform lifecycle.
+
+Application (merged tree):
+- Unit 824/824 (813 + the 11 airport tests from main).
+- TypeScript `tsc --noEmit`: 0 errors.
+- ESLint: 0 errors. All 107 warnings are in untracked .tmp-qa scripts, 0 in tracked source.
+- Production `next build`: succeeded (both against the isolated stack and again for dev afterwards).
+
+Browser E2E (merged build, `next start` on :3100 / :3200, against a fresh isolated database):
+- NP-P2-S4 conversion & rebooking 31/31, including the R1 reload checks C4/C5;
+- NC-INTAKE-AIRPORT-S1 public route + Operations 19/19;
+- NP-P2-S3 34/34; NP-P2-S2 76/76; NP-P2-S1 57/57; P1-OPS-R1 decisions 52/52;
+- P1-PILOT-R3 request / recurring care 57/57, including E2 on clean data;
+- S4C acquisition 27/27.
+
+7a. Failures (none caused by P2-S4 or the airport merge):
+1. request_decision_expand_compat_tests: 10 of 18. NOT APPLICABLE at this head, by its own design. Its header says it
+   is "ONLY meaningful on a database migrated through 20260924090000 ... and NOT through 20260924091000", the
+   expand-only deploy window. At the current head the legacy overloads are correctly gone ("function ... does not
+   exist").
+2. recurring_trip_creation_tests RTC-04 "past date rejected": 1 of 24. Time-of-day harness flake.
+   - The test builds its "past" date as UTC `current_date - 1`.
+   - It ran at 01:49 UTC on 2026-10-16, which was 21:49 on 2026-10-15 in Org A's timezone (America/New_York). So the
+     "past" date was the organization's TODAY.
+   - create_trip_for_recurring_occurrence correctly compares against the organization-local date
+     (`now() at time zone timezone`), and accepted it.
+   - The test fails only between 00:00 and about 04:00 UTC. Remedy (harness): use the organization-local date.
+3. mutation_concurrency_test CONCURRENCY-1 and request_lifecycle_concurrency_test REQUEST-CONCURRENCY-1. Pre-existing
+   direct-table-lock harness failures, identical in NP-P2-S3 and NP-P2-S4-R1 before any of this work.
+4. Dev-database-only, not rerun here, since this review used the isolated stack and dev lacks the airport migration:
+   - P1-PILOT-R3 E2 data accumulation (R1, section 8);
+   - the run-once suites.
+   Both pass on clean data, as shown above.
+
+======================================================================
+8. CODE CORRECTIONS
+======================================================================
+None. No defect was found in the merged tree, so no source, migration or test file was changed in R2. The only new
+file is this report.
+
+======================================================================
+9. EXACT CHANGED-FILE INVENTORY (prospective P2-S4 PR: origin/main a0a65aa...HEAD 91474fc)
+======================================================================
+23 paths: the 22 committed paths below + this R2 report (untracked, to be added).
+No airport file appears in the diff, because main supplies it. No unrelated file.
+Added (10):
+  docs/reports/NP-P2-S4-R1-precommit-security-review.txt
+  docs/reports/NP-P2-S4-conversion-rebooking-implementation.txt
+  docs/reports/NP-P2-S4-R2-post-merge-integration-security-review.txt   (NEW in R2; untracked)
+  src/app/operations/growth/booking/actions.ts
+  src/components/growth/BookingRequestDialog.tsx
+  src/lib/plus/booking-core.ts
+  src/lib/plus/booking-core.test.mjs
+  supabase/migrations/20261015140000_plus_conversion_rebooking.sql
+  supabase/tests/plus_conversion_rebooking_concurrency_test.sh
+  supabase/tests/plus_conversion_rebooking_tests.sql
+Modified (13):
+  docs/data/mutation-api.md
+  docs/product/plus-domain-model.md
+  docs/product/plus-product-spec.md
+  docs/security/database-privilege-contract.md
+  docs/security/plus-access-model.md
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/lib/plus/opportunities-core.test.mjs   (also carries the merge resolution with airport)
+  src/lib/plus/opportunities-core.ts
+  src/lib/supabase/database.types.ts
+  supabase/tests/plus_opportunities_tests.sql
+  supabase/tests/plus_request_attributions_tests.sql
+  supabase/tests/privilege_contract_tests.sql
+New database objects:
+- RPCs (SECURITY DEFINER, EXECUTE authenticated only): plus_convert_opportunity_to_request,
+  plus_create_rebooking_request.
+- Internals (no client EXECUTE): _plus_opportunity_conversion_guard (trigger function), _plus_core_request_source,
+  _plus_require_idempotency_key.
+- Type plus_booking_request_result.
+- Constraint trigger plus_opportunities_conversion_guard.
+- CHECK plus_request_attributions_method_shape_check; unique index plus_request_attributions_one_conversion_idx.
+Replaced: plus_update_request_attribution (same signature and ACL; conversion links immutable; rebooking links never
+gain an opportunity).
+Privilege changes: only the two new authenticated EXECUTE grants. The privilege contract and its test are updated.
+No table grant changed.
+UI / API:
+- Opportunity detail: "Create transportation request".
+- Contact detail: "Create another transportation request".
+- BookingRequestDialog: review step, idempotent submit, sessionStorage retry key.
+- Server actions in src/app/operations/growth/booking/actions.ts call only the two RPCs.
+- No public API change.
+Accidental unrelated changes: none.
+
+======================================================================
+10. OPEN DECISIONS AND RISKS
+======================================================================
+Owner confirmation needed before production release:
+- OD-1: refuse conversion of a manually linked opportunity (implemented; confirm).
+- OD-3: contact phone required (Core's own NOT NULL; implemented; confirm).
+- OD-2: ship with service_type NULL on Plus-created Requests and schedule NC-REQUEST-SERVICE-TYPE (section 5).
+  - Operational effect: a converted wheelchair opportunity's Request gets no wheelchair pre-selection when a trip is
+    created.
+- OD-6: approve or decline a "this person asked not to be contacted" notice in the rebooking dialog. Not
+  implemented; nothing is sent either way.
+- Backup / PITR tier confirmation and the kill-switch plan (section 12).
+Not blocking:
+- OD-4: keep the source mapping.
+- OD-5: count conversions only by link_method = converted_from_opportunity (P2-S8 reporting).
+- OD-7: harness hygiene. P1-OPS-R1 E2E cleanup; R3 page-aware comparison; RTC-04 to use the org-local date;
+  label request_decision_expand_compat as expand-window-only; the two direct-lock concurrency scripts.
+- OD-8: optional server-side duplicate guard for cross-tab / cross-device rebooking.
+- Plus opportunity service types exclude airport_transportation (separate Plus decision).
+Risks:
+- Cross-device duplicate rebooking (documented, mitigated, not solved).
+- Once released, conversion Requests are permanent operational records, so rollback is limited (section 12).
+- PD-10 / PD-11 (privacy, HIPAA / BAA, retention) remain OPEN: fictional data only; no real customer data.
+
+======================================================================
+11. PR READINESS ASSESSMENT
+======================================================================
+READY for a P2-S4 pull request (origin/main <- np-p2-s4-conversion-rebooking) after this R2 report is committed with
+the branch, on owner review.
+- The merge with airport is correct and compatible.
+- The scope is exactly P2-S4.
+- Every relevant suite passed on the merged tree.
+- No defect and no security issue.
+- Every remaining failure is a documented harness issue unrelated to this work.
+NOT yet ready for PRODUCTION RELEASE until the section 10 owner decisions and the backup / kill-switch preparation
+are done.
+
+======================================================================
+12. PRODUCTION RELEASE SEQUENCE (checklist; nothing here was executed)
+======================================================================
+Current state: production DB head 20261015135000 (airport applied); 20261015140000 pending; production app a0a65aa.
+1. Owner decisions OD-1, OD-2, OD-3 and OD-6 confirmed (section 10). PR reviewed and merged to main; CI green.
+2. Backup and recovery:
+   - confirm the production backup / PITR tier;
+   - record a recovery point (timestamp or on-demand backup) immediately before the migration.
+3. Pre-migration read-only checks:
+   - head = 20261015135000;
+   - plus_request_attributions holds only linked_existing_request rows, so the new CHECK and unique index validate
+     instantly;
+   - no opportunity in stage converted;
+   - log_transportation_request body / ACL equal to the repository.
+4. Dry run: apply 20261015140000 on a fresh isolated copy at the production head, as done here.
+   - Optionally `supabase db push --dry-run` against production. It must list ONLY 20261015140000.
+5. Apply the migration (one transaction) through the approved release path, by the owner.
+6. Post-migration read-only checks:
+   - privilege contract (0 violations);
+   - EXECUTE authenticated-only on the 2 RPCs and none on the 3 internals;
+   - the guard trigger is deferrable and initially deferred;
+   - no new not-validated constraint;
+   - function bodies match the file (schema dump diff);
+   - existing Requests unchanged (row count / checksum).
+7. Deploy the application (main) to Vercel AFTER the migration. The live app (a0a65aa) never calls the new RPCs, so
+   migration-first is safe.
+8. Synthetic production smoke, Pilot Simulation tenant ONLY, needing explicit owner approval:
+   - convert a fictional opportunity and create one rebooking;
+   - verify each pending Request, attribution and activity;
+   - then DECLINE those smoke Requests through Core's normal workflow. Never delete them.
+   - No live customer test and no real customer data.
+9. Rollback limits and safe disable:
+   - BEFORE any conversion or rebooking exists: a reviewed reverse migration can remove the P2-S4 objects and
+     restore the 20261015130000 body of plus_update_request_attribution. Prepare it and review it; do not run it
+     unless needed.
+   - AFTER the first conversion or rebooking: no destructive rollback. Core Requests created from Plus must NEVER be
+     deleted.
+   - Feature disable: REVOKE EXECUTE on the two RPCs from authenticated (one reversible statement) and/or redeploy
+     the app without the two buttons. Keep the CHECK, index and trigger; they protect existing rows.
+   - Fix forward with a new migration.
+   - A mistaken pending Request is declined or cancelled through Core's decision workflow.
+10. After release: keep PD-10 / PD-11 restrictions (fictional data only) and schedule NC-REQUEST-SERVICE-TYPE.
+
+STOP. Testing and reporting complete. Nothing staged, committed, pushed, merged or deployed; no PR opened.
