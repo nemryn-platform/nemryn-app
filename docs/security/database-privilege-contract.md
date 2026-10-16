@@ -115,6 +115,13 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
   * A gains `_plus_require_core_request_read` and `_plus_resolve_attribution`.
   * `plus_activities` gains `request_id` (composite FK to `transportation_requests`), with its privileges unchanged.
   * No Core object is changed. No Core function or policy references a Plus object, and no Plus function writes or locks a Core table (`plus_request_attributions_tests.sql` K1-K3).
+* **NP-P2-S4 additions:**
+  * No new table.
+  * D gains two RPCs: `plus_convert_opportunity_to_request` and `plus_create_rebooking_request`. Each creates the Core Request only through `log_transportation_request`, called as the caller.
+  * A gains `_plus_opportunity_conversion_guard` (a deferred constraint-trigger function), `_plus_core_request_source` and `_plus_require_idempotency_key`.
+  * `plus_update_request_attribution` is replaced with the same signature and grants.
+  * Constraints added: `plus_request_attributions_method_shape_check` and the partial unique `plus_request_attributions_one_conversion_idx`.
+  * No Core object is changed.
 * **A — internal (17):** underscore helpers (incl. `_sanitize_acquisition`, S4C; `_validate_request_decision_reason`, P1-OPS-R1), trigger functions and `signup_create_organization` (called only from inside SECURITY DEFINER functions as the owner). No client role holds EXECUTE.
 * Every SECURITY DEFINER function pins `search_path` (contract check 19). Functions executable by clients that contain no inline `auth.uid()` / role check are: the three service-only RPCs (validate the integration / dispatch event themselves), the six `driver_*` transition wrappers (delegate to `_driver_execute_trip_transition`, which authorises), the two anon previews (token-scoped), and `is_valid_iana_timezone` (pure).
 

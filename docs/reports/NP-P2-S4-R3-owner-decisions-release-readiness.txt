@@ -1,0 +1,316 @@
+NP-P2-S4-R3 -- OWNER DECISIONS, DO-NOT-CONTACT NOTICE & FINAL PR READINESS
+Nemryn Plus P2-S4: Opportunity Conversion & Rebooking
+Date: 2026-10-16
+Mode: CONTROLLED IMPLEMENTATION AND TESTING, LOCAL ONLY.
+- Nothing staged, committed, pushed, merged or deployed; no PR opened.
+- No production migration, production write or live Request.
+- No new worktree.
+Inputs: NP-P2-S4-R1-precommit-security-review.txt, NP-P2-S4-R2-post-merge-integration-security-review.txt.
+Test infrastructure: the isolated Supabase stack NemrynS1Iso. Fictional data only. The shared dev database was not
+used.
+
+======================================================================
+1. APPROVED OWNER DECISIONS
+======================================================================
+OD-1 APPROVED: refuse conversion of an opportunity already manually linked to a Core Request.
+- Preserved unchanged: ZW004 linked_request_exists in plus_convert_opportunity_to_request.
+- The UI offers no conversion for a linked opportunity and explains why.
+- Re-verified: P2-S4 E2E B1/B2.
+
+OD-3 APPROVED: contact phone required for conversion and rebooking.
+- Preserved unchanged: Core requester_phone NOT NULL, the RPC's ZW006 contact_phone_required, and the dialog
+  blocking Review.
+- Re-verified: P2-S4 E2E B3.
+
+OD-2 APPROVED: release P2-S4 with service_type NULL on Plus-created Pending Requests, through the existing Core
+log_transportation_request.
+- log_transportation_request was NOT modified.
+- Documented in docs/product/plus-product-spec.md (P2-S4 implementation notes).
+- PRIORITY FOLLOW-UP: NC-REQUEST-SERVICE-TYPE (Core). Preserve the service type on staff-created and Plus-created
+  Requests:
+  - a trailing `p_service_type text default null`, as DROP + CREATE in one migration, validated by the Core CHECK
+    (which already includes airport_transportation);
+  - then a small Plus change that passes opportunity.service_type, or a staff choice when rebooking.
+- Operational effect until then: no wheelchair pre-selection when Operations creates a trip from a converted
+  wheelchair opportunity's Request.
+
+OD-6 APPROVED: a staff-visible do-not-contact reminder in the rebooking flow. Implemented (section 2).
+
+======================================================================
+2. OD-6 IMPLEMENTATION AND LIMITATION
+======================================================================
+Finding: an AUTHORITATIVE, tenant-scoped do-not-contact status already exists.
+- Column plus_contacts.do_not_contact (boolean, NOT NULL, default false), from NP-P1-S4. Its schema comment reads
+  "Stored preference. Every FUTURE outbound action ... must refuse when true."
+- It is set only by staff through plus_create_contact / plus_update_contact.
+- It is read through plus_get_contact, which is Plus READ, tenant-scoped, and raises ZW002 for a foreign or unknown
+  contact, plus RLS plus_can_read.
+- It already appears as the "Do not contact" badge on Contact detail, Opportunity detail, Pipeline and the Growth
+  Agent.
+So the brief's "authoritative status exists" branch applies. Nothing was invented, and no consent is assumed.
+
+Implementation (UI only; no database, RPC, migration or schema change):
+1. src/lib/plus/booking-core.ts gains a pure helper, doNotContactNotice(doNotContact), and its copy:
+   - true -> a warning. Title: "This person asked not to be contacted". Text: "Create this request only if they
+     asked for this ride. Creating a transportation request does not send them a message; respect their preference
+     when Operations follows up."
+   - false -> no notice.
+   - null / undefined (preference not available to the form) -> a neutral reminder that asserts nothing about the
+     person: "Before contacting this person, check their communication preferences. Creating a transportation
+     request does not send a message."
+   - Only a strict boolean true counts as the preference. Look-alikes such as "true", 1 or "yes" are not treated as
+     one.
+2. BookingRequestDialog: BookingCustomer gains an optional doNotContact. The form renders the notice under the
+   requester block:
+   - data-testid booking-do-not-contact, as an AttentionState warning;
+   - or booking-preference-reminder, as metadata text.
+   The rest of the approved P2-S4 UI and interaction is unchanged: steps, copy, review, idempotency and the
+   sessionStorage retry key.
+3. Contact detail (rebooking) and Opportunity detail (conversion) pass doNotContact from the contact already loaded
+   through the tenant-scoped getContact. No new query and no new data access.
+
+Scope note: the approval names the rebooking flow. The same shared dialog also shows the warning in the CONVERSION
+form when that opportunity's contact is flagged. That conversion also creates a Request for the same person, and the
+opportunity page already shows the "Do not contact" badge, so the reminder is consistent. Removing it from
+conversion is a one-line change if the owner prefers.
+
+Behaviour guarantees:
+- The notice never blocks or changes eligibility. The flagged Request is created exactly as before.
+- Nothing is sent: P2-S4 has no messaging path. Notification behaviour is identical for flagged and unflagged
+  contacts.
+- The preference is never inferred from activity, notes or any other data; only the stored column is read.
+- The preference is never written by this flow.
+- No consent ledger, communication engine, email / SMS sender or schema change was introduced. Per-channel consent
+  remains P2-S6, as already in the spec.
+Limitation: the "unavailable" reminder state is defensive. Both current pages always pass the stored boolean, so in
+practice staff see either the warning or nothing. The reminder state is covered by unit tests.
+
+======================================================================
+3. TESTS AND RESULTS (all executed in R3; nothing reported unexecuted)
+======================================================================
+Unit (node --test):
+- 826/826 (824 + 2 new OD-6 tests).
+- booking-core 9/9. The new tests cover:
+  - flagged, unflagged and unavailable states, exact copy;
+  - the reminder never asserts a person-specific preference or consent;
+  - no inference from truthy look-alikes;
+  - no "blocked / sent" claims;
+  - source checks that the dialog reads only customer.doNotContact, that both pages pass it from the
+    tenant-scoped contact, and that conversion gating (canConvert) does not use it.
+
+TypeScript `tsc --noEmit`: 0 errors.
+ESLint (whole repo): 0 errors. All 107 warnings are in untracked .tmp-qa scripts, 0 in tracked source, and the R3
+files are clean.
+Production `next build`: succeeded, against the isolated stack for E2E and again for dev afterwards.
+- The first dev rebuild hit a transient ENOTEMPTY while clearing .next (the server was shutting down). An immediate
+  rerun succeeded; it was not a code error.
+
+Browser E2E (production build, `next start -p 3100`, fresh isolated database):
+- NEW .tmp-qa/np-p2-s4-r3-do-not-contact-e2e.mjs: 14/14.
+  - F1-F5 flagged contact:
+    - the warning shows in rebooking and conversion, with no duplicate reminder;
+    - it does not block (one pending Request created);
+    - the preference is unchanged, and no opportunity is created.
+  - U1-U4 unflagged contact:
+    - no warning and no contact-specific claim;
+    - unchanged behaviour (one pending Request);
+    - same notification behaviour as a flagged contact (0 vs 0).
+  - A1: a note that mentions "do not contact" / "opted out" produces NO warning (never inferred).
+  - T1-T3:
+    - Org B cannot open Org A's flagged contact (neither name nor preference shown);
+    - Org B's database read is refused with ZW002;
+    - no Send / Call / Text / Email control.
+  - Cleanup verified.
+  - First run: 13/14. T2 failed on a harness defect, not a product one: psql without verbose errors omitted the ZW002
+    code from stderr. A direct probe showed the database refusing correctly (RLS 0 rows; plus_get_contact raised
+    ZW002 not_found). The script was fixed to request verbose errors and assert ZW002 exactly, and the rerun passed
+    14/14.
+- NP-P2-S4 conversion & rebooking (unchanged script): 31/31. This covers:
+  - OD-1 (B1/B2) and OD-3 (B3);
+  - Pending only (A6/A9, E2);
+  - rebooking without an opportunity (C2);
+  - earlier Requests untouched (C2);
+  - the sessionStorage retry key (C4/C5);
+  - READ-grant refusal (D1/D2) and WRITE-grant + Core role (D3);
+  - cross-tenant refusal (D4);
+  - no Passenger / Trip (E1) and no send control (E4).
+- Regression: NP-P2-S3 34/34; NP-P2-S2 76/76 (the Growth Agent still shows its own do-not-contact badge);
+  NP-P2-S1 57/57.
+
+Isolated SQL, each suite from a fresh reset (every reset log complete, no errors):
+- plus_conversion_rebooking 44/44; plus_contacts_activities 82/82; plus_request_attributions 73/73;
+  plus_opportunities 75/75;
+- privilege contract 0/29 violations; rls_adversarial 33/33; client_privilege_surface 21/21;
+  security_definer_exposure 20/20.
+- plus_conversion_rebooking_concurrency_test: TOTAL FAILURES 0.
+The full 64-suite and 26-script isolated run and the full browser regression were done on the merged tree in R2. R3
+changes no database object, so they were not repeated.
+
+======================================================================
+4. SECURITY REVIEW
+======================================================================
+- Data access:
+  - unchanged; the notice uses the contact already returned by getContact (plus_get_contact), Plus READ,
+    tenant-scoped;
+  - RLS and ZW002 refuse a foreign organization, re-verified (E2E T1/T2, rls_adversarial);
+  - no new query, RPC, grant or client write path.
+- Authorization unchanged:
+  - conversion and rebooking still require Plus WRITE and the Core role, server-side and in the database;
+  - the notice is presentation only and cannot widen access;
+  - canConvert is unchanged.
+- No inference: only the stored boolean is read; activity text is never parsed (E2E A1).
+- No messaging:
+  - no send path exists, and P2-S4 adds none;
+  - the copy states that nothing is sent;
+  - notification behaviour is unaffected by the flag (E2E U3).
+- No service-role key in client code. The temporary local .env.production.local used for the isolated E2E was removed
+  afterwards, and none is committed.
+- Privilege contract 0 violations; security_definer_exposure and client_privilege_surface pass.
+No unresolved security issue.
+
+======================================================================
+5. EXACT FILES CHANGED BY R3 (working tree, unstaged)
+======================================================================
+Modified (6). Every one is already part of the P2-S4 change set, so R3 adds no new tracked path except this report:
+  src/lib/plus/booking-core.ts                                 (doNotContactNotice + copy)
+  src/lib/plus/booking-core.test.mjs                           (2 OD-6 tests)
+  src/components/growth/BookingRequestDialog.tsx               (optional customer.doNotContact; notice)
+  src/app/operations/growth/contacts/[contactId]/page.tsx      (passes contact.doNotContact)
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx  (passes c.doNotContact)
+  docs/product/plus-product-spec.md                            (OD-6 and OD-2 notes under P2-S4)
+New, to commit (1):
+  docs/reports/NP-P2-S4-R3-owner-decisions-release-readiness.txt
+New, QA only, untracked; do NOT commit:
+  .tmp-qa/np-p2-s4-r3-do-not-contact-e2e.mjs
+Not changed:
+- every migration (20261015140000 is unchanged), RPCs, SQL tests, database.types.ts and server actions;
+- all existing untracked QA scripts and reports;
+- the airport worktree (9 paths, unchanged).
+R2 report status: docs/reports/NP-P2-S4-R2-post-merge-integration-security-review.txt is NO LONGER untracked. It was
+committed locally as 91c6d9e "docs(plus): record P2-S4 post-merge security review", so it is already in the
+prospective PR.
+
+======================================================================
+6. PROSPECTIVE PR FILE INVENTORY (origin/main a0a65aa ... branch)
+======================================================================
+Local branch commits ahead of origin/main: 2bd3317 (P2-S4), 91474fc (merge of origin/main with airport), 91c6d9e
+(R2 report). The branch is not yet on the remote.
+After the R3 commit, 24 paths in total:
+Added (11):
+  docs/reports/NP-P2-S4-conversion-rebooking-implementation.txt
+  docs/reports/NP-P2-S4-R1-precommit-security-review.txt
+  docs/reports/NP-P2-S4-R2-post-merge-integration-security-review.txt
+  docs/reports/NP-P2-S4-R3-owner-decisions-release-readiness.txt        (R3, to commit)
+  src/app/operations/growth/booking/actions.ts
+  src/components/growth/BookingRequestDialog.tsx
+  src/lib/plus/booking-core.ts
+  src/lib/plus/booking-core.test.mjs
+  supabase/migrations/20261015140000_plus_conversion_rebooking.sql
+  supabase/tests/plus_conversion_rebooking_concurrency_test.sh
+  supabase/tests/plus_conversion_rebooking_tests.sql
+Modified (13):
+  docs/data/mutation-api.md
+  docs/product/plus-domain-model.md
+  docs/product/plus-product-spec.md
+  docs/security/database-privilege-contract.md
+  docs/security/plus-access-model.md
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/lib/plus/opportunities-core.test.mjs
+  src/lib/plus/opportunities-core.ts
+  src/lib/supabase/database.types.ts
+  supabase/tests/plus_opportunities_tests.sql
+  supabase/tests/plus_request_attributions_tests.sql
+  supabase/tests/privilege_contract_tests.sql
+Scope checks:
+- Airport intake (PR #9) is incorporated through main; no airport file appears in the diff.
+- The only migration is 20261015140000.
+- No Zenward or other unrelated work.
+- No P2-S5 (Quotes) code.
+- No schema change beyond the reviewed P2-S4 migration.
+- Excluded: .tmp-qa/, screens, the other untracked reports, scratchpad material.
+
+======================================================================
+7. MIGRATION AND PRODUCTION RELEASE CHECKLIST (owner-executed; nothing here was run)
+======================================================================
+State at review (read-only): production DB head 20261015135000; 20261015140000 NOT applied; production app a0a65aa.
+ 1. Commit R3 (the 6 modified paths + this report) on np-p2-s4-conversion-rebooking.
+ 2. Push the branch with the nemryn GitHub account (GH_CONFIG_DIR=$HOME/.config/gh-nemryn).
+ 3. Open the PR to main, review it against section 6, and merge.
+ 4. Required checks: GitHub checks green on the PR; Vercel preview build "Ready". The preview must not be pointed at
+    production data for write tests.
+ 5. Production Supabase head verification (read-only): `supabase migration list --linked`. Head must be
+    20261015135000, and 20261015140000 the only pending migration. Confirm the CLI is on the correct account.
+ 6. Backup and recovery:
+    - confirm the backup / PITR tier;
+    - record a recovery point immediately before applying;
+    - confirm the restore procedure is known and tested.
+ 7. Pre-migration read-only checks:
+    - plus_request_attributions holds only linked_existing_request rows;
+    - no opportunity is in stage converted;
+    - log_transportation_request body and ACL match the repository.
+ 8. Dry run: `supabase db push --dry-run` must list ONLY 20261015140000. It was already proven on an isolated copy at
+    the production head (R2).
+ 9. Apply the migration FIRST (one transaction). The live app does not call the new RPCs, so this is safe.
+10. Post-migration verification (read-only):
+    - privilege contract (0 violations);
+    - EXECUTE authenticated-only on plus_convert_opportunity_to_request and plus_create_rebooking_request, and none
+      on the 3 internals;
+    - plus_opportunities_conversion_guard deferrable and initially deferred;
+    - no new not-validated constraint;
+    - function bodies equal to the file;
+    - existing Requests unchanged (count / checksum).
+11. Deploy the application from main to Vercel Production. Confirm the deployment commit and that the deploy is
+    Ready.
+12. Fictional smoke test, Pilot Simulation tenant ONLY, needing explicit owner approval:
+    - convert one fictional opportunity;
+    - create one rebooking, including a contact flagged do-not-contact, to see the warning;
+    - verify each Request is Pending, the attribution and activity rows are right, and no Trip / Passenger exists.
+13. Cleanup: DECLINE the smoke Requests through Core's normal decision workflow. Never delete Requests, attributions
+    or audit rows.
+14. Feature disable, if needed:
+    - `REVOKE EXECUTE ON FUNCTION public.plus_convert_opportunity_to_request(...), public.plus_create_rebooking_request(...)
+      FROM authenticated;` This is reversible with GRANT.
+    - and/or redeploy without the two buttons.
+    - Keep the CHECK, index and trigger, and fix forward with a new migration.
+    - Destructive rollback only BEFORE the first conversion or rebooking, with a reviewed reverse migration.
+15. Privacy and retention:
+    - PD-10 / PD-11 (privacy, HIPAA / BAA, retention) remain OPEN;
+    - fictional data only;
+    - no real customer data, and no live customer test or Request.
+
+======================================================================
+8. REMAINING RISKS
+======================================================================
+- service_type is NULL on Plus-created Requests (approved OD-2) until NC-REQUEST-SERVICE-TYPE ships, so there is no
+  wheelchair pre-selection for converted wheelchair opportunities.
+- Cross-tab / cross-device duplicate rebooking after an ambiguous timeout is NOT prevented. Same-tab reload is.
+  - Mitigation: Linked requests, and Operations declines duplicates.
+  - Optional server guard: OD-8 (not approved, not built).
+- The do-not-contact notice is a reminder, not enforcement. Enforcement for future outbound actions, and per-channel
+  consent, remain P2-S6.
+- Once real conversions exist, rollback is forward-fix only.
+- Known harness issues, unrelated to P2-S4 (R2 section 7a):
+  - request_decision_expand_compat is expand-window-only;
+  - RTC-04 fails between 00:00 and 04:00 UTC because of a timezone assumption in the test;
+  - two direct-lock concurrency scripts;
+  - dev-database data accumulation for R3 E2.
+- Privacy approvals PD-10 / PD-11 remain open.
+
+======================================================================
+9. ASSESSMENTS
+======================================================================
+PR-READY: YES. Commit the 6 R3 modifications plus this report, then open the PR to main.
+- Owner decisions are recorded.
+- OD-6 is implemented, minimal and tested.
+- The original P2-S4 behaviour is unchanged.
+- Scope is exactly P2-S4.
+- No defect and no security issue.
+PRODUCTION-READY: NOT YET. Code and migration are ready. Release still needs the owner-executed steps in section 7:
+- PR review and merge, with green checks;
+- backup / PITR confirmation with a recovery point;
+- the production dry run showing only 20261015140000;
+- owner approval for the fictional smoke test.
+PD-10 / PD-11 continue to bar real customer data.
+
+STOP. Testing and reporting complete. Nothing staged, committed, pushed, merged or deployed; no PR opened.

@@ -280,9 +280,13 @@ begin
   v := pg_temp.mv(c_a1, c_a, o1, pg_temp.ver(o1) - interval '1 second', 'qualified');
   perform pg_temp.t('T5 stale version -> ZW003, nothing written', v = 'ERR:ZW003' and pg_temp.stg(o1) = 'contacted' and pg_temp.stage_rows(o1) = 2, v);
   perform pg_temp.t('T6 stage note > 500 -> ZW006', pg_temp.mv(c_a1, c_a, o1, pg_temp.ver(o1), 'qualified', repeat('n', 501)) = 'ERR:ZW006');
-  perform pg_temp.t('T7 no function can set converted (no "converted" assignment in any Plus function)',
+  -- NP-P2-S4: ONLY the conversion RPC may set converted (it creates the Core Request in the same transaction, and the
+  -- deferred plus_opportunities_conversion_guard refuses 'converted' without a conversion attribution).
+  perform pg_temp.t('T7 no function except plus_convert_opportunity_to_request can set converted',
     not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
-                and p.proname ~ '^(plus_|_plus_)' and p.prosrc ~* '(set|,)\s*stage\s*=\s*''converted''|converted_at\s*=\s*now|values\s*\([^)]*''converted'''));
+                and p.proname ~ '^(plus_|_plus_)' and p.proname <> 'plus_convert_opportunity_to_request'
+                and p.prosrc ~* '(set|,)\s*stage\s*=\s*''converted''|converted_at\s*=\s*now|values\s*\([^)]*''converted''')
+    and exists (select 1 from pg_trigger where tgname = 'plus_opportunities_conversion_guard' and tgdeferrable and tginitdeferred));
   v := pg_temp.mv(c_a1, c_a, o1, pg_temp.ver(o1), 'quote_sent');
   perform pg_temp.t('T8 quote_sent is a staff-reported stage only: no quote record / table, payment status untouched',
     v = 'quote_sent:true' and to_regclass('public.plus_quotes') is null

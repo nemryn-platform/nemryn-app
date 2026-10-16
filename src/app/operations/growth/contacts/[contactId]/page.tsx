@@ -24,6 +24,7 @@ import { stageDisplayLabel, stageTone } from "@/lib/plus/opportunities-core";
 import Link from "next/link";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
+import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -86,9 +87,18 @@ export default async function ContactDetailPage({
         breadcrumb={[{ label: "Growth", href: "/operations/growth" }, { label: "Contacts", href: "/operations/growth/contacts" }, { label: contact.displayName }]}
         actions={
           canWrite ? (
-            <LinkButton href={`/operations/growth/contacts/${contact.id}/edit`} variant="outline" data-testid="contact-edit">
-              Edit contact
-            </LinkButton>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* NP-P2-S4 rebooking: ONE new pending Operations request for this contact; no opportunity is created */}
+              <BookingRequestDialog
+                mode="rebook"
+                organizationId={context.organizationId}
+                customer={{ name: contact.displayName, phone: contact.phone, email: contact.email, doNotContact: contact.doNotContact }}
+                contactId={contact.id}
+              />
+              <LinkButton href={`/operations/growth/contacts/${contact.id}/edit`} variant="outline" data-testid="contact-edit">
+                Edit contact
+              </LinkButton>
+            </div>
           ) : undefined
         }
       />

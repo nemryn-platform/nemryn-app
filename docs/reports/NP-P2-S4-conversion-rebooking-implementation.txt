@@ -1,0 +1,499 @@
+NP-P2-S4 -- OPPORTUNITY-TO-BOOKING CONVERSION & REBOOKING -- IMPLEMENTATION REPORT
+Date: 2026-10-15
+Mode: CONTROLLED IMPLEMENTATION, LOCAL ONLY.
+- Nothing staged, committed, pushed, PR'd, merged or deployed.
+- No production migration and no production write.
+- Fictional data only. P2-S5 not started.
+Central rule honoured: Core stays the authority. Plus creates a PENDING Request only through Core's own
+log_transportation_request, as the signed-in staff member, and never a Trip, Passenger link, assignment or recurring
+arrangement.
+
+======================================================================
+1. VERIFIED P2-S3 RELEASE BASELINE AND PRODUCTION DEPLOYMENT (read-only)
+======================================================================
+- GitHub: account nemryn (isolated GH_CONFIG_DIR, active); repository nemryn-platform/nemryn-app.
+- PR #8 (np-p2-s3-request-attribution): MERGED 2026-10-15T15:26:11Z, merge commit
+  1355c756eea5c721bf397e3cb2f4b13493208bd8. The P2-S3 commit 2257343 is an ancestor of origin/main.
+- Vercel Production: deployment 7096838236, sha 1355c75, state success. app.nemryn.com/sw.js BUILD = "1355c756eea5".
+- Supabase linked project wyocbivzgrbekuyqdfts: remote head 20261015130000 (100000 / 110000 / 120000 / 130000 all
+  applied).
+- PRODUCTION FUNCTION BODIES VERIFIED, not just migration history:
+  - Method: a read-only `supabase db dump --linked --schema public` (pg_dump, no writes).
+  - The following are byte-identical (trimmed) to the released 20261015130000 on origin/main, and the
+    plus_request_attributions table exists:
+    - plus_update_opportunity, including the Option B `linked_requests` guard;
+    - plus_link_request, plus_update_request_attribution, plus_get_request_attribution,
+      plus_list_request_attributions, plus_get_request_summaries;
+    - _plus_resolve_attribution, _plus_require_core_request_read.
+  - Production log_transportation_request is byte-identical to the local definition used here.
+- Local: tracked tree clean, nothing staged. Unrelated untracked files and reports preserved.
+- RESULT: every prerequisite matched.
+
+======================================================================
+2. BRANCH AND COMMIT ANCESTRY
+======================================================================
+- np-p2-s4-conversion-rebooking, created from origin/main 1355c75 (the verified P2-S3 merge). Not stacked.
+- No commit was made.
+
+======================================================================
+3. MIGRATION FILENAME
+======================================================================
+supabase/migrations/20261015140000_plus_conversion_rebooking.sql (419 lines; forward-only).
+- NO new table, and no earlier migration modified.
+- Applied: local dev, and the isolated stack (fresh and upgraded; section 15).
+
+======================================================================
+4. RPC SIGNATURES AND OBJECT INVENTORY
+======================================================================
+RPCs (SECURITY DEFINER, search_path = public, pg_temp, EXECUTE authenticated only):
+  plus_convert_opportunity_to_request(p_organization_id uuid, p_opportunity_id uuid, p_expected_updated_at timestamptz,
+    p_idempotency_key text, p_requester_relationship text, p_pickup_description text, p_destination_description text,
+    p_return_trip_needed text, p_preferred_date date, p_preferred_time time, p_assistance_notes text,
+    p_additional_notes text) -> plus_booking_request_result
+  plus_create_rebooking_request(p_organization_id uuid, p_contact_id uuid, p_idempotency_key text,
+    p_requester_relationship text, p_pickup_description text, p_destination_description text, p_return_trip_needed text,
+    p_source text, p_preferred_date date, p_preferred_time time, p_assistance_notes text, p_additional_notes text)
+    -> plus_booking_request_result
+Type: plus_booking_request_result(request_id, contact_id, opportunity_id, request_state, changed).
+Internal (REVOKE ALL incl. service_role):
+  - _plus_opportunity_conversion_guard() (deferred constraint-trigger function);
+  - _plus_core_request_source(text);
+  - _plus_require_idempotency_key(text).
+Constraints / trigger / index (additive):
+  - plus_request_attributions_method_shape_check:
+    - converted_from_opportunity => contact + opportunity + key;
+    - rebooking => contact + key, and NO opportunity.
+  - plus_request_attributions_one_conversion_idx: partial unique (opportunity_id) where converted_from_opportunity.
+  - plus_opportunities_conversion_guard: deferrable, initially deferred constraint trigger. stage 'converted' requires
+    its conversion attribution at commit.
+Replaced forward-only (identical signature and grants): plus_update_request_attribution (P2-S3) gains two checks.
+  - A conversion link is immutable: ZW004 conversion_link_immutable.
+  - A rebooking link never gains an opportunity: ZW006.
+Privilege contract: 0 violations of 29 checks. The 2 RPCs are 'u'; the 3 internals have no roles.
+
+======================================================================
+5. CORE REQUEST CREATION CONTRACT AND FIELD MAPPING
+======================================================================
+Verified against the CURRENT Core function (dev = production body):
+- log_transportation_request(org, requester_name, requester_relationship, requester_phone, pickup_description,
+  destination_description, return_trip_needed, source, requester_email?, passenger_id?, preferred_date?,
+  preferred_time?, assistance_notes?, additional_notes?) -> request_creation_result.
+- It enforces has_org_role(admin, dispatcher) (ZW002), validates every field (ZW006), hard-codes 'pending', and writes
+  request_events 'request_logged' with actor auth.uid().
+- It has NO service_type parameter.
+Mapping (both RPCs):
+  - requester_name <- plus_contacts.display_name (1-200; fits Core's ≤ 200).
+  - requester_phone <- plus_contacts.phone. REQUIRED by Core, so a contact without a phone is refused first (ZW006
+    contact_phone_required).
+  - requester_email <- plus_contacts.email (optional).
+  - requester_relationship, pickup, destination, return_trip_needed, preferred date / time, assistance and additional
+    notes <- deliberate staff input, validated by the app (mirrors Core) and by Core.
+  - passenger_id <- always NULL.
+  - source:
+    - conversion: mapped from the opportunity. phone, email and facility unchanged; website and web_inquiry -> web;
+      referral, walk_in, event, advertising and other -> other.
+    - rebooking: chosen by staff (Core's closed set; default phone).
+- Transport details are stored ONLY in Core. No Plus table, activity or audit row receives pickup, destination,
+  assistance or note text (SQL V7; E2E A8).
+- No direct write to transportation_requests anywhere in Plus (SQL G2). The staff member is the actor in Core's
+  request_logged event and in the Plus history and audit (SQL V1, V2; E2E E2).
+- Not set: service_type. Core's RPC offers no such parameter, and Plus must not write Core tables directly. See
+  section 18.
+
+======================================================================
+6. ELIGIBILITY AND STAGE RULES
+======================================================================
+Conversion requires, re-checked on every call:
+  - Plus WRITE (_require_plus_write) and the Core request role (_plus_require_core_request_read; Core re-checks it).
+  - A private-pay opportunity of THIS organization (ZW002 otherwise, no oracle).
+  - An open stage: lost -> ZW004 illegal_transition; converted -> ZW004 already_converted.
+  - The current version (ZW003).
+  - NO Request already linked to the opportunity (P2-S3 manual link) -> ZW004 linked_request_exists. The conservative
+    choice: never create a second Request; staff are pointed to the existing one. See OD-1.
+  - An ACTIVE primary contact (ZW006 contact_not_active) with a phone (ZW006 contact_phone_required).
+  - Valid key and Core fields (ZW006).
+  - A quote is NOT required: quote-based eligibility is not approved.
+Success sets stage 'converted', converted_at and closed_at (the existing CHECKs hold). It writes one request_linked and
+one stage_changed (from the previous stage to converted).
+Impersonation is impossible (database-enforced):
+  - plus_change_opportunity_stage still refuses 'converted' (ZW006).
+  - Clients cannot write plus_opportunities.
+  - The deferred guard refuses ANY 'converted' without its conversion attribution at commit (SQL S3: a direct update
+    is refused).
+  - Only plus_convert_opportunity_to_request sets converted (SQL C3 / opportunities T7 updated to that contract).
+Unchanged:
+  - lost / reopen rules and the approved lost reasons;
+  - a converted opportunity is closed to edits (plus_update_opportunity ZW004);
+  - P2-S3 Option B contact consistency (SQL S4).
+
+======================================================================
+7. IDEMPOTENCY GUARANTEES
+======================================================================
+- Key: 8-200 characters of [A-Za-z0-9._:-]. The UI uses "<mode>-<crypto.randomUUID()>", one per opened form. The key is
+  stored as plus_request_attributions.conversion_idempotency_key (unique per organization; R1 contract kept).
+- Same key + same operation (conversion of THAT opportunity / rebooking of THAT contact) -> the ORIGINAL Request,
+  changed=false, and nothing written: no Request, activity, audit or Core event (SQL I1, R4; CONC-C1/C2/C8; E2E A13).
+- An already converted opportunity + a different key -> ZW004 already_converted (SQL I2; CONC-C3).
+- A key of another operation (other opportunity / contact / method) -> ZW006, and never that Request (SQL I3, R4;
+  CONC-C4).
+- A double click -> one Request (CONC-C1; E2E A6). A browser retry after a timeout reuses the form's key -> the same
+  Request.
+- The key is never proof of authority: Plus write and the Core role are checked BEFORE the replay lookup (SQL P3: a
+  converting Dispatcher downgraded to read-only cannot even replay).
+- Any failure after the Core insert rolls the Core Request back (SQL F3; CONC-C10). No orphan Request is possible.
+
+======================================================================
+8. CONCURRENCY / LOCKING STRATEGY AND LOCK ORDER
+======================================================================
+  1. pg_advisory_xact_lock(hashtext('plus-booking:' || org || ':' || key)): serializes one operation per key.
+  2. plus_opportunities FOR UPDATE (conversion): serializes with edits, stage moves, other conversions and P2-S3 links
+     (which take FOR SHARE).
+  3. plus_contacts FOR SHARE: blocks a concurrent archive (FOR UPDATE) until commit.
+  4. log_transportation_request: Core INSERTs; no Plus lock.
+  5. Attribution / activities / audit INSERTs.
+No cycle:
+  - every existing Plus writer takes the opportunity before the contact (P2-S1 update, P2-S3 link and correction);
+  - contact edit and archive take only the contact;
+  - no other path takes the advisory lock;
+  - Core request functions never touch Plus.
+Ten races were verified with separate sessions (section 13), plus a serialization in each direction for the contact edit.
+
+======================================================================
+9. CONVERSION WORKFLOW AND UI
+======================================================================
+Opportunity detail (src/app/operations/growth/pipeline/[opportunityId]/page.tsx + BookingRequestDialog):
+- Shown when ALL hold: writer, open stage, active contact, no linked Request.
+- "Create transportation request" sits next to "Edit opportunity", in the existing shell, buttons and dialog.
+- Step 1, details:
+  - shows the requester (from the contact: name, phone, email) and the opportunity;
+  - explains "This creates a pending transportation request for Operations to review. No ride is confirmed, no driver is
+    assigned and no trip is scheduled yet.";
+  - fields: who is requesting, pickup, destination, preferred date / time, return trip, assistance, notes. These reuse
+    Core's own option lists (log-request-options) and limits;
+  - Review stays disabled until pickup and destination are filled, and while the contact has no phone (the dialog
+    explains).
+- Step 2, review: a summary, including the Core source mapped from the opportunity, and what confirming does.
+- Confirm: the pending state disables the button. A double click is absorbed by the key.
+- Success: "Transportation request created. Awaiting Operations review." plus "Open the request in Operations" (a
+  working link). On close, the page refreshes: the opportunity shows Converted, a note, and the Request (Pending) under
+  Linked requests; no second conversion action and no Edit.
+- An already-linked opportunity has no conversion action and shows an explanation.
+- Errors are plain words per database reason: already converted, linked request exists, closed, stale, inactive
+  contact, phone required, no write, no access, invalid details, and a timeout ("safe to try again -- the same request
+  will never be created twice"). Never SQL.
+- Never claimed: ride confirmed, driver assigned, payment received, booking complete (unit-tested; E2E A11).
+- The P2-S1 stage panel copy, which said conversion "isn't available yet", now says Converted is set only by "Create
+  transportation request".
+
+======================================================================
+10. REBOOKING WORKFLOW AND UI
+======================================================================
+Contact detail -> "Create another transportation request" (writers; active contact):
+- The same two-step form, plus "How the request came in" (Core source).
+- One new pending Request with a rebooking link (contact only).
+- No opportunity is created or changed. Earlier Requests and their outcomes are untouched. Nothing is copied from an
+  earlier Request (no pickup, destination, passenger or medical prefill).
+- The new Request appears in the contact's Linked requests ("Rebooking"). Operations reviews it normally.
+- No standing schedule or recurring arrangement.
+
+======================================================================
+11. CORE ROLE AND PLUS WRITE AUTHORIZATION
+======================================================================
+- Plus: _require_plus_write. ZW002 without Plus read access; ZW001 for read-only / read grant / expired Plus.
+- Core: _plus_require_core_request_read (has_org_role admin / dispatcher) before anything else, and Core's own
+  has_org_role inside log_transportation_request. There is no service role and no impersonation; auth.uid() is the
+  signed-in staff member throughout.
+- Server actions (src/app/operations/growth/booking/actions.ts): requirePlusAccess, the organization binding (posted
+  organizationId = the session workspace), canWriteGrowth, and app validation that mirrors Core. The RPC is the
+  authority.
+- The Growth Agent has no path to either RPC: no agent / dashboard function references them or Core creation (SQL G4).
+  Converted opportunities are not agent candidates. No automation and no recommendation tooling were added.
+
+======================================================================
+12. SQL TEST EVIDENCE -- supabase/tests/plus_conversion_rebooking_tests.sql: 40/40 PASS
+======================================================================
+Brief items -> tests:
+  1-6: V1-V6.
+  7 (requester mapping): V5.
+  8 (source mapping): V8.
+  9 (same-key replay): I1.
+  10 (different key, converted): I2.
+  11 (key of another operation): I3.
+  12 (manually linked): I4.
+  13 (invalid inputs roll back): F1, I5.
+  14 (Core failure leaves nothing): F1, F2.
+  15 (attribution failure rolls back Core): F3, using a temporary trigger inside the rolled-back transaction.
+  16 (revoked grant): P4.
+  17 (Plus read): P2, P3.
+  18-20 (expired / locked / suspended): P6.
+  21-22 (Driver, Platform Admin): P5.
+  23 (foreign ids): P7.
+  24 (multi-organization): P8.
+  25 (lost / converted): S1.
+  26 (stale): S2.
+  27 (P2-S3 consistency): S4, R6.
+  28-31 (rebooking): R1-R5.
+  32 (grants / surface): G1, G2.
+  33 (no outbound): G3.
+  34 (no Agent execution): G4.
+  Also: S3 (impersonation guard), V7 (no transport text in Plus), G5 (no Passenger / Trip etc. across the suite).
+Existing suites updated deliberately (their forward-looking checks asserted that conversion could not exist):
+  - plus_request_attributions_tests.sql:
+    - C1 now uses rebooking-shaped rows (an opportunity can be converted only once);
+    - C2 / C3 now allow ONLY the P2-S4 RPCs to write conversion / rebooking and to set converted.
+    Still 73/73.
+  - plus_opportunities_tests.sql: T7 allows only plus_convert_opportunity_to_request to set converted and asserts the
+    deferred guard. Still 75/75.
+
+======================================================================
+13. CONCURRENCY TEST EVIDENCE -- supabase/tests/plus_conversion_rebooking_concurrency_test.sh: 11/11 PASS
+======================================================================
+Separate psql sessions holding locks ~1 s. After each scenario the invariant was checked on the final rows: no Core
+Request of the fixture organization without its attribution (orphans = 0), plus the per-scenario counts.
+  - CONC-C1: double click (same key) -> 1 Request, 1 request_linked; t + f.
+  - CONC-C2: two staff, same key -> 1 Request; t + f.
+  - CONC-C3: two staff, different keys, same opportunity -> 1 Request; the other ZW004 already_converted.
+  - CONC-C4: the same key on two opportunities -> 1 Request; the other ZW006.
+  - CONC-C5: conversion first, contact edit waits -> the edit is refused; the pair stays consistent; converted.
+  - CONC-C5b: contact edit first, conversion from the old version waits -> ZW003; no Request.
+  - CONC-C6: P2-S3 manual link first, conversion waits -> ZW004 linked_request_exists; no second Request.
+  - CONC-C7: contact archive first, conversion waits -> ZW006 contact_not_active; no Request.
+  - CONC-C8: two rebook submissions, same key -> 1 Request; t + f.
+  - CONC-C9: rebooking first, archive waits -> one Request; the archive applies after.
+  - CONC-C10: a failure AFTER Core creation (attribution insert) racing a normal conversion -> only the normal one's
+    Request exists; the failing opportunity stays qualified; orphans 0.
+Existing concurrency, rerun: P2-S3 attribution 6/6, P2-S2 agent 5/5 (dev and isolated); full list in section 15.
+
+======================================================================
+14. BROWSER TEST EVIDENCE -- .tmp-qa/np-p2-s4-conversion-rebooking-e2e.mjs: 29/29 PASS (two consecutive runs)
+======================================================================
+  - A. Conversion (A1-A13):
+    - action visible to an eligible writer;
+    - the form names the customer and opportunity and explains pending;
+    - Review disabled until required fields are entered;
+    - the review shows the mapped source;
+    - a double click on Create -> exactly one pending Request, with requester from the contact, passenger NULL and
+      source web;
+    - the confirmation and link work, with no "already created" note for a double click;
+    - attribution, converted stage and history are correct; no transport text in Plus;
+    - the Operations Request is Pending with its normal Accept / Decline, and its Growth panel says "Created from an
+      opportunity";
+    - the opportunity shows Converted with its linked Request, and no second action or Edit;
+    - no false claims;
+    - the Contact lists the Request;
+    - a same-key retry returns the same Request.
+  - B. Refusals (B1-B4): a manually linked opportunity offers no conversion and explains why (the database refuses
+    too); a contact without a phone is blocked in the form; a stale opportunity gives a plain message and no Request.
+  - C. Rebooking (C1-C3): one new pending Request (source email) with a rebooking link; no opportunity created; the
+    earlier Request is untouched; the Contact lists conversion + rebooking.
+  - D. Permissions (D1-D4): read grant -> no controls, and ZW001 in the database; a write-grant Dispatcher converts;
+    Org B -> ZW002.
+  - E. Boundary (E1-E4): no Passenger / Trip / assignment / recurring / acquisition created; every Request is pending
+    with Core's request_logged by the staff member; the Agent creates nothing; no Send / Call / Text control.
+  - Cleanup: every fixture is removed.
+  - Screenshots (local, untracked): .tmp-qa/screens/p2s4-convert-review.png, p2s4-convert-success.png,
+    p2s4-contact-linked-requests.png.
+Defects found and fixed during E2E (UI only):
+  1. The confirmation was unmounted by a same-request page revalidation. The booking actions no longer revalidate; the
+     dialog refreshes the page when closed.
+  2. After a double click, the confirmation said "already created". That note now appears only for a genuine retry
+     after an error.
+
+======================================================================
+15. CORE AND PLUS REGRESSION RESULTS
+======================================================================
+Dev database (local):
+  - plus_conversion_rebooking 40/40, plus_request_attributions 73/73, plus_opportunities 75/75, plus_growth_agent 40/40;
+  - plus_tasks 58/58, plus_contacts_activities 82/82, plus_member_grants 76/76;
+  - privilege contract 0/29;
+  - concurrency: conversion 11/11, attribution 6/6, agent 5/5.
+Isolated stack (separate project NemrynS1Iso):
+  (a) UPGRADE path: P2-S4 on a SEEDED P2-S3 head 20261015130000, with realistic fictional CRM and Request records.
+      - Seed: a contact with phone; a qualified opportunity manually linked (P2-S3) to an existing ACCEPTED Core
+        Request, with its request_linked activity; a second open opportunity; an open task; a pending agent
+        recommendation.
+      - `supabase migration up` applied 20261015140000, rc 0. All data preserved:
+        - contact 1, opportunities 2;
+        - the Request still 'accepted';
+        - its attribution still linked_existing_request;
+        - activity 1, task 1, recommendation 1;
+        - 0 invalid constraints (the new CHECK and index validated against the existing rows).
+      - Converting the old open opportunity (in a rolled-back transaction) gives changed=true / pending.
+      - Converting the manually linked opportunity gives ZW004 linked_request_exists.
+      - On the upgraded database:
+        - plus_conversion_rebooking 40/40, plus_request_attributions 73/73, plus_tasks 58/58, plus_growth_agent 40/40,
+          plus_opportunities 75/75, plus_contacts_activities 82/82;
+        - privilege contract 0/29;
+        - concurrency: conversion 11/11, attribution 6/6, agent 5/5.
+  (b) FRESH path: a reset from zero before EACH suite (database verified fresh), 30 suites, 0 real failures.
+      Core security:
+        - privilege_contract 0/29, platform_admin_foundation 58, rls_adversarial 33, security_definer_exposure 20,
+          function_privilege 7, client_privilege_surface 21, mutation_privilege 7.
+      Core Request / Trip / Passenger / Recurring:
+        - request_decision_workflow 60, request_mutation 39, request_mutation_privilege 23,
+          request_mutation_atomicity 4;
+        - request_trip_passenger_integrity 11, request_recurring_care 42;
+        - create_trip 20, create_trip_atomicity 2, create_trip_privilege 5, mutation_authorization 4.
+      Intake:
+        - public_request_intake 42, public_intake_rate_limit 8;
+        - website_intake_acquisition 52/52 (the runner's real_fail=1 is the known grep false positive on a PASSING test
+          name).
+      Plus:
+        - plus_entitlement 150, plus_access_helpers 170, plus_entitlement_versioned 17, plus_member_grants 76;
+        - plus_contacts_activities 82, plus_opportunities 75, plus_tasks 58, plus_growth_agent 40;
+        - plus_request_attributions 73, plus_conversion_rebooking 40.
+  (c) CONCURRENCY (fresh):
+      - PASS: conversion 11, attribution 6, tasks 4, agent 5, opportunities 6, contacts 4, member_grants 6,
+        entitlement_versioned 4, entitlement 5, platform_lifecycle 2, request_decision 21, public_request_intake 1,
+        website_intake_acquisition 1.
+      - Pre-existing, unrelated FAILs: request_lifecycle REQUEST-CONCURRENCY-1 and mutation CONCURRENCY-1. Same
+        signature; proven to fail without any Plus change (NP-P2-S3).
+Browser (local next start -p 3100; production build):
+  - NP-P2-S4 29/29 (x2), NP-P2-S3 34/34, NP-P2-S2 76/76;
+  - NP-P2-S1 57/57. D2 was updated deliberately to the new truthful Converted copy.
+  - NP-P1-S4 50/50, NP-P1-S3 57/57, NP-P1-S2 49/49, NP-P1-S1 45/45;
+  - P1-OPS-R1 Request decisions 52/52, P1-PILOT-UX1 46/46, P1-PILOT-S4C acquisition 27/27.
+  - P1-PILOT-R3 Request -> Recurring Care: 56 PASS, 1 FAIL (E2). PRE-EXISTING DATA-ACCUMULATION HARNESS ISSUE, not
+    P2-S4:
+    - E2 compares the "accepted, still needs a trip" SQL count with the IDs on ONE page of
+      /operations/requests?needs=trip, whose page size is 25 (REQUESTS_LIST_PAGE_SIZE).
+    - The long-lived dev database now holds 21 such accepted Requests left behind by earlier runs (11 "R1 Concurrency"
+      and 4 "R1 Tablet Flow" from the P1-OPS-R1 E2E, plus older SQL-suite fixtures). With R3's own fixtures the count
+      exceeds one page.
+    - P2-S4 changes neither the Requests list nor any R3 path. R3 passed 57/57 during NP-P2-S3 with fewer leftovers.
+    - Every other R3 check passes, including the recurring-care conversion itself.
+    - No Core data was deleted to make it pass.
+    - Safe remedy (owner decision): have P1-OPS-R1's E2E delete its fixtures in `finally`, and have R3 compare across
+      pages (or use a fresh reset).
+UNRELATED, PRE-EXISTING (unchanged; identified in NP-P2-S3 / R1 / R2):
+  - mutation_concurrency_test CONCURRENCY-1 and request_lifecycle_concurrency_test REQUEST-CONCURRENCY-1 (a direct
+    table lock as authenticated).
+  - request_decision_workflow_tests / request_mutation_tests are run-once fixed-id suites: they fail only on the
+    long-lived dev database and pass on every fresh reset.
+  - .tmp-qa/s2e-request-detail-e2e.mjs: missing ad-hoc fixtures.
+Unit / static: 813/813 (7 new booking-core tests; the opportunities-core copy tests updated); TypeScript clean; ESLint
+clean; next build succeeded.
+
+======================================================================
+16. PRODUCTION COMPATIBILITY AND ROLLBACK CONSIDERATIONS
+======================================================================
+- Prerequisite: the production head is exactly 20261015130000 (verified, with function bodies matching).
+- The migration is one transaction:
+  - It ADDS a CHECK (method shape) and a partial unique index to plus_request_attributions. Every existing production
+    row is linked_existing_request (P2-S4 is the first writer of the other methods), so both validate. The upgraded
+    isolated run confirmed this on seeded P2-S3 data.
+  - It ADDS a deferred constraint trigger on plus_opportunities. Existing rows are never 'converted'
+    (plus_opportunities_converted_check plus the P2-S1 RPC refusal), and the trigger fires only on insert / update to
+    'converted'.
+  - It REPLACES plus_update_request_attribution (same signature; existing rows are linked_existing_request, so the new
+    checks never apply to them).
+- Order: apply the migration, then deploy the app. The deployed app (1355c75) does not call the new RPCs. Its
+  opportunity page shows the old "isn't available yet" stage copy until the new app is deployed (cosmetic).
+- Rollback, if needed BEFORE any conversion exists, in one transaction:
+  - drop the two RPCs, the three internals, the type, the trigger, the index and the CHECK;
+  - restore the 20261015130000 body of plus_update_request_attribution.
+  - AFTER conversions exist: Core Requests created by conversion are legitimate Core records and must NOT be deleted.
+    Rolling back would leave their attributions with link methods no RPC can create; keep the constraints, or migrate
+    those rows deliberately. A forward fix is preferred to a rollback once used.
+- Not done: no rollback SQL file has been prepared, and the production backup / PITR tier was not inspected. Prepare
+  both in the release step (NP-P1-S1-R2B pattern).
+- Post-migration checks:
+  - privilege contract 0 violations;
+  - EXECUTE authenticated-only on the 2 RPCs, none on the internals;
+  - the deferred trigger present;
+  - 0 invalid constraints;
+  - production function bodies equal to the file.
+- Smoke on the Pilot Simulation tenant only, with fictional data. A conversion creates a REAL pending Request in that
+  tenant: decline or cancel it afterwards through Core, never by deleting it.
+
+======================================================================
+17. EXACT CHANGED-FILE INVENTORY FOR FUTURE GIT STAGING (nothing staged)
+======================================================================
+New (8):
+  supabase/migrations/20261015140000_plus_conversion_rebooking.sql
+  supabase/tests/plus_conversion_rebooking_tests.sql
+  supabase/tests/plus_conversion_rebooking_concurrency_test.sh
+  src/lib/plus/booking-core.ts
+  src/lib/plus/booking-core.test.mjs
+  src/app/operations/growth/booking/actions.ts
+  src/components/growth/BookingRequestDialog.tsx
+  docs/reports/NP-P2-S4-conversion-rebooking-implementation.txt
+Modified (13):
+  docs/data/mutation-api.md
+  docs/product/plus-domain-model.md
+  docs/product/plus-product-spec.md
+  docs/security/database-privilege-contract.md
+  docs/security/plus-access-model.md
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/lib/plus/opportunities-core.test.mjs
+  src/lib/plus/opportunities-core.ts
+  src/lib/supabase/database.types.ts (regenerated; 61 additions, 0 removals)
+  supabase/tests/plus_opportunities_tests.sql
+  supabase/tests/plus_request_attributions_tests.sql
+  supabase/tests/privilege_contract_tests.sql
+EXCLUDE:
+  - .tmp-qa/ (incl. np-p2-s4-conversion-rebooking-e2e.mjs, the updated np-p2-s1 E2E, screens/);
+  - every other untracked docs/reports file;
+  - scratchpad runners, logs and the production schema dump.
+
+======================================================================
+18. KNOWN LIMITATIONS AND UNRESOLVED OWNER DECISIONS
+======================================================================
+Owner decisions:
+  OD-1. Opportunity already linked to an existing Request (P2-S3). Implemented: conversion refused (ZW004
+        linked_request_exists); staff use the existing Request.
+        Alternative, not implemented: "mark converted using the existing Request". It would need a reviewed rule,
+        because it changes a manual link's meaning.
+  OD-2. service_type is not set on converted Requests: Core's log_transportation_request has no parameter for it, and
+        Plus must not write Core tables directly. Options: accept; or a reviewed, additive Core change (an optional,
+        trailing p_service_type on log_transportation_request).
+  OD-3. A contact without a phone cannot be converted or rebooked (Core requires a requester phone). Staff add the
+        phone to the contact first.
+  OD-4. Conversion source mapping (referral / walk_in / event / advertising -> "other"). Confirm, or prefer staff
+        override.
+  OD-5. A converted opportunity can still be linked to further existing Requests through P2-S3 (any stage). This is
+        history, not a second conversion; confirm or restrict.
+  OD-6. do_not_contact does not block conversion or rebooking (they create an internal Operations request the customer
+        asked for; nothing is sent). Confirm.
+  OD-7. Dev-data harness hygiene: P1-OPS-R1 E2E fixtures and R3 pagination (section 15), plus the earlier s2e fixture
+        issue.
+  - PD-10 / PD-11 remain OPEN. PD-18 is not implemented; growth-only members could not convert by design.
+Limitations:
+  - No "Send to Operations" alternative for non-Core users (PD-18 not approved).
+  - No requester-phone override in the form.
+  - Rebooking does not prefill from an earlier Request, by design.
+  - One conversion per opportunity; later Requests use rebooking.
+  - Replay returns the CURRENT Core state of the original Request (it may have been accepted or declined since).
+
+======================================================================
+19. CONFIRMATION -- NO TRIP, PASSENGER OR RECURRING CARE CREATED AUTOMATICALLY
+======================================================================
+CONFIRMED. Neither RPC nor any app path creates or links a Passenger, creates a Trip or trip assignment, or creates a
+recurring arrangement or acquisition snapshot.
+- passenger_id is always NULL.
+- The only Core write is log_transportation_request's own pending Request and its request_logged event.
+- Evidence:
+  - SQL V6, G2, G5: the Passenger / Trip / assignment / recurring / acquisition counts are unchanged across the whole
+    suite;
+  - E2E E1, E2;
+  - CONC-C1..C10: no orphan.
+- No email, SMS, call or AI provider was added (SQL G3). No background automation.
+
+======================================================================
+20. READY FOR AN INDEPENDENT PRE-COMMIT SECURITY REVIEW?
+======================================================================
+YES -- ready for an independent pre-commit security review (an NP-P2-S4-R1, as for P2-S2 / P2-S3), then a controlled
+commit and PR as a separate, owner-approved step using the section 17 inventory (21 paths).
+- Every P2-S4 data-layer, idempotency, concurrency, tenant and Core-boundary test passes, fresh and upgraded.
+- Every Plus and Core Request regression passes, except the separately identified pre-existing harness issues
+  (section 15): R3 E2 pagination / data accumulation; two direct-lock Core concurrency scripts; run-once suites on the
+  long-lived dev database; s2e fixtures. None is caused or masked by P2-S4.
+- Review focus suggested:
+  - the replay-before-eligibility ordering;
+  - the deferred conversion guard;
+  - the OD-1 / OD-2 / OD-6 decisions;
+  - production rollback semantics once real pending Requests exist.
+- Not ready for real customer data: PD-10 / PD-11 open.
+
+STOP. P2-S5 not started.

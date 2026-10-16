@@ -128,6 +128,20 @@ Rules:
 3. **Request → Passenger:** Core only (`link_request_passenger`). Plus never guesses a Passenger.
 4. **Request → Trip:** Core only.
 
+> **NP-P2-S4 implementation notes (local):**
+> - **Opportunity → "Create transportation request"** is shown to writers (Admins and write-grant Dispatchers, both holding the Core request role) on an **open** opportunity whose contact is active and which has **no Request linked yet**.
+>   - Flow: a two-step form (details, then review, then confirm).
+>   - Requester name, phone and email are copied from the contact; a phone is required by Core. Who is requesting, pickup, destination, preferred date/time, return trip, assistance and notes are staff input, stored **only in Core**.
+>   - The Core source is mapped from the opportunity's source.
+>   - The result is **one pending Request** created by Core's `log_transportation_request` as the staff member. The opportunity becomes **Converted**, and the confirmation reads "Transportation request created. Awaiting Operations review." with a link to the Request.
+> - **Contact → "Create another transportation request" (rebooking)** creates one new pending Request for the contact. Staff choose the source. No opportunity is created or changed, and nothing is copied from earlier Requests.
+> - **Replay-safe:** one key per opened form. A double click or a retry after a timeout returns the same Request, never a second one.
+> - **Never:** no Passenger link, Trip, recurring arrangement, payment or confirmation is created. Operations decides from there.
+> - An opportunity already linked (P2-S3) to an existing Request is **not** converted again. Staff are pointed to that Request.
+> - Quotes are **not** required for conversion: quote-based eligibility is not approved.
+> - **Do-not-contact reminder (OD-6, NP-P2-S4-R3):** when the contact's stored `do_not_contact` preference is set, both forms show "This person asked not to be contacted" with "Create this request only if they asked for this ride…". It is a reminder only: the Request is not blocked, nothing is sent, and the preference is never inferred from activity. Per-channel consent remains P2-S6.
+> - **Service type (OD-2):** Requests created from Plus have `service_type` NULL, like every staff-logged Core Request, because `log_transportation_request` has no service parameter. The follow-up **NC-REQUEST-SERVICE-TYPE** (Core) is a priority.
+
 ### 4.5 Quotes and payments (staged — PD-08 revised)
 
 | Stage | When | What |
@@ -352,7 +366,7 @@ Each slice ships independently: its own additive migration (if any), app change,
 | **P2-S1 Opportunities + pipeline** | `plus_opportunities` (private-pay only), stage RPCs, Pipeline private-pay tab, Opportunity detail; `plus_activities.opportunity_id` | 1 table + 1 additive column, check replaced | Stage rules; lost reason; ZW003 on a stale token; facility channel refused (CHECK) | P1-S4 | none in Core | facility channel |
 | **P2-S2 Tasks, Dashboard, nested nav, supervised Growth Agent** *(implemented locally — NP-P2-S2)* | `plus_tasks` (contact / opportunity), Tasks page, due/overdue; nested Growth navigation; Growth Dashboard (first Overview); `plus_agent_recommendations` + staff-run review / approve / dismiss; draft-only templates | 2 tables + read RPCs | Exactly one subject; assignee must have Plus write; approval creates a task only; stale recommendations revalidated; nothing sent | P2-S1 | sidebar (Core UI): Core nav E2E re-run | reminder emails, scheduler, any sending, external AI |
 | **P2-S3 Request attribution** *(implemented locally — NP-P2-S3)* | `plus_request_attributions` (contact / opportunity), `plus_link_request`, `plus_update_request_attribution`, `plus_get_request_summaries`; Request-detail Growth panel; `plus_activities.request_id` | 1 table + 1 additive column | T12, T14, T15, T16; the panel is invisible without Plus | P2-S1 | Request detail page (Core UI): Dispatcher E2E | referral account |
-| **P2-S4 Conversion + rebooking** | `plus_convert_opportunity_to_request`, `plus_create_rebooking_request` | RPCs only | T13, T17; one `pending` Request; Core request suites unchanged | P2-S3 | calls Core request creation | Trip creation (never) |
+| **P2-S4 Conversion + rebooking** *(implemented locally — NP-P2-S4)* | `plus_convert_opportunity_to_request`, `plus_create_rebooking_request` | RPCs only | T13, T17; one `pending` Request; Core request suites unchanged | P2-S3 | calls Core request creation | Trip creation (never) |
 | **P2-S5 Staff estimates & quotes (Q1)** | `plus_quotes` (staff-entered lines, server-computed total, immutable when sent, supersede); Opportunity quotes panel; printable estimate | 1 table | T28; labels never say invoice/payment; stage auto → quote_sent | P2-S1 | — | pricing rules (Q2), payments (Q3), emailing quotes (P4) |
 | **P2-S6 Consent ledger** *(moved from NP-P4)* | `plus_communication_consents`; record / revoke consent on Contact detail | 1 table | T20 (append-only); latest-row semantics; `do_not_contact` overrides | P1-S4 | — | any sending |
 | **P2-S7 Plus inquiry form** *(moved from NP-P4)* | `plus_inquiry_forms`, `plus_inquiries`, `plus_inquiry_rate_limit_events`; `plus_opportunities.inquiry_id`; hosted + embed pages; submission route; service-role RPCs; Inquiries to review; Convert / Dismiss; Settings → Inquiry form | 3 tables + 1 additive column; reviewed edits to `src/proxy.ts` and `next.config.ts` | T23–T26; Core intake suites show no diff; publication + entitlement gating; consent captured | P2-S1, P2-S6 | shared proxy/header config (Core files): request-form-host and Core form E2E re-run | auto-creation of anything; Core form changes; email alerts (PD-16) |

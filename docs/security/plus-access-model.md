@@ -166,6 +166,13 @@ create policy <t>_select_plus on … for select to authenticated
 >   - If PD-18 is approved, whether growth-only members may see these minimum facts without the Core role is a separate, reviewed change. The data-minimisation boundary already exists for it.
 > - Tested in `plus_request_attributions_tests.sql`, including a simulated Plus user **without** the Core role (Z1), which is refused everywhere.
 
+> **Implementation status (NP-P2-S4, migration `20261015140000`, local only):**
+> - **Plus → Core write** is implemented exactly as specified above. `plus_convert_opportunity_to_request` / `plus_create_rebooking_request` require Plus write and the Core request role, then call `log_transportation_request` as the caller, which re-checks the Core role. There is no service-role path and no direct `transportation_requests` write.
+> - The Request is always `pending` with `passenger_id` NULL. No Trip, passenger link, assignment or recurring arrangement is created.
+> - Transport text (pickup, destination, assistance, notes) is stored only in Core. Plus attributions, activities and audit rows carry ids only.
+> - The Growth Agent has no path to either RPC.
+> - Tests: `plus_conversion_rebooking_tests.sql` (T13 replay, T17 no passenger / Trip) and `plus_conversion_rebooking_concurrency_test.sh`.
+
 **Passenger identity:** Plus never matches a contact to a Passenger by name, phone or email. The Passenger link is made only by staff in Core (`link_request_passenger`) and is visible to Plus only as "a passenger is linked: yes/no".
 
 ## 5. Data categories

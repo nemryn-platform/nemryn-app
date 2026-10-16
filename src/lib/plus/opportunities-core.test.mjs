@@ -35,7 +35,7 @@ test("quote stages are always labelled as staff-reported; no quote is implied", 
   assert.equal(o.stageDisplayLabel("quote_accepted"), "Quote accepted (reported)");
   assert.equal(o.stageDisplayLabel("qualified"), "Qualified");
   assert.match(o.REPORTED_QUOTE_STAGE_NOTE, /hasn't created, sent or received a quote/);
-  assert.match(o.CONVERTED_RESERVED_NOTE, /isn't available yet/);
+  assert.match(o.CONVERTED_RESERVED_NOTE, /Create transportation request/); // NP-P2-S4: conversion now exists
 });
 
 // NC-INTAKE-AIRPORT-S1: Core intake added airport_transportation; Plus opportunity service types are unchanged (Plus is
@@ -127,7 +127,7 @@ test("error copy: plain words, no codes", () => {
   for (const code of ["ZW001", "ZW002", "ZW003", "ZW004", "ZW006", undefined]) {
     for (const op of ["save", "stage", "lost", "reopen"]) assert.doesNotMatch(o.opportunityErrorMessage(code, op), /ZW\d|sqlstate/i);
   }
-  assert.match(o.opportunityErrorMessage("ZW006", "stage"), /Converted isn't available yet/);
+  assert.match(o.opportunityErrorMessage("ZW006", "stage"), /Converted is set by “Create transportation request”/);
 });
 
 test("NP-P2-S3-R2: a contact change refused for linked Requests gets its own message; closed stays closed", () => {
