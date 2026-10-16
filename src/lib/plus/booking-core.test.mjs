@@ -86,3 +86,33 @@ test("errors: specific copy per database reason; never SQL text; retry after a t
   for (const c of ["ZW001", "ZW002", "ZW003", "ZW004", "ZW006", undefined]) assert.doesNotMatch(b.bookingErrorMessage(c, "x"), /ZW\d|sqlstate|exception/i);
   assert.doesNotMatch(readFileSync(new URL("./booking-core.ts", import.meta.url), "utf8"), /^import /m, "runtime-import-free");
 });
+
+test("OD-6 do-not-contact notice: flagged -> warning; unflagged -> none; unavailable -> neutral reminder only", () => {
+  const flagged = b.doNotContactNotice(true);
+  assert.equal(flagged.kind, "do_not_contact");
+  assert.equal(flagged.title, "This person asked not to be contacted");
+  assert.match(flagged.description, /does not send them a message/);
+  assert.equal(b.doNotContactNotice(false), null);
+  for (const unknown of [null, undefined]) {
+    const r = b.doNotContactNotice(unknown);
+    assert.equal(r.kind, "reminder");
+    assert.equal(r.description, "Before contacting this person, check their communication preferences. Creating a transportation request does not send a message.");
+    // the neutral reminder never asserts a person-specific preference or consent
+    assert.doesNotMatch(r.description, /asked not to|opted out|consent|agreed/i);
+  }
+  // only an explicit boolean true is a preference; truthy look-alikes are not inferred as one
+  for (const v of ["true", 1, "yes"]) assert.notEqual(b.doNotContactNotice(v)?.kind, "do_not_contact");
+  // never claims anything is sent or blocked
+  for (const n of [flagged, b.doNotContactNotice(null)]) assert.doesNotMatch(n.description, /cannot|blocked|refused|we will (send|text|call)/i);
+});
+
+test("OD-6: the dialog reads ONLY the contact's stored flag; both pages pass it from the tenant-scoped contact loader", () => {
+  const dialog = readFileSync(new URL("../../components/growth/BookingRequestDialog.tsx", import.meta.url), "utf8");
+  assert.match(dialog, /doNotContactNotice\(customer\.doNotContact\)/);
+  const contactPage = readFileSync(new URL("../../app/operations/growth/contacts/[contactId]/page.tsx", import.meta.url), "utf8");
+  assert.match(contactPage, /doNotContact: contact\.doNotContact/);
+  const oppPage = readFileSync(new URL("../../app/operations/growth/pipeline/[opportunityId]/page.tsx", import.meta.url), "utf8");
+  assert.match(oppPage, /doNotContact: c\.doNotContact/);
+  // the flag never changes eligibility: conversion gating does not mention it
+  assert.doesNotMatch(oppPage.match(/const canConvert = .*/)[0], /doNotContact/i);
+});

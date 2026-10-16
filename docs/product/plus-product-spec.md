@@ -139,6 +139,8 @@ Rules:
 > - **Never:** no Passenger link, Trip, recurring arrangement, payment or confirmation is created. Operations decides from there.
 > - An opportunity already linked (P2-S3) to an existing Request is **not** converted again. Staff are pointed to that Request.
 > - Quotes are **not** required for conversion: quote-based eligibility is not approved.
+> - **Do-not-contact reminder (OD-6, NP-P2-S4-R3):** when the contact's stored `do_not_contact` preference is set, both forms show "This person asked not to be contacted" with "Create this request only if they asked for this ride…". It is a reminder only: the Request is not blocked, nothing is sent, and the preference is never inferred from activity. Per-channel consent remains P2-S6.
+> - **Service type (OD-2):** Requests created from Plus have `service_type` NULL, like every staff-logged Core Request, because `log_transportation_request` has no service parameter. The follow-up **NC-REQUEST-SERVICE-TYPE** (Core) is a priority.
 
 ### 4.5 Quotes and payments (staged — PD-08 revised)
 

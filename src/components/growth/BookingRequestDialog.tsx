@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import { AttentionState } from "@/components/ui/AttentionState";
-import { BOOKING_LIMITS, BOOKING_PENDING_NOTE } from "@/lib/plus/booking-core";
+import { BOOKING_LIMITS, BOOKING_PENDING_NOTE, doNotContactNotice } from "@/lib/plus/booking-core";
 import { REQUESTER_RELATIONSHIP_OPTIONS, RETURN_TRIP_OPTIONS, SOURCE_OPTIONS, DEFAULT_SOURCE, selectOptionLabel } from "@/lib/operations/log-request-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -21,6 +21,8 @@ export interface BookingCustomer {
   name: string;
   phone: string | null;
   email: string | null;
+  /** the contact's STORED do_not_contact preference; omitted when not available (OD-6, NP-P2-S4-R3) */
+  doNotContact?: boolean | null;
 }
 
 /**
@@ -179,6 +181,21 @@ function BookingForm({
             </p>
           )}
         </div>
+
+        {/* OD-6: from the stored preference only; a reminder, never a block, and nothing is sent */}
+        {(() => {
+          const notice = doNotContactNotice(customer.doNotContact);
+          if (!notice) return null;
+          return notice.kind === "do_not_contact" ? (
+            <div data-testid="booking-do-not-contact">
+              <AttentionState level="warning" title={notice.title} description={notice.description} />
+            </div>
+          ) : (
+            <p className={cn(typography.metadata, "text-text-secondary")} data-testid="booking-preference-reminder">
+              {notice.description}
+            </p>
+          );
+        })()}
 
         {restored && state.status === "idle" && (
           <p className={cn(typography.metadata, "text-text-secondary")} data-testid="booking-restored">

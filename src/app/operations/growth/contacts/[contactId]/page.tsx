@@ -92,7 +92,7 @@ export default async function ContactDetailPage({
               <BookingRequestDialog
                 mode="rebook"
                 organizationId={context.organizationId}
-                customer={{ name: contact.displayName, phone: contact.phone, email: contact.email }}
+                customer={{ name: contact.displayName, phone: contact.phone, email: contact.email, doNotContact: contact.doNotContact }}
                 contactId={contact.id}
               />
               <LinkButton href={`/operations/growth/contacts/${contact.id}/edit`} variant="outline" data-testid="contact-edit">

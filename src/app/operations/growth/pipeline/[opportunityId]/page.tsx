@@ -86,7 +86,7 @@ export default async function OpportunityDetailPage({
   // NP-P2-S4 conversion: writers, open opportunity, active contact, and no Request already linked (a manual P2-S3 link
   // is never turned into a second Request). The database re-checks every one of these and the Core role.
   let linkedCount: number | null = null;
-  let customer: { name: string; phone: string | null; email: string | null } | null = null;
+  let customer: { name: string; phone: string | null; email: string | null; doNotContact: boolean } | null = null;
   if (canWrite && open && !o.contactArchived) {
     try {
       linkedCount = (await listLinkedRequests(context.organizationId, { opportunityId: o.id })).total;
@@ -95,7 +95,7 @@ export default async function OpportunityDetailPage({
     }
     try {
       const c = await getContact(context.organizationId, o.contactId);
-      customer = c ? { name: c.displayName, phone: c.phone, email: c.email } : null;
+      customer = c ? { name: c.displayName, phone: c.phone, email: c.email, doNotContact: c.doNotContact } : null;
     } catch {
       customer = null;
     }

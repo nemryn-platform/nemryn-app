@@ -18,6 +18,30 @@ export const BOOKING_PENDING_NOTE =
   "This creates a pending transportation request for Operations to review. No ride is confirmed, no driver is assigned and no trip is scheduled yet.";
 export const BOOKING_SUCCESS_MESSAGE = "Transportation request created. Awaiting Operations review.";
 
+/**
+ * OD-6 (NP-P2-S4-R3): a staff-visible reminder in the booking form, driven ONLY by the contact's stored do_not_contact
+ * preference (plus_contacts, read tenant-scoped through getContact). Never inferred from activity, never treated as
+ * consent, never blocks the internal Request, and nothing is sent either way.
+ *   true            -> warning: this person asked not to be contacted
+ *   false           -> no notice
+ *   null/undefined  -> preference not available here: a neutral reminder that asserts nothing about this person
+ */
+export const DO_NOT_CONTACT_BOOKING_TITLE = "This person asked not to be contacted";
+export const DO_NOT_CONTACT_BOOKING_NOTE =
+  "Create this request only if they asked for this ride. Creating a transportation request does not send them a message; respect their preference when Operations follows up.";
+export const CONTACT_PREFERENCE_REMINDER =
+  "Before contacting this person, check their communication preferences. Creating a transportation request does not send a message.";
+
+export type DoNotContactNotice =
+  | { kind: "do_not_contact"; title: string; description: string }
+  | { kind: "reminder"; description: string };
+
+export function doNotContactNotice(doNotContact: boolean | null | undefined): DoNotContactNotice | null {
+  if (doNotContact === true) return { kind: "do_not_contact", title: DO_NOT_CONTACT_BOOKING_TITLE, description: DO_NOT_CONTACT_BOOKING_NOTE };
+  if (doNotContact === false) return null;
+  return { kind: "reminder", description: CONTACT_PREFERENCE_REMINDER };
+}
+
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const KEY_RE = /^[A-Za-z0-9._:-]{8,200}$/;
