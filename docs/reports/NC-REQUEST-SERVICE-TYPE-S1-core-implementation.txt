@@ -1,0 +1,375 @@
+NC-REQUEST-SERVICE-TYPE-S1 -- CORE IMPLEMENTATION: STAFF REQUEST SERVICE TYPE
+Date: 2026-10-17
+Mode: LOCAL IMPLEMENTATION + ISOLATED TESTING ONLY.
+- No production migration, data change or deploy.
+- No stage, commit, push or PR.
+- No branch switch, worktree, reset, stash or clean.
+- Plus S2 and P2-S5 not started.
+Reference: docs/reports/NC-REQUEST-SERVICE-TYPE-S0-architecture-audit.txt.
+Test infrastructure: the isolated Supabase stack NemrynS1Iso (ports 54361/54362). Fictional seed data only. Nothing that
+writes ran against production.
+Legend: IMPLEMENTED / TESTED / NOT TESTED / REQUIRES OWNER ACTION.
+
+======================================================================
+1. BASELINE
+======================================================================
+- Branch np-p2-s4-r5-f1-link-ux (unchanged, as instructed). HEAD 59794bf; its tree equals origin/main 869c794.
+- R5-F1 (PR #11) is merged and deployed (production build id 869c7947c6dd; verified in S0).
+- No tracked changes at start. Untracked: reports and .tmp-qa QA scripts only, all preserved.
+- Production head 20261015140000 (S0). The new version 20261017100000 was unused and sorts after it.
+- Note for the commit step (REQUIRES OWNER ACTION): this checkout is on the already-merged F1 branch. Commit S1 on a
+  NEW branch created from main.
+
+======================================================================
+2. APPROVED OWNER DECISIONS
+======================================================================
+- OD-S1 = A:
+  - the database validates only the canonical set;
+  - the staff UI lists the organization's configured Services, or all nine when none are configured;
+  - the database never rejects a canonical value because it is not configured.
+- OD-S2: optional; default "Not specified"; no backfill, no inference.
+- OD-S3: Plus rebooking will use the nine values filtered by Services. This is S2 and was NOT done here.
+- OD-S4: no airport_transportation for Plus Opportunities (deferred). NOT done.
+- APPROVED DURING S1 (owner, 2026-10-17): Dispatchers may READ the configured Services, so Log Request can list them.
+  - get_organization_service_offerings admits an active Organization Admin OR Dispatcher of that organization only;
+    read-only and narrowly scoped.
+  - set_organization_service_offerings stays Admin-only.
+  - No direct table access.
+  - The Settings page stays Admin-only.
+  - Discovered in S1: the S0 audit had assumed Dispatchers could already read Services. They could not: the RPC was
+    Admin-only and the table has no client access.
+
+======================================================================
+3. EXACT FILES (working tree, unstaged)
+======================================================================
+NEW (3, to commit) + this report:
+  supabase/migrations/20261017100000_core_staff_request_service_type.sql
+  supabase/tests/core_staff_request_service_type_tests.sql
+  src/lib/operations/log-request-options.test.mjs
+  docs/reports/NC-REQUEST-SERVICE-TYPE-S1-core-implementation.txt
+MODIFIED (11): 113 insertions, 10 deletions (after the pre-PR refinement, section 16).
+  src/app/operations/requests/new/actions.ts            (read raw serviceType, validate, pass p_service_type)
+  src/app/operations/requests/new/page.tsx              (load configured Services; build options)
+  src/components/operations/requests/LogRequestForm.tsx (one optional Select after Destination)
+  src/lib/operations/log-request-options.ts             (serviceRequestedOptions, parseServiceTypeInput; no new list)
+  src/lib/operations/log-request-errors.ts              (INVALID_SERVICE staff message)
+  src/lib/supabase/database.types.ts                    (p_service_type?: string)
+  supabase/tests/privilege_contract_tests.sql           (signature -> 15 args)
+  supabase/tests/request_mutation_privilege_tests.sql   (signature -> 15 args)
+  supabase/tests/team_services_operations_tests.sql     (SVC-7: the Dispatcher READ is now allowed; every other refusal + Dispatcher SET refusal kept)
+  docs/data/mutation-api.md                             (new section)
+  docs/security/database-privilege-contract.md          (S1 changes)
+UNCHANGED, by design:
+- supabase/tests/support/emulate_production_acl_2026-09-21.sql (historical);
+- every Plus RPC, BookingRequestDialog and Growth attribution;
+- every table, CHECK, policy and trigger.
+QA only (untracked, NOT for commit): .tmp-qa/nc-request-service-type-s1-e2e.mjs.
+
+======================================================================
+4. MIGRATION AND FUNCTION SIGNATURE   [IMPLEMENTED]
+======================================================================
+Migration 20261017100000_core_staff_request_service_type.sql:
+- DROP FUNCTION public.log_transportation_request(<exact 14-argument identity>). NO CASCADE; dependencies were
+  verified in S0 (none).
+- CREATE FUNCTION public.log_transportation_request(
+    p_organization_id uuid, p_requester_name text, p_requester_relationship text, p_requester_phone text,
+    p_pickup_description text, p_destination_description text, p_return_trip_needed text, p_source text,
+    p_requester_email text DEFAULT NULL, p_passenger_id uuid DEFAULT NULL, p_preferred_date date DEFAULT NULL,
+    p_preferred_time time DEFAULT NULL, p_assistance_notes text DEFAULT NULL, p_additional_notes text DEFAULT NULL,
+    p_service_type text DEFAULT NULL)
+  RETURNS request_creation_result, LANGUAGE plpgsql, VOLATILE, SECURITY DEFINER, SET search_path = public, pg_temp.
+- The body is the 20260916100000 body VERBATIM (a diff shows only the parameter, one variable, the service block and
+  the INSERT column), plus:
+  - service block: NULL or whitespace-only -> NULL;
+  - otherwise exactly one of the nine canonical values, never trimmed, case-folded or mapped; else ZW006;
+  - stored in service_type;
+  - the request_logged event is unchanged ({source}).
+- COMMENT restored and extended. REVOKE ALL FROM public, anon, service_role; GRANT EXECUTE TO authenticated.
+- get_organization_service_offerings: CREATE OR REPLACE with the 20260920110000 body.
+  - The only change is the role array {organization_admin} -> {organization_admin, dispatcher}.
+  - Same signature, SECURITY DEFINER, search_path; grants re-asserted (authenticated only).
+- NOTIFY pgrst, 'reload schema'.
+- Atomic: the Supabase CLI applies the file in one transaction (verified by the upgrade rehearsals: the function is
+  never missing).
+
+======================================================================
+5. BACKWARD-COMPATIBILITY EVIDENCE   [TESTED]
+======================================================================
+Upgrade rehearsal v2, from the production head 20261015140000. Seeded:
+- 10 fictional Requests (all nine services + NULL);
+- Org B Services;
+- a website integration;
+- Plus entitlement, contact and opportunity (service wheelchair).
+Results:
+- Exactly 1 log_transportation_request after the migration. The 14 pre-migration Requests are BYTE-IDENTICAL.
+- The old 14-argument NAMED call (the deployed app's shape) works before and after, storing NULL / pending / phone.
+- The old 14-argument POSITIONAL call (the Plus RPC shape) works: NULL / pending / email.
+- LONG-LIVED SESSION (plan cache): the same connection ran plus_create_rebooking_request BEFORE and AFTER the migration.
+  Both returned pending with service NULL, with 0 errors.
+- Plus conversion (opportunity service wheelchair) -> pending, service NULL. Plus rebooking -> pending, service NULL.
+  This is the intended S1 behaviour.
+- Core intake, decision, create_trip and Plus RPC definitions: signature, SECURITY DEFINER, ACL, search_path and body
+  are unchanged.
+- Upgraded-database suites, all pass:
+  - core_staff_request_service_type 50/50, core_intake_airport 24/24, plus_conversion_rebooking 44/44,
+    plus_request_attributions 73/73;
+  - team_services_operations 106/106, request_mutation 39/39, request_mutation_privilege 23/23;
+  - privilege contract 0/29.
+- Harness note: the FIRST rehearsal had two harness defects.
+  1. Its probes read the new row in the SAME statement as the function call; a statement cannot see rows its called
+     function inserts, so they printed nothing.
+  2. Its cleanup missed an FK order and rolled back, leaving fixtures that made 2 team_services checks fail on that
+     database only.
+  Rehearsal v2 fixed both: two-statement probes and verified FK-ordered cleanup. Every result above is from v2.
+
+======================================================================
+6. SERVICE-TYPE VALIDATION RESULTS   [TESTED]
+======================================================================
+core_staff_request_service_type_tests.sql: 50/50 fresh, 50/50 upgraded.
+- All nine CHECK values are accepted and stored exactly. The parity source is the CHECK constraint itself.
+- Omitted, explicit NULL, '', spaces and tabs/newlines -> NULL.
+- Each refused with ZW006, writing no Request and no event:
+  - "limousine", "Dialysis", "DIALYSIS", "Airport Transportation", "Wheelchair transportation", "airport";
+  - " dialysis", "dialysis ", "dialysis\n";
+  - "wheelchair-transportation", "medical appointment".
+- Server action (unit 835/835, incl. 6 new): parseServiceTypeInput applies the same rule to the RAW form value,
+  independent of the dropdown. An invalid value is refused before the RPC with "Choose a service from the list, or
+  leave Service requested as Not specified." (E2E B5).
+
+======================================================================
+7. TENANT SERVICES UI BEHAVIOUR   [TESTED]
+======================================================================
+- Log Request -> Transportation, after Destination: "Service requested (optional)".
+  - The first option is "Not specified" (value "", the default, always selectable).
+  - Then the organization's configured Services in canonical order, or all nine when none are configured.
+  - Labels come from SERVICE_TYPE_LABELS, the same as Request detail; no second list.
+- If the Services list cannot be read, only "Not specified" is offered, with a short note (pre-PR refinement, section
+  16). A failed read is never treated as "none configured". The Request can still be logged.
+- E2E (production build, fresh isolated database), 27/27:
+  - A1-A3: placement, label, nine options, default "Not specified".
+  - A4/A5: logging without a service -> NULL (as before); detail shows no service row.
+  - A6-A8: wheelchair is stored exactly; the request_logged event shape is unchanged; detail shows "Service requested:
+    Wheelchair transportation".
+  - A9: no Trip, Passenger, recurring arrangement or notification.
+  - A10: after a passenger link + acceptance (normal Operations steps), New Trip from that Request PRE-SELECTS
+    wheelchair "Yes" (existing behaviour). Opening it creates no Trip.
+  - A11: recurring_care is a label only (no recurring arrangement). A13: Airport transportation can be recorded.
+  - B1/B2: with Services = {dialysis}, the Admin AND the Dispatcher see only "Not specified" + Dialysis.
+  - B3: the Dispatcher logs Dialysis.
+  - B4: a canonical service outside the list, posted directly, is accepted (OD-S1 = A).
+  - B5: invalid posted values are refused with the staff message, and nothing is created.
+  - C1: the Services Settings page stays Admin-only (the Dispatcher is redirected to /operations).
+  - C2: the Admin still opens it.
+  - C3: the Dispatcher cannot change Services (ZW002).
+  - C4: a Driver cannot use Log Request (redirected to /driver).
+  - C5: Org B sees all nine (no leak of Org A's configuration).
+  - C6: no Plus object touched.
+  - A12: a newly opened Log Request starts at "Not specified".
+  - Harness notes: the first run failed A10 and A12.
+    - A10: the test Request had no passenger, and New Trip lists only Requests with an active passenger. This is an
+      existing rule, so the test now links one.
+    - A12: see section 12, item 1 (a pre-existing defect).
+
+======================================================================
+8. SECURITY REVIEW AND PRIVILEGE RESULTS   [TESTED]
+======================================================================
+- log_transportation_request:
+  - exactly one function, 15 args, SECURITY DEFINER, search_path pinned, owner postgres;
+  - EXECUTE authenticated only (PUBLIC / anon / service_role none);
+  - anon -> 42501; no user -> ZW001; Driver / inactive Dispatcher / foreign tenant -> ZW002 with nothing written;
+  - Admin and Dispatcher allowed; Org B in Org B works (S1 suite A1-A5, E1-E8).
+- get_organization_service_offerings (owner-approved):
+  - Admin and Dispatcher of the organization read identifiers only (result type text[]);
+  - Driver, inactive, no-membership and Platform Admin without membership -> ZW002; no user -> ZW001; anon -> 42501;
+  - Org B admin / dispatcher -> ZW002 for Org A, and the Org A dispatcher -> ZW002 for Org B (S1 suite S1-S5;
+    team_services SVC-7 / SVC-8).
+- set_organization_service_offerings is unchanged and Admin-only: Dispatcher -> ZW002 with nothing changed; Admin
+  works (S6, S8).
+- organization_service_offerings: RLS on, no policy, no client grant. A Dispatcher's SELECT -> 42501 (S7).
+- The Settings page stays Admin-only (requireOrganizationAdminAccess; E2E C1 / C2).
+- Privilege contract 0/29 (fresh and upgraded). rls_adversarial 33, security_definer_exposure 20,
+  client_privilege_surface 21, function_privilege 7: all pass.
+- Plus: conversion / rebooking still work; the duplicate guard (ZW004 already_converted), conversion-link immutability
+  (ZW004 conversion_link_immutable), attribution and history are intact (S1 suite G1-G6; P2-S4 E2E 31/31; R5-F1 E2E
+  19/19).
+No unresolved security issue.
+
+======================================================================
+9. DATABASE TEST COUNTS   [TESTED]
+======================================================================
+Fresh reset per suite (verified fresh), EVERY supabase/tests/*.sql: 65 suites, 2,307 PASS lines.
+- 64 suites pass, including:
+  - core_staff_request_service_type 50/50, core_intake_airport 24/24;
+  - request_mutation 39, request_mutation_privilege 23, request_mutation_atomicity 4, request_decision_workflow 60,
+    request_trip_passenger_integrity 11, request_recurring_care 42, recurring_trip_creation 24 (RTC-04 passed in this
+    run), create_trip 20;
+  - public_request_intake 42, website_* (all), team_services_operations 106;
+  - plus_conversion_rebooking 44, plus_request_attributions 73, plus_entitlement 150;
+  - rls_adversarial 33, privilege_contract 0/29.
+- request_decision_expand_compat_tests: 10 failures, NOT APPLICABLE at this head (expand-window-only by design, as
+  documented in NP-P2-S4-R2).
+Concurrency, all 26 scripts:
+- 24 pass, including plus_conversion_rebooking (11 races against the new Core function) and request_decision (21).
+- 2 known, pre-existing direct-lock harness failures: mutation CONCURRENCY-1 and request_lifecycle
+  REQUEST-CONCURRENCY-1 (identical since NP-P2-S3).
+
+======================================================================
+10. UNIT AND BROWSER E2E RESULTS   [TESTED]
+======================================================================
+- Unit 836/836 after the refinement (829 + 7 in log-request-options.test.mjs; 835 before the refinement). The new tests cover:
+  - nine-value parity across intake, Services settings and staff options;
+  - options with none, with some and with unknown configured values;
+  - "Not specified" first;
+  - parse rules;
+  - the error message;
+  - the action / page / form wiring.
+- TypeScript 0 errors.
+- ESLint 0 errors; the 107 warnings are in untracked .tmp-qa only.
+- next build succeeded (isolated build, and the dev rebuild afterwards).
+- Browser E2E, production build against a fresh isolated database:
+  - NEW NC-REQUEST-SERVICE-TYPE-S1 27/27, and 35/35 after the refinement (section 16);
+  - NP-P2-S4 conversion & rebooking 31/31; NP-P2-S4-R5-F1 19/19;
+  - P1-OPS-R1 decisions 52/52; P1-PILOT-R3 request / recurring care 57/57;
+  - NC-INTAKE-AIRPORT-S1 public route 19/19; S4C acquisition 27/27.
+
+======================================================================
+11. UPGRADE-REHEARSAL RESULTS   [TESTED]
+======================================================================
+See section 5:
+- 20261015140000 -> 20261017100000 applied with rc 0, in one transaction;
+- no destructive data change;
+- pre-existing rows byte-identical;
+- only the 15-argument function exists;
+- ACLs and search_path correct;
+- old callers, the Plus RPCs (fresh and long-lived sessions), intake and the Services rules all verified;
+- 8 suites pass on the upgraded database;
+- cleanup verified (0 leftover rows).
+
+======================================================================
+12. KNOWN LIMITATIONS AND UNRESOLVED FAILURES
+======================================================================
+1. PRE-EXISTING Core UX defect, not caused by S1 and NOT fixed (out of scope):
+   - On Log Request, "Log another request" keeps showing the "Request logged" view.
+   - Cause: formKey remounts an inner element, not the useActionState owner, so the success state persists. The code
+     is identical at HEAD.
+   - Workaround: navigate to Log Request again.
+   - Recommend a small separate fix, e.g. key the form component from its page, or reset via navigation.
+2. Plus-created Requests still store service_type NULL until S2 (by design).
+3. The known harness issues listed in section 9: expand-compat not applicable, and the 2 direct-lock concurrency
+   scripts.
+4. NOT TESTED in production: everything. This phase is local only.
+
+======================================================================
+13. CONTROLLED COMMIT INVENTORY (proposed; nothing staged)
+======================================================================
+On a NEW branch from main (e.g. nc-request-service-type-s1). CONFIRMED: 4 new S1 files (incl. this report) + 11
+modified = 15 paths; 16 with the optional S0 audit report:
+  NEW  supabase/migrations/20261017100000_core_staff_request_service_type.sql
+  NEW  supabase/tests/core_staff_request_service_type_tests.sql
+  NEW  src/lib/operations/log-request-options.test.mjs
+  NEW  docs/reports/NC-REQUEST-SERVICE-TYPE-S1-core-implementation.txt
+  OPT  docs/reports/NC-REQUEST-SERVICE-TYPE-S0-architecture-audit.txt   (untracked; the optional 16th path, recommended)
+  MOD  the 11 files in section 3
+EXCLUDE:
+- .tmp-qa/ (incl. nc-request-service-type-s1-e2e.mjs) and screens;
+- the other untracked reports (incl. NP-P2-S4-R4 / R5, owner's choice);
+- scratchpad material.
+
+======================================================================
+14. PRODUCTION RELEASE CHECKLIST (owner-executed; NOT performed)   [REQUIRES OWNER ACTION]
+======================================================================
+ 1. Commit on a new branch; push with the nemryn account; open a PR to main.
+ 2. CI / Vercel preview green; review the diff against section 13.
+ 3. Confirm a production backup / recovery point immediately before applying.
+ 4. `supabase projects list` includes wyocbivzgrbekuyqdfts. `supabase migration list --linked`: head 20261015140000.
+ 5. Dry run: `supabase db push --dry-run` lists ONLY 20261017100000.
+ 6. Apply the migration FIRST (after approval). The deployed app (869c794) keeps working, because it never sends
+    p_service_type.
+ 7. Verify (read-only):
+    - exactly 1 log_transportation_request, with the 15-argument identity;
+    - EXECUTE authenticated only; SECURITY DEFINER; search_path pinned;
+    - get_organization_service_offerings admits the Dispatcher (body diff), with its ACL unchanged;
+    - privilege contract 0/29 (scripts/verify-db-privileges.sh production);
+    - the Plus RPCs present and unchanged.
+ 8. Deploy main to Vercel Production; confirm the build id equals the merge commit.
+ 9. Fictional smoke on the "Nemryn Pilot Simulation" tenant (owner approval):
+    - log one Request as the SIM Admin with Service requested = Dialysis transportation;
+    - verify it shows on Request detail, is pending, and has no Trip;
+    - optionally open Log Request as the SIM Dispatcher to see the list.
+10. DECLINE the smoke Request through the Request Hub (note "S1 production smoke test — fictional request"). Never
+    delete it; keep the audit history.
+Rollback:
+- BEFORE any staff Request stores a service: a reviewed reverse migration recreating the 14-argument function and the
+  Admin-only read.
+- AFTER: forward-fix only. A stored service is legitimate data.
+- ORDER IS CRITICAL: the new app sends p_service_type, which PostgREST rejects unless the 15-argument function exists.
+  Migration first, then the app.
+
+======================================================================
+15. S1 READINESS VERDICT
+======================================================================
+S1 IS READY for a controlled commit and PR, on owner review.
+- IMPLEMENTED and TESTED locally:
+  - the optional staff service type (nine canonical values, strict validation, NULL by default);
+  - a one-function migration with no overload and no data change;
+  - the owner-approved, narrowly scoped Dispatcher read of Services;
+  - the Log Request field with the tenant list.
+- Backward compatibility is proven: old callers, the Plus RPCs including the plan-cache case, intake, and historic
+  rows byte-identical.
+- Security and privilege contracts hold.
+- REQUIRES OWNER ACTION: commit on a new branch, PR / CI, and the production release in section 14 (migration first).
+- Open, separate:
+  - the pre-existing "Log another request" defect (section 12, item 1);
+  - S2 (Plus conversion / rebooking service type).
+
+======================================================================
+16. PRE-PR REFINEMENT: SERVICES LOAD FAILURE (2026-10-17)   [IMPLEMENTED, TESTED]
+======================================================================
+Issue: when the configured Services could not be read, Log Request showed all nine services, treating a failure like
+an organization with nothing configured.
+Change (UI only; no migration, RPC, Plus or S2 change):
+- src/lib/operations/log-request-options.ts:
+  - serviceRequestedOptions(canonical, labels, configured) now takes `configured: string[] | null`:
+    - a successful EMPTY list -> "Not specified" + all nine;
+    - a successful configured list -> "Not specified" + ONLY those (canonical order). A successful list with nothing
+      canonical is never widened to nine.
+    - null (could not be loaded) -> "Not specified" only.
+  - New SERVICE_OPTIONS_UNAVAILABLE_NOTE = "Available services couldn't be loaded. You can still log this request
+    without one."
+- src/app/operations/requests/new/page.tsx: a failed getServiceOfferings() becomes `null` (never []), and passes
+  serviceOptionsUnavailable to the form. No error detail is rendered or passed on.
+- src/components/operations/requests/LogRequestForm.tsx: the existing Select shows that note as its helpText only when
+  unavailable. Same component, same placement; no redesign.
+- Database behaviour unchanged (OD-S1 = A): authorized staff RPC calls still accept any valid canonical service.
+Exact tests run for the refinement:
+- Unit: log-request-options 7/7 and the full suite 836/836. They cover:
+  - a successful empty -> nine;
+  - a successful configured -> only those;
+  - a successful but non-canonical list -> "Not specified" only;
+  - null -> "Not specified" only;
+  - the exact note copy, with no error wording;
+  - the page maps a failure to null (never []) and flags the form;
+  - the form wires helpText.
+- TypeScript 0 errors; ESLint 0 errors; next build succeeded (isolated, then the dev rebuild).
+- Browser E2E (production build, fresh isolated database), NC-REQUEST-SERVICE-TYPE-S1 35/35, including the new section
+  D:
+  - D1/D2 (Admin AND Dispatcher): with the real Services read made to FAIL (isolated stack only: EXECUTE temporarily
+    revoked from authenticated, always restored in finally, and the restore verified), only "Not specified" plus the
+    note is shown. No error code, RPC name or other-organization data appears.
+  - D3: the Dispatcher still logs the Request without a service (NULL, pending).
+  - D4: a valid canonical service posted by authorized staff is still accepted (OD-S1 = A unchanged).
+  - D5: once readable, a successful empty configuration shows all nine and no note.
+  - Also re-confirmed: A2 (empty -> nine), B1/B2 (configured {dialysis} -> only Dialysis, for Admin and Dispatcher), C5
+    (tenant isolation), and the existing Log Request submissions A4-A13.
+- Regression browser E2E on the same build: NP-P2-S4 31/31, NP-P2-S4-R5-F1 19/19, P1-OPS-R1 52/52.
+- Isolated SQL, fresh reset each: core_staff_request_service_type 50/50, team_services_operations 106/106,
+  request_mutation 39/39, privilege contract 0/29.
+- Earlier S1 results (sections 5-11) are unaffected: the database and migration did not change.
+FINAL PR READINESS: READY.
+- The refinement is implemented and tested.
+- The inventory is confirmed: 15 paths, or 16 with the S0 audit.
+- Nothing staged, committed, pushed or deployed.
+- The production release follows section 14: migration FIRST, then the app.
+
+STOP. Local implementation, isolated testing and report complete. Nothing staged, committed, pushed, deployed or
+migrated in production.

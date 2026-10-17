@@ -3162,6 +3162,7 @@ export type Database = {
           p_requester_phone: string
           p_requester_relationship: string
           p_return_trip_needed: string
+          p_service_type?: string
           p_source: string
         }
         Returns: Database["public"]["CompositeTypes"]["request_creation_result"]

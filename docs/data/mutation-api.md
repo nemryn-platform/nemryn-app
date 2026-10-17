@@ -616,3 +616,23 @@ Tests:
 
 No Trip, Passenger, passenger link, assignment, recurring arrangement, payment or outbound message is ever created.
 
+
+## Core staff Request service type (NC-REQUEST-SERVICE-TYPE-S1)
+
+Migration `20261017100000_core_staff_request_service_type.sql`. No table, column or CHECK changes.
+
+### `log_transportation_request(..., p_service_type text default null) → request_creation_result`
+
+The same function, with one trailing optional parameter. It is replaced by DROP + CREATE: one function, no overload. The first 14 parameters, the authorization (Organization Admin / Dispatcher, otherwise ZW002), the validation, the pending-only INSERT and the `request_logged` event (`{source}` only) are unchanged.
+
+- Omitted, NULL, empty or whitespace-only `p_service_type` means not specified (NULL is stored).
+- Otherwise the value must be EXACTLY one of the nine canonical identifiers (`medical_appointment`, `dialysis`, `rehabilitation`, `hospital_discharge`, `recurring_care`, `senior_medical`, `wheelchair_transportation`, `other`, `airport_transportation`). It is never trimmed, case-folded or mapped from a label. Anything else raises ZW006 and writes nothing.
+- The organization's configured Services do **not** restrict staff-recorded Requests (owner decision OD-S1 = A). The Log Request form lists them.
+- Existing 14-argument callers keep working unchanged: the deployed app's named calls, and the positional calls inside `plus_convert_opportunity_to_request` / `plus_create_rebooking_request`, which keep storing NULL until the Plus follow-up.
+- Nothing else is created: no Trip, Passenger, recurring arrangement or notification. `recurring_care` is a label only.
+
+### `get_organization_service_offerings(p_organization_id) → text[]`
+
+The enabled canonical service identifiers (an empty array means never configured). Owner-approved with S1: an active **Organization Admin or Dispatcher** of the organization may read them, so the staff form can list them. It is read-only; `set_organization_service_offerings` stays Organization Admin only.
+
+Tests: `supabase/tests/core_staff_request_service_type_tests.sql` (rollback-only); `team_services_operations_tests.sql` SVC-7.
