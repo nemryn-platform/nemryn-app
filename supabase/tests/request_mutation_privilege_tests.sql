@@ -34,9 +34,9 @@ insert into public.request_events (organization_id, request_id, event_type, acto
 
 do $$
 begin
-  if has_function_privilege('authenticated', 'public.log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('anon', 'public.log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text)'::regprocedure, 'EXECUTE')
-     and not has_function_privilege('public', 'public.log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text)'::regprocedure, 'EXECUTE') then
+  if has_function_privilege('authenticated', 'public.log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('anon', 'public.log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text,text)'::regprocedure, 'EXECUTE')
+     and not has_function_privilege('public', 'public.log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text,text)'::regprocedure, 'EXECUTE') then
     raise notice 'REQ-PRIV log_transportation_request exposed-authenticated-only: PASS';
   else
     raise notice 'REQ-PRIV log_transportation_request exposed-authenticated-only: FAIL';

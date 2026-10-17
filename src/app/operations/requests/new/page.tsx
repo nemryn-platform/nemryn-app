@@ -2,6 +2,9 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getLogRequestFormData } from "@/lib/operations/log-request";
 import { LogRequestForm } from "@/components/operations/requests/LogRequestForm";
+import { getServiceOfferings } from "@/lib/operations/organization-services";
+import { serviceRequestedOptions } from "@/lib/operations/log-request-options";
+import { SERVICE_TYPE_LABELS, SERVICE_TYPE_VALUES } from "@/lib/public-intake/website-intake-core";
 
 /**
  * Internal Log Request (P1-E1-S2C) — fast demand capture for an
@@ -23,5 +26,16 @@ export default async function LogRequestPage() {
 
   const { passengers } = await getLogRequestFormData(organization.organizationId);
 
-  return <LogRequestForm passengers={passengers} />;
+  // NC-REQUEST-SERVICE-TYPE-S1 (OD-S1 = A): offer the organization's configured Services (Admins and Dispatchers may
+  // read them), or every canonical service when none are configured. A failed read is NOT "none configured": then only
+  // "Not specified" is offered, with a short note, and the Request can still be logged. No error detail is shown.
+  let configured: string[] | null;
+  try {
+    configured = await getServiceOfferings(organization.organizationId);
+  } catch {
+    configured = null;
+  }
+  const serviceOptions = serviceRequestedOptions(SERVICE_TYPE_VALUES, SERVICE_TYPE_LABELS, configured);
+
+  return <LogRequestForm passengers={passengers} serviceOptions={serviceOptions} serviceOptionsUnavailable={configured === null} />;
 }

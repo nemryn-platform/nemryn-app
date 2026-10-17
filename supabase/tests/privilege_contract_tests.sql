@@ -208,7 +208,7 @@ c_fn(sig, roles) as (values
   ('list_request_intake_integrations(uuid)', 'u'),
   ('list_staff_invites(uuid)', 'u'),
   ('list_team_members(uuid)', 'u'),
-  ('log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text)', 'u'),
+  ('log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text)', 'u'),
   ('pause_recurring_arrangement(uuid,uuid)', 'u'),
   ('platform_get_organization(uuid)', 'u'),
   ('platform_get_overview()', 'u'),

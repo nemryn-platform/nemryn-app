@@ -5,6 +5,8 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapLogRequestError, type LogRequestErrorCode } from "@/lib/operations/log-request-errors";
+import { parseServiceTypeInput } from "@/lib/operations/log-request-options";
+import { SERVICE_TYPE_VALUES } from "@/lib/public-intake/website-intake-core";
 
 export interface LogRequestActionState {
   status: "idle" | "success" | "error";
@@ -74,6 +76,12 @@ export async function logRequestAction(
   if (!returnTripNeeded || !source) {
     return { status: "error", errorCode: "INVALID_INPUT" };
   }
+  // NC-REQUEST-SERVICE-TYPE-S1: optional; read RAW (never trimmed into a valid value) and checked against the canonical
+  // set independently of the dropdown. Services do not restrict it (OD-S1 = A); the RPC re-validates.
+  const serviceType = parseServiceTypeInput(formData.get("serviceType"), SERVICE_TYPE_VALUES);
+  if (!serviceType.ok) {
+    return { status: "error", errorCode: "INVALID_SERVICE" };
+  }
 
   const pathname = await getCurrentPathname("/operations/requests/new");
   const organization = await requireOperationsAccess(pathname);
@@ -94,6 +102,7 @@ export async function logRequestAction(
     p_preferred_time: preferredTime ?? undefined,
     p_assistance_notes: assistanceNotes ?? undefined,
     p_additional_notes: additionalNotes ?? undefined,
+    p_service_type: serviceType.value ?? undefined,
   });
 
   if (error) {

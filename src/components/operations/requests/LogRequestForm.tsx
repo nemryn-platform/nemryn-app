@@ -16,7 +16,7 @@ import { AddPassengerDialog } from "@/components/operations/new-trip/AddPassenge
 import type { NewTripPassengerOption } from "@/lib/operations/new-trip-options";
 import { logRequestAction, type LogRequestActionState } from "@/app/operations/requests/new/actions";
 import { logRequestErrorMessage } from "@/lib/operations/log-request-errors";
-import { REQUESTER_RELATIONSHIP_OPTIONS, RETURN_TRIP_OPTIONS, SOURCE_OPTIONS, DEFAULT_SOURCE } from "@/lib/operations/log-request-options";
+import { REQUESTER_RELATIONSHIP_OPTIONS, RETURN_TRIP_OPTIONS, SOURCE_OPTIONS, DEFAULT_SOURCE, SERVICE_OPTIONS_UNAVAILABLE_NOTE, type SelectOption } from "@/lib/operations/log-request-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -24,6 +24,10 @@ const INITIAL_STATE: LogRequestActionState = { status: "idle" };
 
 export interface LogRequestFormProps {
   passengers: NewTripPassengerOption[];
+  /** "Service requested (optional)": "Not specified" first, then the organization's Services (NC-REQUEST-SERVICE-TYPE-S1). */
+  serviceOptions: SelectOption[];
+  /** The organization's Services could not be loaded: only "Not specified" is offered, with a short note. */
+  serviceOptionsUnavailable?: boolean;
 }
 
 /**
@@ -42,7 +46,7 @@ export interface LogRequestFormProps {
  * this same action). See docs/reports/p1-e1-s2c-internal-log-request.txt
  * §9 for the full reuse-vs-reimplement reasoning.
  */
-export function LogRequestForm({ passengers: initialPassengers }: LogRequestFormProps) {
+export function LogRequestForm({ passengers: initialPassengers, serviceOptions, serviceOptionsUnavailable = false }: LogRequestFormProps) {
   const [state, formAction, pending] = useActionState(logRequestAction, INITIAL_STATE);
 
   // Double-submit guard (log_transportation_request is deliberately
@@ -62,6 +66,7 @@ export function LogRequestForm({ passengers: initialPassengers }: LogRequestForm
   const [requesterEmail, setRequesterEmail] = useState("");
   const [pickupDescription, setPickupDescription] = useState("");
   const [destinationDescription, setDestinationDescription] = useState("");
+  const [serviceType, setServiceType] = useState("");
   const [preferredDate, setPreferredDate] = useState("");
   const [preferredTime, setPreferredTime] = useState("");
   const [returnTripNeeded, setReturnTripNeeded] = useState("");
@@ -99,6 +104,7 @@ export function LogRequestForm({ passengers: initialPassengers }: LogRequestForm
     setRequesterEmail("");
     setPickupDescription("");
     setDestinationDescription("");
+    setServiceType("");
     setPreferredDate("");
     setPreferredTime("");
     setReturnTripNeeded("");
@@ -233,6 +239,15 @@ export function LogRequestForm({ passengers: initialPassengers }: LogRequestForm
             placeholder="e.g. Emory Dialysis, 456 Clifton Rd, Atlanta, GA"
             value={destinationDescription}
             onChange={(e) => setDestinationDescription(e.target.value)}
+          />
+          <Select
+            label="Service requested (optional)"
+            name="serviceType"
+            options={serviceOptions}
+            value={serviceType}
+            onChange={(e) => setServiceType(e.target.value)}
+            helpText={serviceOptionsUnavailable ? SERVICE_OPTIONS_UNAVAILABLE_NOTE : undefined}
+            data-testid="log-request-service"
           />
           <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
             <Input

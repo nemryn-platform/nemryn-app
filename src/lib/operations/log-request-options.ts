@@ -46,6 +46,38 @@ export const SOURCE_OPTIONS: SelectOption[] = [
 /** The operationally-likeliest channel for an authenticated operator logging demand as it comes in — matches this form's own primary use case (phone call → Log Request), per the phase's own explicit recommendation. The operator can always change it. */
 export const DEFAULT_SOURCE = "phone";
 
+/**
+ * "Service requested (optional)" (NC-REQUEST-SERVICE-TYPE-S1). The canonical values and labels are passed in by the
+ * caller (SERVICE_TYPE_VALUES / SERVICE_TYPE_LABELS from website-intake-core), so this module keeps no second list.
+ * OD-S1 = A: list the organization's configured Services; when it has none configured (a SUCCESSFUL empty answer), list
+ * every canonical service. `configured = null` means the Services could NOT be loaded: that is never treated as "none
+ * configured", so only "Not specified" is offered (the Request can still be logged without a service). The first option
+ * is always "Not specified" (value ""), the default and always selectable. UI convenience only: the server action and
+ * log_transportation_request re-validate, and Services never restrict what the database accepts.
+ */
+export const SERVICE_NOT_SPECIFIED_LABEL = "Not specified";
+export const SERVICE_OPTIONS_UNAVAILABLE_NOTE = "Available services couldn't be loaded. You can still log this request without one.";
+
+export function serviceRequestedOptions(
+  canonical: readonly string[],
+  labels: Readonly<Record<string, string>>,
+  configured: readonly string[] | null,
+): SelectOption[] {
+  const shown = configured === null ? [] : configured.length === 0 ? canonical : canonical.filter((value) => configured.includes(value));
+  return [{ value: "", label: SERVICE_NOT_SPECIFIED_LABEL }, ...shown.map((value) => ({ value, label: labels[value] ?? value }))];
+}
+
+/**
+ * Posted serviceType -> the RPC value. Missing, empty or whitespace-only = not specified (null). Anything else must be
+ * EXACTLY a canonical value: never trimmed, case-folded or mapped from a label (mirrors the database rule).
+ */
+export function parseServiceTypeInput(raw: unknown, canonical: readonly string[]): { ok: true; value: string | null } | { ok: false } {
+  if (raw === null || raw === undefined) return { ok: true, value: null };
+  if (typeof raw !== "string") return { ok: false };
+  if (!/\S/.test(raw)) return { ok: true, value: null };
+  return canonical.includes(raw) ? { ok: true, value: raw } : { ok: false };
+}
+
 /** Looks up a value's label from one of these option lists (P1-E1-S2E) — Request Detail's own read-only display reuses the SAME lists Log Request's own Select controls already use, rather than declaring a second, parallel value→label mapping that could drift out of sync. Falls back to the raw value for any not-yet-seen value, never throws. */
 export function selectOptionLabel(options: SelectOption[], value: string): string {
   return options.find((option) => option.value === value)?.label ?? value;

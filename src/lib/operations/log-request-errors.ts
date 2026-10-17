@@ -15,13 +15,15 @@
  * finer-grained categories the RPC doesn't actually provide, matching
  * `new-trip-errors.ts`'s own "use actual RPC errors" discipline.
  */
-export type LogRequestErrorCode = "UNAUTHORIZED" | "ACCESS_UNAVAILABLE" | "INVALID_INPUT" | "UNKNOWN";
+export type LogRequestErrorCode = "UNAUTHORIZED" | "ACCESS_UNAVAILABLE" | "INVALID_INPUT" | "INVALID_SERVICE" | "UNKNOWN";
 
 const LOG_REQUEST_ERROR_MESSAGE: Record<LogRequestErrorCode, string> = {
   UNAUTHORIZED: "Your session is no longer valid. Sign in again.",
   ACCESS_UNAVAILABLE: "You don't have permission to log requests for this organization.",
   INVALID_INPUT:
     "Could not log this request. Check the requester details, pickup, destination, and any linked passenger, then try again.",
+  // NC-REQUEST-SERVICE-TYPE-S1: raised by the server action before the RPC (the database would answer ZW006)
+  INVALID_SERVICE: "Choose a service from the list, or leave Service requested as Not specified.",
   UNKNOWN: "Something went wrong. Try again.",
 };
 

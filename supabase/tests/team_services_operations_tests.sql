@@ -555,14 +555,20 @@ begin
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select public.set_organization_service_offerings(%L, null)', v_a)) = 'ZW006'
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select public.set_organization_service_offerings(%L, array[''DIALYSIS''])', v_a)) = 'ZW006'
     and (select count(*) from public.organization_service_offerings where organization_id = v_a) = 3);
-  perform pg_temp.report('SVC-7 (Dispatcher / Driver / inactive / no-membership / Platform Admin / anon cannot set or read offerings)',
+  perform pg_temp.report('SVC-7 (Dispatcher / Driver / inactive / no-membership / Platform Admin / anon cannot SET offerings; only Admin + Dispatcher may READ them (NC-REQUEST-SERVICE-TYPE-S1))',
     pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a2', format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = 'ZW002'
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a3', format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = 'ZW002'
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a5', format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = 'ZW002'
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000e1', format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = 'ZW002'
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000d1', format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = 'ZW002'
     and pg_temp.try_as('anon', null, format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = '42501'
-    and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a2', format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW002');
+    and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a2', format('select public.get_organization_service_offerings(%L)', v_a)) = 'OK'
+    and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a3', format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW002'
+    and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000a5', format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW002'
+    and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000e1', format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW002'
+    and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000d1', format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW002'
+    and pg_temp.try_as('authenticated', null, format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW001'
+    and pg_temp.try_as('anon', null, format('select public.get_organization_service_offerings(%L)', v_a)) = '42501');
   perform pg_temp.report('SVC-8 (cross-org: Org B admin cannot set/read Org A offerings; Org A admin cannot touch Org B; Org B stays unconfigured)',
     pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000b1', format('select public.set_organization_service_offerings(%L, array[''other''])', v_a)) = 'ZW002'
     and pg_temp.try_as('authenticated', '20000000-0000-0000-0000-0000000000b1', format('select public.get_organization_service_offerings(%L)', v_a)) = 'ZW002'

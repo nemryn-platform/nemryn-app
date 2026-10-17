@@ -1,0 +1,401 @@
+NC-REQUEST-SERVICE-TYPE-S0 -- STAFF REQUEST SERVICE TYPE: ARCHITECTURE & MIGRATION AUDIT
+Nemryn Core (+ the Nemryn Plus P2-S4 follow-up)
+Date: 2026-10-16
+Mode: READ-ONLY ANALYSIS AND IMPLEMENTATION PLANNING.
+- No source change, migration, data change, deploy or Git operation.
+- No branch switch, worktree, reset, stash or clean.
+Production access: read-only `supabase migration list --linked` and catalog-only SELECTs (no table rows).
+Legend: [VERIFIED] = checked in this audit with the evidence named. [RECOMMENDED] = proposal for S1 / S2.
+[DECISION] = needs the owner.
+
+======================================================================
+1. VERIFIED BASELINE
+======================================================================
+[VERIFIED]
+- Local checkout:
+  - branch np-p2-s4-r5-f1-link-ux, HEAD 59794bf "fix(plus): prevent editing immutable conversion links";
+  - 0 tracked changes;
+  - its tree equals origin/main.
+- origin/main = 869c794 "Merge pull request #11 from nemryn-platform/np-p2-s4-r5-f1-link-ux": R5-F1 MERGED
+  2026-10-16T22:26:30Z.
+  - Contents: attribution actions, RequestGrowthPanel, attribution-core (+ test), and the F1 report.
+- Production app:
+  - GitHub Production deployment 7130829302, sha 869c794, status success;
+  - the live https://app.nemryn.com/sign-in embeds build id 869c7947c6dd.
+- Production database (wyocbivzgrbekuyqdfts):
+  - migration list 86/86 with 0 mismatches;
+  - 20261015135000 (Core airport intake) applied; 20261015140000 (Plus P2-S4) applied; head 20261015140000.
+
+======================================================================
+2. CURRENT RPC SIGNATURE AND CALLER INVENTORY
+======================================================================
+[VERIFIED] public.log_transportation_request: defined ONCE, in 20260916100000_request_mutation_foundation.sql
+(D). There is no later redefinition, and the production body md5 14e12fea... equals the repository (R4 diff and this
+audit).
+- Signature (identity):
+  log_transportation_request(uuid, text, text, text, text, text, text, text, text, uuid, date,
+                             time without time zone, text, text)
+- Arguments, in order:
+  1. p_organization_id uuid
+  2. p_requester_name text
+  3. p_requester_relationship text
+  4. p_requester_phone text
+  5. p_pickup_description text
+  6. p_destination_description text
+  7. p_return_trip_needed text
+  8. p_source text
+  9. p_requester_email text DEFAULT NULL
+  10. p_passenger_id uuid DEFAULT NULL
+  11. p_preferred_date date DEFAULT NULL
+  12. p_preferred_time time DEFAULT NULL
+  13. p_assistance_notes text DEFAULT NULL
+  14. p_additional_notes text DEFAULT NULL
+- Returns public.request_creation_result (request_id uuid, organization_id uuid, state text, created boolean).
+- LANGUAGE plpgsql, VOLATILE, SECURITY DEFINER, owner postgres, SET search_path = public, pg_temp.
+- ACL {postgres=X, authenticated=X}: no PUBLIC, anon or service_role. There is 1 overload only.
+- Body:
+  - Authorization: ZW001 if auth.uid() is null. Otherwise has_org_role(p_organization_id, {organization_admin,
+    dispatcher}), else ZW002 not_found (Driver / inactive / foreign are indistinguishable). RLS is not relied on:
+    SECURITY DEFINER with an explicit role check.
+  - Validation (all ZW006):
+    - requester_name trimmed, 1-200;
+    - relationship in (self, family, caregiver, facility_coordinator, other);
+    - phone trimmed, 1-50;
+    - email at most 320;
+    - pickup / destination trimmed, 1-2000;
+    - return_trip in (yes, no, not_sure);
+    - source in (phone, facility, email, web, other);
+    - notes at most 4000;
+    - optional passenger must be an active passenger of the same organization.
+  - Side effects:
+    - ONE INSERT into transportation_requests with state hard-coded 'pending'; service_type is NOT set (NULL);
+    - ONE request_events row request_logged {source}.
+    - No notification_events: there is no trigger, and a staff-logged Request enqueues nothing (R5 D3 also observed
+      0).
+    - No Trip, Passenger, recurring arrangement or idempotency (non-idempotent by design).
+- Triggers on transportation_requests: only prevent_organization_id_change and set_updated_at. None on
+  request_events.
+
+Callers:
+- Database [VERIFIED; production pg_proc prosrc scan]: exactly two, both Nemryn Plus P2-S4, both POSITIONAL with 14
+  arguments:
+  - plus_convert_opportunity_to_request (20261015140000 line 215);
+  - plus_create_rebooking_request (line 308).
+  The other 12 migrations that mention the name only cite it in comments ("IDENTICAL bounds to
+  log_transportation_request") or list its signature for grants (20260921110000, historical).
+- Application [VERIFIED]: exactly one, src/app/operations/requests/new/actions.ts (Core "Log Request"), calling
+  through PostgREST with NAMED arguments. Other src mentions are comments.
+- Generated types: src/lib/supabase/database.types.ts declares the 14 named args.
+- Tests that hard-code the 14-argument signature:
+  - supabase/tests/privilege_contract_tests.sql:211;
+  - supabase/tests/request_mutation_privilege_tests.sql:37-39;
+  - supabase/tests/support/emulate_production_acl_2026-09-21.sql:381-384. This is a HISTORICAL P1-SEC-01 snapshot,
+    not a suite; leave it unchanged.
+  Suites that call it by name with named or positional args:
+  - request_mutation (15), request_mutation_atomicity (9), trip_details_update (3), request_decision_workflow (2),
+    public_request_intake (3), plus_entitlement (1), plus_conversion_rebooking (4).
+
+======================================================================
+3. FUNCTION DEPENDENCY ANALYSIS
+======================================================================
+[VERIFIED] Production catalog:
+- pg_depend dependents on the function: NONE (no view, rule, default, trigger or constraint references it).
+- views / rules calling it: none.
+- Its own dependencies: type request_creation_result, plpgsql, schema public.
+- PL/pgSQL call sites are not tracked in pg_depend. The two Plus RPCs resolve the name at EXECUTION time, so a DROP
+  without CASCADE succeeds; they must find a compatible function the next time they run.
+- Event triggers present: pgrst_ddl_watch (ddl_command_end) and pgrst_drop_watch (sql_drop). PostgREST reloads its
+  schema cache after DDL automatically.
+- Other functions already taking p_service_type: _create_public_request, submit_public_transportation_request,
+  submit_public_form_request, plus_create_opportunity, plus_update_opportunity. There is no name clash.
+Consequences [VERIFIED by PostgreSQL rules, to be proven in S1 tests]:
+- CREATE OR REPLACE cannot add a parameter (it changes the identity signature), so DROP + CREATE is required.
+- Keeping the old 14-argument function AND adding a 15-argument one with `p_service_type default null` would make
+  every 14-argument call (PostgREST named, and the two positional Plus calls) match BOTH overloads: "function ... is
+  not unique". The repository's own precedent (20260924090000 EXPAND notes) records exactly this hazard.
+  => NO overload.
+- A trailing parameter WITH a default keeps every existing call valid: named calls without p_service_type, and the
+  two positional 14-argument Plus calls.
+
+======================================================================
+4. RECOMMENDED MIGRATION STRATEGY
+======================================================================
+[RECOMMENDED] One Core migration, e.g. 20261017100000_core_staff_request_service_type.sql (timestamp after
+20261015140000), in ONE transaction (the CLI wraps each migration file):
+  1. DROP FUNCTION public.log_transportation_request(uuid, text, text, text, text, text, text, text, text, uuid,
+     date, time, text, text). Exact signature, NO CASCADE: it must fail loudly if anything unexpected depends on it.
+  2. CREATE FUNCTION public.log_transportation_request(<the same 14 parameters, same names, types, order and
+     defaults>, p_service_type text DEFAULT NULL)
+     - Same RETURNS, LANGUAGE, SECURITY DEFINER and SET search_path = public, pg_temp.
+     - The body is the existing body VERBATIM, plus:
+       - v_service_type := nullif(btrim(p_service_type), ''), so '' is treated as omitted;
+       - if not null and not in the 9 values (explicit list, the established defensive-duplication style, identical
+         to _create_public_request) -> ZW006;
+       - [DECISION OD-S1] tenant Services rule (section 6);
+       - INSERT adds service_type = v_service_type.
+     - The request_events metadata is UNCHANGED ({source} only).
+  3. COMMENT ON FUNCTION (new signature): the existing comment plus the optional service_type.
+  4. REVOKE ALL ... FROM public, anon, service_role; GRANT EXECUTE ... TO authenticated. The ACL is identical to
+     today, and every SECURITY DEFINER keeps search_path.
+  5. NOTIFY pgrst, 'reload schema' (belt and braces; the event triggers already do it).
+- The transaction is atomic: other sessions see either the old or the new function, never neither.
+  - A call already executing finishes on its cached body.
+  - A Plus RPC's cached plan is invalidated by the pg_proc change; S1 must prove this with a same-session test.
+- No table, column, CHECK or data change: transportation_requests.service_type and its 9-value CHECK already exist.
+  NO existing row is rewritten.
+- Rollback before release: DROP the 15-argument function and CREATE the 14-argument original (file 20260916100000
+  body) in one transaction. Safe because the column stays.
+- After release: forward-fix only. Requests may by then carry staff-chosen service types, which are legitimate data.
+
+======================================================================
+5. SERVICE-TYPE CONTRACT AND VALIDATION
+======================================================================
+[VERIFIED] Where the nine values live:
+| Place | Values | Note |
+|-------|--------|------|
+| transportation_requests_service_type_check (DB) | NULL + 9 (incl. airport_transportation) | authority |
+| organization_service_offerings_service_type_check (DB) | 9 (NOT NULL) | tenant Services |
+| _create_public_request (website intake) | explicit 9 + tenant Services rule | ZW006 |
+| website_request_forms / _publications services CHECKs (DB) | 8, no airport | BY DESIGN (NC-INTAKE-AIRPORT-S1: hosted form does not offer Airport; documented in website-requests-core.ts:328) |
+| plus_opportunities_service_type_check (DB) | NULL + 8, no airport | Plus decision (P2-S4 R2/R3) |
+| src/lib/public-intake/website-intake-core.ts SERVICE_TYPE_VALUES / SERVICE_TYPE_LABELS | 9 + labels | the label source for Request detail |
+| src/lib/operations/organization-services-core.ts SERVICE_OFFERING_OPTIONS | 9 | Services settings |
+| src/lib/plus/opportunities-core.ts SERVICE_TYPES | 8 (parity test: Core minus airport) | Plus |
+| database.types.ts | service_type: string (no enum) | — |
+| Staff Log Request form, log-request-options.ts | NO service option today | the gap |
+[RECOMMENDED] Contract for log_transportation_request.p_service_type:
+- optional;
+- NULL, omitted or '' (after btrim) -> NULL stored, exactly as today;
+- otherwise exactly one of the 9 canonical values (case-sensitive, no remapping, no aliasing; "airport" or
+  "Airport Transportation" are refused);
+- invalid -> ZW006 invalid_input (the generic code, with no oracle about tenant offerings).
+- App options derive from SERVICE_TYPE_VALUES / SERVICE_TYPE_LABELS, the same labels as Request detail.
+- Unit parity tests: the staff options equal SERVICE_TYPE_VALUES equal SERVICE_OFFERING_OPTIONS. SQL tests: the
+  function's explicit list equals the CHECK list (as core_intake_airport_tests does for intake).
+
+======================================================================
+6. TENANT SERVICES POLICY FINDINGS
+======================================================================
+[VERIFIED]
+- Website intake enforces Services: if the organization has ANY configured offering, a supplied service must be one
+  of them (ZW006). No offerings configured means every canonical value is accepted.
+- Staff creation (log_transportation_request) has no service today, so it has no Services rule.
+- Plus opportunities accept any of the 8 regardless of Services.
+[DECISION OD-S1] Should staff-created Requests be limited by the organization's Services setting?
+  Option A (RECOMMENDED):
+  - The database validates the closed set ONLY.
+  - The staff UI LISTS the organization's enabled Services (or all 9 when none are configured), so the normal path
+    respects Services, without the database refusing a staff record.
+  - Rationale:
+    - Services governs what the public may request.
+    - Staff record what a customer actually asked for on the phone.
+    - A hard database rule would make a Plus conversion FAIL whenever the opportunity's service is not currently
+      offered (S2), which is a confusing failure for an internal record.
+  Option B: the database enforces the same rule as intake for staff, too.
+  - Strictest and consistent with intake.
+  - Requires S2 to map a non-offered opportunity service to NULL (silent loss) or to refuse the conversion. Needs a
+    UX decision.
+  Do not silently change either behaviour; record the owner's choice before S1.
+Related finding, not changed:
+- website_request_forms / _publications CHECKs allow only 8 services (no airport). This is deliberate per
+  NC-INTAKE-AIRPORT-S1 and is not part of this slice.
+
+======================================================================
+7. CORE UI IMPACT
+======================================================================
+[VERIFIED] The only staff workflow that calls the function is Operations -> Requests -> "Log Request":
+- src/app/operations/requests/new/page.tsx + src/components/operations/requests/LogRequestForm.tsx +
+  src/app/operations/requests/new/actions.ts;
+- FormSections: Requester / Transportation / Passenger / Details (source) / Notes.
+- Request detail (RequestDetailsPanel) ALREADY shows "Service requested" with SERVICE_TYPE_LABELS when not NULL, and
+  hides the row when NULL.
+- The Request Hub list does not show service (unchanged).
+[RECOMMENDED] S1 UI, existing components only, no redesign:
+- Transportation section: one optional <Select label="Service requested (optional)" name="serviceType"> after
+  Destination.
+  - Placeholder "Not specified" (value "") is the DEFAULT. Nothing is preselected and nothing is inferred from other
+    fields.
+  - Options: the organization's enabled Services (labels from SERVICE_TYPE_LABELS), or all 9 when none are
+    configured (OD-S1 A).
+  - Offerings come from the existing getOrganizationServiceOfferings (organization-services.ts) on the server page.
+- Action: read "serviceType", pass p_service_type only when non-empty, and do a client-side closed-set check for a
+  clean message. The database stays the authority; ZW006 maps through the existing log-request-errors.
+- Downstream (EXISTING behaviour, no new feature):
+  - New Trip and recurring prefill (new-trip-options.ts, request-recurring-prefill-core.ts) already pre-select the
+    wheelchair requirement when service_type = wheelchair_transportation. Staff-chosen wheelchair Requests start
+    benefiting automatically.
+  - "recurring_care" is a label only: it does NOT create a recurring arrangement or schedule (staff recurring
+    fields are not part of this RPC).
+  - No calendar, dispatch or pricing behaviour.
+
+======================================================================
+8. PLUS S2 INTEGRATION DESIGN (after S1 is released)
+======================================================================
+[VERIFIED]
+- plus_convert_opportunity_to_request loads `v_opp public.plus_opportunities%rowtype`, so v_opp.service_type is
+  already in hand.
+- plus_create_rebooking_request has no service input.
+- BookingRequestDialog, booking-core and booking actions have no service field.
+- plus_opportunities allows NULL + 8 (no airport).
+[RECOMMENDED] Migration 2026101x..._plus_booking_service_type.sql (after the S1 migration):
+- Conversion: CREATE OR REPLACE plus_convert_opportunity_to_request with the SAME signature.
+  - The only body change: pass v_opp.service_type as the 15th argument of log_transportation_request (named or
+    positional).
+  - NULL stays NULL. No new parameter. Entitlement, authorization, lock order, idempotency, replay, attribution and
+    audit are byte-identical otherwise.
+  - With OD-S1 A this never fails because of Services. With B, decide the behaviour first.
+- Rebooking: DROP + CREATE plus_create_rebooking_request with ONE trailing `p_service_type text default null`. Same
+  pattern and the same no-overload reasoning as S1.
+  - Pass it through to log_transportation_request; validation is Core's.
+  - Replay semantics UNCHANGED: the same key + contact returns the original Request whatever service the retry
+    carries (key identity, as today).
+  - Re-grant authenticated only, and update the privilege contract signature.
+- App:
+  - Dialog, rebook mode: an optional "Service requested" Select (default "Not specified").
+  - Dialog, convert mode: show the opportunity's service read-only in Review ("Service: Dialysis transportation" or
+    "Not specified").
+  - booking-core: closed-set check.
+  - booking actions: pass p_service_type (rebook only).
+  - database.types.
+[DECISION OD-S3] The rebooking selector creates a CORE Request, so it could offer Core's 9 values, including Airport
+transportation, or match Plus's 8.
+- Recommend: Core's 9, filtered by Services under OD-S1 A. It does NOT add airport to Plus OPPORTUNITIES.
+- Expanding plus_opportunities to airport_transportation remains a SEPARATE Plus decision (OD-S4); untouched here.
+Out of scope for S2: P2-S4 entitlement, attribution, idempotency, concurrency and authorization (unchanged), and
+P2-S5 Quotes.
+
+======================================================================
+9. SECURITY AND BACKWARD-COMPATIBILITY RISKS
+======================================================================
+1. Accidental overload -> "not unique" for every existing caller. Mitigation: DROP + CREATE in one file, plus a test
+   that exactly 1 function exists.
+2. Lost grants after DROP. Mitigation: explicit REVOKE / GRANT in the migration; the privilege contract (signature
+   updated) and request_mutation_privilege_tests must pass.
+3. Deploy ordering. The NEW app sends p_service_type, and PostgREST rejects an unknown named argument (PGRST202).
+   Mitigation: MIGRATION FIRST, then the app.
+   - The deployed app (869c794) does not send it and keeps working after the migration (default NULL).
+4. Plus RPCs (positional 14 args) after the change. Mitigation: S1 SQL tests run conversion and rebooking after the
+   migration, including in a session that ran them BEFORE (plan-cache invalidation).
+5. Validation drift between the explicit list and the CHECK. Mitigation: a parity test; the database CHECK remains
+   the final guard.
+6. Tenant Services semantics. Mitigation: owner decision OD-S1 before S1.
+7. Information leakage. ZW006 stays generic; the cross-tenant role check is unchanged (ZW002 for foreign / driver /
+   inactive).
+8. Existing rows. No UPDATE or backfill. Historic staff Requests stay NULL; no inference from notes.
+9. PD-10 / PD-11 open: service is an operational category, not health data. The Log Request help text must not
+   invite medical detail. Fictional data in tests only.
+
+======================================================================
+10. EXACT PROPOSED FILE INVENTORY
+======================================================================
+S1: NC-REQUEST-SERVICE-TYPE (Core)
+  NEW  supabase/migrations/20261017100000_core_staff_request_service_type.sql   (timestamp illustrative; must sort after 20261015140000)
+  NEW  supabase/tests/core_staff_request_service_type_tests.sql
+  MOD  supabase/tests/privilege_contract_tests.sql            (signature line 211 -> 15 args)
+  MOD  supabase/tests/request_mutation_privilege_tests.sql    (lines 37-39 signature)
+  MOD  src/lib/supabase/database.types.ts                     (p_service_type?: string)
+  MOD  src/app/operations/requests/new/actions.ts             (read / validate / pass serviceType)
+  MOD  src/app/operations/requests/new/page.tsx               (load Services offerings for the options)
+  MOD  src/components/operations/requests/LogRequestForm.tsx  (optional Select in Transportation)
+  MOD  src/lib/operations/log-request-options.ts              (service options from SERVICE_TYPE_VALUES / LABELS)
+  NEW  src/lib/operations/log-request-options.test.mjs        (or extend organization-services-core.test.mjs: parity)
+  MOD  docs/data/mutation-api.md, docs/security/database-privilege-contract.md (+ the Core request product doc
+       section if present)
+  NEW  docs/reports/NC-REQUEST-SERVICE-TYPE-S1-*.txt
+  UNCHANGED: supabase/tests/support/emulate_production_acl_2026-09-21.sql (historical snapshot).
+S2: NP-P2-S4.1 Plus booking service type
+  NEW  supabase/migrations/2026101x..._plus_booking_service_type.sql
+  MOD  supabase/tests/plus_conversion_rebooking_tests.sql (+ service cases), supabase/tests/privilege_contract_tests.sql (rebooking signature)
+  MOD  src/lib/supabase/database.types.ts, src/app/operations/growth/booking/actions.ts, src/lib/plus/booking-core.ts (+ .test.mjs),
+       src/components/growth/BookingRequestDialog.tsx
+  MOD  docs/product/plus-product-spec.md, docs/product/plus-domain-model.md, docs/data/mutation-api.md, docs/security/database-privilege-contract.md
+  NEW  docs/reports/NP-P2-S4-1-booking-service-type.txt
+
+======================================================================
+11. REGRESSION TEST PLAN (isolated NemrynS1Iso stack, fictional seed data only)
+======================================================================
+S1 SQL (new core_staff_request_service_type_tests.sql):
+- Signature:
+  - exactly 1 log_transportation_request;
+  - identity = 14 args + text;
+  - p_service_type DEFAULT NULL;
+  - SECURITY DEFINER; search_path pinned;
+  - EXECUTE authenticated only (anon, PUBLIC, service_role none).
+- Each of the 9 values -> pending Request with that service_type; the request_logged event is unchanged ({source}).
+- NULL, omitted (14 named args) and '' -> service_type NULL; the Request is otherwise byte-identical to today's.
+- Invalid values ("airport", "Airport Transportation", "limousine", 'dialysis ' with spaces per the btrim rule,
+  wrong case) -> ZW006 and nothing inserted.
+- OD-S1 per the decision:
+  - A: an organization with Services {dialysis} can still record wheelchair by staff;
+  - B: refused with ZW006.
+- Authorization: Driver / inactive / foreign organization -> ZW002; anonymous -> ZW001; cross-tenant
+  p_organization_id -> ZW002 and nothing inserted.
+- Existing positional 14-argument caller compatibility: plus_convert_opportunity_to_request and
+  plus_create_rebooking_request succeed after the migration (service NULL in S1). This includes the same-session
+  before / after plan-cache case.
+- Unchanged invariants: state pending; source as passed; organization; no Trip / Passenger link / recurring
+  arrangement; no notification_events; existing rows untouched (checksum before / after).
+- Parity: the function's explicit list equals transportation_requests_service_type_check.
+Re-run (fresh reset each):
+- request_mutation, request_mutation_privilege, request_mutation_atomicity, request_decision_workflow,
+  request_trip_passenger_integrity, request_recurring_care, trip_details_update;
+- create_trip*, public_request_intake, core_intake_airport, website_intake_acquisition, website_*,
+  team_services_operations;
+- plus_conversion_rebooking, plus_request_attributions, plus_entitlement;
+- privilege_contract (0 violations), rls_adversarial, security_definer_exposure, client_privilege_surface,
+  function_privilege;
+- request_decision_concurrency, request_lifecycle (known harness issue), plus_conversion_rebooking_concurrency.
+Upgrade: production head 20261015140000 seeded with Requests of every service + NULL, website intake, Services and
+Plus data -> apply S1. Assert:
+- function / ACL / search_path;
+- existing rows unchanged (md5);
+- old-style named calls work;
+- the Plus RPCs work.
+App:
+- unit (options parity, action mapping);
+- tsc, ESLint, next build;
+- browser E2E: Log Request with no service, with a service and with each Services configuration; Request detail
+  shows "Service requested"; the wheelchair choice pre-selects in New Trip (existing behaviour); a Dispatcher can,
+  a Driver cannot; Org B isolation;
+- the existing P1-OPS-R1, P1-PILOT-R3, S4C, NC-INTAKE-AIRPORT and P2-S4 E2E suites unchanged.
+S2:
+- plus_conversion_rebooking + service cases: conversion carries the opportunity's service (each of the 8 + NULL);
+  rebooking with each Core value / NULL / invalid -> ZW006;
+- replay with a different service returns the original;
+- signature / ACL of the new rebooking function;
+- concurrency script unchanged and passing;
+- E2E: the dialog review shows the service; the rebooking select; the R3 / OD-6 and F1 suites unchanged.
+
+======================================================================
+12. RECOMMENDED RELEASE SEQUENCE
+======================================================================
+1. Owner decisions OD-S1 .. OD-S4 (section 13).
+2. S1 implementation on a branch from main; isolated tests (section 11); PR; review; merge.
+3. Release S1:
+   - backup / recovery point;
+   - `db push --dry-run` lists ONLY the S1 migration;
+   - apply the migration FIRST (the old app keeps working);
+   - post-checks: 1 function, the 15-argument identity, ACL, the privilege contract;
+   - then deploy the app;
+   - synthetic smoke on Pilot Simulation: log one Request with a service, verify, then DECLINE it.
+4. S2 implementation (Plus) on a new branch; tests; PR; merge.
+5. Release S2: migration first (the conversion body and the rebooking signature), then the app; smoke conversion +
+   rebooking with a service on Pilot Simulation, then Decline.
+Each step: no destructive SQL. Rollback before first use; forward-fix after.
+
+======================================================================
+13. OWNER DECISIONS NEEDED BEFORE IMPLEMENTATION
+======================================================================
+OD-S1 (required before S1): staff-created Requests and the tenant Services setting.
+- Recommend A: the database checks the closed set only; the UI lists enabled Services.
+- B: the database enforces Services, as intake does.
+OD-S2 (confirm): the selector is OPTIONAL with default "Not specified". No backfill of historic Requests, and no
+inference from notes.
+OD-S3 (required before S2): the rebooking selector offers Core's 9 values (including Airport transportation,
+filtered by Services) or Plus's 8. Recommend Core's 9.
+OD-S4 (separate, not in S1 / S2): whether Plus OPPORTUNITIES should allow airport_transportation. A Plus product
+decision with its own migration (plus_opportunities CHECK, SERVICE_TYPES, parity test).
+Noted, no decision needed now: the hosted website request form intentionally offers 8 services (no airport), per
+NC-INTAKE-AIRPORT-S1.
+
+STOP. Architecture audit complete. No source, migration, data or Git change.
