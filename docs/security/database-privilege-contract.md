@@ -122,6 +122,10 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
   * `plus_update_request_attribution` is replaced with the same signature and grants.
   * Constraints added: `plus_request_attributions_method_shape_check` and the partial unique `plus_request_attributions_one_conversion_idx`.
   * No Core object is changed.
+* **NP-P2-S4.1-S2 changes (Plus):**
+  * `plus_convert_opportunity_to_request`: same signature and grants (CREATE OR REPLACE); it now passes the opportunity's own `service_type` to Core.
+  * `plus_create_rebooking_request` gains a trailing `p_service_type text DEFAULT NULL`. It is replaced by DROP + CREATE (exact 12-argument identity, no CASCADE): one function, no overload. Contract signature: `(uuid,uuid,text,text,text,text,text,text,date,time without time zone,text,text,text)`. It stays SECURITY DEFINER with `search_path` pinned, and EXECUTE is `authenticated` only.
+  * No table, column, CHECK, policy or table grant changes.
 * **NC-REQUEST-SERVICE-TYPE-S1 changes (Core):**
   * `log_transportation_request` gains a trailing `p_service_type text DEFAULT NULL`. It is replaced by DROP + CREATE (exact 14-argument identity, no CASCADE): ONE function remains, never an overload. Its new contract signature is `(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text)`. It stays SECURITY DEFINER with `search_path` pinned, and EXECUTE is `authenticated` only (no PUBLIC, `anon` or `service_role`).
   * `get_organization_service_offerings` (owner-approved, read-only) now admits an active Organization Admin OR Dispatcher of that organization. The signature, grant and SECURITY DEFINER are unchanged, and it returns only the enabled service identifiers. `set_organization_service_offerings` stays Organization Admin only, and `organization_service_offerings` keeps RLS on, with no policy and no client grant.

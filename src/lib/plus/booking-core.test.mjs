@@ -116,3 +116,30 @@ test("OD-6: the dialog reads ONLY the contact's stored flag; both pages pass it 
   // the flag never changes eligibility: conversion gating does not mention it
   assert.doesNotMatch(oppPage.match(/const canConvert = .*/)[0], /doNotContact/i);
 });
+
+test("NP-P2-S4.1-S2: rebooking passes a validated staff service choice; conversion never takes one from the form", () => {
+  assert.equal(b.BOOKING_SERVICE_ERROR, "Choose a service from the list, or leave Service requested as Not specified.");
+  const actions = readFileSync(new URL("../../app/operations/growth/booking/actions.ts", import.meta.url), "utf8");
+  const rebook = actions.slice(actions.indexOf("export async function rebookContactAction"));
+  const convert = actions.slice(actions.indexOf("export async function convertOpportunityAction"), actions.indexOf("export async function rebookContactAction"));
+  assert.match(rebook, /parseServiceTypeInput\(formData\.get\("serviceType"\), SERVICE_TYPE_VALUES\)/);
+  assert.match(rebook, /errors: \{ serviceType: BOOKING_SERVICE_ERROR \}/);
+  assert.match(rebook, /p_service_type: service\.value \?\? undefined/);
+  assert.doesNotMatch(convert, /serviceType|p_service_type/, "conversion uses the opportunity's own service in the database; the form cannot override it");
+});
+
+test("NP-P2-S4.1-S2: dialog + pages -- rebooking select (configured / all nine / unavailable), conversion review is read-only", () => {
+  const dialog = readFileSync(new URL("../../components/growth/BookingRequestDialog.tsx", import.meta.url), "utf8");
+  assert.match(dialog, /label="Service requested \(optional\)"/);
+  assert.match(dialog, /mode === "rebook" && \(\s*<Select\s+label="Service requested \(optional\)"/);
+  assert.match(dialog, /helpText=\{serviceOptionsUnavailable \? SERVICE_OPTIONS_UNAVAILABLE_NOTE : undefined\}/);
+  assert.match(dialog, /mode === "convert"\s*\?\s*\(opportunityServiceLabel \?\? SERVICE_NOT_SPECIFIED_LABEL\)/);
+  assert.match(dialog, /doNotContactNotice\(customer\.doNotContact\)/, "OD-6 notice kept");
+  assert.match(dialog, /nemryn\.plus\.booking\./, "retry key kept");
+  const contactPage = readFileSync(new URL("../../app/operations/growth/contacts/[contactId]/page.tsx", import.meta.url), "utf8");
+  assert.match(contactPage, /catch \{\s*configuredServices = null;\s*\}/);
+  assert.match(contactPage, /serviceRequestedOptions\(SERVICE_TYPE_VALUES, SERVICE_TYPE_LABELS, configuredServices\)/);
+  assert.match(contactPage, /serviceOptionsUnavailable=\{configuredServices === null\}/);
+  const oppPage = readFileSync(new URL("../../app/operations/growth/pipeline/[opportunityId]/page.tsx", import.meta.url), "utf8");
+  assert.match(oppPage, /opportunityServiceLabel=\{o\.serviceType \? \(SERVICE_TYPE_LABELS\[o\.serviceType as ServiceType\] \?\? null\) : null\}/);
+});

@@ -140,7 +140,7 @@ Rules:
 > - An opportunity already linked (P2-S3) to an existing Request is **not** converted again. Staff are pointed to that Request.
 > - Quotes are **not** required for conversion: quote-based eligibility is not approved.
 > - **Do-not-contact reminder (OD-6, NP-P2-S4-R3):** when the contact's stored `do_not_contact` preference is set, both forms show "This person asked not to be contacted" with "Create this request only if they asked for this ride…". It is a reminder only: the Request is not blocked, nothing is sent, and the preference is never inferred from activity. Per-channel consent remains P2-S6.
-> - **Service type (OD-2):** Requests created from Plus have `service_type` NULL, like every staff-logged Core Request, because `log_transportation_request` has no service parameter. The follow-up **NC-REQUEST-SERVICE-TYPE** (Core) is a priority.
+> - **Service type (OD-2 -> NP-P2-S4.1-S2):** conversion passes the opportunity's own service to the Core Request (NULL stays NULL; never inferred or overridden in the dialog, where Review shows it read-only). Rebooking offers an optional **"Service requested"**, defaulting to "Not specified", with Core's nine services filtered by the organization's configured Services (all nine when none are configured; only "Not specified" plus a short note if they can't be loaded). The database accepts any canonical service from authorized staff (OD-S1 = A). Plus opportunities still offer eight services; airport is deferred (OD-S4).
 
 ### 4.5 Quotes and payments (staged — PD-08 revised)
 

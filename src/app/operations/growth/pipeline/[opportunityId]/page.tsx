@@ -35,6 +35,7 @@ import { getContact } from "@/lib/plus/contacts";
 import { listLinkedRequests } from "@/lib/plus/attribution";
 import { coreSourceForOpportunity } from "@/lib/plus/booking-core";
 import { SOURCE_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
+import { SERVICE_TYPE_LABELS, type ServiceType } from "@/lib/public-intake/website-intake-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -122,6 +123,7 @@ export default async function OpportunityDetailPage({
                   opportunityTitle={o.title}
                   expectedVersion={o.updatedAt}
                   sourceLabel={selectOptionLabel(SOURCE_OPTIONS, coreSourceForOpportunity(o.source))}
+                  opportunityServiceLabel={o.serviceType ? (SERVICE_TYPE_LABELS[o.serviceType as ServiceType] ?? null) : null}
                 />
               )}
               <LinkButton href={`/operations/growth/pipeline/${o.id}/edit`} variant="outline" data-testid="opportunity-edit">

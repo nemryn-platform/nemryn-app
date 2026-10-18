@@ -25,6 +25,9 @@ import Link from "next/link";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
 import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
+import { getServiceOfferings } from "@/lib/operations/organization-services";
+import { serviceRequestedOptions } from "@/lib/operations/log-request-options";
+import { SERVICE_TYPE_LABELS, SERVICE_TYPE_VALUES } from "@/lib/public-intake/website-intake-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -78,6 +81,17 @@ export default async function ContactDetailPage({
   const canWrite = canWriteGrowth(plus.state, plus.capability) && !archived;
   const saved = (await searchParams).saved;
   const savedMessage = typeof saved === "string" ? SAVED_MESSAGES[saved] : undefined;
+  // NP-P2-S4.1-S2 rebooking "Service requested (optional)" (OD-S3): the organization's configured Services, or all nine
+  // when none are configured; a FAILED read is never "none configured" (only "Not specified", with a short note).
+  let configuredServices: string[] | null = null;
+  if (canWrite) {
+    try {
+      configuredServices = await getServiceOfferings(context.organizationId);
+    } catch {
+      configuredServices = null;
+    }
+  }
+  const rebookServiceOptions = serviceRequestedOptions(SERVICE_TYPE_VALUES, SERVICE_TYPE_LABELS, configuredServices);
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -94,6 +108,8 @@ export default async function ContactDetailPage({
                 organizationId={context.organizationId}
                 customer={{ name: contact.displayName, phone: contact.phone, email: contact.email, doNotContact: contact.doNotContact }}
                 contactId={contact.id}
+                serviceOptions={rebookServiceOptions}
+                serviceOptionsUnavailable={configuredServices === null}
               />
               <LinkButton href={`/operations/growth/contacts/${contact.id}/edit`} variant="outline" data-testid="contact-edit">
                 Edit contact

@@ -636,3 +636,15 @@ The same function, with one trailing optional parameter. It is replaced by DROP 
 The enabled canonical service identifiers (an empty array means never configured). Owner-approved with S1: an active **Organization Admin or Dispatcher** of the organization may read them, so the staff form can list them. It is read-only; `set_organization_service_offerings` stays Organization Admin only.
 
 Tests: `supabase/tests/core_staff_request_service_type_tests.sql` (rollback-only); `team_services_operations_tests.sql` SVC-7.
+
+## Nemryn Plus booking service type (NP-P2-S4.1-S2)
+
+Migration `20261017110000_plus_booking_service_type.sql` (on top of S1). No table, column or CHECK changes.
+
+- **`plus_convert_opportunity_to_request`**: unchanged signature. The Core Request now carries the opportunity's own `service_type`; NULL stays NULL. Nothing is inferred, and the conversion form cannot override it.
+- **`plus_create_rebooking_request(..., p_additional_notes text, p_service_type text default null)`**: one trailing optional parameter. It is replaced by DROP + CREATE: one function, no overload. The value goes to `log_transportation_request`, which validates it: one of the nine canonical services; omitted or blank means NULL; anything else is ZW006 and nothing is written. Configured Services do not restrict it (OD-S1 = A); the dialog lists them.
+- Existing 12-argument calls (named or positional) keep working and store NULL.
+- A retry with the same idempotency key returns the original Request (`changed = false`) whatever service it carries. It never creates a second Request or changes the original service.
+- Everything else is unchanged: Plus WRITE + Core role, tenancy, the advisory lock, eligibility, attribution, activities, audit, conversion immutability and the pending-only Core Request.
+
+Tests: `supabase/tests/plus_booking_service_type_tests.sql` (rollback-only).

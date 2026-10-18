@@ -4,6 +4,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
 import { canWriteGrowth } from "@/lib/plus/access-core";
 import {
+  BOOKING_SERVICE_ERROR,
   BOOKING_SUCCESS_MESSAGE,
   bookingErrorMessage,
   isIdempotencyKey,
@@ -12,6 +13,8 @@ import {
   type BookingFormValues,
 } from "@/lib/plus/booking-core";
 import { isUuid } from "@/lib/plus/attribution-core";
+import { parseServiceTypeInput } from "@/lib/operations/log-request-options";
+import { SERVICE_TYPE_VALUES } from "@/lib/public-intake/website-intake-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 /**
@@ -109,6 +112,10 @@ export async function rebookContactAction(_prev: BookingActionState, formData: F
   const parsed = validateBookingForm(readValues(formData), { needsSource: true });
   if (!parsed.ok) return { status: "error", errors: parsed.errors, message: "Check the highlighted fields." };
   const v = parsed.value;
+  // NP-P2-S4.1-S2: optional "Service requested" -- the RAW value against Core's canonical nine (blank = not specified;
+  // never trimmed into a valid value). Configured Services do not restrict it (OD-S1 = A); Core re-validates.
+  const service = parseServiceTypeInput(formData.get("serviceType"), SERVICE_TYPE_VALUES);
+  if (!service.ok) return { status: "error", errors: { serviceType: BOOKING_SERVICE_ERROR }, message: "Check the highlighted fields." };
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.rpc("plus_create_rebooking_request", {
     p_organization_id: guard.context.organizationId,
@@ -123,6 +130,7 @@ export async function rebookContactAction(_prev: BookingActionState, formData: F
     p_preferred_time: v.preferredTime as string,
     p_assistance_notes: v.assistanceNotes as string,
     p_additional_notes: v.additionalNotes as string,
+    p_service_type: service.value ?? undefined,
   });
   if (error || !data) {
     console.error("[plus] rebooking failed", error?.code ?? "no_data");
