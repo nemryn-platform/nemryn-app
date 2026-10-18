@@ -193,9 +193,10 @@ begin
   perform pg_temp.t('Q5 no dependency on future tables; every FK targets organizations, auth.users or plus_contacts',
     (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts'))
        from pg_constraint where contype = 'f' and conrelid = 'public.plus_opportunities'::regclass)
-    -- (plus_tasks ships in NP-P2-S2; accounts / quotes / inquiries / attributions remain future)
-    and to_regclass('public.plus_accounts') is null and to_regclass('public.plus_quotes') is null
-    and to_regclass('public.plus_inquiries') is null);   -- (plus_request_attributions ships in NP-P2-S3)
+    -- (plus_tasks ships in NP-P2-S2; plus_request_attributions in NP-P2-S3; plus_quotes in NP-P2-S5-S1 and references
+    -- plus_opportunities, never the reverse; accounts / inquiries remain future)
+    and to_regclass('public.plus_accounts') is null
+    and to_regclass('public.plus_inquiries') is null);
   begin
     insert into public.plus_opportunities (organization_id, title, primary_contact_id, source, created_by) values (c_a, 'X', ct_b, 'phone', c_a1);
     perform pg_temp.t('Q6 composite FK: an Org A opportunity can never reference an Org B contact', false);
@@ -288,8 +289,8 @@ begin
                 and p.prosrc ~* '(set|,)\s*stage\s*=\s*''converted''|converted_at\s*=\s*now|values\s*\([^)]*''converted''')
     and exists (select 1 from pg_trigger where tgname = 'plus_opportunities_conversion_guard' and tgdeferrable and tginitdeferred));
   v := pg_temp.mv(c_a1, c_a, o1, pg_temp.ver(o1), 'quote_sent');
-  perform pg_temp.t('T8 quote_sent is a staff-reported stage only: no quote record / table, payment status untouched',
-    v = 'quote_sent:true' and to_regclass('public.plus_quotes') is null
+  perform pg_temp.t('T8 quote_sent is a staff-reported stage only: a manual move creates no quote record (NP-P2-S5-S1), payment status untouched',
+    v = 'quote_sent:true' and not exists (select 1 from public.plus_quotes where opportunity_id = o1)
     and (select payment_reported_status = 'none' and stage = 'quote_sent' from public.plus_opportunities where id = o1), v);
 
   -- =================================================== lost / reopen

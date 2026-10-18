@@ -2,7 +2,7 @@
 
 **Work item:** NP-P0-A02 · **Date:** 2026-10-13
 **Revised:** NP-P0-A02R (2026-10-13). PD-02, PD-03, PD-04, PD-08 and PD-12 were changed; PD-16 to PD-20 were added.
-**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14). All others have no ZD number yet.
+**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14); PD-08 Q1 → ZD-212 to ZD-220 (NP-P2-S5-S1, 2026-10-18; Q2 and Q3 still proposed). All others have no ZD number yet.
 On approval, each accepted entry is copied into the register as the next ZD number, with `Status: CONFIRMED`.
 
 Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in the NP-P0-A02 brief. They still need formal recording.
@@ -94,7 +94,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
   - **Q2 (after pricing design approval):** Core-owned, versioned `organization_pricing_rules` prefill the Q1 lines; staff overrides are recorded.
   - **Q3:** online payment is a separate decision (PD-09).
   - **No billing system** is part of Plus.
-- **Status:** PROPOSED — Q1 is ready to approve; Q2 **needs an owner pricing-scope decision**.
+- **Status:** Q1 OWNER-APPROVED and RECORDED (NP-P2-S5-S1 owner decisions OD-Q1 to OD-Q9, 2026-10-18 → ZD-212 to ZD-220). Q2 still PROPOSED and **needs an owner pricing-scope decision** (OD-Q14). Q3 still PROPOSED (PD-09).
 - **Changed from A02:** A02 deferred all quote storage until pricing rules existed. A02R ships staff quotes first.
 - **Dependencies:** ZS-021 (billing workflow UNKNOWN) for Q2/Q3 only.
 

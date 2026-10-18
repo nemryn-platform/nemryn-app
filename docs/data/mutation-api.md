@@ -648,3 +648,46 @@ Migration `20261017110000_plus_booking_service_type.sql` (on top of S1). No tabl
 - Everything else is unchanged: Plus WRITE + Core role, tenancy, the advisory lock, eligibility, attribution, activities, audit, conversion immutability and the pending-only Core Request.
 
 Tests: `supabase/tests/plus_booking_service_type_tests.sql` (rollback-only).
+
+## Nemryn Plus estimates & quotes — database foundation (NP-P2-S5-S1)
+
+Migration `20261018100000_plus_quotes_foundation.sql`. Owner decisions ZD-212 to ZD-220 apply. There is no UI in S1.
+- New tables: `plus_quotes` (class B, RLS `plus_can_read`) and `plus_quote_counters` (class A).
+- Every write RPC requires Plus **write** (an Organization Admin, or a Dispatcher with a WRITE grant). No second approver is needed.
+- Every read RPC requires Plus read.
+
+Refusal codes:
+- READ grant and expired Plus: ZW001 on writes.
+- No user: ZW001.
+- No grant, driver, inactive member, platform admin without a membership, foreign organization, locked Plus, and unknown ids: ZW002.
+
+Every write returns `plus_quote_write_result(quote_id, quote_number, status, opportunity_id, opportunity_stage, total_cents, updated_at, changed)`.
+
+| RPC | Contract |
+|---|---|
+| `plus_create_quote(org, opportunity_id, idempotency_key, kind, service_type, round_trip, distance_miles, base_cents, mileage_cents, wait_cents, extra_stops_cents, mobility_assistance_cents, escort_cents, return_leg_cents, other_cents, other_label, discount_cents, terms_note, valid_until)` | Creates a **draft** on an **open** opportunity whose primary contact is active. <br>• The server computes the total. <br>• The number is the organization's next number. <br>• Audit: `plus_quote_created`. <br>• Refusals: ZW002 unknown or foreign opportunity; ZW004 `opportunity_closed` (lost or converted); ZW006 invalid input or archived contact. <br>• Invalid input is ZW006: a bad kind or service, distance < 0 or with more than one decimal, a charge outside 0–10,000,000, discount > charges, a bad `other_label` pairing, terms > 500, `valid_until` missing or before the organization-local date, or a malformed key. <br>• The same key and the same opportunity returns the original quote (`changed=false`). The key on another opportunity, or a key already used by a revision, is ZW006. |
+| `plus_update_quote_draft(org, quote_id, expected_updated_at, …the same snapshot fields)` | Replaces a **draft's** snapshot after the same validation. <br>• An identical payload returns `changed=false` and writes no audit. <br>• Audit: `plus_quote_draft_updated`. <br>• Refusals: ZW003 stale; ZW004 `quote_not_draft`, `opportunity_closed`. |
+| `plus_mark_quote_sent(org, quote_id, expected_updated_at)` | Draft → sent (`sent_at`, `sent_by`). <br>• Refused with ZW004 `quote_expired` if `valid_until` has passed. <br>• A revision first supersedes its original, which must still be `sent` (otherwise ZW004 `revision_base_not_current`). <br>• An open opportunity before `quote_sent` advances to `quote_sent` with a `stage_changed` activity. <br>• Audit: `plus_quote_sent` (and `plus_quote_superseded`). <br>• Already sent returns `changed=false`. |
+| `plus_record_quote_response(org, quote_id, expected_updated_at, response)` | `accepted` or `declined`, for a **sent** quote that has not expired (`quote_expired`). <br>• Accepted advances an open opportunity before `quote_accepted` to `quote_accepted`. <br>• Declined changes no stage and never marks the opportunity Lost. <br>• Audit: `plus_quote_accepted` / `plus_quote_declined`. <br>• The same response again returns `changed=false`; any other is ZW004. |
+| `plus_revise_quote(org, quote_id, idempotency_key)` | Copies a **sent** quote, including an expired one, into a new draft with a new number and `supersedes_quote_id`. <br>• Only one non-withdrawn revision per quote (ZW004 `revision_exists`). <br>• Same-key replays return the same revision. <br>• Audit: `plus_quote_created` with `supersedes_quote_id`. |
+| `plus_withdraw_quote(org, quote_id, expected_updated_at, reason)` | Draft or sent → withdrawn. <br>• A sent quote needs a reason (1–200 characters, otherwise ZW006). <br>• No stage change. <br>• Audit: `plus_quote_withdrawn` with the reason. <br>• Already withdrawn returns `changed=false`. |
+| `plus_list_quotes(org, opportunity_id, contact_id)` | Exactly one filter, otherwise ZW006. Returns summary rows with the derived `is_expired` and `superseded_by_quote_id`. |
+| `plus_get_quote(org, quote_id)` | The full snapshot and staff names. ZW002 if unknown or foreign. |
+
+**Lock order:** advisory (organization, key) for creates and revisions → opportunity `FOR UPDATE` → contact `FOR NO KEY UPDATE` → quote `FOR UPDATE` → counter.
+
+**Database-enforced rules:**
+- CHECKs: the total identity, USD, the charge ranges, and the label, terms, status and timestamp consistency.
+- `_plus_quotes_guard`: immutability once sent, and the allowed transitions only (ZW004 `quote_immutable` / `illegal_transition`).
+- A composite revision FK within one opportunity.
+- The partial unique index `plus_quotes_one_live_successor_idx`.
+- Unique `(organization_id, quote_number)` and `(organization_id, idempotency_key)`.
+
+**Not written or not decided:**
+- Quote activity rows (OD-Q15) are not written.
+- Not enforced or not decided: one live quote per opportunity (OD-Q12), changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16), print content and number format (OD-Q10), follow-up tasks (OD-Q11), and pricing rules (OD-Q14).
+- No Request, Trip, Passenger, payment, notification or outbound message is ever created.
+
+Tests:
+- `supabase/tests/plus_quotes_tests.sql` (rollback-only);
+- `supabase/tests/plus_quotes_concurrency_test.sh` (twelve races).

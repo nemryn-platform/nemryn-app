@@ -1,0 +1,666 @@
+NP-P2-S5-S1 -- ESTIMATES & QUOTES: DATABASE FOUNDATION, AUTHORIZATION AND SECURITY CONTRACT
+Nemryn Plus, stage Q1 (PD-08 Q1). Implementation report.
+Date: 2026-10-18
+Mode: controlled local implementation.
+- Isolated database only: Supabase project NemrynS1Iso (API 54361, DB 54362, container supabase_db_NemrynS1Iso).
+- Fictional data only.
+- No production access of any kind.
+- No UI.
+- No Git operations: nothing staged, committed or pushed; no branch switched.
+Legend:
+- VERIFIED = executed on the isolated database, with the result shown;
+- DOCUMENTED = written into a repository document;
+- NOT DONE = deliberately out of scope.
+
+======================================================================
+1. EXECUTIVE SUMMARY
+======================================================================
+S1 delivers the database foundation for staff-entered estimates and quotes:
+- one migration, 20261018100000_plus_quotes_foundation.sql;
+- two tables: plus_quotes (class B) and plus_quote_counters (class A);
+- a guard trigger, eight authenticated RPCs (six writes, two reads) and nine internal helpers;
+- an additive plus_activities CHECK extension.
+
+It implements the nine locked owner decisions OD-Q1 to OD-Q9, recorded as ZD-212 to ZD-220:
+- manual itemized quotes, with no rate calculation, payment or invoice;
+- every quote belongs to an existing opportunity;
+- fixed price columns, including extra stops and escort;
+- the kinds estimate and quote;
+- the lifecycle draft / sent / accepted / declined / superseded / withdrawn, with derived expiry;
+- forward-only stage advance on Mark sent and Record accepted;
+- USD integer cents;
+- Admins and WRITE-grant Dispatchers act, with no second approver;
+- no addresses, routes, appointments or medical details.
+
+None of OD-Q10 to OD-Q16 is encoded. No deferred decision blocks S1:
+- OD-Q12: parallel quotes are allowed.
+- OD-Q15: quote timeline activity rows are allowed by the CHECK but not written. All quote history is in audit_events.
+
+Evidence (all VERIFIED on NemrynS1Iso):
+- the new rollback-only suite: 0 failures of 72 tests;
+- the new concurrency script: 12 / 12 races PASS;
+- every existing SQL suite from a fresh reset: 65 of 67 suites with 0 failures; plus_opportunities_tests 75 / 75 after updating two outdated "plus_quotes must not exist yet" assertions; request_decision_expand_compat_tests unchanged from its baseline (it only applies to an intermediate schema state);
+- every concurrency script: 24 of 27 scripts pass in the full run. Of the other three: website_connection_lifecycle is a timing flake (passes when re-run alone); mutation_concurrency and request_lifecycle_concurrency fail the same way at production head 20261017110000 without the S1 migration (old harness defect, section 19);
+- privilege contract: 0 violations of 29;
+- the upgrade rehearsal from production head 20261017110000 with seeded Core and Growth data:
+  - pre-existing rows in 18 tables, functions, policies and table ACLs are byte-identical;
+  - P2-S4 conversion, S2 rebooking service type, Core Log Request and the quote RPCs all work on upgraded data;
+- tsc 0 errors; ESLint 0 errors; unit tests 838 / 838; next build exit 0.
+
+Verdict (section 24): READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR. The database foundation is complete and verified; no blocker remains.
+
+======================================================================
+2. GIT AND MIGRATION BASELINE
+======================================================================
+- Branch np-p2-s5-s1-quotes-foundation, created by the owner from origin/main.
+- HEAD = origin/main = 154a0c7f9b8565f266ab1f2ad6db4119aff01d0a (Merge PR #13, NP-P2-S4.1-S2). It was verified at the start, with 0
+  tracked changes.
+- Production migration head (verified read-only in NP-P2-S4.1-S2-R2): 20261017110000_plus_booking_service_type, 88 / 88
+  in sync.
+- New local migration: 20261018100000_plus_quotes_foundation.sql. It sorts after the production head, and no other new
+  migration exists.
+- Git operations in S1: none. git status shows only working-tree modifications and untracked files (section 22). The
+  index is empty: git diff --cached is empty.
+
+======================================================================
+3. APPROVED DECISION-REGISTER ENTRIES (DOCUMENTED: docs/product/decision-register.md)
+======================================================================
+They use the register's existing format: Date, Category, Decision, Status, Reason, Affected Product Areas, Dependencies, Owner, Review
+Trigger. Each status is "CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Qn = A, 2026-10-18)".
+  ZD-212  OD-Q1  Quotations start as manual, itemized staff quotes (PD-08 Q1); no rate calculation, payments or invoices.
+                 ZD-021 (pricing model) stays UNKNOWN.
+  ZD-213  OD-Q2  Every quote belongs to an existing opportunity; no contact-only quotes; no automatic opportunity.
+  ZD-214  OD-Q3  Fixed staff-entered price columns (including extra stops and escort); no line-item subsystem; server total.
+  ZD-215  OD-Q4  Two kinds: estimate and quote.
+  ZD-216  OD-Q5  Lifecycle draft / sent / accepted / declined / superseded / withdrawn; expiry derived; no scheduler.
+  ZD-217  OD-Q6  Mark sent → quote_sent; Record accepted → quote_accepted; declined is never Lost; never regress; never
+                 alter converted or lost.
+  ZD-218  OD-Q7  USD only, integer cents, no floating point.
+  ZD-219  OD-Q8  Admins and WRITE-grant Dispatchers act; no second approver.
+  ZD-220  OD-Q9  No addresses, routes, appointment details or medical narratives in quotes.
+Also updated:
+- docs/product/plus-decisions-proposed.md: the PD-08 status line now reads "Q1 OWNER-APPROVED and RECORDED (→ ZD-212 to
+  ZD-220); Q2 / Q3 still PROPOSED";
+- the recorded-entries line in the same file's header.
+
+======================================================================
+4. DEFERRED DECISIONS RETAINED (open; NOT encoded)
+======================================================================
+| ID | Open question | What S1 does |
+|---|---|---|
+| OD-Q10 | Print content, number format, default validity, branding | quote_number is a plain per-organization integer; valid_until is required and has no default; no print view |
+| OD-Q11 | Follow-up tasks | Nothing automatic; no task is created |
+| OD-Q12 | One live draft / current sent quote per opportunity, or parallel quotes | NOT enforced. Parallel drafts and parallel sent quotes are allowed (suite L25). Only an explicit revision chain supersedes, with at most one live successor per quote |
+| OD-Q13 | Do quote totals affect estimated_value_cents? | Never touched (suite X2; upgrade rehearsal: 45000 unchanged) |
+| OD-Q14 | Pricing rules | None; all amounts are entered by staff |
+| OD-Q15 | quote_id FK on plus_activities | NOT added. The quote_sent / quote_status_changed types are allowed by the CHECK but NOT written (suite L3). All quote history is in audit_events (entity plus_quote). Opportunity stage changes write the existing stage_changed row |
+| OD-Q16 | Do-not-contact handling for quote actions | Not checked. Nemryn sends nothing, so Mark sent is a staff statement only |
+
+No deferred decision blocks S1:
+- OD-Q12 is satisfied by NOT encoding a uniqueness rule.
+- OD-Q15 limits only the contact / opportunity timeline: quote events are not on the timeline until OD-Q15 is decided.
+  This is a deferred feature, not a defect. If OD-Q15 is approved later, a future additive migration adds quote_id and
+  starts writing the two already-allowed types. No data migration is needed, because audit_events holds the history.
+
+======================================================================
+5. EXACT FILES
+======================================================================
+New (untracked):
+  supabase/migrations/20261018100000_plus_quotes_foundation.sql   976 lines
+  supabase/tests/plus_quotes_tests.sql                            rollback-only suite, 72 tests
+  supabase/tests/plus_quotes_concurrency_test.sh                  12 races
+  docs/reports/NP-P2-S5-S1-quotes-foundation-implementation.txt   this report
+Modified:
+  supabase/tests/privilege_contract_tests.sql      2 tables, the plus_quotes SELECT grant, 9 internal and 8 public functions
+  supabase/tests/plus_opportunities_tests.sql      Q5 / T8: outdated "plus_quotes must not exist yet" assertions updated (section 17)
+  src/lib/supabase/database.types.ts               regenerated from the isolated DB (supabase gen types --local): purely additive, no line removed
+  docs/product/decision-register.md                ZD-212 to ZD-220
+  docs/product/plus-decisions-proposed.md          PD-08 status and recorded-entries line
+  docs/product/plus-domain-model.md                §14 Stage Q1: implemented schema and rules
+  docs/product/plus-product-spec.md                §4.5 S1 note
+  docs/security/plus-access-model.md               T28 (tests, codes)
+  docs/security/database-privilege-contract.md     NP-P2-S5-S1 additions
+  docs/data/mutation-api.md                        quotes section
+No application source (pages, components, server actions) was changed. No Core migration, function or policy was changed.
+
+======================================================================
+6. MIGRATION FILENAME AND SCHEMA
+======================================================================
+20261018100000_plus_quotes_foundation.sql. Contents, in order:
+  1. plus_quote_counters (organization_id PK → organizations; next_number int ≥ 1). Class A: RLS on, no policy,
+     revoke all from public / anon / authenticated / service_role.
+  2. plus_quotes:
+     - identity: id, organization_id, opportunity_id, quote_number, kind;
+     - snapshot: service_type, round_trip, distance_miles numeric(7,1);
+     - charges: base_cents, mileage_cents, wait_cents, extra_stops_cents, mobility_assistance_cents, escort_cents,
+       return_leg_cents, other_cents + other_label; discount_cents; total_cents;
+     - terms: currency, terms_note, valid_until;
+     - lifecycle: status, supersedes_quote_id, idempotency_key, created_by, created_at, updated_at, sent_at, sent_by,
+       responded_at, responded_by, withdrawn_reason.
+     Also: comments; indexes; triggers set_updated_at, prevent_organization_id_change and plus_quotes_guard; RLS; the
+     SELECT grant; policy plus_quotes_select_plus.
+  3. plus_activities:
+     - plus_activities_activity_type_check is extended additively with quote_sent and quote_status_changed;
+     - plus_activities_quote_subject_check is new: quote types require opportunity_id.
+     Both constraints are validated against existing rows.
+  4. The type plus_quote_write_result(quote_id, quote_number, status, opportunity_id, opportunity_stage, total_cents,
+     updated_at, changed), and the internal helpers.
+  5. Six write RPCs.  6. Two read RPCs.  Ends with notify pgrst, 'reload schema'.
+No column exists for an address, route, appointment, passenger or medical detail (suite S6 checks the column names).
+
+======================================================================
+7. TABLE AND CONSTRAINT DETAILS
+======================================================================
+plus_quotes
+- Keys:
+  - PK id;
+  - unique (id, organization_id) and (id, organization_id, opportunity_id), the composite FK targets;
+  - unique (organization_id, quote_number) and (organization_id, idempotency_key).
+- FKs:
+  - plus_quotes_opportunity_fkey (opportunity_id, organization_id) → plus_opportunities (id, organization_id);
+  - plus_quotes_supersedes_fkey (supersedes_quote_id, organization_id, opportunity_id) → plus_quotes (id,
+    organization_id, opportunity_id). A revision never crosses organizations or opportunities.
+- CHECKs:
+
+  | Constraint | Rule |
+  |---|---|
+  | supersedes_self | supersedes_quote_id ≠ id |
+  | number | quote_number ≥ 1 |
+  | kind | estimate or quote |
+  | service_type | one of the 8 Plus services, or NULL |
+  | distance | ≥ 0 |
+  | lines | every charge and the discount between 0 and 10,000,000 |
+  | total | total = base + mileage + wait + extra_stops + mobility_assistance + escort + return_leg + other − discount, and ≥ 0 |
+  | other_label | NULL if and only if other_cents = 0; otherwise trimmed, 1 to 60 characters |
+  | currency | 'USD' |
+  | terms_note | NULL, or trimmed, 1 to 500 characters |
+  | status | one of the 6 statuses |
+  | idempotency_key | ^[A-Za-z0-9._:-]{8,200}$ |
+  | sent | draft has no sent_at / sent_by; sent, accepted, declined and superseded have both; withdrawn has both or neither |
+  | responded | responded_at / responded_by are set if and only if the status is accepted or declined |
+  | withdrawn_reason | only when withdrawn; trimmed, 1 to 200 characters; required when withdrawing a sent quote |
+
+- Indexes:
+  - plus_quotes_org_opportunity_idx (organization_id, opportunity_id, created_at desc);
+  - plus_quotes_one_live_successor_idx: UNIQUE (supersedes_quote_id) WHERE supersedes_quote_id IS NOT NULL AND
+    status <> 'withdrawn'.
+- Guard trigger _plus_quotes_guard (BEFORE UPDATE; applies to every writer, including the owner). Violations raise
+  ZW004 quote_immutable unless noted.
+  - Identity never changes: opportunity_id, quote_number, idempotency_key, supersedes_quote_id, created_by and created_at.
+  - Once status ≠ draft, the commercial snapshot is frozen: kind, service, round_trip, distance, every charge,
+    other_label, discount, total, currency, terms, valid_until, sent_at and sent_by.
+  - Allowed transitions: draft → sent | withdrawn; sent → accepted | declined | superseded | withdrawn. Anything else
+    raises ZW004 illegal_transition.
+  - In a final status, responded_* and withdrawn_reason are frozen.
+plus_quote_counters: organization_id PK, next_number. Only the internal allocator writes it.
+
+======================================================================
+8. PRICING ARITHMETIC AND VALIDATION
+======================================================================
+- Money arrives as bigint cents. The SQL signature makes fractional cents impossible: a 12.5 or '12.50' argument is not
+  a valid call (suite C8). No float or real type is used anywhere.
+- NULL money inputs mean 0. NULL distance means none.
+- _plus_quote_validate computes subtotal = the eight charges, and total = subtotal − discount. The server computes the
+  total, and the RPCs have no total parameter. The CHECK re-verifies the identity on every row (suite C15: a forged
+  total → check_violation).
+- Refused with ZW006:
+
+  | Input | Refused when |
+  |---|---|
+  | Each charge | < 0 or > 10,000,000 ($100,000.00); exactly 10,000,000 is accepted (C7) |
+  | Discount | < 0, > 10,000,000, or > subtotal, so the total is never negative (C5) |
+  | Distance | < 0, > 99,999.9, or more than one decimal; never rounded (C9) |
+  | other_label | without other_cents, or other_cents without a label, or more than 60 characters (C10) |
+  | Kind and service | kind not estimate | quote; a service outside the 8 Plus services, including airport_transportation and case variants (C11) |
+  | Terms and validity | terms over 500 characters; valid_until NULL or before the organization-local today (C12) |
+
+- "Today" is _plus_org_local_today(org) = (now() at time zone organizations.timezone)::date. timezone is NOT NULL and
+  IANA-validated.
+- USD only: there is no currency parameter, and a CHECK rejects any other value (C16).
+- Integer exactness: 333 + 333 + 334 = 1000 (C17); 27,300 − 1,250 = 26,050 (C1).
+
+======================================================================
+9. RPC SIGNATURES AND PERMISSIONS
+======================================================================
+Every function is in schema public, SECURITY DEFINER (except the pure validator), with search_path = public, pg_temp.
+Public RPCs: EXECUTE for authenticated only, revoked from PUBLIC, anon and service_role. Internals: no client EXECUTE.
+The privilege contract and suite S4 verify this.
+
+Write RPCs (each calls _require_plus_write first: Organization Admin, or a Dispatcher with an active WRITE grant):
+  plus_create_quote(uuid org, uuid opportunity_id, text idempotency_key, text kind, text service_type, boolean
+    round_trip, numeric distance_miles, bigint base_cents, bigint mileage_cents, bigint wait_cents, bigint
+    extra_stops_cents, bigint mobility_assistance_cents, bigint escort_cents, bigint return_leg_cents, bigint
+    other_cents, text other_label, bigint discount_cents, text terms_note, date valid_until) → plus_quote_write_result
+  plus_update_quote_draft(uuid org, uuid quote_id, timestamptz expected_updated_at, …the same 16 snapshot fields)
+    → plus_quote_write_result
+  plus_mark_quote_sent(uuid org, uuid quote_id, timestamptz expected_updated_at) → plus_quote_write_result
+  plus_record_quote_response(uuid org, uuid quote_id, timestamptz expected_updated_at, text response) → …
+  plus_revise_quote(uuid org, uuid quote_id, text idempotency_key) → …
+  plus_withdraw_quote(uuid org, uuid quote_id, timestamptz expected_updated_at, text reason) → …
+Read RPCs (no user → ZW001; then plus_can_read, else ZW002):
+  plus_list_quotes(uuid org, uuid opportunity_id, uuid contact_id): exactly one filter, else ZW006. Returns summary rows
+    with the derived is_expired and superseded_by_quote_id.
+  plus_get_quote(uuid org, uuid quote_id): the full snapshot and staff names. Unknown and foreign are both ZW002, so the
+    caller cannot tell them apart.
+Internal: _plus_quotes_guard, _plus_org_local_today, _plus_quote_validate, _plus_quote_lock_open_opportunity,
+  _plus_quote_lock, _plus_quote_opportunity, _plus_next_quote_number, _plus_quote_advance_stage, _plus_quote_audit.
+Reused existing helpers (unchanged): _require_plus_write, plus_can_read, _plus_require_idempotency_key,
+  _plus_require_active_contact, _plus_staff_name.
+
+Authorization matrix (VERIFIED, suite A1–A10):
+
+| Caller | Read | Write |
+|---|---|---|
+| Organization Admin, Plus active | ok | ok |
+| WRITE-grant Dispatcher | ok | ok |
+| READ-grant Dispatcher | ok | ZW001 |
+| Dispatcher without a grant / revoked grant, Driver, inactive Dispatcher, Platform Admin without membership, no-membership user | ZW002 | ZW002 |
+| Multi-organization user (c1): Admin in A, Driver in B | ok in A | ok in A; ZW002 in B |
+| Plus expired (read-only) | Admin reads ok | ZW001 |
+| Plus locked | ZW002 | ZW002 |
+| No user | ZW001 | ZW001 |
+| anon | 42501 (no EXECUTE) | 42501 (no EXECUTE) |
+
+Direct client INSERT, UPDATE and DELETE on plus_quotes, and any client access to plus_quote_counters, give 42501
+(A7, N2).
+
+======================================================================
+10. LIFECYCLE TRANSITIONS
+======================================================================
+| From | Action | To | Conditions and effects |
+|---|---|---|---|
+| (none) | create | draft | open opportunity; active contact; valid snapshot; number allocated; audit plus_quote_created |
+| draft | update draft | draft | not stale (ZW003); identical payload → changed=false, no write, no audit; audit plus_quote_draft_updated |
+| draft | mark sent | sent | not stale; valid_until ≥ today (else ZW004 quote_expired); a revision's predecessor must still be sent (else ZW004 revision_base_not_current) and is superseded in the same transaction; stage advance (§11); audit plus_quote_sent (+ plus_quote_superseded) |
+| draft | withdraw | withdrawn | reason optional; audit plus_quote_withdrawn |
+| sent | record accepted / declined | accepted / declined | not stale; not expired (ZW004 quote_expired); accepted advances the stage; audit plus_quote_accepted / plus_quote_declined |
+| sent | revise | (new draft) | at most one live successor (ZW004 revision_exists); also allowed when expired; the source is unchanged until the revision is sent |
+| sent | (revision sent) | superseded | |
+| sent | withdraw | withdrawn | reason required (ZW006); audit carries the reason |
+
+Final statuses: accepted, declined, superseded, withdrawn. Every further action raises ZW004 illegal_transition, except
+the idempotent repeats listed below.
+
+Idempotent repeats (changed=false, nothing written): Mark sent on a sent quote; the same response again; withdraw on a
+withdrawn quote; a replay of create or revise with the same key.
+
+Expiry is DERIVED: is_expired = status = 'sent' AND valid_until < the organization-local today. There is no stored
+status and no scheduler (L13–L15).
+
+Any write on a quote of a converted or lost opportunity raises ZW004 opportunity_closed, including withdraw (L26,
+L27). The quotes stay readable.
+
+======================================================================
+11. OPPORTUNITY STAGE INTERACTIONS
+======================================================================
+_plus_quote_advance_stage(opportunity, target) runs only inside Mark sent and Record accepted, on an opportunity
+already locked FOR UPDATE and verified open.
+- Mark sent moves new_inquiry / contacted / qualified to quote_sent. quote_sent and quote_accepted are unchanged (L11).
+- Record accepted moves new_inquiry / contacted / qualified / quote_sent to quote_accepted. quote_accepted is
+  unchanged (L12).
+- Declined never changes the stage and never marks the opportunity Lost (L10).
+- A quote action never regresses a stage. converted and lost are refused before any write (ZW004 opportunity_closed).
+  No quote action ever writes stage_changed to converted or lost (X3).
+- Each real advance writes exactly ONE stage_changed activity (opportunity_id, from_stage, to_stage, actor), the same
+  row a manual plus_change_opportunity_stage writes (L1). A repeated Mark sent writes no second row (L2).
+- The stage advance bumps the opportunity's updated_at, so a concurrent stale opportunity write is refused (CONC-Q8b:
+  Lost from the old version → ZW003).
+- Upgrade rehearsal: a quote_accepted opportunity was then converted through the unchanged P2-S4 RPC. Results:
+  - the Request carried the opportunity's dialysis service, in state pending;
+  - the stage became converted;
+  - the accepted quote stayed accepted / 28100;
+  - quote writes on the converted opportunity were then refused.
+- Quotes are NOT required for conversion (unchanged product rule).
+
+======================================================================
+12. NUMBERING AND IDEMPOTENCY
+======================================================================
+Numbering
+- _plus_next_quote_number(org): insert … on conflict do nothing, then update … set next_number = next_number + 1
+  returning next_number − 1.
+- The row lock is held until commit, so concurrent creates serialize.
+- The counter is transactional: a rolled-back create also rolls back its number. Numbers are unique per organization
+  (unique constraint) and are never reused.
+- Numbering is per organization: Org B starts at 1 independently (N1).
+- CONC-Q3: six parallel creates got six distinct, consecutive numbers.
+- No RPC deletes a quote. N1 shows that the owner deleting a fixture does not cause reuse.
+- The display format is open (OD-Q10).
+
+Idempotency (create and revise)
+- The key is 8–200 characters of [A-Za-z0-9._:-] (_plus_require_idempotency_key) and is unique per organization.
+- The advisory transaction lock is hashtext('plus-quote:' || org || ':' || key) and is taken before any read.
+- Create replay: the same key on the same opportunity returns the ORIGINAL quote with changed=false. A different
+  payload changes nothing (C3).
+- The same key on another opportunity, or a key that belongs to a revision, raises ZW006 and never returns another
+  quote (C4).
+- Revise replay: the same key on the same source returns the same revision (L17).
+- Authority is re-checked on every call, including replays. A key is never proof of access.
+- CONC-Q1 / Q2 (a double click, and two staff with the same key) each produced one quote with outcomes t + f.
+
+Optimistic concurrency: update, send, respond and withdraw compare p_expected_updated_at with the locked row, and
+refuse with ZW003 on mismatch.
+
+======================================================================
+13. AUDIT IMPLEMENTATION
+======================================================================
+_plus_quote_audit writes one audit_events row per real mutation:
+- entity_type 'plus_quote', entity_id = quote id, actor = auth.uid();
+- after_data = {quote_id, quote_number, kind, status, opportunity_id} + action extras:
+  - plus_quote_sent and plus_quote_accepted / plus_quote_declined: opportunity_stage_before / opportunity_stage_after;
+  - plus_quote_superseded: superseded_by_quote_id;
+  - plus_quote_created: supersedes_quote_id, for a revision;
+  - plus_quote_withdrawn: was_sent.
+- reason = the withdrawal reason (staff-entered, ≤ 200 characters). Only withdrawals have one.
+- Actions: plus_quote_created, plus_quote_draft_updated, plus_quote_sent, plus_quote_superseded, plus_quote_accepted,
+  plus_quote_declined, plus_quote_withdrawn.
+- NO prices or totals and no terms text appear in audit rows (C2, X4).
+- No-change calls write no audit row (U2).
+- audit_events stays class A: there is no client read path except the existing list_activity_events projection, which
+  is unchanged.
+Contact / opportunity timeline: only the existing stage_changed row is written for stage advances. Quote activity
+rows are deferred (OD-Q15, section 4).
+
+======================================================================
+14. RLS AND TENANT-ISOLATION EVIDENCE
+======================================================================
+- plus_quotes has RLS on, exactly one policy (SELECT, plus_can_read(organization_id)), authenticated SELECT only, and no
+  privilege for anon or service_role (S1–S3).
+- plus_quote_counters has RLS on, no policy and no privilege for any client role (S1, S2, N2).
+- RLS reads (A6):
+  - Org B admin sees 0 Org A quote rows;
+  - Org A admin sees Org A rows;
+  - a Driver sees 0 rows.
+- RPC isolation (A5): every lookup filters by (id, organization_id).
+  - Org B admin on Org A ids gets ZW002.
+  - Org A admin passing Org B's quote or opportunity under Org A gets ZW002.
+  - A random uuid gets the identical response, so there is no existence oracle.
+  - Mark sent and Revise on a foreign quote give ZW002.
+- Composite FKs mean a quote cannot reference another organization's opportunity, and a revision cannot point across
+  organizations or opportunities (L21).
+- prevent_organization_id_change blocks a change of organization.
+- plus_list_quotes with a foreign opportunity under the caller's own organization returns 0 rows (A11).
+
+======================================================================
+15. SQL TEST RESULTS
+======================================================================
+New: supabase/tests/plus_quotes_tests.sql (rollback-only; seed fixtures; calls the real RPCs as the signed-in user).
+  Fresh database: 0 failures of 72 tests
+  Groups:
+  - S1–S6: schema, RLS, function contract, privacy columns;
+  - C1–C17: create and money;
+  - N1–N2: numbering;
+  - A1–A11: authorization and tenancy;
+  - U1–U4: draft editing;
+  - L1–L28: lifecycle, stage, expiry, revisions, withdraw, OD-Q12 not encoded, closed opportunities, archived contact;
+  - X1–X4: side effects.
+  Side effects (X1): before and after counts of transportation_requests, request_events, trips, passengers,
+  trip_assignments, recurring_arrangements, notification_events, plus_tasks and plus_request_attributions are
+  identical. No quote action created any of them.
+  Harness notes:
+  - Inside one transaction now() is constant. Stale versions are simulated with an earlier timestamp.
+  - A passed validity is simulated in two ways:
+    - for a DRAFT, by a direct owner update, which the guard allows;
+    - for a SENT quote, by disabling the guard trigger inside the rolled-back transaction, documented in L13.
+  - Lost and converted opportunities are set directly with their required columns. The deferred conversion guard never
+    fires, because the transaction is rolled back.
+  - Order-dependent calls are sequenced into variables, because SQL does not guarantee left-to-right evaluation of AND.
+  - Numbering is asserted relative to the organization's existing maximum, so the suite also passes on an upgraded
+    database.
+Privilege contract (privilege_contract_tests.sql, updated): 0 violations of 29 checks (fresh and upgraded).
+All other suites: section 19.
+
+======================================================================
+16. CONCURRENCY RESULTS
+======================================================================
+New: supabase/tests/plus_quotes_concurrency_test.sh. It uses parallel psql sessions, each holding its locks for about
+1 s, with a throwaway organization and two throwaway Admins, cleaned up on exit (verified: 0 leftover organizations).
+After every scenario it checks these invariants:
+- quote numbers are unique;
+- at most one live successor per quote;
+- no accepted quote has a sent / final successor;
+- no quote was sent after its opportunity closed.
+Result: 12 / 12 PASS (TOTAL FAILURES: 0), in the full run and again after a fresh reset.
+
+| Test | Race | Result |
+|---|---|---|
+| CONC-Q1 | double click: the same key, the same opportunity | 1 quote; outcomes t,f |
+| CONC-Q2 | two staff, the same key | 1 quote; outcomes t,f |
+| CONC-Q3 | six parallel creates | numbers n+1 to n+6, distinct and consecutive |
+| CONC-Q4 | two draft edits from the same version | one t; the other ZW003; no lost update |
+| CONC-Q5 | edit first, then Mark sent from the old version | send ZW003; stays a draft; stage unchanged |
+| CONC-Q5b | Mark sent first, then a draft edit | edit ZW004 quote_not_draft; snapshot unchanged |
+| CONC-Q6 | Revise first, then Record accepted | both succeed; the revision can no longer be sent (ZW004 revision_base_not_current) |
+| CONC-Q6b | Record accepted first, then Revise | ZW004 illegal_transition; no revision |
+| CONC-Q7 | two revisions with different keys | exactly one; the other ZW004 revision_exists |
+| CONC-Q8 | opportunity marked Lost first, then Mark sent | ZW004 opportunity_closed; stays a draft; stage lost |
+| CONC-Q8b | Mark sent first, then Lost from the old version | Lost ZW003; stage quote_sent |
+| CONC-Q9 | Record accepted vs Withdraw | exactly one transition wins; the other ZW004 |
+
+Every existing concurrency script was also re-run: section 19.
+
+======================================================================
+17. FRESH-DATABASE RESULTS
+======================================================================
+Before each of the 67 SQL suites, the isolated database was reset (supabase db reset --local) and verified fresh: head
+20261018100000; 16 seed memberships; 0 Plus contacts, modules and grants. Then the suite ran.
+Main run (run-p2s5s1.sh part 2): 67 suites, each after a verified fresh reset.
+- 65 suites: 0 failures (2,404 PASS lines in total). Among them:
+  - plus_quotes_tests 72/72; privilege_contract_tests 0 violations of 29;
+  - plus_access_helpers 170/170, plus_entitlement 150/150, plus_entitlement_versioned 17/17, plus_member_grants 76/76;
+  - plus_contacts_activities 82/82, plus_tasks 58/58, plus_growth_agent 40/40, plus_request_attributions 73/73;
+  - plus_conversion_rebooking 44/44 (P2-S4), plus_booking_service_type 27/27 (S2);
+  - core_staff_request_service_type 50/50, core_intake_airport 24/24;
+  - rls_adversarial 33, client_privilege_surface 21, privilege_baseline_behavior 30, function / mutation / driver-read /
+    create-trip privilege suites;
+  - request_decision_workflow 60, request_mutation 39, request_mutation_privilege 23, request_recurring_care 42,
+    request_trip_passenger_integrity 11, request_mutation_atomicity 4;
+  - public_request_intake 42, team_services_operations 106, website_request_form_publication 50;
+  - every remaining Core suite.
+- plus_opportunities_tests: 73/75 in the main run. Two P2-S1 assertions expected plus_quotes NOT to exist yet ("no
+  dependency on future tables"):
+  - Q5 now only requires that plus_opportunities has no FK to a later table;
+  - T8 now asserts that a manual quote_sent move creates no quote row.
+  Re-run after a verified fresh reset: 75/75. This is the same kind of update as earlier slices made when plus_tasks and
+  plus_request_attributions were added.
+- request_decision_expand_compat_tests: 8 PASS, 9 FAIL plus 1 ERROR. This is identical to every earlier baseline
+  (results-s1svc, results-s2, results-p2s4r2). The suite only applies to the intermediate P1-OPS-R1 EXPAND-only schema
+  (its header says so), so it is expected to fail on the full head. Not a regression.
+Re-run after the final suite edits (a fresh reset again): plus_opportunities_tests 75/75, plus_quotes_tests 72/72,
+privilege contract 0/29, plus_quotes_concurrency 12/12.
+After one more verified fresh reset, every concurrency script ran: 24 of 27 scripts pass in the full run. Of the other three: website_connection_lifecycle is a timing flake (passes when re-run alone); mutation_concurrency and request_lifecycle_concurrency fail the same way at production head 20261017110000 without the S1 migration (old harness defect, section 19).
+
+======================================================================
+18. UPGRADE-REHEARSAL RESULTS (production head 20261017110000 → 20261018100000)
+======================================================================
+Procedure (run-p2s5s1.sh part 1, NemrynS1Iso):
+- The new migration was held back, and the database was reset to exactly 20261017110000 (verified fresh).
+- It was seeded with fictional data:
+  - Plus active in Org A, and a WRITE grant for Dispatcher a2;
+  - 3 Core Requests (dialysis, airport, NULL service);
+  - 1 contact;
+  - 3 opportunities (qualified with estimated value 45000; qualified; lost/price);
+  - a note and a stage_changed activity;
+  - a pre-migration S2 rebooking with service dialysis (Dispatcher, result pending).
+- Rows of 18 tables were snapshotted, plus fingerprints of every non-quote function, policy and table ACL.
+- Then: supabase migration up --local.
+Results (VERIFIED):
+  migration up rc=0: "Applying migration 20261018100000_plus_quotes_foundation.sql"; head = 20261018100000
+  pre-existing rows byte-identical (row text, multiset compare both directions) in 18 tables: yes. The tables:
+    transportation_requests, request_events, trips, passengers, trip_assignments, recurring_arrangements,
+    notification_events, audit_events, plus_contacts, plus_opportunities, plus_activities, plus_tasks,
+    plus_request_attributions, plus_agent_recommendations, membership_module_grants, organization_modules,
+    organizations, memberships
+  non-quote functions identical (signature, SECURITY DEFINER, ACL, search_path, body md5): yes, 192 functions
+  non-quote policies identical: yes, 47 policies
+  non-quote table ACLs and RLS flags identical: yes, 41 tables
+  plus_activities CHECKs validated on existing rows: activity_type_check t / quote_subject_check t
+  post: Dispatcher (WRITE) creates a quote on the pre-existing qualified opportunity        → total 28100
+  post: Mark sent                                                                          → stage quote_sent
+  post: Admin Record accepted                                                              → stage quote_accepted
+  post: estimated_value_cents                                                              → 45000 (unchanged)
+  post: quote on the pre-existing LOST opportunity                                         → ZW004 opportunity_closed
+  post: P2-S4 conversion of the quote_accepted opportunity                                 → pending Request; service dialysis; stage converted
+  post: the accepted quote after conversion                                                → accepted / 28100 (untouched)
+  post: quote write on the converted opportunity                                           → ZW004 opportunity_closed
+  post: S2 rebooking with airport_transportation                                           → pending
+  post: second conversion attempt                                                          → ZW004 already_converted
+  post: Core Log Request (15-argument, with service)                                       → created
+  post: privilege contract                                                                 → 0 violations of 29
+  post: trips / passengers / assignments                                                   → 22/8/19 before = after
+  post: quote suite on the upgraded database                                               → 0 failures of 72 tests (after the two fixture fixes in section 15; the first two runs showed 5, then 2, fixture-only failures)
+
+======================================================================
+19. REGRESSION RESULTS
+======================================================================
+Requested regressions:
+- P2-S4: plus_conversion_rebooking_tests 44/44, and plus_conversion_rebooking_concurrency_test 11 PASS / exit 0.
+- S2: plus_booking_service_type_tests 27/27, core_staff_request_service_type_tests 50/50.
+- Core RLS: rls_adversarial_tests 33/33, client_privilege_surface 21/21, and the privilege baseline / function /
+  mutation suites, all with 0 failures.
+- Privilege contract: 0 violations of 29.
+All 67 SQL suites and 27 concurrency scripts: section 17.
+
+Concurrency scripts (full run, one verified fresh reset): 24 of 27 pass, including:
+- plus_quotes 12, plus_conversion_rebooking 11, plus_opportunities 6, plus_request_attributions 6, plus_tasks 4;
+- plus_contacts 4, plus_growth_agent 5, plus_entitlement 5 + 4, plus_member_grants 6;
+- request_decision 21, team_last_admin 14;
+- website_request_form_publication 29, website_requests_form 37, and the rest.
+The other three:
+- website_connection_lifecycle_concurrency_test failed once, with one assertion ("no unexpected caller error").
+  Re-run alone after a fresh reset, it PASSES every assertion, so this is a timing flake.
+- mutation_concurrency_test (CONCURRENCY-1) and request_lifecycle_concurrency_test (REQUEST-CONCURRENCY-1) fail
+  deterministically. Session A runs SELECT … FOR UPDATE as the authenticated role and gets "permission denied for
+  table trips" / "transportation_requests", because the earlier privilege hardening removed the client UPDATE
+  privilege that row locks need.
+  - PRE-EXISTING: re-run at production head 20261017110000 WITHOUT the S1 migration, both fail identically.
+  - S1 does not touch either table: the table ACL fingerprints are identical before and after the migration.
+  - Recommended separate follow-up (not S1): take the lock in those harnesses as the postgres role.
+Application checks (working tree, no app source changed):
+  npx tsc --noEmit                    exit 0 (0 errors), including the regenerated database.types.ts
+  npx eslint                          exit 0: 0 errors, 107 warnings. The changed files have none: database.types.ts
+                                      is clean, and the warnings come from untracked .tmp-qa scripts and
+                                      existing code.
+  npm test (node --test)              838 / 838 pass, 0 fail
+  npx next build                      exit 0
+No new pure TypeScript module was added, so no new unit test is required. The SQL-side pure function
+_plus_quote_validate is covered by C5–C13 and U4.
+UI E2E: none. S1 has no UI, and no E2E result is claimed.
+
+======================================================================
+20. SECURITY REVIEW AND PRIVILEGE CONTRACT
+======================================================================
+Privilege contract: privilege_contract_tests.sql now lists:
+- plus_quotes (class B, SELECT) and plus_quote_counters (class A);
+- the 9 internal functions with '' (no client EXECUTE);
+- the 8 public RPCs with 'u' (authenticated only).
+Result: 0 violations of 29, on the fresh and the upgraded database.
+docs/security/database-privilege-contract.md and plus-access-model.md (T28) are updated.
+
+Review checklist:
+
+| Check | Result |
+|---|---|
+| Write path | No client write path exists; every write is a SECURITY DEFINER RPC with _require_plus_write first. ✔ |
+| Read path | SELECT is gated by plus_can_read through RLS and inside the read RPCs. ✔ |
+| search_path | Pinned on every function (S4). ✔ |
+| Tenant isolation | Every query filters on organization_id; composite FKs; no oracle (A5). ✔ |
+| Money integrity | Integer cents; server total; CHECK identity; caps; no currency input. ✔ |
+| Immutability | The guard trigger applies to every writer, including the database owner (L4, L7, L8). ✔ |
+| Concurrency | One lock order (advisory → opportunity FOR UPDATE → contact FOR NO KEY UPDATE → quote FOR UPDATE → counter); the same opportunity-before-contact order as every existing opportunity writer; quote rows and counters are locked only by quote RPCs, so no cycle exists; 12 races pass. ✔ |
+| Idempotency | Keyed per organization, with an advisory lock; authority re-checked on replay. ✔ |
+| Data minimization (ZD-220) | No address, route, appointment, passenger or medical column. Free text: other_label (60), terms_note (500), withdrawn_reason (200), all staff-entered. Audit carries no prices or terms. ✔ |
+| Core boundary | No Core table, function or policy is changed (function / policy / ACL fingerprints identical). Quotes never create a Request, Trip, Passenger, assignment, recurring arrangement, notification, task, attribution or payment (X1). ✔ |
+| Outbound | Nothing is sent. Mark sent is a staff statement, with no email, SMS or HTTP. ✔ |
+
+Residual observations (not defects):
+- The quote numbering counter row is an organization-wide serialization point for quote creation. It is held only for
+  the creating transaction, which is acceptable at the expected volume.
+- plus_get_quote joins the opportunity's primary contact. That contact is required for the only channel today
+  (private_pay; CHECK plus_opportunities_private_pay_contact_check). A future channel without a contact must revisit
+  this join and the active-contact requirement.
+- Accepting two parallel quotes on one opportunity is possible, because OD-Q12 is open (section 21).
+
+======================================================================
+21. KNOWN LIMITATIONS AND OPEN DECISIONS
+======================================================================
+- OD-Q10 to OD-Q16 are open (section 4). In particular:
+  - parallel quotes, including two accepted quotes on one opportunity, are allowed until OD-Q12 is decided;
+  - quote events are not on the contact / opportunity timeline until OD-Q15 is decided;
+  - do-not-contact is not consulted (OD-Q16).
+- No UI, print view, quotes panel, route or customer link (by brief). The database contract is ready for a later UI
+  slice. The regenerated types include the RPCs.
+- "Sent", "accepted" and "declined" are staff statements, not delivery or customer-verified acceptance (documented in
+  the table and RPC comments).
+- Expiry is computed at read and write time against the organization-local date. A quote is valid through the whole
+  of its valid_until day in the organization's timezone.
+- PD-10 and PD-11 remain unresolved: fictional data only. Production release still requires the normal owner-approved
+  release.
+- Pre-existing items, unchanged: the "Log another request" success view; the "Preferred Service" label.
+
+======================================================================
+22. PROPOSED CONTROLLED COMMIT INVENTORY (not executed: no staging, no commit)
+======================================================================
+Proposed single feature commit "feat(plus): estimates and quotes database foundation (NP-P2-S5-S1)":
+  A supabase/migrations/20261018100000_plus_quotes_foundation.sql
+  A supabase/tests/plus_quotes_tests.sql
+  A supabase/tests/plus_quotes_concurrency_test.sh
+  M supabase/tests/privilege_contract_tests.sql
+  M supabase/tests/plus_opportunities_tests.sql
+  M src/lib/supabase/database.types.ts
+  M docs/product/decision-register.md
+  M docs/product/plus-decisions-proposed.md
+  M docs/product/plus-domain-model.md
+  M docs/product/plus-product-spec.md
+  M docs/security/plus-access-model.md
+  M docs/security/database-privilege-contract.md
+  M docs/data/mutation-api.md
+  A docs/reports/NP-P2-S5-S1-quotes-foundation-implementation.txt (optional, at the owner's choice)
+EXCLUDE: .tmp-qa/*, the other untracked docs/reports/* from earlier phases, and any scratchpad file.
+Verify before committing: git diff --cached --stat shows exactly these paths.
+
+======================================================================
+23. PRODUCTION RELEASE ORDER (DOCUMENTATION ONLY -- nothing here was executed)
+======================================================================
+1. Owner review and approval of this report. Open a PR from np-p2-s5-s1-quotes-foundation, with CI green.
+2. Before merge, read-only checks:
+   - production head is still 20261017110000 (supabase migration list --linked);
+   - privilege contract 0 / 29 on production.
+3. Apply the single migration 20261018100000 to production. The owner approves the exact migration first.
+   - It is additive: two new tables, a type, functions, a trigger and policies.
+   - The only change to an existing object is the plus_activities activity-type CHECK, which is widened. Re-adding it
+     validates existing rows.
+   - No data backfill.
+4. Post-migration read-only verification:
+   - head 20261018100000;
+   - privilege contract 0 / 29;
+   - function / ACL / body identity with a fresh isolated build;
+   - existing function fingerprints unchanged.
+5. Merge, then deploy application code. Deploying is safe before or after step 3, because no app code calls the new
+   RPCs yet; the types are additive.
+6. Production smoke only on the Pilot Simulation tenant, with explicit owner approval and fictional data. It is NOT part
+   of S1 and is deferred to the release phase or the first UI slice.
+Rollback (documentation): before any quote exists, the migration can be reverted by dropping the new objects and
+restoring the previous plus_activities CHECK. After quotes exist, roll forward only.
+
+======================================================================
+24. FINAL S1 PR-READINESS VERDICT
+======================================================================
+READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR (S1 database foundation).
+- All nine approved decisions (OD-Q1 to OD-Q9) are implemented, tested and recorded (ZD-212 to ZD-220).
+- None of OD-Q10 to OD-Q16 is encoded. No deferred decision blocks S1:
+  - OD-Q12 is satisfied by not encoding a rule;
+  - OD-Q15 defers only the quote timeline rows; audit_events holds the history.
+- The new SQL suite passes 72/72, on both a fresh and an upgraded database.
+- The new concurrency script passes 12/12.
+- Privilege contract: 0/29.
+- The upgrade from production head 20261017110000 keeps every existing row, function, policy and ACL identical.
+- P2-S4, S2 and Core regressions are green. The only failures are pre-existing and are explained with evidence:
+  - expand-compat is an intermediate-state-only suite;
+  - two harness defects reproduce at production head without S1;
+  - one timing flake passes when re-run.
+- tsc, ESLint (0 errors), 838 unit tests and next build pass.
+Remaining before release (not S1): owner review; the controlled commit (section 22); a PR; the owner-approved
+production migration (section 23). The quote UI and print view are later slices, and OD-Q10 must be decided before the
+print view.
+
+STOP. No Git operations, no deployment, no production access. The isolated stack NemrynS1Iso was stopped after the runs.

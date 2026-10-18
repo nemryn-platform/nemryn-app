@@ -67,7 +67,10 @@ c_tables(tbl) as (values
   -- NP-P2-S2 Growth Agent review queue (SELECT via RLS plus_can_read; writes through RPCs only)
   ('plus_agent_recommendations'),
   -- NP-P2-S3 request attribution (SELECT via RLS plus_can_read AND the Core request-read role; writes through RPCs only)
-  ('plus_request_attributions')
+  ('plus_request_attributions'),
+  -- NP-P2-S5-S1 estimates & quotes (SELECT via RLS plus_can_read; writes through RPCs only) + number allocator (class A)
+  ('plus_quotes'),
+  ('plus_quote_counters')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -105,7 +108,8 @@ c_auth_tbl(tbl, priv) as (values
   ('plus_opportunities', 'SELECT'),
   ('plus_tasks', 'SELECT'),
   ('plus_agent_recommendations', 'SELECT'),
-  ('plus_request_attributions', 'SELECT')
+  ('plus_request_attributions', 'SELECT'),
+  ('plus_quotes', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -332,7 +336,25 @@ c_fn(sig, roles) as (values
   ('_plus_core_request_source(text)', ''),
   ('_plus_require_idempotency_key(text)', ''),
   ('plus_convert_opportunity_to_request(uuid,uuid,timestamp with time zone,text,text,text,text,text,date,time without time zone,text,text)', 'u'),
-  ('plus_create_rebooking_request(uuid,uuid,text,text,text,text,text,text,date,time without time zone,text,text,text)', 'u')
+  ('plus_create_rebooking_request(uuid,uuid,text,text,text,text,text,text,date,time without time zone,text,text,text)', 'u'),
+  -- NP-P2-S5-S1 estimates & quotes
+  ('_plus_quotes_guard()', ''),
+  ('_plus_org_local_today(uuid)', ''),
+  ('_plus_quote_validate(text,text,numeric,bigint,bigint,bigint,bigint,bigint,bigint,bigint,bigint,text,bigint,text,date,date)', ''),
+  ('_plus_quote_lock_open_opportunity(uuid,uuid)', ''),
+  ('_plus_quote_lock(uuid,uuid)', ''),
+  ('_plus_quote_opportunity(uuid,uuid)', ''),
+  ('_plus_next_quote_number(uuid)', ''),
+  ('_plus_quote_advance_stage(plus_opportunities,text)', ''),
+  ('_plus_quote_audit(plus_quotes,text,jsonb,text)', ''),
+  ('plus_create_quote(uuid,uuid,text,text,text,boolean,numeric,bigint,bigint,bigint,bigint,bigint,bigint,bigint,bigint,text,bigint,text,date)', 'u'),
+  ('plus_update_quote_draft(uuid,uuid,timestamp with time zone,text,text,boolean,numeric,bigint,bigint,bigint,bigint,bigint,bigint,bigint,bigint,text,bigint,text,date)', 'u'),
+  ('plus_mark_quote_sent(uuid,uuid,timestamp with time zone)', 'u'),
+  ('plus_record_quote_response(uuid,uuid,timestamp with time zone,text)', 'u'),
+  ('plus_revise_quote(uuid,uuid,text)', 'u'),
+  ('plus_withdraw_quote(uuid,uuid,timestamp with time zone,text)', 'u'),
+  ('plus_list_quotes(uuid,uuid,uuid)', 'u'),
+  ('plus_get_quote(uuid,uuid)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

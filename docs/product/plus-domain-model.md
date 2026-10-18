@@ -485,27 +485,47 @@ browser → /inquiry/<publicKey> (hosted)  or  /embed/inquiry/<publicKey> (ifram
 
 ## 14. Quotes — staged (PD-08 revised)
 
-### Stage Q1 (P2-S5): structured staff estimates (`plus_quotes`)
+### Stage Q1 (P2-S5): structured staff estimates (`plus_quotes`) — database foundation IMPLEMENTED (NP-P2-S5-S1)
+
+Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plus_quotes_foundation.sql`. No UI yet.
 
 | Column | Rule |
 |---|---|
-| `id`, `organization_id`, `opportunity_id` (composite FK) | |
-| `quote_number` | per organization, sequential, display only |
-| `kind` | `estimate` (non-binding) or `quote` (operator commits to the price until `valid_until`) |
-| `service_type` | Core set |
-| `round_trip` | boolean |
-| Line columns (staff-entered, each ≥ 0, cents) | `base_fare_cents`, `distance_miles numeric(7,1)` (staff-entered), `distance_cents`, `wheelchair_cents`, `assistance_cents`, `wait_cents`, `return_leg_cents`, `other_cents` + `other_label ≤ 60`, `discount_cents` |
-| `total_cents` | computed by the RPC as the sum of the lines minus the discount; `check (total_cents >= 0)` |
-| `currency` | default `'USD'` |
-| `terms_note` | ≤ 500 |
-| `valid_until` | |
-| `status` | `draft`, `sent`, `accepted`, `declined`, `expired`, `superseded` |
-| `supersedes_quote_id` | composite self-FK |
-| `created_by`, `sent_at`, `responded_at` | |
+| `id`, `organization_id`, `opportunity_id` | composite FK `(opportunity_id, organization_id)`; **required** (ZD-213) |
+| `quote_number` | integer, per organization, allocated from `plus_quote_counters` (class A); unique `(organization_id, quote_number)`; transactional, so gap-free through the RPCs; no RPC deletes a quote; display format undecided (OD-Q10) |
+| `kind` | `estimate` or `quote` (ZD-215) |
+| `service_type` | one of the eight Plus services, or NULL |
+| `round_trip` | boolean, default false |
+| `distance_miles` | `numeric(7,1)`, optional, ≥ 0; more than one decimal is refused, never rounded |
+| Charge columns (staff-entered `bigint` cents, each 0 to 10,000,000) | `base_cents`, `mileage_cents`, `wait_cents`, `extra_stops_cents`, `mobility_assistance_cents`, `escort_cents`, `return_leg_cents`, `other_cents` + `other_label` (1 to 60 characters, required if and only if `other_cents > 0`), `discount_cents` (≤ the sum of the charges) |
+| `total_cents` | computed by the server: charges − discount; a CHECK enforces the identity and `≥ 0` (ZD-214, ZD-218) |
+| `currency` | `'USD'` only (CHECK) |
+| `terms_note` | optional, trimmed, ≤ 500 |
+| `valid_until` | `date`, required; must be on or after the organization-local date when created, edited or sent |
+| `status` | `draft`, `sent`, `accepted`, `declined`, `superseded`, `withdrawn` (ZD-216). **No stored `expired` status:** `is_expired` = sent and `valid_until` < organization-local date |
+| `supersedes_quote_id` | composite self-FK `(supersedes_quote_id, organization_id, opportunity_id)`, so a revision never crosses opportunities; at most one non-withdrawn successor per quote (partial unique index) |
+| `idempotency_key` | unique per organization; a replay returns the original quote |
+| `created_by`, `sent_at` / `sent_by`, `responded_at` / `responded_by`, `withdrawn_reason` | consistency CHECKs; a withdrawn **sent** quote needs a reason |
 
-- **Immutable once `sent`.** A revision creates a new row and marks the old one `superseded`.
-- **Labelled everywhere** as "Estimate" or "Quote", **never** "Invoice", "Bill" or "Payment". Accepting a quote changes the opportunity's stage only. It records no money movement, creates no Request, and creates no receivable.
+- **Immutable once sent.** The `_plus_quotes_guard` trigger blocks changes to identity and commercial columns of a non-draft quote for every writer (ZW004 `quote_immutable`) and allows only these transitions: draft → sent | withdrawn; sent → accepted | declined | superseded | withdrawn.
+- **Revision:** `plus_revise_quote` copies a sent quote into a new draft. When that draft is marked sent, the original becomes `superseded` in the same transaction, but only if the original is still `sent` (otherwise ZW004 `revision_base_not_current`).
+- **Opportunity stage (ZD-217):**
+  - Mark sent advances to `quote_sent`, and Record accepted advances to `quote_accepted`. Both move forward only, from an open stage.
+  - Declined changes nothing.
+  - Converted and lost opportunities are frozen for all quote writes.
+  - A stage advance writes the existing `stage_changed` activity.
+- **History:** every quote change is in `audit_events` (entity `plus_quote`; no prices). The activity types `quote_sent` and `quote_status_changed` are allowed by the CHECK, but S1 does **not** write them: a quote reference on `plus_activities` is OD-Q15 (open).
+- **Not decided / not encoded:**
+  - OD-Q10: print content, number format, default validity, branding.
+  - OD-Q11: follow-up tasks.
+  - OD-Q12: one current quote per opportunity versus parallel quotes. Parallel quotes are allowed today.
+  - OD-Q13: whether quote totals update `estimated_value_cents`. They don't today.
+  - OD-Q14: pricing rules.
+  - OD-Q15: a quote link on activities.
+  - OD-Q16: do-not-contact for quote actions. It isn't checked today.
+- **Labelled everywhere** as "Estimate" or "Quote", **never** "Invoice", "Bill" or "Payment". Accepting a quote changes only the opportunity's stage. It records no money movement, creates no Request and creates no receivable.
 - "Sending" in Q1 means **marking it as sent**. Staff share it themselves: printed or read out on a call. Emailing a quote PDF is NP-P4 and consent-gated.
+- **No addresses, routes, appointment details or medical narrative** in a quote (ZD-220).
 
 ### Stage Q2 (after PD-08 pricing approval): Core pricing rules + calculation
 - Core `organization_pricing_rules` (versioned, fixed columns: base fare, included miles, per-mile, wheelchair, assistance, included wait + wait fee, round-trip multiplier, minimum fare, after-hours fee) is owned by Core.
