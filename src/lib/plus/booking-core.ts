@@ -59,7 +59,10 @@ export interface BookingFormValues {
   source: string;
 }
 
-export type BookingFieldErrors = Partial<Record<keyof BookingFormValues, string>>;
+export type BookingFieldErrors = Partial<Record<keyof BookingFormValues | "serviceType", string>>;
+
+/** NP-P2-S4.1-S2: a rebooking's optional "Service requested" was not one of the listed services (the action and Core re-check). */
+export const BOOKING_SERVICE_ERROR = "Choose a service from the list, or leave Service requested as Not specified.";
 
 export interface BookingInput {
   requesterRelationship: string;

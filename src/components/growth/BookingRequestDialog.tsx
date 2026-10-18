@@ -11,7 +11,7 @@ import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { BOOKING_LIMITS, BOOKING_PENDING_NOTE, doNotContactNotice } from "@/lib/plus/booking-core";
-import { REQUESTER_RELATIONSHIP_OPTIONS, RETURN_TRIP_OPTIONS, SOURCE_OPTIONS, DEFAULT_SOURCE, selectOptionLabel } from "@/lib/operations/log-request-options";
+import { REQUESTER_RELATIONSHIP_OPTIONS, RETURN_TRIP_OPTIONS, SOURCE_OPTIONS, DEFAULT_SOURCE, SERVICE_NOT_SPECIFIED_LABEL, SERVICE_OPTIONS_UNAVAILABLE_NOTE, selectOptionLabel, type SelectOption } from "@/lib/operations/log-request-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -42,6 +42,12 @@ export function BookingRequestDialog(props: {
   contactId?: string;
   /** conversion: the Core source the Request will record (mapped from the opportunity) */
   sourceLabel?: string;
+  /** conversion: the opportunity's own service label, shown read-only in Review (null = Not specified; NP-P2-S4.1-S2) */
+  opportunityServiceLabel?: string | null;
+  /** rebooking: "Service requested (optional)" options -- "Not specified" first, then the organization's Services */
+  serviceOptions?: SelectOption[];
+  /** rebooking: the organization's Services could not be loaded (only "Not specified" is offered, with a short note) */
+  serviceOptionsUnavailable?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -77,6 +83,9 @@ function BookingForm({
   expectedVersion,
   contactId,
   sourceLabel,
+  opportunityServiceLabel,
+  serviceOptions,
+  serviceOptionsUnavailable = false,
   title,
   onClose: close,
 }: Parameters<typeof BookingRequestDialog>[0] & { title: string; onClose: (created: boolean) => void }) {
@@ -108,7 +117,10 @@ function BookingForm({
     assistanceNotes: "",
     additionalNotes: "",
     source: DEFAULT_SOURCE,
+    // rebooking only: "" = Not specified (posted as a hidden field; the conversion action never reads it)
+    serviceType: "",
   });
+  const rebookServiceOptions = serviceOptions ?? [{ value: "", label: SERVICE_NOT_SPECIFIED_LABEL }];
   const set = (k: keyof typeof v) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [k]: e.target.value }));
   const missing = !v.pickupDescription.trim() || !v.destinationDescription.trim();
   const errors = state.errors ?? {};
@@ -211,6 +223,17 @@ function BookingForm({
             <Select label="Who is requesting" options={REQUESTER_RELATIONSHIP_OPTIONS} value={v.requesterRelationship} onChange={set("requesterRelationship")} error={errors.requesterRelationship} data-testid="booking-relationship" />
             <Textarea label="Pickup location" required rows={2} maxLength={BOOKING_LIMITS.location} value={v.pickupDescription} onChange={set("pickupDescription")} error={errors.pickupDescription} data-testid="booking-pickup" />
             <Textarea label="Destination" required rows={2} maxLength={BOOKING_LIMITS.location} value={v.destinationDescription} onChange={set("destinationDescription")} error={errors.destinationDescription} data-testid="booking-destination" />
+            {mode === "rebook" && (
+              <Select
+                label="Service requested (optional)"
+                options={rebookServiceOptions}
+                value={v.serviceType}
+                onChange={set("serviceType")}
+                error={errors.serviceType}
+                helpText={serviceOptionsUnavailable ? SERVICE_OPTIONS_UNAVAILABLE_NOTE : undefined}
+                data-testid="booking-service"
+              />
+            )}
             <div className="grid grid-cols-1 gap-zw-md md:grid-cols-3">
               <Input label="Preferred date (optional)" type="date" value={v.preferredDate} onChange={set("preferredDate")} error={errors.preferredDate} data-testid="booking-date" />
               <Input label="Preferred time (optional)" type="time" value={v.preferredTime} onChange={set("preferredTime")} error={errors.preferredTime} data-testid="booking-time" />
@@ -240,6 +263,15 @@ function BookingForm({
                 ["Destination", v.destinationDescription.trim()],
                 ["Preferred", [v.preferredDate, v.preferredTime].filter(Boolean).join(" ") || "No date given"],
                 ["Return trip", selectOptionLabel(RETURN_TRIP_OPTIONS, v.returnTripNeeded)],
+                // NP-P2-S4.1-S2: conversion shows the opportunity's own service (read-only); rebooking shows the choice
+                [
+                  "Service requested",
+                  mode === "convert"
+                    ? (opportunityServiceLabel ?? SERVICE_NOT_SPECIFIED_LABEL)
+                    : v.serviceType
+                      ? selectOptionLabel(rebookServiceOptions, v.serviceType)
+                      : SERVICE_NOT_SPECIFIED_LABEL,
+                ],
                 ["Source", mode === "rebook" ? selectOptionLabel(SOURCE_OPTIONS, v.source) : (sourceLabel ?? "From the opportunity")],
               ].map(([k, val]) => (
                 <div key={k}>

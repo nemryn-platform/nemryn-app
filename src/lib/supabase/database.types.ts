@@ -3533,6 +3533,7 @@ export type Database = {
           p_preferred_time: string
           p_requester_relationship: string
           p_return_trip_needed: string
+          p_service_type?: string
           p_source: string
         }
         Returns: Database["public"]["CompositeTypes"]["plus_booking_request_result"]

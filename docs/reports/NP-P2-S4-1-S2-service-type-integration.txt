@@ -1,0 +1,356 @@
+NP-P2-S4.1-S2 -- SERVICE TYPE INTEGRATION: OPPORTUNITY CONVERSION & REBOOKING
+Nemryn Plus (on top of Core NC-REQUEST-SERVICE-TYPE-S1)
+Date: 2026-10-18
+Mode: CONTROLLED LOCAL IMPLEMENTATION AND ISOLATED TESTING.
+- No production migration, deploy or production data write.
+- No stage, commit, push or PR.
+- No branch switch, worktree, reset, stash or clean.
+Test infrastructure: the isolated Supabase stack NemrynS1Iso. Fictional seed data only.
+Owner decisions (locked, not reopened): OD-S1 = A, OD-S2, OD-S3, OD-S4.
+Legend: COMPLETED = executed and passing; NOT EXECUTED = not run (the reason is given).
+
+======================================================================
+1. VERIFIED BASELINE
+======================================================================
+- Branch nc-request-service-type-s1 (the merged S1 branch; not switched, as instructed). HEAD 50ef68b; its tree equals
+  origin/main bb99372.
+  - S1 is merged (PR #12) and released: production smoke signed off.
+  - Commit S2 on a NEW branch from main (owner action).
+- 0 tracked changes at start; untracked = reports and QA scripts only.
+- Production (read-only `supabase migration list --linked`): 87/87, 0 mismatches, head 20261017100000. Matches the
+  S1 sign-off.
+- Plus RPCs before S2:
+  - plus_convert_opportunity_to_request: 12 args;
+  - plus_create_rebooking_request: 12 args, no defaults;
+  - both SECURITY DEFINER, search_path pinned, EXECUTE authenticated only;
+  - Plus WRITE + Core role checks (_require_plus_write, _plus_require_core_request_read).
+- Callers: no database object calls either RPC. The only callers are the booking server actions (named arguments).
+
+======================================================================
+2. EXACT FILES CHANGED (working tree, unstaged)
+======================================================================
+NEW (2) + this report:
+  supabase/migrations/20261017110000_plus_booking_service_type.sql
+  supabase/tests/plus_booking_service_type_tests.sql
+  docs/reports/NP-P2-S4-1-S2-service-type-integration.txt
+MODIFIED (12): 111 insertions, 6 deletions.
+  src/app/operations/growth/booking/actions.ts                 (rebooking: validate the raw serviceType; pass p_service_type)
+  src/lib/plus/booking-core.ts                                 (BOOKING_SERVICE_ERROR; field-error key "serviceType")
+  src/lib/plus/booking-core.test.mjs                           (2 new tests)
+  src/components/growth/BookingRequestDialog.tsx               (rebook Select; Review row for both modes)
+  src/app/operations/growth/contacts/[contactId]/page.tsx      (load configured Services -> options / unavailable)
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx  (pass the opportunity's service label to Review)
+  src/lib/supabase/database.types.ts                           (plus_create_rebooking_request p_service_type?: string)
+  supabase/tests/privilege_contract_tests.sql                  (rebooking signature -> 13 args)
+  supabase/tests/core_staff_request_service_type_tests.sql     (S1 G1: a conversion now carries the opportunity service)
+  docs/data/mutation-api.md, docs/product/plus-product-spec.md, docs/security/database-privilege-contract.md
+QA only (untracked; NOT for commit): .tmp-qa/np-p2-s4-1-s2-service-type-e2e.mjs.
+No Core function, table, column, CHECK, policy, table grant or service value changed. No airport value for Plus
+opportunities (OD-S4).
+
+======================================================================
+3. MIGRATION AND RPC SIGNATURES
+======================================================================
+20261017110000_plus_booking_service_type.sql (sorts after 20261017100000; one transaction via the CLI):
+1. CREATE OR REPLACE public.plus_convert_opportunity_to_request(uuid, uuid, timestamptz, text, text, text, text, text,
+   date, time, text, text) RETURNS plus_booking_request_result. The signature is UNCHANGED.
+   - Body = the 20261015140000 body verbatim, except the Core call gains a 15th argument, v_opp.service_type.
+   - The comment is extended. REVOKE public / anon / service_role; GRANT authenticated.
+2. DROP public.plus_create_rebooking_request(<exact 12-argument identity>), no CASCADE. Then CREATE
+   public.plus_create_rebooking_request(p_organization_id uuid, p_contact_id uuid, p_idempotency_key text,
+   p_requester_relationship text, p_pickup_description text, p_destination_description text,
+   p_return_trip_needed text, p_source text, p_preferred_date date, p_preferred_time time, p_assistance_notes text,
+   p_additional_notes text, p_service_type text DEFAULT NULL) RETURNS plus_booking_request_result.
+   - SECURITY DEFINER; SET search_path = public, pg_temp.
+   - Body = the original verbatim, plus p_service_type passed to log_transportation_request.
+   - Comment; REVOKE public / anon / service_role; GRANT authenticated.
+3. NOTIFY pgrst, 'reload schema'.
+Diffs against 20261015140000 show only these lines. Exactly one function each (no overload); ACL {postgres,
+authenticated}.
+
+======================================================================
+4. CONVERSION SERVICE PROPAGATION   [COMPLETED]
+======================================================================
+- The Core Request carries the opportunity's own service_type: one of the eight Plus values, all accepted by Core's
+  nine.
+  - NULL stays NULL; nothing is inferred; a configured or unconfigured service is preserved (OD-S1 = A); a valid
+    service is never replaced with NULL.
+- The dialog has NO service control in convert mode. Review shows "Service requested: <label>" read-only, or "Not
+  specified".
+- The conversion action never reads a service from the form, so it cannot be overridden (unit source check).
+- Preserved (SQL suite + P2-S4 suites):
+  - authorization, tenancy, the advisory lock, replay;
+  - eligibility, manual-link refusal, attribution, the stage change, audit;
+  - conversion-link immutability, pending-only, no Trip / Passenger.
+
+======================================================================
+5. REBOOKING SERVICE SELECTION   [COMPLETED]
+======================================================================
+- Rebook dialog: one optional "Service requested (optional)" Select after Destination, using the existing component.
+  - The default is "Not specified"; Review shows the choice.
+  - Options from serviceRequestedOptions (S1 helper) with Core's SERVICE_TYPE_VALUES / SERVICE_TYPE_LABELS: no
+    second list.
+- The server action re-checks the RAW value with parseServiceTypeInput (blank = NULL; exact canonical value; never
+  trimmed). Otherwise a field error: "Choose a service from the list, or leave Service requested as Not specified."
+  Core re-validates authoritatively.
+- Idempotency is unchanged: the replay path returns BEFORE the Core call. The same key returns the ORIGINAL Request
+  (changed=false), never a second one, and never changes the original service, even if the retry carries another
+  service.
+- The do-not-contact notice, the sessionStorage retry key, the review / confirm steps and the success behaviour are
+  unchanged (R3 E2E 14/14; P2-S4 E2E 31/31).
+
+======================================================================
+6. SERVICES LOADING AND FAILURE BEHAVIOUR   [COMPLETED, isolated]
+======================================================================
+The contact page loads the configured Services with the existing get_organization_service_offerings (Admins and
+Dispatchers since S1), only for Plus writers:
+- successful EMPTY list -> "Not specified" + all nine (incl. Airport transportation, OD-S3);
+- successful configured list -> "Not specified" + only those (canonical order);
+- FAILED read -> "Not specified" only, with "Available services couldn't be loaded. You can still log this request
+  without one." No error detail is shown.
+The database accepts any valid canonical service from authorized staff, whatever the configuration (SQL C1 / C2).
+
+======================================================================
+7. SECURITY REVIEW   [COMPLETED]
+======================================================================
+- Both RPCs: SECURITY DEFINER, search_path pinned, EXECUTE authenticated only (not PUBLIC / anon / service_role); one
+  function each (SQL R1-R3).
+- Privilege contract 0/29.
+- Authorization unchanged and re-tested with the service parameter:
+  - Admin and WRITE-grant Dispatcher allowed;
+  - READ grant -> ZW001; no grant / Driver / inactive -> ZW002;
+  - foreign organization -> ZW002 (no oracle); no user -> ZW001; anon -> 42501;
+  - every refusal writes nothing (SQL D1-D7).
+- The service value never widens access: Core validates it after the Plus WRITE + Core role checks.
+- Configured Services are a UI list only (OD-S1 = A).
+- No new read path. The Services list uses the S1-approved RPC (no direct table access).
+- No client-side-only bypass: the action and Core both validate.
+
+======================================================================
+8. BACKWARD COMPATIBILITY   [COMPLETED]
+======================================================================
+- Existing rebooking calls WITHOUT p_service_type (12 named args, the deployed app's shape; or 12 positional) work
+  and store NULL (SQL B3; upgrade rehearsal).
+- The conversion signature is unchanged.
+- A LONG-LIVED session ran the old 12-argument rebooking BEFORE and AFTER the DROP + CREATE: both succeeded (pending,
+  NULL), with 0 errors.
+- Replays of PRE-migration keys after the migration return the original Requests unchanged (conversion and rebooking).
+- The deployed app (bb99372) never sends p_service_type, so it keeps working once the migration is applied.
+
+======================================================================
+9. SQL RESULTS   [COMPLETED]
+======================================================================
+NEW plus_booking_service_type_tests.sql: 27/27 (fresh and upgraded).
+- R1-R3: contract.
+- A1: all eight Plus services convert into Requests carrying exactly that service (attribution + Converted kept).
+- A2: NULL -> NULL.
+- A3: reconversion refused (ZW004 already_converted, nothing written). A4: replay returns the same Request,
+  service unchanged.
+- A5: manual-link refusal (ZW004 linked_request_exists). A6: conversion link immutable.
+- B1: all nine Core services (incl. airport) via rebooking. B2: NULL / '' / whitespace -> NULL. B3: 12-argument
+  calls -> NULL.
+- B4: "limousine", "Dialysis", "Airport Transportation", "airport", " dialysis", "dialysis ", "dialysis\n" -> ZW006.
+  B5: nothing written.
+- B6: a same-key retry with another service returns the original (dialysis kept). B7: no opportunity created.
+- C1 / C2: Services {dialysis} -> airport rebooking accepted; a senior_medical conversion kept.
+- D1-D7: authorization (section 7).
+- E1: no Trip / Passenger / assignment / recurring / notification. E2: every Plus-created Request is pending, with
+  the unchanged request_logged event.
+Fresh reset per suite (verified), EVERY supabase/tests/*.sql: 66 suites, 2,333 PASS lines.
+- All pass except:
+  1. core_staff_request_service_type G1 failed once, as EXPECTED: it asserted the S1-era "conversion stores NULL".
+     The test was updated to the S2 behaviour (carries the opportunity's service). The rerun on a fresh database gave
+     50/50.
+  2. request_decision_expand_compat: not applicable at this head (expand-window-only; documented since R2).
+- Included: plus_conversion_rebooking 44, plus_request_attributions 73, plus_opportunities 75,
+  plus_contacts_activities 82, core_staff_request_service_type 50, core_intake_airport 24, public_request_intake 42,
+  website_* (all), team_services_operations 106, request_mutation 39, request_decision_workflow 60, rls_adversarial
+  33, privilege_contract 0/29.
+Concurrency, all 26 scripts:
+- 23 pass in the batch, including plus_conversion_rebooking (11 races on the S2 functions) and plus_request_
+  attributions 6.
+- Pre-existing harness failures: mutation CONCURRENCY-1 and request_lifecycle REQUEST-CONCURRENCY-1 (known since
+  NP-P2-S3).
+- request_decision_concurrency C.2 "Cancel queued before Accept" failed ONCE in the batch: a timing race in which
+  Accept won. It touches no S2 object, and three standalone reruns passed 21/21. Classified as a harness timing flake.
+
+======================================================================
+10. UNIT AND BROWSER TESTS   [COMPLETED]
+======================================================================
+- Unit 838/838 (booking-core 11/11, incl. 2 new):
+  - the error copy;
+  - the rebooking action validates the raw value and passes p_service_type;
+  - the conversion action never reads or sends a service;
+  - the dialog and page wiring (rebook-only Select, unavailable note, read-only conversion Review, OD-6 notice and
+    retry key kept).
+- TypeScript 0 errors.
+- ESLint 0 errors; the 107 warnings are in untracked .tmp-qa only.
+- next build succeeded (isolated, then the dev rebuild).
+- Browser E2E, production build against a fresh isolated database:
+  - NEW NP-P2-S4.1-S2 19/19:
+    - A1: no service control when converting;
+    - A2 / A3: Review "Dialysis transportation" -> Request dialysis;
+    - A4 / A5: no-service opportunity -> "Not specified" -> NULL;
+    - B1: select after Destination, default "Not specified", all nine;
+    - B2 / B3: Airport transportation chosen -> stored; rebooking attribution; no opportunity;
+    - B4 / B5: "Not specified" -> NULL;
+    - B6: an injected invalid value refused with the field message; nothing created;
+    - B7: no Trip / Passenger / recurring;
+    - C1: configured {dialysis, airport} -> only those;
+    - C2: Services read made to fail (isolated only; EXECUTE revoked, then restored and verified) -> "Not specified"
+      + note, no error detail;
+    - D1 / D2: a WRITE-grant Dispatcher sees all nine and rebooks with Rehabilitation;
+    - D3: a READ-grant Dispatcher has no rebooking control.
+  - Regression: NP-P2-S4 31/31, NP-P2-S4-R3 do-not-contact 14/14, NP-P2-S4-R5-F1 19/19, NP-P2-S3 34/34,
+    NC-REQUEST-SERVICE-TYPE-S1 Log Request 35/35.
+
+======================================================================
+11. UPGRADE REHEARSAL   [COMPLETED]
+======================================================================
+From the production head 20261017100000, seeded with:
+- fictional Requests (dialysis, wheelchair, airport, NULL);
+- Plus entitlement, a contact and two opportunities (dialysis, wheelchair);
+- a PRE-migration conversion and rebooking.
+Results:
+- `migration up` rc 0 -> head 20261017110000.
+- Exactly 1 conversion and 1 rebooking function (13-argument identity); ACL / secdef / search_path correct.
+- Core / Services / intake / attribution functions unchanged (signature, ACL, search_path, body).
+- Pre-migration Requests and attributions BYTE-IDENTICAL (9 Requests, 3 attributions).
+- Long-lived session (old 12-argument rebooking): before = pending / NULL, after = pending / NULL, 0 errors.
+- Post-migration probes:
+  - new conversion -> wheelchair_transportation / pending / web;
+  - pre-migration conversion key -> changed=false, original unchanged (NULL);
+  - 12-argument positional and named rebooking -> NULL;
+  - rebooking airport -> airport_transportation;
+  - pre-migration rebooking key + service -> changed=false, original unchanged;
+  - 'Dialysis' -> ZW006;
+  - S1 staff log (Dispatcher, dialysis) -> dialysis.
+- Cleanup verified (0 leftover rows).
+- Upgraded-database suites: plus_booking_service_type 27/27, plus_conversion_rebooking 44/44, plus_request_
+  attributions 73/73, plus_opportunities 75/75, core_intake_airport 24/24, privilege contract 0/29.
+  core_staff_request_service_type gave 49/50 there: the same expected G1 (S1-era NULL assertion), run BEFORE the
+  test was updated. The updated suite then passed 50/50 on a fresh database. It was not re-run on the upgraded
+  database.
+
+======================================================================
+12. UNRESOLVED RISKS
+======================================================================
+- Plus opportunities still offer 8 services (no airport): OD-S4, deferred by decision.
+- Historic Plus-created Requests stay NULL. No backfill, by OD-S2.
+- A cross-device duplicate rebooking is still possible (OD-8; unchanged).
+- Harness: request_decision C.2 timing flake (one occurrence); the two direct-lock concurrency scripts; expand-compat
+  not applicable.
+- Pre-existing UX items (unchanged): Log Request "Log another request"; "Preferred Service" wording on Request detail.
+- NOT EXECUTED: anything in production (local-only phase).
+
+======================================================================
+13. CONTROLLED COMMIT INVENTORY (proposed; nothing staged)
+======================================================================
+On a NEW branch from main (e.g. np-p2-s4-1-s2-service-type). 15 paths:
+  NEW  supabase/migrations/20261017110000_plus_booking_service_type.sql
+  NEW  supabase/tests/plus_booking_service_type_tests.sql
+  NEW  docs/reports/NP-P2-S4-1-S2-service-type-integration.txt
+  MOD  the 12 files in section 2
+EXCLUDE:
+- .tmp-qa/ (incl. np-p2-s4-1-s2-service-type-e2e.mjs, nc-request-service-type-s1-prod-smoke*.mjs) and screens;
+- other untracked reports (incl. NC-REQUEST-SERVICE-TYPE-S1-production-smoke-signoff.txt, NP-P2-S4-R4 / R5:
+  owner's choice);
+- scratchpad.
+
+======================================================================
+14. RELEASE SEQUENCE (documentation only; NOT performed)
+======================================================================
+1. Owner-reviewed PR (from a new branch); CI / Vercel preview green.
+2. Confirm the production backup and recovery point.
+3. `supabase projects list` includes wyocbivzgrbekuyqdfts. Head 20261017100000. `supabase db push --dry-run` lists
+   ONLY 20261017110000.
+4. Apply the migration FIRST. The deployed app keeps working, since it never sends p_service_type to rebooking.
+5. Verify (read-only):
+   - exactly one rebooking function with the 13-argument identity; one conversion function, signature unchanged;
+   - EXECUTE authenticated only; SECURITY DEFINER; search_path;
+   - privilege contract 0/29;
+   - function bodies equal the repository.
+6. Merge and deploy the application; confirm the live build id = the merge commit.
+7. Fictional Pilot Simulation smoke (owner approval). Create a fictional opportunity with a service and convert it;
+   rebook a fictional contact with a chosen service; verify both Requests carry the right service.
+8. DECLINE the test Requests through Core; never delete them.
+Rollback: before first use, a reviewed reverse migration (restore the 12-argument rebooking and the old conversion
+body). After first use, forward-fix only. ORDER IS CRITICAL: the new app sends p_service_type to rebooking, so the
+migration goes first.
+
+======================================================================
+15. FINAL PR-READINESS VERDICT
+======================================================================
+READY FOR A CONTROLLED PR, on owner review.
+- Conversion carries the opportunity's service.
+- Rebooking offers the optional, Services-filtered selection, with the failure fallback.
+- One migration: no Core or table change; no overload.
+- Backward compatibility proven: old calls, long-lived sessions, replays.
+- Security and privilege contracts hold; all executed suites pass apart from the documented harness items.
+REQUIRES OWNER ACTION: a new branch + commit, the PR, then the release in section 14 (migration first).
+
+======================================================================
+R1. FINAL UPGRADE REGRESSION VERIFICATION (2026-10-18)   [COMPLETED, isolated only]
+======================================================================
+Gap closed: the S2 upgrade rehearsal had run core_staff_request_service_type_tests.sql BEFORE its outdated G1
+assertion was corrected. The updated suite had passed only on a fresh database.
+Method:
+- The SAME rehearsal procedure as section 11 (run-s2.sh part 1, unchanged), with the isolated NemrynS1Iso stack:
+  1. reset to the production head 20261017100000, verified fresh;
+  2. seeded fictional Core Requests (dialysis, wheelchair, airport, NULL), Plus entitlement, a contact and two
+     opportunities, and a PRE-migration conversion + rebooking;
+  3. kept a long-lived session open;
+  4. `supabase migration up` applied ONLY 20261017110000;
+  5. two-statement probes;
+  6. verified cleanup;
+  7. then the updated suites on that upgraded database.
+- The working tree was confirmed identical to the S2 change set (12 modified files, unchanged). The isolated stack's
+  migrations and tests were byte-identical to the working tree, including the updated G1.
+Exact tests executed and results (all on the UPGRADED database):
+- Migration: rc 0, "Applying migration 20261017110000_plus_booking_service_type.sql", head 20261017110000.
+- Functions:
+  - exactly ONE plus_convert_opportunity_to_request (uuid, uuid, timestamptz, text, text, text, text, text, date,
+    time, text, text);
+  - exactly ONE plus_create_rebooking_request (uuid, uuid, text, text, text, text, text, text, date, time, text,
+    text, text);
+  - both SECURITY DEFINER, search_path = public, pg_temp, ACL {postgres, authenticated} (authenticated EXECUTE
+    only).
+- Core / Services / intake / attribution functions unchanged (signature, SECURITY DEFINER, ACL, search_path, body):
+  yes.
+- Existing records: the 9 pre-migration Requests and 3 attributions are BYTE-IDENTICAL after the migration.
+- Old callers:
+  - long-lived connection, old 12-argument rebooking, before -> after: pending / NULL and pending / NULL, 0 errors;
+  - 12-argument positional rebooking -> NULL / pending / email; 12-argument named (no p_service_type) -> NULL /
+    pending / phone;
+  - replay of the pre-migration conversion key -> changed=false, original unchanged;
+  - replay of the pre-migration rebooking key with a service -> changed=false, original unchanged (NULL).
+- New behaviour:
+  - conversion of a wheelchair opportunity -> wheelchair_transportation / pending;
+  - rebooking airport_transportation -> stored; 'Dialysis' -> ZW006;
+  - S1 Dispatcher staff log (dialysis) -> dialysis.
+- Cleanup verified: 0 leftover rows.
+- core_staff_request_service_type_tests (UPDATED): 50/50, failures = 0 of 50 (incl. G1: a conversion carries the
+  opportunity service).
+- plus_booking_service_type_tests: 27/27.
+- privilege_contract_tests: 0 violations of 29.
+- Also re-run: plus_conversion_rebooking_tests 44/44; plus_request_attributions_tests 73/73.
+Corrections:
+- No application or migration change (no defect found).
+- Test-infrastructure only: the scratchpad's isolated-stack supabase/config.toml and auth email templates had
+  disappeared since the last run, so the CLI fell back to defaults (project id "iso-s1", analytics on, unhealthy). They
+  were recreated from the repository config with the isolated settings:
+  - project_id NemrynS1Iso;
+  - API 54361, DB 54362, shadow 54360, port 54369, Studio 54363, Inbucket 54364, analytics 54367;
+  - [analytics] enabled = false;
+  - templates copied from supabase/templates.
+  The repository was not changed.
+FINAL PR-READINESS VERDICT (R1): READY FOR A CONTROLLED PR, on owner review. The remaining verification gap is closed.
+- Every S2 suite passes on a database upgraded from the production head.
+- Existing records are unchanged; old callers are compatible.
+- Exactly one conversion and one rebooking function exist, with the intended signatures and authenticated-only
+  EXECUTE.
+- Unchanged inventory (section 13): 15 paths, on a new branch from main.
+- Release sequence unchanged (section 14): migration FIRST.
+
+STOP. Implementation, isolated testing and report complete. Nothing staged, committed, pushed, deployed or migrated in
+production.

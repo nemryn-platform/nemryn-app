@@ -278,9 +278,9 @@ begin
   select * into v_plus from public.plus_convert_opportunity_to_request(c_a, o, (select updated_at from public.plus_opportunities where id = o),
     's1-conv-key-1', 'self', 'Fictional plus pickup', 'Fictional plus clinic', 'no', null, null, null, null);
   reset role;
-  perform pg_temp.t('G1 P2-S4 conversion works through the updated Core function: pending Request, service_type NULL in S1 (opportunity = dialysis)',
+  perform pg_temp.t('G1 P2-S4 conversion works through the updated Core function: pending Request; since NP-P2-S4.1-S2 it carries the opportunity service (dialysis)',
     v_plus.changed and v_plus.request_state = 'pending'
-    and (select coalesce(service_type, '<null>') from public.transportation_requests where id = v_plus.request_id) = '<null>'
+    and (select coalesce(service_type, '<null>') from public.transportation_requests where id = v_plus.request_id) = 'dialysis'
     and (select stage from public.plus_opportunities where id = o) = 'converted'
     and (select link_method from public.plus_request_attributions where request_id = v_plus.request_id) = 'converted_from_opportunity');
   v_rid := v_plus.request_id;
