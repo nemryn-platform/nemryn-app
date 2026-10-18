@@ -1069,6 +1069,163 @@ export type Database = {
           },
         ]
       }
+      plus_quote_counters: {
+        Row: {
+          next_number: number
+          organization_id: string
+        }
+        Insert: {
+          next_number?: number
+          organization_id: string
+        }
+        Update: {
+          next_number?: number
+          organization_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_quote_counters_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      plus_quotes: {
+        Row: {
+          base_cents: number
+          created_at: string
+          created_by: string
+          currency: string
+          discount_cents: number
+          distance_miles: number | null
+          escort_cents: number
+          extra_stops_cents: number
+          id: string
+          idempotency_key: string
+          kind: string
+          mileage_cents: number
+          mobility_assistance_cents: number
+          opportunity_id: string
+          organization_id: string
+          other_cents: number
+          other_label: string | null
+          quote_number: number
+          responded_at: string | null
+          responded_by: string | null
+          return_leg_cents: number
+          round_trip: boolean
+          sent_at: string | null
+          sent_by: string | null
+          service_type: string | null
+          status: string
+          supersedes_quote_id: string | null
+          terms_note: string | null
+          total_cents: number
+          updated_at: string
+          valid_until: string
+          wait_cents: number
+          withdrawn_reason: string | null
+        }
+        Insert: {
+          base_cents?: number
+          created_at?: string
+          created_by: string
+          currency?: string
+          discount_cents?: number
+          distance_miles?: number | null
+          escort_cents?: number
+          extra_stops_cents?: number
+          id?: string
+          idempotency_key: string
+          kind: string
+          mileage_cents?: number
+          mobility_assistance_cents?: number
+          opportunity_id: string
+          organization_id: string
+          other_cents?: number
+          other_label?: string | null
+          quote_number: number
+          responded_at?: string | null
+          responded_by?: string | null
+          return_leg_cents?: number
+          round_trip?: boolean
+          sent_at?: string | null
+          sent_by?: string | null
+          service_type?: string | null
+          status?: string
+          supersedes_quote_id?: string | null
+          terms_note?: string | null
+          total_cents: number
+          updated_at?: string
+          valid_until: string
+          wait_cents?: number
+          withdrawn_reason?: string | null
+        }
+        Update: {
+          base_cents?: number
+          created_at?: string
+          created_by?: string
+          currency?: string
+          discount_cents?: number
+          distance_miles?: number | null
+          escort_cents?: number
+          extra_stops_cents?: number
+          id?: string
+          idempotency_key?: string
+          kind?: string
+          mileage_cents?: number
+          mobility_assistance_cents?: number
+          opportunity_id?: string
+          organization_id?: string
+          other_cents?: number
+          other_label?: string | null
+          quote_number?: number
+          responded_at?: string | null
+          responded_by?: string | null
+          return_leg_cents?: number
+          round_trip?: boolean
+          sent_at?: string | null
+          sent_by?: string | null
+          service_type?: string | null
+          status?: string
+          supersedes_quote_id?: string | null
+          terms_note?: string | null
+          total_cents?: number
+          updated_at?: string
+          valid_until?: string
+          wait_cents?: number
+          withdrawn_reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_quotes_opportunity_fkey"
+            columns: ["opportunity_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_opportunities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_quotes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_quotes_supersedes_fkey"
+            columns: [
+              "supersedes_quote_id",
+              "organization_id",
+              "opportunity_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "plus_quotes"
+            referencedColumns: ["id", "organization_id", "opportunity_id"]
+          },
+        ]
+      }
       plus_request_attributions: {
         Row: {
           contact_id: string | null
@@ -2453,12 +2610,137 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_next_quote_number: {
+        Args: { p_organization_id: string }
+        Returns: number
+      }
       _plus_org_day_bounds: {
         Args: { p_organization_id: string }
         Returns: {
           day_end: string
           day_start: string
         }[]
+      }
+      _plus_org_local_today: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
+      _plus_quote_advance_stage: {
+        Args: {
+          p_opp: Database["public"]["Tables"]["plus_opportunities"]["Row"]
+          p_target: string
+        }
+        Returns: string
+      }
+      _plus_quote_audit: {
+        Args: {
+          p_action: string
+          p_extra: Json
+          p_quote: Database["public"]["Tables"]["plus_quotes"]["Row"]
+          p_reason: string
+        }
+        Returns: undefined
+      }
+      _plus_quote_lock: {
+        Args: { p_organization_id: string; p_quote_id: string }
+        Returns: {
+          base_cents: number
+          created_at: string
+          created_by: string
+          currency: string
+          discount_cents: number
+          distance_miles: number | null
+          escort_cents: number
+          extra_stops_cents: number
+          id: string
+          idempotency_key: string
+          kind: string
+          mileage_cents: number
+          mobility_assistance_cents: number
+          opportunity_id: string
+          organization_id: string
+          other_cents: number
+          other_label: string | null
+          quote_number: number
+          responded_at: string | null
+          responded_by: string | null
+          return_leg_cents: number
+          round_trip: boolean
+          sent_at: string | null
+          sent_by: string | null
+          service_type: string | null
+          status: string
+          supersedes_quote_id: string | null
+          terms_note: string | null
+          total_cents: number
+          updated_at: string
+          valid_until: string
+          wait_cents: number
+          withdrawn_reason: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "plus_quotes"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _plus_quote_lock_open_opportunity: {
+        Args: { p_opportunity_id: string; p_organization_id: string }
+        Returns: {
+          campaign_code: string | null
+          channel: string
+          closed_at: string | null
+          converted_at: string | null
+          created_at: string
+          created_by: string
+          estimated_value_cents: number | null
+          id: string
+          inquiry_type: string | null
+          lost_note: string | null
+          lost_reason: string | null
+          organization_id: string
+          owner_user_id: string | null
+          payment_reported_status: string
+          primary_contact_id: string | null
+          service_type: string | null
+          source: string
+          source_detail: string | null
+          stage: string
+          title: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "plus_opportunities"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _plus_quote_opportunity: {
+        Args: { p_organization_id: string; p_quote_id: string }
+        Returns: string
+      }
+      _plus_quote_validate: {
+        Args: {
+          p_base_cents: number
+          p_discount_cents: number
+          p_distance_miles: number
+          p_escort_cents: number
+          p_extra_stops_cents: number
+          p_kind: string
+          p_local_today: string
+          p_mileage_cents: number
+          p_mobility_assistance_cents: number
+          p_other_cents: number
+          p_other_label: string
+          p_return_leg_cents: number
+          p_service_type: string
+          p_terms_note: string
+          p_valid_until: string
+          p_wait_cents: number
+        }
+        Returns: number
       }
       _plus_require_active_contact: {
         Args: { p_contact_id: string; p_organization_id: string }
@@ -3520,6 +3802,36 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_create_quote: {
+        Args: {
+          p_base_cents: number
+          p_discount_cents: number
+          p_distance_miles: number
+          p_escort_cents: number
+          p_extra_stops_cents: number
+          p_idempotency_key: string
+          p_kind: string
+          p_mileage_cents: number
+          p_mobility_assistance_cents: number
+          p_opportunity_id: string
+          p_organization_id: string
+          p_other_cents: number
+          p_other_label: string
+          p_return_leg_cents: number
+          p_round_trip: boolean
+          p_service_type: string
+          p_terms_note: string
+          p_valid_until: string
+          p_wait_cents: number
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_quote_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_quote_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_create_rebooking_request: {
         Args: {
           p_additional_notes: string
@@ -3638,6 +3950,48 @@ export type Database = {
           stage: string
           title: string
           updated_at: string
+        }[]
+      }
+      plus_get_quote: {
+        Args: { p_organization_id: string; p_quote_id: string }
+        Returns: {
+          base_cents: number
+          contact_id: string
+          contact_name: string
+          created_at: string
+          created_by_name: string
+          currency: string
+          discount_cents: number
+          distance_miles: number
+          escort_cents: number
+          extra_stops_cents: number
+          is_expired: boolean
+          kind: string
+          mileage_cents: number
+          mobility_assistance_cents: number
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          other_cents: number
+          other_label: string
+          quote_id: string
+          quote_number: number
+          responded_at: string
+          responded_by_name: string
+          return_leg_cents: number
+          round_trip: boolean
+          sent_at: string
+          sent_by_name: string
+          service_type: string
+          status: string
+          superseded_by_quote_id: string
+          supersedes_quote_id: string
+          terms_note: string
+          total_cents: number
+          updated_at: string
+          valid_until: string
+          wait_cents: number
+          withdrawn_reason: string
         }[]
       }
       plus_get_request_attribution: {
@@ -3903,6 +4257,35 @@ export type Database = {
           total_count: number
         }[]
       }
+      plus_list_quotes: {
+        Args: {
+          p_contact_id: string
+          p_opportunity_id: string
+          p_organization_id: string
+        }
+        Returns: {
+          contact_id: string
+          created_at: string
+          currency: string
+          is_expired: boolean
+          kind: string
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          quote_id: string
+          quote_number: number
+          responded_at: string
+          round_trip: boolean
+          sent_at: string
+          service_type: string
+          status: string
+          superseded_by_quote_id: string
+          supersedes_quote_id: string
+          total_cents: number
+          updated_at: string
+          valid_until: string
+        }[]
+      }
       plus_list_recent_activities: {
         Args: { p_limit: number; p_organization_id: string }
         Returns: {
@@ -3999,6 +4382,20 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_mark_quote_sent: {
+        Args: {
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_quote_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_quote_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_quote_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_reassign_task: {
         Args: {
           p_assignee_membership_id: string
@@ -4010,6 +4407,21 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_task_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_record_quote_response: {
+        Args: {
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_quote_id: string
+          p_response: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_quote_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_quote_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4026,6 +4438,20 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_opportunity_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_revise_quote: {
+        Args: {
+          p_idempotency_key: string
+          p_organization_id: string
+          p_quote_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_quote_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_quote_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4100,6 +4526,36 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_update_quote_draft: {
+        Args: {
+          p_base_cents: number
+          p_discount_cents: number
+          p_distance_miles: number
+          p_escort_cents: number
+          p_expected_updated_at: string
+          p_extra_stops_cents: number
+          p_kind: string
+          p_mileage_cents: number
+          p_mobility_assistance_cents: number
+          p_organization_id: string
+          p_other_cents: number
+          p_other_label: string
+          p_quote_id: string
+          p_return_leg_cents: number
+          p_round_trip: boolean
+          p_service_type: string
+          p_terms_note: string
+          p_valid_until: string
+          p_wait_cents: number
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_quote_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_quote_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_update_request_attribution: {
         Args: {
           p_contact_id: string
@@ -4130,6 +4586,21 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_task_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_withdraw_quote: {
+        Args: {
+          p_expected_updated_at: string
+          p_organization_id: string
+          p_quote_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_quote_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_quote_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4799,6 +5270,16 @@ export type Database = {
       plus_opportunity_write_result: {
         opportunity_id: string | null
         stage: string | null
+        updated_at: string | null
+        changed: boolean | null
+      }
+      plus_quote_write_result: {
+        quote_id: string | null
+        quote_number: number | null
+        status: string | null
+        opportunity_id: string | null
+        opportunity_stage: string | null
+        total_cents: number | null
         updated_at: string | null
         changed: boolean | null
       }

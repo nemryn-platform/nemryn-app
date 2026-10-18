@@ -2615,6 +2615,155 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Engineering
 - **Review Trigger:** A proposal for a workspace-wide Plus activity feed
 
+### ZD-212 — Nemryn Plus quotations start as manual, itemized staff quotes (PD-08 Q1)
+
+- **Date:** 2026-10-18
+- **Category:** Product / Commercial
+- **Decision:**
+  - The first Nemryn Plus quotation capability (NP-P2-S5) is PD-08 **Q1**: staff enter itemized estimates and quotes by hand.
+  - It has no rate calculation, payments or invoicing. A quote is never an invoice, a bill, a payment request or a payment record.
+  - PD-08 Q2 (organization pricing rules) and Q3 (online payment, PD-09) are **not** approved by this decision.
+  - ZD-021 (pricing model) stays UNKNOWN.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q1 = A, 2026-10-18)
+- **Reason:** Private-pay operators need to give a written price before a ride is booked. Pricing rules and payments need separate commercial and security decisions, and they must not delay staff quotes.
+- **Affected Product Areas:** `plus_quotes` (migration `20261018100000_plus_quotes_foundation.sql`); `docs/product/plus-domain-model.md` §14; `docs/product/plus-decisions-proposed.md` PD-08
+- **Dependencies:** ZD-021, PD-08, PD-09
+- **Owner:** Product / Commercial
+- **Review Trigger:** An owner pricing-scope decision for PD-08 Q2 (OD-Q14), or a payment design (PD-09)
+
+### ZD-213 — Every quote belongs to an existing opportunity
+
+- **Date:** 2026-10-18
+- **Category:** Product / Data
+- **Decision:**
+  - Every `plus_quotes` row references an existing opportunity in the **same** organization (composite foreign key `(opportunity_id, organization_id)`; NOT NULL).
+  - There are no contact-only quotes, and creating a quote never creates an opportunity automatically.
+  - A quote's contact is its opportunity's primary contact. Creating or revising a quote requires that contact to be active.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q2 = A, 2026-10-18)
+- **Reason:** The opportunity is the pipeline unit whose stage a quote advances (ZD-217). One mandatory parent keeps tenancy, history and reporting unambiguous.
+- **Affected Product Areas:** `plus_quotes`, `plus_create_quote`, `plus_revise_quote`, `plus_list_quotes`
+- **Dependencies:** ZD-212
+- **Owner:** Product / Engineering
+- **Review Trigger:** A request for quick quotes on a contact without an opportunity
+
+### ZD-214 — Quotes use fixed staff-entered price columns; no line-item subsystem
+
+- **Date:** 2026-10-18
+- **Category:** Data
+- **Decision:**
+  - A quote has fixed, staff-entered charge columns: base, mileage, wait time, extra stops, mobility assistance, escort, return leg, and one labelled "other" charge. A discount is subtracted.
+  - The quote also stores a service type (one of the eight Plus services, or none), whether it is a round trip, an optional distance in miles, terms text and a validity date.
+  - There is **no** line-item table or configurable charge catalogue.
+  - The server computes the total: the charges minus the discount. A CHECK constraint enforces it; clients never supply it.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q3 = A, 2026-10-18)
+- **Reason:** These columns cover the private-pay charges operators actually quote. Fixed columns are easy to validate, to make immutable and to read later in PD-08 Q2, with no generic billing structure.
+- **Affected Product Areas:** `plus_quotes`; `_plus_quote_validate`; `plus_create_quote`, `plus_update_quote_draft`
+- **Dependencies:** ZD-212, ZD-218
+- **Owner:** Product / Engineering
+- **Review Trigger:** A real operator needing a charge that the fixed columns and the single "other" line cannot express
+
+### ZD-215 — Two quotation kinds: Estimate and Quote
+
+- **Date:** 2026-10-18
+- **Category:** Product
+- **Decision:**
+  - `plus_quotes.kind` is `estimate` or `quote`. The same structure, lifecycle and rules apply to both; the kind only labels how firm the price is.
+  - No other kind (for example invoice, receipt or contract) exists.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q4 = A, 2026-10-18)
+- **Reason:** Operators distinguish a rough estimate from a firm quote. A label covers this without a second workflow.
+- **Affected Product Areas:** `plus_quotes.kind`
+- **Dependencies:** ZD-212
+- **Owner:** Product
+- **Review Trigger:** The print-content decision (OD-Q10)
+
+### ZD-216 — Quote lifecycle: draft, sent, accepted, declined, superseded, withdrawn; expiry is derived
+
+- **Date:** 2026-10-18
+- **Category:** Data / Lifecycle
+- **Decision:**
+  - Stored statuses: `draft`, `sent`, `accepted`, `declined`, `superseded`, `withdrawn`.
+  - Allowed transitions:
+    - draft → sent | withdrawn;
+    - sent → accepted | declined | superseded | withdrawn.
+  - Accepted, declined, superseded and withdrawn are final.
+  - Only a draft can be edited. A sent quote is immutable. A trigger enforces this for every writer, including the database owner.
+  - Revising a sent quote creates a new draft linked by `supersedes_quote_id`. When that revision is marked sent, the original becomes `superseded` in the same transaction.
+  - Expiry is **derived**: a sent quote whose `valid_until` is before the organization's local date reads as expired.
+    - There is no `expired` status and no scheduler.
+    - An expired quote cannot be marked sent or answered. It can be revised or withdrawn.
+  - Withdrawing a sent quote requires a reason.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q5 = A, 2026-10-18)
+- **Reason:** A sent price must stay exactly as the customer saw it. A derived expiry needs no background job and cannot drift.
+- **Affected Product Areas:** `_plus_quotes_guard` trigger; `plus_mark_quote_sent`, `plus_record_quote_response`, `plus_revise_quote`, `plus_withdraw_quote`; `plus_list_quotes` / `plus_get_quote` (`is_expired`)
+- **Dependencies:** ZD-213, ZD-217
+- **Owner:** Product / Engineering
+- **Review Trigger:** A request for automatic expiry notices or follow-up tasks (OD-Q11)
+
+### ZD-217 — Quote actions advance the opportunity stage forward only
+
+- **Date:** 2026-10-18
+- **Category:** Product / Lifecycle
+- **Decision:**
+  - **Mark sent** moves an open opportunity that is before `quote_sent` to `quote_sent`.
+  - **Record accepted** moves an open opportunity that is before `quote_accepted` to `quote_accepted`.
+  - **Record declined** never marks an opportunity Lost automatically and does not change its stage.
+  - A quote action never moves a stage backwards, and never changes a `converted` or `lost` opportunity. No quote can be created, edited, sent, answered, revised or withdrawn on a closed opportunity (ZW004 `opportunity_closed`).
+  - A stage advance writes the existing `stage_changed` activity, exactly as a manual stage change does.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q6 = A, 2026-10-18)
+- **Reason:** The pipeline should show quote progress without extra clicks. Losing an opportunity, and conversion, stay deliberate staff decisions (ZD-204 conversion path).
+- **Affected Product Areas:** `_plus_quote_advance_stage`; `plus_opportunities.stage`; `plus_activities` (`stage_changed`)
+- **Dependencies:** ZD-213, ZD-216
+- **Owner:** Product
+- **Review Trigger:** A request to close an opportunity automatically after a decline
+
+### ZD-218 — Quote money is USD in integer cents
+
+- **Date:** 2026-10-18
+- **Category:** Data / Commercial
+- **Decision:**
+  - Quote amounts are `bigint` cents with no floating point anywhere.
+  - Each charge is between 0 and 10,000,000 cents ($100,000.00).
+  - The discount cannot exceed the charges, so the total is never negative.
+  - `currency` is fixed to `USD` by a CHECK, and no API accepts a currency.
+  - Distance is `numeric(7,1)` miles. A value with more than one decimal place is refused, never rounded.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q7 = A, 2026-10-18)
+- **Reason:** Integer cents give exact arithmetic. Every current operator bills in US dollars.
+- **Affected Product Areas:** `plus_quotes` CHECK constraints; `_plus_quote_validate`
+- **Dependencies:** ZD-214
+- **Owner:** Product / Engineering
+- **Review Trigger:** A non-US operator
+
+### ZD-219 — Organization Admins and WRITE-grant Dispatchers create and manage quotes; no second approver
+
+- **Date:** 2026-10-18
+- **Category:** Security / Authorization
+- **Decision:**
+  - Any member allowed to write Plus records may create, edit, send, record a response to, revise and withdraw quotes, and no second person must approve. Today that is an Organization Admin, or a Dispatcher with an active **Write** grant (ZD-210).
+  - READ-grant Dispatchers, and Organization Admins while Plus is read-only (expired), can list and read quotes only (ZW001 on writes).
+  - Drivers, members without a grant, inactive members, platform admins without a membership and other organizations get ZW002, which looks the same as "not found".
+  - Clients have SELECT on `plus_quotes` through RLS (`plus_can_read`) and no direct INSERT, UPDATE or DELETE. Every change goes through SECURITY DEFINER RPCs and is recorded in `audit_events` (entity `plus_quote`; prices excluded).
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q8 = A, 2026-10-18)
+- **Reason:** Small operators quote by phone in real time, and an approval step would block them. The audit trail records who acted.
+- **Affected Product Areas:** `plus_can_write` / `plus_can_read`; every quote RPC; `docs/security/plus-access-model.md`; `docs/security/database-privilege-contract.md`
+- **Dependencies:** ZD-206, ZD-210, ZD-211
+- **Owner:** Product / Security
+- **Review Trigger:** An operator asking for price approvals or discount limits
+
+### ZD-220 — Quotes contain no addresses, routes, appointment details or medical information
+
+- **Date:** 2026-10-18
+- **Category:** Security / Privacy
+- **Decision:**
+  - `plus_quotes` has no column for pickup or destination addresses, routes, appointment times or details, passenger identity, assistance notes or medical narrative.
+  - The only free text is the "other" charge label (60 characters) and the terms note (500 characters). Any future quote screen must label these fields as commercial terms only.
+  - Quote audit rows record identifiers and status only, never prices or free text (except a withdrawal reason of up to 200 characters, which staff enter).
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S1 owner decisions OD-Q9 = A, 2026-10-18)
+- **Reason:** It keeps quotes outside the health-information boundary while PD-10 (HIPAA / BAA) remains open. Trip details stay in Core when the opportunity is converted.
+- **Affected Product Areas:** `plus_quotes` schema; quote RPC inputs; future quote UI and print view (OD-Q10)
+- **Dependencies:** PD-10, ZD-212
+- **Owner:** Product / Security
+- **Review Trigger:** A resolution of PD-10, or a request to print trip details on a quote
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

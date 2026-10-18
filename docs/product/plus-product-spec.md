@@ -150,6 +150,13 @@ Rules:
 | **Q2 — Rule-based pricing** | After the pricing design is approved (PD-08) | Core-owned `organization_pricing_rules` (versioned) + a calculation that prefills Q1 lines. Staff may override, and overrides are recorded. Core owns the rules because dispatch, billing and any future marketplace need the same prices |
 | **Q3 — Online payment** | Separate decision (PD-09) | Hosted payment-provider flow; separate ledger; not a billing system |
 
+> **NP-P2-S5-S1 (2026-10-18): Q1 database foundation implemented. No UI yet.** The owner decisions are ZD-212 to ZD-220.
+> - The fixed charge columns are base, mileage, wait, extra stops, mobility assistance, escort, return leg and other (labelled), minus a discount, in USD integer cents.
+> - Statuses: Draft → Sent → Accepted / Declined / Superseded / Withdrawn. **Expired is derived** from `valid_until` and is not a stored status.
+> - Mark sent advances the opportunity to Quote sent, and Record accepted advances it to Quote accepted. Both move forward only. A decline never marks the opportunity Lost.
+> - These are still open and are not built: print content and number format (OD-Q10), follow-up tasks (OD-Q11), one current quote versus parallel quotes (OD-Q12), quote totals feeding the estimated value (OD-Q13), pricing rules (OD-Q14), quote timeline rows (OD-Q15), and do-not-contact handling (OD-Q16).
+> - The Opportunity quotes panel and the printable view come in later P2-S5 slices.
+
 **Payment status** remains a separate, staff-reported field (None / Deposit reported / Paid reported / Refund reported). It is never revenue or settlement evidence and is never derived from a quote. No invoicing or billing is added in Plus.
 
 ### 4.6 Retention
