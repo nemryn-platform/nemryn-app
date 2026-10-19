@@ -1,4 +1,7 @@
+import Link from "next/link";
+import { listOwnerOptions } from "@/lib/plus/contacts";
 import { getQuote, listOpportunityQuotes, type QuoteDetail, type QuoteSummary } from "@/lib/plus/quotes";
+import { listTasks } from "@/lib/plus/tasks";
 import { localDateKeyOf } from "@/lib/operations/local-time-core";
 import { formatContactTime } from "@/lib/plus/contacts-core";
 import { SERVICE_OPTIONS, serviceTypeLabel } from "@/lib/plus/opportunities-core";
@@ -11,7 +14,9 @@ import {
   formatCents,
   formatQuoteDate,
   groupQuotes,
+  quoteChargeLines,
   quoteKindLabel,
+  quotePrintHref,
   quoteReference,
   quoteStatusLabel,
   quoteStatusTone,
@@ -21,28 +26,18 @@ import { AttentionState } from "@/components/ui/AttentionState";
 import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { QuoteDraftControls, type DraftForEditing, type SentForActions } from "@/components/growth/QuoteDraftControls";
+import { QuoteDraftControls, type DraftForEditing, type FollowUpContext, type SentForActions } from "@/components/growth/QuoteDraftControls";
 import type { QuoteReview } from "@/components/growth/QuoteLifecycleDialogs";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 /** The server-read snapshot for the Mark sent review (amounts formatted from stored integer cents). */
 function toReview(d: QuoteDetail, predecessor: QuoteSummary | undefined): QuoteReview {
-  const charges: [string, number][] = [
-    ["Base transportation", d.baseCents],
-    ["Mileage charge", d.mileageCents],
-    ["Waiting time", d.waitCents],
-    ["Additional stops", d.extraStopsCents],
-    ["Mobility assistance", d.mobilityAssistanceCents],
-    ["Escort / attendant", d.escortCents],
-    ["Return leg", d.returnLegCents],
-    [d.otherLabel ? `Other: ${d.otherLabel}` : "Other charge", d.otherCents],
-  ];
   return {
     reference: quoteReference(d.kind, d.quoteNumber),
     kindLabel: quoteKindLabel(d.kind),
     serviceLabel: d.serviceType ? serviceTypeLabel(d.serviceType) : "Service not specified",
-    lines: charges.filter(([, c]) => c > 0).map(([label, c]) => ({ label, amount: formatCents(c) })),
+    lines: quoteChargeLines(d),
     discount: d.discountCents > 0 ? formatCents(d.discountCents) : null,
     total: formatCents(d.totalCents),
     validUntil: formatQuoteDate(d.validUntil),
@@ -97,6 +92,10 @@ function QuoteRow({ q, byId, timezone, emphasis }: { q: QuoteSummary; byId: Map<
         Created {formatContactTime(q.createdAt, timezone)}
         {predecessor ? ` · Revision of ${quoteReference(predecessor.kind, predecessor.quoteNumber)}` : ""}
         {successor ? ` · Replaced by ${quoteReference(successor.kind, successor.quoteNumber)}` : ""}
+        {" · "}
+        <Link href={quotePrintHref(q.id)} target="_blank" rel="noopener" className="text-text-link hover:underline" data-testid="quote-print-link">
+          Print<span className="sr-only"> {quoteReference(q.kind, q.quoteNumber)} (opens in a new tab)</span>
+        </Link>
       </p>
     </li>
   );
@@ -108,11 +107,14 @@ function QuoteRow({ q, byId, timezone, emphasis }: { q: QuoteSummary; byId: Map<
  * sent quote; everything else is read-only history. Expiry is the read RPC's derived is_expired. Writers on an open
  * opportunity may create, edit, mark sent and withdraw the DRAFT, and record responses to, revise or withdraw the current
  * SENT quote (NP-P2-S5-S3B); every action is a staff statement and the database writes its timeline event.
+ * NP-P2-S5-S3C: every row has a staff-only "Print" view (ZD-224); after Mark sent, writers are OFFERED an optional
+ * follow-up task (ZD-225) -- the panel reads the opportunity's open tasks and the assignable people for that offer only.
  */
 export async function QuotesPanel({
   organizationId,
   timezone,
   opportunityId,
+  opportunityTitle,
   opportunityServiceType,
   canWrite,
   contactDoNotContact = false,
@@ -120,6 +122,7 @@ export async function QuotesPanel({
   organizationId: string;
   timezone: string;
   opportunityId: string;
+  opportunityTitle: string;
   opportunityServiceType: string | null;
   /** Plus write AND an open opportunity (the database re-checks both) */
   canWrite: boolean;
@@ -153,6 +156,23 @@ export async function QuotesPanel({
   const sent: SentForActions | null = groups?.sent
     ? { id: groups.sent.id, reference: quoteReference(groups.sent.kind, groups.sent.quoteNumber), updatedAt: groups.sent.updatedAt, isExpired: groups.sent.isExpired }
     : null;
+  // ZD-225 follow-up offer: the existing open tasks (duplicate notice) and the assignable people (default: you). A failed
+  // read only hides the offer; it never blocks the quote actions.
+  let followUp: FollowUpContext | null = null;
+  if (canWrite && groups && (groups.draft || groups.sent)) {
+    try {
+      const [owners, tasks] = await Promise.all([listOwnerOptions(organizationId), listTasks(organizationId, { view: "open", opportunityId, limit: 5 })]);
+      followUp = {
+        subjectLabel: opportunityTitle,
+        owners: owners.map((o) => ({ value: o.handle, label: o.isSelf ? `${o.name} (you)` : o.name })),
+        selfHandle: owners.find((o) => o.isSelf)?.handle ?? null,
+        openTaskCount: tasks.total,
+        openTaskTitles: tasks.rows.map((t) => t.title),
+      };
+    } catch {
+      followUp = null;
+    }
+  }
   const showControls = canWrite && groups !== null && !draftUnavailable && (groups.draft ? draft !== null : true);
 
   return (
@@ -171,6 +191,7 @@ export async function QuotesPanel({
               draft={draft}
               sent={sent}
               doNotContact={contactDoNotContact}
+              followUp={followUp}
               canCreate={!groups.draft && !groups.sent}
             />
           ) : undefined

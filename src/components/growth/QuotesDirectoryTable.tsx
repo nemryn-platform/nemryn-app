@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { quotePrintHref } from "@/lib/plus/quotes-core";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -30,7 +31,7 @@ export const opportunityQuotesHref = (opportunityId: string) => `/operations/gro
 /**
  * Growth -> Estimates & Quotes rows (NP-P2-S5-S3A). Display only: a row opens its opportunity at the Estimates & quotes
  * panel, where the existing draft workflow lives; the reference is also a real link (keyboard / new tab). No quote is
- * created, edited or withdrawn from this table.
+ * created, edited or withdrawn from this table. NP-P2-S5-S3C: "Print" opens the staff-only print view in a new tab.
  */
 export function QuotesDirectoryTable({ rows }: { rows: QuotesDirectoryRow[] }) {
   const router = useRouter();
@@ -49,7 +50,19 @@ export function QuotesDirectoryTable({ rows }: { rows: QuotesDirectoryRow[] }) {
           >
             {row.reference}
           </Link>
-          <p className={cn(typography.metadata, "text-text-secondary")}>{row.kindLabel}</p>
+          <p className={cn(typography.metadata, "text-text-secondary")}>
+            {row.kindLabel} ·{" "}
+            <Link
+              href={quotePrintHref(row.id)}
+              target="_blank"
+              rel="noopener"
+              onClick={(e) => e.stopPropagation()}
+              className="text-text-link hover:underline"
+              data-testid="quote-directory-print"
+            >
+              Print<span className="sr-only"> {row.reference} (opens in a new tab)</span>
+            </Link>
+          </p>
         </div>
       ),
     },

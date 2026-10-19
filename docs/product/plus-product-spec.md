@@ -168,7 +168,17 @@ Rules:
 >   - The quote lifecycle on the Opportunity panel: Mark sent (review, then confirm), record the customer's reported acceptance or decline, Revise, and withdraw a sent quote with a reason.
 >   - Quote events appear on the Opportunity, Contact and dashboard timelines (OD-Q15 = A, ZD-222).
 >   - For a do-not-contact contact, Mark sent shows a warning and needs an explicit acknowledgment that the server enforces and audits. It is not consent and Nemryn sends nothing (OD-Q16 = A, ZD-223).
->   - Still not built: print / PDF (OD-Q10), follow-ups (OD-Q11), copying the quote total into the estimated value (OD-Q13), and pricing rules (OD-Q14).
+>   - Still not built in S3B: print / PDF (OD-Q10), follow-ups (OD-Q11), copying the quote total into the estimated value (OD-Q13), and pricing rules (OD-Q14).
+> - **NP-P2-S5-S3C (no migration):**
+>   - **Printable view (OD-Q10 = A, ZD-224).** Every quote row on the Opportunity panel and in the directory has **Print**, which opens a staff-only page (`/quote-print/<id>`, Plus read or above). Staff use the browser's Print / Save as PDF and share the copy themselves.
+>   - The page shows the organization name and its existing business phone, email and address; the customer's display name only; the reference ("Estimate N" / "Quote N"), date, valid-until, shared date, service, round trip and miles; the non-zero charges, discount and the stored total in USD; the terms note; and "This is an estimate / quote, not an invoice. Prices in US dollars."
+>   - Every status prints. A banner marks Draft, Expired, Accepted / Declined (recorded by staff, with the date), Superseded (naming its replacement) and Withdrawn. A current sent quote has no banner.
+>   - There is no public link, email, share action, branding field or default validity. The PDF is the team's own copy.
+>   - **Optional follow-up (OD-Q11 = A, ZD-225).** After a confirmed Mark sent, the panel offers **Add follow-up task** or **No thanks**. Only a save in the existing task dialog creates a task: an opportunity task with the suggested title "Follow up on Quote N", no due date, and assigned to the person who marked it sent (editable).
+>   - The offer and dialog list the opportunity's existing open tasks, to discourage duplicates.
+>   - For a do-not-contact contact, the suggested title is "Review Quote N internally" and a reminder says the task is internal only and doesn't allow outreach.
+>   - Accept, decline and withdraw never create, complete or cancel tasks.
+>   - Still open: OD-Q13 (quote total → estimated value) and OD-Q14 (pricing rules). The visual overhaul stays deferred.
 
 **Payment status** remains a separate, staff-reported field (None / Deposit reported / Paid reported / Refund reported). It is never revenue or settlement evidence and is never derived from a quote. No invoicing or billing is added in Plus.
 

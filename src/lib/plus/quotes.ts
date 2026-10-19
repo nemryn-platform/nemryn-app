@@ -47,6 +47,9 @@ export interface QuoteDetail extends QuoteSummary {
   termsNote: string | null;
   createdByName: string | null;
   withdrawnReason: string | null;
+  /** NP-P2-S5-S3C print view: the opportunity (for the back link) and the contact's display name only */
+  opportunityId: string;
+  contactName: string;
 }
 
 const n = (v: number | string | null) => (v === null ? 0 : Number(v));
@@ -120,6 +123,8 @@ export async function getQuote(organizationId: string, quoteId: string): Promise
     termsNote: r.terms_note,
     createdByName: r.created_by_name,
     withdrawnReason: r.withdrawn_reason,
+    opportunityId: r.opportunity_id,
+    contactName: r.contact_name,
   };
 }
 

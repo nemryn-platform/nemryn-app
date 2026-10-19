@@ -1,0 +1,297 @@
+NP-P2-S5-S3C — PRINTABLE ESTIMATES & QUOTES + OPTIONAL FOLLOW-UP TASK — IMPLEMENTATION REPORT
+=============================================================================================
+Branch: np-p2-s5-s3c-print-followup (created by the owner from origin/main at bb10195). Date: 2026-10-19.
+Status: IMPLEMENTED AND VERIFIED LOCALLY on the isolated NemrynS1Iso stack with fictional data only.
+Nothing has been staged, committed, pushed or merged. No production migration, deployment, production read
+or production write took place.
+
+======================================================================
+1. PRE-IMPLEMENTATION CONFIRMATIONS
+======================================================================
+- Branch verified: np-p2-s5-s3c-print-followup at bb10195, the same as origin/main, with no tracked changes at the start.
+- Both prerequisite reports are saved:
+  - docs/reports/NP-P2-S5-S3B-production-smoke-signoff.txt (31/31 PASS);
+  - docs/reports/NP-P2-S5-S3C-print-followup-architecture-audit.txt (sections 1–9; section 9 records the owner's approvals).
+- The decision register docs/product/decision-register.md takes the next available IDs:
+  - ZD-224 = OD-Q10 Option A (printable estimates and quotes; Q10.1–Q10.6), CONFIRMED — OWNER-APPROVED;
+  - ZD-225 = OD-Q11 Option A (optional, explicit follow-up task; Q11.1–Q11.7), CONFIRMED — OWNER-APPROVED.
+- Preserved without change: OD-Q1–Q9 (ZD-212–220), OD-Q12 (ZD-221), OD-Q15 (ZD-222) and OD-Q16 (ZD-223).
+- OD-Q13 and OD-Q14 remain OPEN. Nothing here copies a quote total into estimated_value_cents or adds pricing rules.
+
+======================================================================
+2. TASK SCHEMA CONFIRMATION (BEFORE ANY CHANGE) — NO CHANGE REQUIRED
+======================================================================
+I checked migration 20261015100000_plus_tasks.sql against ZD-225:
+- Opportunity subject: plus_tasks.opportunity_id has a composite FK (opportunity_id, organization_id). The
+  CHECK num_nonnulls(contact_id, opportunity_id) = 1 means an opportunity-only task is valid.
+  plus_create_task -> _plus_require_task_subject accepts an OPEN opportunity of the same organization. After Mark
+  sent, the opportunity is still open, so a follow-up can be created.
+- No default due date: due_at is nullable, and plus_create_task accepts p_due_at NULL.
+- Default assignee = the person who marked the quote sent: _plus_resolve_owner accepts any eligible Plus writer's
+  membership handle. Mark sent itself needs Plus write, so the sender is always eligible.
+- Duplicate guard: plus_create_task already treats the same open title, by the same person, for the same subject
+  within 30 seconds as an idempotent no-op, serialized by the subject row lock. Together with the dialog's
+  single-submit guard and the open-task notice, this meets Q11.5 Option A.
+- No automatic changes: the quote lifecycle RPCs (plus_mark_quote_sent, plus_record_quote_response,
+  plus_revise_quote, plus_withdraw_quote) never reference plus_tasks. A unit test asserts this over every
+  plus_quote* migration.
+Conclusion: no migration, no new column (no quote_id on tasks), and no RPC change. The existing TaskDialog,
+createTaskAction and plus_create_task are reused as they are.
+
+======================================================================
+3. WHAT WAS BUILT
+======================================================================
+A. Printable view (ZD-224)
+- New route: src/app/quote-print/[quoteId]/page.tsx. It sits outside /operations (no shell), like /day-sheet.
+  - Guard: requirePlusAccess. That means a signed-in staff member of the current workspace with Plus READ or above,
+    and it runs before any read.
+  - isUuid check; plus_get_quote runs on the per-request cookie client, never the service role.
+  - Unknown, foreign and malformed ids all give the same notFound().
+  - force-dynamic (the response is "private, no-cache, no-store"); robots noindex.
+  - No generateStaticParams, no public segment, no token.
+- Content comes from the pure model quotePrintModel() in src/lib/plus/quotes-core.ts:
+  - the organization name (session workspace) and its EXISTING business phone / email / address, read via
+    getOrganizationSettings with member RLS;
+  - the customer's display name only;
+  - the kind and "Estimate N" / "Quote N";
+  - date, valid until, shared date, service, round trip and miles;
+  - the non-zero itemized charges (quoteChargeLines), the discount, and the STORED total_cents in USD (never
+    recalculated);
+  - the terms note;
+  - the footer "This is a quote / an estimate, not an invoice. Prices in US dollars."
+  It does not print: contact phone / email, the opportunity title, staff names, the withdrawal reason,
+  addresses / appointments / medical information, branding or logo.
+- Status labels and banners:
+
+  | Status            | Label      | Banner                                              |
+  |-------------------|------------|-----------------------------------------------------|
+  | Draft             | Draft      | DRAFT — not yet given to the customer               |
+  | Sent              | Sent       | none                                                |
+  | Sent, past date   | Expired    | EXPIRED (derived), with the passed date             |
+  | Accepted          | Accepted   | ACCEPTED — "recorded by staff on <date>"            |
+  | Declined          | Declined   | DECLINED — "recorded by staff on <date>"            |
+  | Superseded        | Superseded | SUPERSEDED — "Replaced by Quote N …"                |
+  | Withdrawn         | Withdrawn  | WITHDRAWN — "No longer offered."                    |
+
+  The in-app panel labels are unchanged (canonical UI preserved).
+- Toolbar src/components/growth/QuotePrintToolbar.tsx: screen-only (print:hidden), with "Print / Save PDF"
+  (window.print) and "← Back to the opportunity", plus a note that the PDF is the team's own copy. There is no
+  email, share, mailto, SMS or upload.
+- Entry points: a "Print" link (new tab, rel=noopener, with screen-reader text) on every quote row of the Opportunity
+  panel (current and history) and on every directory row. The directory link stops propagation, so the row
+  navigation doesn't also fire.
+- Read model: QuoteDetail gains opportunityId and contactName. These are fields plus_get_quote already returned, so
+  the database is unchanged.
+
+B. Optional follow-up task (ZD-225)
+- QuoteDraftControls: only after a CONFIRMED Mark sent (onDone=sentDone), an offer appears with "Add follow-up task"
+  and "No thanks".
+  - It is never shown after accept, decline, revise or withdraw, and doesn't reappear on reload.
+  - Nothing is created unless the person saves the task dialog.
+- It opens the EXISTING TaskDialog (create mode) with:
+  - the subject fixed to the opportunity;
+  - the suggested title "Follow up on Quote N";
+  - due date and time EMPTY;
+  - the assignee preselected to the signed-in person who marked it sent (editable; Unassigned remains possible).
+- Duplicates are discouraged: the offer and the dialog show the opportunity's existing open-task count and up to five
+  titles. QuotesPanel reads these for writers only (listTasks open + listOwnerOptions). A failed read just hides the
+  offer.
+- Do not contact:
+  - the suggested title becomes "Review Quote N internally";
+  - the offer and dialog show "This person asked not to be contacted. A task is an internal reminder only: it doesn't
+    allow calls, emails, texts or other outreach."
+  - The contact's flag, consent and preferences are never touched.
+- TaskDialog gains one optional `notice` prop, rendered above the fields. It is additive; other callers are
+  unchanged.
+- The page passes opportunityTitle into QuotesPanel to label the subject.
+
+C. Docs
+- decision-register (ZD-224, ZD-225).
+- plus-product-spec §4.5 (NP-P2-S5-S3C) and plus-domain-model (print view + follow-up; "not decided" now lists only
+  Q13 / Q14).
+- mutation-api (S3C section: no RPC change; the OD-Q10 / Q11 status updated).
+- database-privilege-contract (S3C: no database change).
+- plus-access-model (T28b test row).
+
+Files changed:
+- Modified:
+  - src/lib/plus/quotes-core.ts
+  - src/lib/plus/quotes.ts
+  - src/lib/plus/quotes-core.test.mjs
+  - src/components/growth/QuotesPanel.tsx
+  - src/components/growth/QuoteDraftControls.tsx
+  - src/components/growth/QuotesDirectoryTable.tsx
+  - src/components/growth/TaskDialog.tsx
+  - src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  - the six docs above
+- New:
+  - src/app/quote-print/[quoteId]/page.tsx
+  - src/components/growth/QuotePrintToolbar.tsx
+  - src/lib/plus/quotes-print-followup.test.mjs
+- QA (untracked): .tmp-qa/np-p2-s5-s3c-print-followup-e2e.mjs, plus a one-assertion update in
+  .tmp-qa/np-p2-s5-s3a-quotes-directory-e2e.mjs (R4).
+- Migrations: NONE. The head is still 20261021100000.
+
+======================================================================
+4. VERIFICATION — RUN AND PASSED
+======================================================================
+Environment: isolated Supabase project NemrynS1Iso (container supabase_db_NemrynS1Iso, API 54361); the app built with
+`next build` and served with `next start -p 3100` against it. FICTIONAL seed identities and data only. The migrations
+in the isolated stack were byte-identical to the branch (diff -rq).
+
+Static and unit
+- tsc --noEmit: clean.
+- eslint .: 0 errors. All 108 warnings are in older untracked .tmp-qa scripts; none are in src/ or the new E2E.
+- next build: success; /quote-print/[quoteId] is a dynamic (ƒ) route.
+- npm test (node --test): 880 / 880 pass.
+  - New: quotes-print-followup.test.mjs, 15 / 15, covering:
+    - charge lines; the stored total; details;
+    - the display-name-only model shape;
+    - all 7 status labels and banners;
+    - staff wording only (no "online" / "signed" / "verified");
+    - follow-up titles, including DNC; the open-task notice;
+    - source rules: requirePlusAccess before getQuote, force-dynamic, notFound, noindex;
+    - no service-role client in the page or its read helpers;
+    - no route under (public) / request / embed / api;
+    - no mailto / share / fetch / upload in the toolbar or page;
+    - no branding fields;
+    - the follow-up only via TaskDialog after sentDone, with no default due date and the self assignee;
+    - the lifecycle dialogs and actions never touch tasks;
+    - no plus_quote* migration writes plus_tasks;
+    - the Print links are new-tab / noopener.
+  - Updated (outdated after an approved change, not deleted): the quotes-core.test.mjs "UI boundaries" assertion
+    used to forbid "Print" in the panel. It now forbids print/send/email/SMS/invoice in the controls and dialogs,
+    forbids PDF/send/email/window.print in the panel, and requires the panel's only print surface to be the
+    quotePrintHref link.
+
+SQL regression (run-p2s5s3c.sh: every suite in supabase/tests from a verified fresh reset)
+- 69 suites ran; 68 have 0 failures. Key results:
+
+  | Suite                       | Result                      |
+  |-----------------------------|-----------------------------|
+  | plus_quotes_tests           | 0 / 83 failures             |
+  | plus_quotes_directory_tests | 0 / 34 failures             |
+  | plus_quotes_lifecycle_tests | 0 / 41 failures             |
+  | plus_tasks_tests            | 0 / 58 failures             |
+  | plus_opportunities_tests    | 0 / 75 failures             |
+  | plus_growth_agent_tests     | 0 / 40 failures             |
+  | privilege_contract_tests    | 0 violations of 29 checks   |
+  | function_privilege_tests    | pass                        |
+  | mutation_privilege_tests    | pass                        |
+  | client_privilege_surface    | pass                        |
+
+  The tenant-isolation suites (plus_* tenant matrices, tenant_settings_foundation, etc.) all show 0 failures.
+- The one failing suite is pre-existing and unrelated: request_decision_expand_compat_tests (8 pass / 10 fail). It
+  only applies to an intermediate schema, and the S3B baseline documented it identically.
+
+Concurrency (one fresh reset, every *_test.sh)
+- Pass:
+  - plus_quotes_concurrency 18 / 18
+  - plus_tasks_concurrency 4 / 4
+  - plus_opportunities 6
+  - plus_growth_agent 5
+  - plus_conversion_rebooking 11
+  - plus_request_attributions 6
+  - plus_member_grants 6
+  - plus_entitlement 5 + 4
+  - plus_contacts 4
+  - request_decision 21
+  - team_last_admin 14
+  - the website_* scripts and all others listed in the log
+- Pre-existing harness failures (unchanged, documented earlier): mutation_concurrency CONCURRENCY-1 and
+  request_lifecycle REQUEST-CONCURRENCY-1 (the client FOR UPDATE permission issue in those harnesses). S3C touches
+  neither.
+
+Browser E2E — NEW: .tmp-qa/np-p2-s5-s3c-print-followup-e2e.mjs, 54 / 54 PASS (final run)
+- Print content: P1–P6
+  - organization name + business fields; reference; Sent with no banner;
+  - itemized non-zero lines, discount, stored total $120.00, terms, footer;
+  - display name only (no contact phone / email, opportunity title or staff names);
+  - toolbar with no share / email;
+  - response "private, no-cache, no-store"; noindex.
+- Print media: P7–P8. Emulated print media hides the toolbar. Page.printToPDF gives a valid %PDF of the view
+  (89 KB, saved locally under .tmp-qa/screens).
+- Banners: P9–P14. Draft, Accepted (recorded by staff on the date), Declined, Superseded ("Replaced by Quote N", its
+  own $120.00 against the revision's $220.00), Withdrawn (sent and draft; the reason is not printed), and Expired.
+- Tenant isolation and access: P15–P26.
+  - The same 404 for an Org B id, an unknown id and a malformed id; Org B's Admin also gets 404 on an Org A quote
+    and prints its own.
+  - Signed out: redirected to /sign-in.
+  - READ-grant Dispatcher can print; the Print link shows, but no write controls and no offer.
+  - No-grant Dispatcher: /operations. Driver: /driver.
+  - Plus expired: still prints.
+  - A revoked plus_get_quote gives an error, never a partial document.
+- Entry points: P27–P29.
+  - Panel Print links on current and history rows (_blank, noopener).
+  - A directory Print link per row; clicking it doesn't navigate the directory tab.
+- Follow-up: F1–F20.
+  - The offer appears only after a UI Mark sent, and no task exists until a save.
+  - The dialog is fixed to the opportunity with "Follow up on Quote N", empty due date / time, and the assignee = the
+    sender's membership.
+  - Cancel creates nothing.
+  - A double-clicked Save creates exactly one task: due_at NULL, assignee and created_by = the sender, audited once
+    as plus_task_created.
+  - The task shows under Open tasks, and the offer doesn't reappear after a reload.
+  - "No thanks" creates nothing.
+  - The existing open task is listed (count + title) in the offer and the dialog.
+  - DNC: the internal-reminder notice and the "Review Quote N internally" title; the saved task leaves
+    do_not_contact = true and unchanged.
+  - Recording accepted / declined and withdrawing leave every task identical (same updated_at, still open).
+  - Exactly 3 tasks exist across all fixture opportunities: 2 explicit saves + 1 fixture.
+- 768 px: T1–T3. The offer and buttons are inside the viewport; the print view has no horizontal overflow.
+- No communication: N1. notification_events and the email / SMS / notification audit rows went 0/0 -> 0/0.
+- Screenshots: .tmp-qa/screens/np-p2-s5-s3c/ (p1, p9, p12, f2, f4, f17, t2, t3, plus p8 PDF).
+
+Browser E2E regression of the earlier quote slices (same build)
+- NP-P2-S5-S3B lifecycle: 32 / 32.
+- NP-P2-S5-S2 drafts: 33 / 33.
+- NP-P2-S5-S3A directory: 31 / 31 on a fresh reset, after updating R4 for the approved Print link. R4 now requires
+  that the only "Print" element is an <a> to /quote-print/<uuid> with target _blank, and still forbids Mark sent /
+  Revise / Edit / Withdraw in the directory.
+  - On a database reused from earlier E2E runs, P4 (page-2 count) and F4 (exactly one expired quote) failed because
+    of leftover fictional quotes from other scripts. That is a fixture collision, not a regression; both pass from
+    a fresh reset.
+
+======================================================================
+5. NOT RUN / NOT APPLICABLE
+======================================================================
+- Upgrade rehearsal: NOT APPLICABLE. S3C adds no migration (the head is unchanged at 20261021100000), so there is
+  nothing to apply on top of the deployed head. The fresh-reset suites above cover the unchanged schema.
+- New SQL suite: none was needed. No SQL object changed, and the existing quotes / tasks suites cover the read and
+  create paths used.
+- Production: no production smoke. Nothing was deployed, and no production access was authorized for this slice.
+- Real browser print dialog: CDP Page.printToPDF and print-media emulation were used instead of the interactive OS
+  print dialog.
+- Cross-browser (Safari / Firefox) print rendering: not run. Only headless Chrome was used.
+
+======================================================================
+6. OBSERVATIONS (NOT FIXED — EXISTING BEHAVIOUR, FOR THE OWNER'S AWARENESS)
+======================================================================
+- O1: a deliberate double-click on Save in the EXISTING TaskDialog sends two submissions. The database stores one
+  task, but the final message reads "That task was already added." rather than "Task added." This is the
+  pre-existing createTaskAction / plus_create_task duplicate-window wording, not new in S3C. It is truthful, with one
+  task, but slightly surprising. I left it unchanged to preserve the canonical UI; it could be refined during the
+  UI overhaul.
+- O2: the open-task notice counts ALL open tasks on the opportunity, not only quote follow-ups. That is the intended
+  Q11.5 A behaviour, since tasks have no quote link (Q11.4 A).
+- O3: the print page title is the generic "Estimate or quote", so the browser's suggested PDF file name is generic.
+  A reference-based file name would need a second read in generateMetadata; I deferred it as cosmetic.
+- PD-10 / PD-11 remain unresolved. The print view creates a copy outside Nemryn when staff save a PDF. The on-screen
+  note says the team is responsible for that copy. Fictional data only.
+
+======================================================================
+7. SCOPE GUARDS CONFIRMED
+======================================================================
+- No automatic outbound communication, public quote URL, token, share or email action, or new branding / logo /
+  default-validity fields.
+- Follow-up tasks are never created, completed or cancelled automatically.
+- The do-not-contact flag, consent and preferences are untouched; the DNC follow-up is internal only.
+- The canonical Nemryn UI is preserved: existing components and tokens, additive controls only, and the in-app status
+  labels unchanged. The visual overhaul stays deferred.
+- The isolated app was stopped, the isolated Supabase stack was stopped (`supabase stop`, no NemrynS1Iso
+  containers left running), and the temporary env file (.iso-env.tmp) was deleted. No other project's containers
+  were touched.
+- No git stage, commit, push, merge, PR, branch switch, stash, reset or clean. No production migration, deployment or
+  production data access.
+
+STOPPED after implementation and reporting, awaiting the owner's review.

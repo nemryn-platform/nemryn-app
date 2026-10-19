@@ -685,7 +685,7 @@ Every write returns `plus_quote_write_result(quote_id, quote_number, status, opp
 
 **Not written or not decided:**
 - Quote activity rows (OD-Q15) were not written in S1. NP-P2-S5-S3B (ZD-222) now writes them; see below.
-- Not enforced or not decided: changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16; decided and implemented in NP-P2-S5-S3B, ZD-223), print content and number format (OD-Q10), follow-up tasks (OD-Q11), and pricing rules (OD-Q14).
+- Not enforced or not decided: changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16; decided and implemented in NP-P2-S5-S3B, ZD-223), print content and number format (OD-Q10; decided in NP-P2-S5-S3C, ZD-224, with no mutation), follow-up tasks (OD-Q11; decided in NP-P2-S5-S3C, ZD-225, using the existing `plus_create_task`), and pricing rules (OD-Q14).
 - No Request, Trip, Passenger, payment, notification or outbound message is ever created.
 
 Tests:
@@ -766,3 +766,12 @@ Tests:
 - `supabase/tests/plus_quotes_lifecycle_tests.sql`;
 - `plus_quotes_concurrency_test.sh` (Q13 / Q13b plus the one-event-per-transition invariant);
 - `quotes-core.test.mjs`.
+
+### NP-P2-S5-S3C — printable view (ZD-224) and optional follow-up task (ZD-225)
+
+No migration and no RPC change.
+- The print view `/quote-print/[quoteId]` only reads. It uses `plus_get_quote`, the `organizations` business fields (member RLS) and, for a superseded quote, `plus_get_quote` on its replacement. It writes nothing and sends nothing.
+- The follow-up task is created through the existing `createTaskAction` → `plus_create_task(org, title, NULL due_at, assignee, NULL contact, opportunity_id)`, only when the staff member saves the task dialog. The RPC already re-checks Plus write, the open opportunity subject and the assignee's eligibility, and treats the same title for the same subject by the same person within 30 seconds as a no-op.
+- `plus_mark_quote_sent`, `plus_record_quote_response`, `plus_revise_quote` and `plus_withdraw_quote` are unchanged and never touch `plus_tasks`.
+
+Tests: `src/lib/plus/quotes-print-followup.test.mjs`; the existing quote and task SQL suites.

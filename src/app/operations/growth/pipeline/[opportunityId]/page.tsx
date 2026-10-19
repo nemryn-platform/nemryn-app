@@ -216,6 +216,7 @@ export default async function OpportunityDetailPage({
         organizationId={context.organizationId}
         timezone={tz}
         opportunityId={o.id}
+        opportunityTitle={o.title}
         opportunityServiceType={o.serviceType}
         canWrite={canWrite && open}
         contactDoNotContact={o.contactDoNotContact}

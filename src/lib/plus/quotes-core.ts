@@ -494,3 +494,179 @@ export function quoteActivityLine(type: string, kind: string | null, quoteNumber
   }
   return "Quote updated";
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Printable estimate / quote (NP-P2-S5-S3C, ZD-224). A staff-only print view of the STORED record: amounts are formatted
+// from the stored integer cents and the total is the stored total_cents (never recalculated). Customer display name
+// only -- no contact details, addresses, appointment or medical information (OD-Q9). Every status prints, with a banner
+// so a draft or a replaced version can't pass as the current price.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export interface QuoteChargeSource {
+  baseCents: number;
+  mileageCents: number;
+  waitCents: number;
+  extraStopsCents: number;
+  mobilityAssistanceCents: number;
+  escortCents: number;
+  returnLegCents: number;
+  otherCents: number;
+  otherLabel: string | null;
+}
+
+/** The non-zero itemized charges, in the editor's order, formatted from stored cents. */
+export function quoteChargeLines(d: QuoteChargeSource): { label: string; amount: string }[] {
+  const charges: [string, number][] = [
+    ["Base transportation", d.baseCents],
+    ["Mileage charge", d.mileageCents],
+    ["Waiting time", d.waitCents],
+    ["Additional stops", d.extraStopsCents],
+    ["Mobility assistance", d.mobilityAssistanceCents],
+    ["Escort / attendant", d.escortCents],
+    ["Return leg", d.returnLegCents],
+    [d.otherLabel ? `Other: ${d.otherLabel}` : "Other charge", d.otherCents],
+  ];
+  return charges.filter(([, c]) => c > 0).map(([label, c]) => ({ label, amount: formatCents(c) }));
+}
+
+/** Print status labels: the six stored statuses by name, plus the derived "Expired" for a sent quote past its date. */
+const PRINT_STATUS_LABELS: Record<QuoteStatus, string> = {
+  draft: "Draft",
+  sent: "Sent",
+  accepted: "Accepted",
+  declined: "Declined",
+  superseded: "Superseded",
+  withdrawn: "Withdrawn",
+};
+export function quotePrintStatusLabel(status: string, isExpired: boolean): string {
+  if (status === "sent" && isExpired) return "Expired";
+  return isStatus(status) ? PRINT_STATUS_LABELS[status] : "Unknown";
+}
+
+export interface QuotePrintBanner {
+  /** "caution": not a current offer (draft, expired, superseded, withdrawn, declined); "record": an outcome on file */
+  tone: "caution" | "record";
+  heading: string;
+  text: string;
+}
+
+export interface QuotePrintInput extends QuoteChargeSource {
+  kind: string;
+  quoteNumber: number;
+  status: string;
+  isExpired: boolean;
+  serviceLabel: string;
+  roundTrip: boolean;
+  distanceMiles: number | null;
+  discountCents: number;
+  totalCents: number;
+  currency: string;
+  validUntil: string;
+  /** organization-local calendar dates (YYYY-MM-DD); null when not applicable */
+  createdDate: string;
+  sentDate: string | null;
+  respondedDate: string | null;
+  termsNote: string | null;
+  customerName: string;
+  /** the revision that replaced this version (superseded only) */
+  successor: { kind: string; quoteNumber: number } | null;
+}
+
+export interface QuotePrintModel {
+  documentTitle: string;
+  reference: string;
+  statusLabel: string;
+  banner: QuotePrintBanner | null;
+  customerName: string;
+  details: { label: string; value: string }[];
+  lines: { label: string; amount: string }[];
+  discount: string | null;
+  total: string;
+  currency: string;
+  termsNote: string | null;
+  footer: string;
+}
+
+export function quotePrintBanner(input: Pick<QuotePrintInput, "status" | "isExpired" | "validUntil" | "respondedDate" | "successor">): QuotePrintBanner | null {
+  const on = (d: string | null) => (d ? ` on ${formatQuoteDate(d)}` : "");
+  switch (input.status) {
+    case "draft":
+      return { tone: "caution", heading: "DRAFT", text: "Not yet given to the customer. The prices may still change." };
+    case "sent":
+      return input.isExpired
+        ? { tone: "caution", heading: "EXPIRED", text: `The valid-until date (${formatQuoteDate(input.validUntil)}) has passed.` }
+        : null;
+    case "accepted":
+      return { tone: "record", heading: "ACCEPTED", text: `Customer acceptance recorded by staff${on(input.respondedDate)}.` };
+    case "declined":
+      return { tone: "caution", heading: "DECLINED", text: `Customer decline recorded by staff${on(input.respondedDate)}.` };
+    case "superseded":
+      return {
+        tone: "caution",
+        heading: "SUPERSEDED",
+        text: `${input.successor ? `Replaced by ${quoteReference(input.successor.kind, input.successor.quoteNumber)}` : "Replaced by a revision"}. This version is no longer the current price.`,
+      };
+    case "withdrawn":
+      return { tone: "caution", heading: "WITHDRAWN", text: "No longer offered." };
+  }
+  return { tone: "caution", heading: "NOT CURRENT", text: "This record's status is not recognised." };
+}
+
+export function quotePrintFooter(kind: string): string {
+  return `This is ${kind === "estimate" ? "an estimate" : "a quote"}, not an invoice. Prices in US dollars.`;
+}
+
+/** Shown on screen only (never printed): the saved PDF is the team's own copy. */
+export const QUOTE_PRINT_SCREEN_NOTE =
+  "Print or save a PDF to share it yourself. Nemryn doesn't send this document or keep the PDF, and your team is responsible for the copy.";
+
+export function quotePrintModel(input: QuotePrintInput): QuotePrintModel {
+  const kindLabel = quoteKindLabel(input.kind);
+  const details: { label: string; value: string }[] = [
+    { label: "Date", value: formatQuoteDate(input.createdDate) },
+    { label: "Valid until", value: formatQuoteDate(input.validUntil) },
+  ];
+  if (input.sentDate) details.push({ label: "Shared with the customer", value: formatQuoteDate(input.sentDate) });
+  details.push({ label: "Service", value: input.serviceLabel });
+  details.push({ label: "Round trip", value: input.roundTrip ? "Yes" : "No, one way" });
+  if (input.distanceMiles !== null) details.push({ label: "Estimated miles", value: `${input.distanceMiles} mi` });
+  return {
+    documentTitle: kindLabel,
+    reference: quoteReference(input.kind, input.quoteNumber),
+    statusLabel: quotePrintStatusLabel(input.status, input.isExpired),
+    banner: quotePrintBanner(input),
+    customerName: input.customerName,
+    details,
+    lines: quoteChargeLines(input),
+    discount: input.discountCents > 0 ? formatCents(input.discountCents) : null,
+    total: formatCents(input.totalCents),
+    currency: input.currency,
+    termsNote: input.termsNote && input.termsNote.trim() ? input.termsNote : null,
+    footer: quotePrintFooter(input.kind),
+  };
+}
+
+export const quotePrintHref = (quoteId: string) => `/quote-print/${quoteId}`;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Optional follow-up task after Mark sent (NP-P2-S5-S3C, ZD-225). Offered, never created automatically: the staff member
+// confirms it in the existing task dialog (an opportunity task through plus_create_task). No default due date; the
+// assignee defaults to the person who marked the quote sent. Accept / decline / withdraw never touch tasks.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The suggested title. For a do-not-contact contact, an internal review title -- never "call" / "email". */
+export function followUpTaskTitle(reference: string, doNotContact: boolean): string {
+  return doNotContact ? `Review ${reference} internally` : `Follow up on ${reference}`;
+}
+
+export const FOLLOW_UP_OFFER_TEXT = "Want a reminder? You can add a follow-up task for your team. It's optional, and nothing is sent to the customer.";
+export const FOLLOW_UP_DNC_REMINDER =
+  "This person asked not to be contacted. A task is an internal reminder only: it doesn't allow calls, emails, texts or other outreach.";
+
+/** A notice when the opportunity already has open tasks (discourages duplicates); null when it has none. */
+export function openTasksNotice(count: number): string | null {
+  if (!Number.isInteger(count) || count <= 0) return null;
+  return count === 1
+    ? "This opportunity already has 1 open task. Check it before adding another."
+    : `This opportunity already has ${count} open tasks. Check them before adding another.`;
+}

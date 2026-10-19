@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useState, type ReactNode } from "react";
 import { createTaskAction, updateTaskAction, type TaskFormState } from "@/app/operations/growth/tasks/actions";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -33,6 +33,7 @@ export function TaskDialog({
   subjectOptions,
   taskId,
   expectedVersion,
+  notice,
 }: {
   mode: "create" | "edit";
   organizationId: string;
@@ -46,6 +47,8 @@ export function TaskDialog({
   subjectOptions?: ChoiceOption[];
   taskId?: string;
   expectedVersion?: string;
+  /** NP-P2-S5-S3C: an extra notice above the fields (e.g. the do-not-contact reminder on a quote follow-up) */
+  notice?: ReactNode;
 }) {
   const [state, action, pending] = useActionState(mode === "create" ? createTaskAction : updateTaskAction, IDLE);
   const [picked, setPicked] = useState(subjectOptions?.[0]?.value ?? "");
@@ -71,6 +74,7 @@ export function TaskDialog({
           </>
         )}
         {taskId && <input type="hidden" name="taskId" value={taskId} />}
+        {notice}
         {expectedVersion && <input type="hidden" name="expectedVersion" value={expectedVersion} />}
         {mode === "create" &&
           (subject ? (

@@ -530,9 +530,13 @@ Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plu
   - The Opportunity quotes panel offers Mark sent (a review of the server snapshot), record the customer's accepted / declined response, Revise (a new draft with a stable key), and withdraw a sent quote (with a reason).
   - OD-Q15 = A (ZD-222): `plus_activities.quote_id` (composite FK `(quote_id, organization_id, opportunity_id)`) and `quote_status`. The events are `quote_sent`, `quote_status_changed` and `quote_revised`. They are written in the same transaction, carry no body and no amounts, and are shown on the Opportunity, Contact and dashboard timelines.
   - OD-Q16 = A (ZD-223): `plus_mark_quote_sent(..., p_dnc_acknowledged boolean DEFAULT false)` refuses a do-not-contact contact without an explicit acknowledgment. The acknowledgment is audited and is not consent.
+- **Print view + optional follow-up (NP-P2-S5-S3C, no migration):**
+  - OD-Q10 = A (ZD-224): `/quote-print/[quoteId]` (outside `/operations`, `requirePlusAccess`, `force-dynamic`, noindex). It reads `plus_get_quote` plus the organization's existing business fields (`organizations`, member RLS) on the per-request client. Unknown, foreign and malformed ids are the same 404.
+  - The print model (`quotePrintModel` in `quotes-core.ts`) formats the STORED cents and total, prints the customer's display name only, and adds a status banner for every non-current status. No branding columns, no default validity, and the reference stays "Estimate N" / "Quote N".
+  - OD-Q11 = A (ZD-225): the follow-up is an ordinary `plus_tasks` row for the OPPORTUNITY, created only by an explicit save through the existing `plus_create_task`.
+  - The schema already supported it: `due_at` is nullable, the opportunity is a valid subject while the opportunity is open, the assignee is any eligible Plus writer, and a 30-second same-title duplicate window applies. No quote link column was added.
+  - Quote lifecycle RPCs never read or write `plus_tasks`.
 - **Not decided / not encoded:**
-  - OD-Q10: print content, number format, default validity, branding.
-  - OD-Q11: follow-up tasks.
   - OD-Q13: whether quote totals update `estimated_value_cents`. They don't today.
   - OD-Q14: pricing rules.
 - **Labelled everywhere** as "Estimate" or "Quote", **never** "Invoice", "Bill" or "Payment". Accepting a quote changes only the opportunity's stage. It records no money movement, creates no Request and creates no receivable.
