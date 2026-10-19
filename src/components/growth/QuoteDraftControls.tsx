@@ -17,15 +17,20 @@ import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import {
   CHARGE_FIELDS,
+  FOLLOW_UP_DNC_REMINDER,
+  FOLLOW_UP_OFFER_TEXT,
   KIND_HELP,
   KIND_OPTIONS,
   QUOTE_LIMITS,
   QUOTE_PRIVACY_HELP,
+  followUpTaskTitle,
   formatCents,
+  openTasksNotice,
   quoteReference,
   validateQuoteForm,
   type QuoteFormValues,
 } from "@/lib/plus/quotes-core";
+import { TaskDialog, type ChoiceOption } from "@/components/growth/TaskDialog";
 import { MarkSentDialog, ResponseDialog, ReviseDialog, WithdrawSentDialog, type LifecycleTarget, type QuoteReview } from "@/components/growth/QuoteLifecycleDialogs";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -56,7 +61,21 @@ export interface SentForActions {
   isExpired: boolean;
 }
 
-type Mode = "create" | "edit" | "withdraw" | "send" | "accept" | "decline" | "revise" | "withdraw-sent";
+/**
+ * NP-P2-S5-S3C (ZD-225): what the optional follow-up offer needs -- read on the server for writers only. The task is an
+ * ordinary opportunity task (plus_create_task); nothing links it to the quote and nothing creates it automatically.
+ */
+export interface FollowUpContext {
+  subjectLabel: string;
+  owners: ChoiceOption[];
+  /** the signed-in staff member's handle: the default assignee (the person who marked the quote sent) */
+  selfHandle: string | null;
+  openTaskCount: number;
+  /** up to five open task titles, shown so people don't add a duplicate */
+  openTaskTitles: string[];
+}
+
+type Mode = "create" | "edit" | "withdraw" | "send" | "accept" | "decline" | "revise" | "withdraw-sent" | "follow-up";
 
 /**
  * The Quotes panel's write controls, shown only to Plus writers on an open opportunity (NP-P2-S5-S2 / S3B):
@@ -67,6 +86,9 @@ type Mode = "create" | "edit" | "withdraw" | "send" | "accept" | "decline" | "re
  * Every lifecycle action is a STAFF STATEMENT; nothing is sent to the customer. One component instance in a fixed place,
  * so the confirmation line survives the page refresh that follows an action; each dialog acts on the quote captured
  * when it opened (D1).
+ * NP-P2-S5-S3C: after a confirmed Mark sent, an optional "Add follow-up task" offer appears (ZD-225). Only an explicit
+ * save in the existing task dialog creates a task: no default due date, assigned to you by default, the opportunity's
+ * open tasks listed first, and for a do-not-contact contact an internal-review title and reminder.
  */
 export function QuoteDraftControls({
   organizationId,
@@ -77,6 +99,7 @@ export function QuoteDraftControls({
   draft,
   sent,
   doNotContact,
+  followUp = null,
   canCreate,
 }: {
   organizationId: string;
@@ -89,6 +112,7 @@ export function QuoteDraftControls({
   sent: SentForActions | null;
   /** the contact's stored do-not-contact flag when the page loaded (the database re-checks the current one) */
   doNotContact: boolean;
+  followUp?: FollowUpContext | null;
   canCreate: boolean;
 }) {
   const router = useRouter();
@@ -100,8 +124,11 @@ export function QuoteDraftControls({
   const [sentTarget, setSentTarget] = useState<SentForActions | null>(null);
   const [instance, setInstance] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
+  // the reference of the quote just marked sent, while its follow-up offer is shown (never acted on automatically)
+  const [offer, setOffer] = useState<string | null>(null);
   const show = (mode: Mode) => {
     setMessage(null);
+    if (mode !== "follow-up") setOffer(null);
     setTarget(["edit", "withdraw", "send"].includes(mode) ? draft : null);
     setSentTarget(["accept", "decline", "revise", "withdraw-sent"].includes(mode) ? sent : null);
     setInstance((n) => n + 1);
@@ -111,6 +138,15 @@ export function QuoteDraftControls({
     setOpen(null);
     setMessage(text);
     router.refresh();
+  };
+  const sentDone = (text: string) => {
+    const reference = target?.review.reference ?? null;
+    done(text);
+    setOffer(reference);
+  };
+  const followUpDone = (text: string) => {
+    setOffer(null);
+    done(text);
   };
   const close = () => setOpen(null);
   const reload = () => {
@@ -166,6 +202,25 @@ export function QuoteDraftControls({
           {message}
         </p>
       )}
+      {offer && followUp && open !== "follow-up" && (
+        <div className="flex max-w-md flex-col gap-2 rounded-md bg-surface-secondary p-3" data-testid="quote-follow-up-offer">
+          <p className={cn(typography.bodySmall, "text-text-primary")}>{FOLLOW_UP_OFFER_TEXT}</p>
+          {doNotContact && (
+            <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="quote-follow-up-dnc">
+              {FOLLOW_UP_DNC_REMINDER}
+            </p>
+          )}
+          <OpenTasksNotice followUp={followUp} />
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={() => show("follow-up")} data-testid="quote-follow-up-open">
+              Add follow-up task
+            </Button>
+            <Button type="button" size="sm" variant="text" onClick={() => setOffer(null)} data-testid="quote-follow-up-dismiss">
+              No thanks
+            </Button>
+          </div>
+        </div>
+      )}
       {open === "create" && (
         <QuoteEditorDialog
           key={`c${instance}`}
@@ -206,8 +261,28 @@ export function QuoteDraftControls({
           review={target.review}
           doNotContact={doNotContact}
           onClose={close}
-          onDone={done}
+          onDone={sentDone}
           onReload={reload}
+        />
+      )}
+      {open === "follow-up" && offer && followUp && (
+        <TaskDialog
+          key={`f${instance}`}
+          mode="create"
+          organizationId={organizationId}
+          onClose={close}
+          onDone={followUpDone}
+          owners={followUp.owners}
+          initial={{ title: followUpTaskTitle(offer, doNotContact), dueDate: "", dueTime: "", assigneeHandle: followUp.selfHandle ?? "" }}
+          subject={{ kind: "opportunity", id: opportunityId, label: followUp.subjectLabel }}
+          notice={
+            <div className="flex flex-col gap-2" data-testid="quote-follow-up-notice">
+              {doNotContact && (
+                <AttentionState level="warning" title="Internal reminder only" description={FOLLOW_UP_DNC_REMINDER} />
+              )}
+              <OpenTasksNotice followUp={followUp} />
+            </div>
+          }
         />
       )}
       {(open === "accept" || open === "decline") && sentLifecycle && (
@@ -435,5 +510,25 @@ function WithdrawDraftDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+/** The opportunity's existing open tasks, so a duplicate follow-up isn't added by mistake (ZD-225 Q11.5). */
+function OpenTasksNotice({ followUp }: { followUp: FollowUpContext }) {
+  const notice = openTasksNotice(followUp.openTaskCount);
+  if (!notice) return null;
+  return (
+    <div data-testid="quote-follow-up-open-tasks">
+      <p className={cn(typography.bodySmall, "text-text-secondary")}>{notice}</p>
+      {followUp.openTaskTitles.length > 0 && (
+        <ul className={cn(typography.bodySmall, "mt-1 list-disc pl-5 text-text-secondary")}>
+          {followUp.openTaskTitles.map((t, i) => (
+            <li key={i} className="break-words">
+              {t}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

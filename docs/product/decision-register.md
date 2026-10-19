@@ -2824,6 +2824,48 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Compliance
 - **Review Trigger:** Any outbound quote delivery (email / SMS / link), or a consent-management design
 
+### ZD-224 — Printable estimates and quotes are a staff-only, authenticated print view (OD-Q10 Option A)
+
+- **Date:** 2026-10-19
+- **Category:** Product / Security
+- **Decision:**
+  - Q10.1 Staff-only print view. Any member with Plus read access opens it while signed in and saves a PDF with the browser. There is no public, tokenised or unauthenticated quote link.
+  - Q10.2 Content:
+    - the organization name and its existing business phone / email / address;
+    - the customer's display name only, with no contact phone, email, address, opportunity title, passenger, appointment or medical detail;
+    - kind, reference, created and valid-until dates, service category, round trip and staff-entered miles;
+    - the non-zero itemized charges, discount, the STORED total in USD, and the terms note;
+    - the footer "not an invoice".
+  - Q10.3 The reference stays "Estimate N" / "Quote N" (the stored per-organization number). There is no new number format.
+  - Q10.4 No default valid-until date: staff choose it.
+  - Q10.5 No new branding fields, logo or colours.
+  - Q10.6 Every status can be printed with a clear banner: draft (not yet given), expired (derived), customer acceptance / decline recorded, replaced by a revision, withdrawn.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S3C owner decision OD-Q10 = A, 2026-10-19)
+- **Reason:** Operators need a document to give the customer. A staff-only print view of the immutable snapshot needs no new data, storage or public surface while PD-10 / PD-11 remain open.
+- **Affected Product Areas:** `/quote-print/[quoteId]`; Opportunity quotes panel; Estimates & Quotes directory
+- **Dependencies:** ZD-212, ZD-216, ZD-220, ZD-221
+- **Owner:** Product
+- **Review Trigger:** A request for customer-facing links, branded documents or a formatted quote number
+
+### ZD-225 — Quote follow-up tasks are optional and explicit, never automatic (OD-Q11 Option A)
+
+- **Date:** 2026-10-19
+- **Category:** Product
+- **Decision:**
+  - Q11.1 After a successful Mark sent, staff are OFFERED "Add follow-up task". Nothing is created automatically.
+  - Q11.2 No default due date.
+  - Q11.3 The assignee defaults to the staff member who marked the quote sent, and stays editable.
+  - Q11.4 The task is a normal Growth task on the OPPORTUNITY (existing `plus_tasks` / `plus_create_task`). It has no quote link and needs no migration.
+  - Q11.5 Duplicates are discouraged by the dialog's single-submit guard and by showing the opportunity's existing open tasks.
+  - Q11.6 For a do-not-contact contact the offer shows the do-not-contact reminder and suggests an internal title only. A task never authorizes communication.
+  - Q11.7 Recording accepted / declined or withdrawing a quote never completes, cancels or changes a task automatically.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S3C owner decision OD-Q11 = A, 2026-10-19)
+- **Reason:** Follow-ups help staff, but automatic work items and hidden task mutations would surprise them. Reusing Growth Tasks avoids new schema.
+- **Affected Product Areas:** Mark sent confirmation; TaskDialog; `plus_create_task` (unchanged)
+- **Dependencies:** ZD-219, ZD-222, ZD-223
+- **Owner:** Product
+- **Review Trigger:** A request for automatic follow-ups or quote-linked tasks
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

@@ -175,14 +175,17 @@ test("server actions: re-check access, organization binding and write capability
   assert.doesNotMatch(src, /p_dnc_acknowledged: true/, "never a hard-coded acknowledgment");
 });
 
-test("UI boundaries: lifecycle controls (S3B) but no print, send, email / SMS or invoice; read-only users get no write controls", () => {
+test("UI boundaries: lifecycle controls (S3B) but no send, email / SMS or invoice; print only as the S3C staff view link; read-only users get no write controls", () => {
   const controls = readFileSync(new URL("../../components/growth/QuoteDraftControls.tsx", import.meta.url), "utf8");
   const dialogs = readFileSync(new URL("../../components/growth/QuoteLifecycleDialogs.tsx", import.meta.url), "utf8");
   const panel = readFileSync(new URL("../../components/growth/QuotesPanel.tsx", import.meta.url), "utf8");
   const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  for (const src of [controls, dialogs, panel]) {
+  for (const src of [controls, dialogs]) {
     assert.doesNotMatch(code(src), /Print|PDF|Send to customer|Send email|Send SMS|\binvoice\b|mailto:|sms:/);
   }
+  // NP-P2-S5-S3C (ZD-224): the panel's only print surface is a link to the staff-only print view
+  assert.doesNotMatch(code(panel), /PDF|Send to customer|Send email|Send SMS|\binvoice\b|mailto:|sms:|window\.print/);
+  assert.match(code(panel), /href=\{quotePrintHref\(q\.id\)\}/);
   assert.match(code(controls), /Mark sent/);
   assert.match(code(controls), /Record accepted/);
   assert.match(code(controls), /Revise/);
