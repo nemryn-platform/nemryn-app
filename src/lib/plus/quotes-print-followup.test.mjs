@@ -76,7 +76,7 @@ test("quotePrintModel: stored total (never recalculated), discount, details, ref
 test("quotePrintModel: customer display name only -- the model has no contact, address or opportunity fields", () => {
   const m = q.quotePrintModel(input());
   assert.equal(m.customerName, "Fictional Person");
-  assert.deepEqual(Object.keys(m).sort(), ["banner", "currency", "customerName", "details", "discount", "documentTitle", "footer", "lines", "reference", "statusLabel", "termsNote", "total"]);
+  assert.deepEqual(Object.keys(m).sort(), ["banner", "closedNotice", "currency", "customerName", "details", "discount", "documentTitle", "footer", "lines", "reference", "statusLabel", "termsNote", "total"]);
 });
 
 test("print status labels: Draft, Sent, Accepted, Declined, Superseded, Withdrawn, and the derived Expired", () => {
@@ -201,4 +201,50 @@ test("quote panel: Print link per row opens a new tab with noopener; follow-up d
   const dir = src("src/components/growth/QuotesDirectoryTable.tsx");
   assert.match(dir, /href=\{quotePrintHref\(row\.id\)\}/);
   assert.match(dir, /rel="noopener"/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-P2-S5-O1 (ZD-226): closed-opportunity notice -- presentational only
+// ---------------------------------------------------------------------------------------------------------------------
+
+test("O1 closed notice: Lost / Converted add it for EVERY status; open stages never do; the status banner is unchanged", () => {
+  const statuses = [["draft", false], ["sent", false], ["sent", true], ["accepted", false], ["declined", false], ["superseded", false], ["withdrawn", false]];
+  for (const stage of ["lost", "converted"]) {
+    for (const [status, isExpired] of statuses) {
+      const open = q.quotePrintModel(input({ status, isExpired, respondedDate: "2026-10-20", opportunityStage: "qualified" }));
+      const closed = q.quotePrintModel(input({ status, isExpired, respondedDate: "2026-10-20", opportunityStage: stage }));
+      assert.deepEqual(closed.closedNotice, q.QUOTE_PRINT_CLOSED_NOTICE, `${stage}/${status}`);
+      assert.equal(open.closedNotice, null);
+      // everything else -- status label, banner, amounts, details -- is identical with or without the notice
+      assert.deepEqual({ ...closed, closedNotice: null }, open, `${stage}/${status}/${isExpired}`);
+    }
+  }
+  for (const stage of ["new_inquiry", "contacted", "qualified", "quote_sent", "quote_accepted", null, undefined, "", "LOST"]) {
+    assert.equal(q.quotePrintModel(input({ opportunityStage: stage })).closedNotice, null, String(stage));
+  }
+  assert.equal(q.isClosedOpportunityStage("lost"), true);
+  assert.equal(q.isClosedOpportunityStage("converted"), true);
+});
+
+test("O1 closed notice copy: neutral; never claims the quote was invalidated, cancelled or withdrawn; no opportunity details", () => {
+  const { heading, text } = q.QUOTE_PRINT_CLOSED_NOTICE;
+  assert.equal(heading, "Opportunity closed");
+  assert.match(text, /recorded quotation status has not changed/);
+  assert.match(text, /Confirm that the quotation is still applicable before sharing or relying on it/);
+  assert.doesNotMatch(text, /invalid|cancel|withdrawn|expired|void|lost reason|medical/i);
+});
+
+test("O1 source rules: the stage comes from the existing plus_get_quote row; the page renders the notice; no new query, RPC or migration", () => {
+  const lib = src("src/lib/plus/quotes.ts");
+  assert.match(lib, /opportunityStage: r\.opportunity_stage/);
+  const page = src(PRINT_PAGE);
+  assert.match(page, /opportunityStage: q\.opportunityStage/);
+  assert.match(page, /data-testid="quote-print-closed-notice"/);
+  // the closed notice is NOT inside the screen-only toolbar and has no print:hidden class
+  const block = page.slice(page.indexOf("m.closedNotice &&"), page.indexOf("quote-print-closed-notice") + 40);
+  assert.doesNotMatch(block, /print:hidden/);
+  assert.equal((page.match(/getQuote\(/g) ?? []).length, 2, "the quote and (superseded only) its successor -- no extra read");
+  assert.doesNotMatch(page, /getOpportunity|plus_get_opportunity/);
+  const migrations = readdirSync(new URL("../../../supabase/migrations/", import.meta.url).pathname).sort();
+  assert.equal(migrations.at(-1), "20261021100000_plus_quote_lifecycle_activity.sql");
 });

@@ -570,6 +570,8 @@ export interface QuotePrintInput extends QuoteChargeSource {
   customerName: string;
   /** the revision that replaced this version (superseded only) */
   successor: { kind: string; quoteNumber: number } | null;
+  /** NP-P2-S5-O1 (ZD-226): the opportunity's current stage; Lost / Converted adds the closed-opportunity notice */
+  opportunityStage?: string | null;
 }
 
 export interface QuotePrintModel {
@@ -577,6 +579,8 @@ export interface QuotePrintModel {
   reference: string;
   statusLabel: string;
   banner: QuotePrintBanner | null;
+  /** ZD-226: shown with ANY status banner when the opportunity is closed; never changes the status */
+  closedNotice: { heading: string; text: string } | null;
   customerName: string;
   details: { label: string; value: string }[];
   lines: { label: string; amount: string }[];
@@ -616,6 +620,13 @@ export function quotePrintFooter(kind: string): string {
   return `This is ${kind === "estimate" ? "an estimate" : "a quote"}, not an invoice. Prices in US dollars.`;
 }
 
+/** ZD-226 (O1 Option B): presentational only -- closing an opportunity never changes, cancels or withdraws a quote. */
+export const QUOTE_PRINT_CLOSED_NOTICE = {
+  heading: "Opportunity closed",
+  text: "This quotation is associated with a closed opportunity. Its recorded quotation status has not changed. Confirm that the quotation is still applicable before sharing or relying on it.",
+} as const;
+export const isClosedOpportunityStage = (stage: string | null | undefined) => stage === "lost" || stage === "converted";
+
 /** Shown on screen only (never printed): the saved PDF is the team's own copy. */
 export const QUOTE_PRINT_SCREEN_NOTE =
   "Print or save a PDF to share it yourself. Nemryn doesn't send this document or keep the PDF, and your team is responsible for the copy.";
@@ -635,6 +646,7 @@ export function quotePrintModel(input: QuotePrintInput): QuotePrintModel {
     reference: quoteReference(input.kind, input.quoteNumber),
     statusLabel: quotePrintStatusLabel(input.status, input.isExpired),
     banner: quotePrintBanner(input),
+    closedNotice: isClosedOpportunityStage(input.opportunityStage) ? { ...QUOTE_PRINT_CLOSED_NOTICE } : null,
     customerName: input.customerName,
     details,
     lines: quoteChargeLines(input),

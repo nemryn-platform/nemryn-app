@@ -179,6 +179,7 @@ Rules:
 >   - For a do-not-contact contact, the suggested title is "Review Quote N internally" and a reminder says the task is internal only and doesn't allow outreach.
 >   - Accept, decline and withdraw never create, complete or cancel tasks.
 >   - Still open: OD-Q13 (quote total → estimated value) and OD-Q14 (pricing rules). The visual overhaul stays deferred.
+> - **NP-P2-S5-O1 (ZD-226, no migration):** when the opportunity is Lost or Converted, the printable quote also shows "Opportunity closed: … Its recorded quotation status has not changed. Confirm that the quotation is still applicable before sharing or relying on it." It appears on screen and on paper / PDF, for every status, next to the status banner. Closing an opportunity still never changes a quote. The directory and panel labels are unchanged.
 
 **Payment status** remains a separate, staff-reported field (None / Deposit reported / Paid reported / Refund reported). It is never revenue or settlement evidence and is never derived from a quote. No invoicing or billing is added in Plus.
 
