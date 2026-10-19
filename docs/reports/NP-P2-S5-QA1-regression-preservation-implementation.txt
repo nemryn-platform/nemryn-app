@@ -1,0 +1,316 @@
+NP-P2-S5-QA1 — PRESERVE AND HARDEN THE ESTIMATES & QUOTES REGRESSION TESTS — IMPLEMENTATION REPORT
+=================================================================================================
+Date: 2026-10-19. Mode: controlled local implementation and isolated verification.
+RESULT: IMPLEMENTED AND VERIFIED.
+- The 7 isolated suites and the 3 production read-only scripts are preserved as maintainable tests under tests/.
+- Every assertion is unchanged; the results are equivalent to S4.
+- No business logic, canonical UI, migration, production access or Git operation.
+PR-READINESS: READY for the owner to commit / PR (nothing staged).
+
+======================================================================
+1. EXACT BRANCH AND BASELINE
+======================================================================
+- Branch: np-p2-s5-qa-regression-preservation (owner-created), HEAD 1ef6d64b9f6a6705865e67424600c4241c11446a, which
+  equals origin/main.
+  - The first QA1 attempt stopped correctly because the branch didn't exist yet; the owner then created it.
+- The S4 documentation closeout is merged into main: PR #20 (merge 1ef6d64, commit 587bb58 "docs(plus): close S4
+  quotes integration verification"). ZD-227 is in the main decision register, and the S4 final report is on main.
+- Product code: src/ and supabase/ unchanged versus main (`git diff origin/main -- src supabase` empty). 92 migrations,
+  the latest is 20261021100000.
+- Source inventory (all present in untracked .tmp-qa/):
+  - 7 isolated suites:
+    - np-p2-s5-{s2-quote-drafts, s3a-quotes-directory, s3b-quote-lifecycle, s3c-print-followup,
+      o1-closed-quote-print, s4-integrated, s4-a11y}-e2e.mjs;
+  - 3 production read-only scripts: np-p2-s5-s3c-prod-preflight.mjs, np-p2-s5-o1-prod-readonly.mjs,
+    np-p2-s5-s4-prod-b56-readonly.mjs;
+  - the shared local-helper.mjs.
+- The .tmp-qa originals are left untouched (preserved, untracked).
+
+======================================================================
+2. COMPLETE FILE INVENTORY (new / modified; nothing staged)
+======================================================================
+New, untracked, intended to be tracked:
+
+tests/e2e/plus-quotes/
+- README.md                       prerequisites, setup, fixtures, commands, expected results, exceptions, safety,
+                                  production read-only usage, UI-overhaul protection.
+- _config.mjs                     configuration and guards: local app URL, local container, artifacts outside the repo,
+                                  Chrome path, seed check, sql().
+- _harness.mjs                    binds the shared CDP tooling to the isolated configuration; signIn().
+- run.mjs                         runner: verified fresh reset before each suite, sequential isolated processes,
+                                  U1 / U2 classification, --strict, --no-reset.
+- s2-drafts.e2e.mjs               (from np-p2-s5-s2-quote-drafts-e2e.mjs)
+- s3a-directory.e2e.mjs           (from np-p2-s5-s3a-quotes-directory-e2e.mjs)
+- s3b-lifecycle.e2e.mjs           (from np-p2-s5-s3b-quote-lifecycle-e2e.mjs)
+- s3c-print-followup.e2e.mjs      (from np-p2-s5-s3c-print-followup-e2e.mjs)
+- o1-closed-notice.e2e.mjs        (from np-p2-s5-o1-closed-quote-print-e2e.mjs)
+- s4-integrated.e2e.mjs           (from np-p2-s5-s4-integrated-e2e.mjs)
+- s4-a11y.e2e.mjs                 (from np-p2-s5-s4-a11y-e2e.mjs)
+
+tests/prod-readonly/plus-quotes/
+- README.md                       manual, owner-authorized only; never CI.
+- _prod.mjs                       production guards: ACK gate, linked-project check, SELECT-only q(), git-ignored SIM
+                                  env, evidence outside the repo.
+- preflight.mjs                   (from np-p2-s5-s3c-prod-preflight.mjs)
+- print-readonly.mjs              (from np-p2-s5-o1-prod-readonly.mjs, incl. the P6 / ZD-227 successor rule)
+- records-integrity-readonly.mjs  (from np-p2-s5-s4-prod-b56-readonly.mjs)
+
+tests/shared/
+- cdp.mjs                         configuration-free CDP harness (from local-helper.mjs), pinned axe-core injector,
+                                  pinned pdf.js text extractor.
+
+Modified, tracked:
+- package.json:
+  - devDependencies + "axe-core": "4.10.2", + "pdfjs-dist": "4.10.38" (exact pins);
+  - scripts + "test:e2e:quotes", + "test:e2e:quotes:strict";
+  - "test" unchanged.
+- package-lock.json: the lock entries for the two dev dependencies. pdfjs-dist brings only its optional
+  @napi-rs/canvas prebuilt binaries; no native build.
+
+New report: docs/reports/NP-P2-S5-QA1-regression-preservation-implementation.txt (this file).
+
+NOT modified: src/, supabase/, any canonical UI component, the existing tests, eslint / ts configuration, .gitignore.
+NOT tracked, by design: .tmp-qa/ (originals kept), env files, screenshots / PDFs / logs / browser profiles (written
+outside the repository).
+
+======================================================================
+3. TEST DEPENDENCIES AND CONFIGURATION
+======================================================================
+Runtime:
+- Node 20+ (verified on 24.14) with built-in fetch / WebSocket;
+- Google Chrome or Chromium (headless, CDP);
+- Docker plus the Supabase CLI;
+- an isolated local Supabase project (container supabase_db_NemrynS1Iso) with the repository migrations and the
+  fictional seed;
+- a local `next build && next start` against it (email provider key unset).
+Pinned tools (devDependencies; no CDN at test time):
+- axe-core 4.10.2, injected from node_modules;
+- pdfjs-dist 4.10.38, Node legacy build with isEvalSupported:false, used for PDF text extraction.
+  - The originally planned 3.11.174 (used via CDN in S4) was REJECTED. It is affected by the published pdf.js
+    advisory (versions ≤ 4.1.392, CVE-2024-4367) and pulled in native canvas build dependencies.
+  - `npm audit` lists the same 9 findings before and after this change (next, sharp, eslint-config-next, …, all
+    pre-existing). The two new packages add none.
+
+Isolated suite configuration (environment):
+| Variable                              | Default                          | Notes |
+|---------------------------------------|----------------------------------|-------|
+| QUOTES_E2E_APP_URL                    | http://localhost:3100            | must be http://localhost or 127.0.0.1 |
+| QUOTES_E2E_DB_CONTAINER               | supabase_db_NemrynS1Iso          | any other LOCAL container needs QUOTES_E2E_ALLOW_OTHER_LOCAL_STACK=1 |
+| QUOTES_E2E_SUPABASE_WORKDIR           | required for the runner's resets |       |
+| QUOTES_E2E_ARTIFACTS_DIR              | $TMPDIR/nemryn-plus-quotes-e2e   | refused inside the repository |
+| QUOTES_E2E_CHROME_PATH / CHROME_PATH  | the macOS Chrome path            |       |
+
+Production read-only configuration:
+| Variable                              | Default / requirement |
+|---------------------------------------|-----------------------|
+| QUOTES_PROD_READONLY_ACK              | must equal "read-only" |
+| QUOTES_PROD_PROJECT_REF               | default wyocbivzgrbekuyqdfts; checked against supabase/.temp/project-ref |
+| QUOTES_SIM_ENV_FILE                   | default .env.sim.local; must be git-ignored |
+| QUOTES_PROD_ARTIFACTS_DIR             | outside the repository |
+| QUOTES_PROD_REFERENCE_DB_CONTAINER    | default supabase_db_NemrynS1Iso |
+
+Fixture assumptions:
+- The repository seed: Org A / Org B and the @example.test identities with the fictional local seed password.
+- Each suite creates STAMP-suffixed fictional records through the real RPCs or the UI.
+- S3A needs a fresh database.
+- The a11y suite now creates its own Withdrawn / Superseded history rows (section 6).
+
+======================================================================
+4. SECURITY HARDENING
+======================================================================
+1. No credentials or secrets are tracked. A scan of tests/ for JWTs, provider keys, *_KEY= / PASSWORD= values, real
+   e-mail domains and machine paths found none. The only password is the FICTIONAL local seed password already
+   public in supabase/seed.sql.
+2. SIM credentials load only from the git-ignored .env.sim.local. _prod.mjs runs `git check-ignore` and refuses a
+   non-ignored file. Values are never printed; no console.log references env, password or PW.
+3. The isolated suites refuse non-localhost app URLs (verified), non-local / non-NemrynS1Iso containers (verified),
+   and non-seed databases. assertFictionalSeed requires both seed organizations and org-a-admin@example.test, and the
+   ABSENCE of the production Pilot Simulation organization.
+4. The production scripts are strictly read-only:
+   - the ACK gate (verified: all 3 refuse without it, before any connection);
+   - the linked-project check;
+   - q() allows only ONE SELECT / WITH statement, refuses write / DDL / transaction keywords and a second statement
+     (string literals are blanked before screening, so `';'` and words inside quotes are data);
+   - the browser only views pages.
+   A scan of all 40 SQL strings in the 3 scripts: 0 keyword false positives.
+5. Fixture reset requirements are explicit: the runner resets and verifies (latest migration, 0 quotes, 0 contacts)
+   before EVERY suite, and the README documents the requirement.
+6. No shared state: one process per suite, a fresh database per suite, and a throw-away Chrome profile per session
+   (deleted on close) under the artifacts directory.
+7. axe-core and pdf.js are pinned devDependencies; there are no CDN fetches at test time.
+8. The new lint warnings are removed: the unused `byId` (print script) and `catch (e)` (integrated suite). ESLint on
+   tests/ reports 0 problems.
+9. Screenshots, PDFs, logs and profiles are written OUTSIDE the repository. An in-repo artifacts directory is refused
+   (verified).
+10. No credential or sensitive configuration logging (scan above). The production scripts print only check results
+    and record counts.
+
+======================================================================
+5. EXECUTED COMMANDS AND RESULTS
+======================================================================
+Static:
+- `npx tsc --noEmit -p .`: clean.
+- `npx eslint .`: 0 errors. 111 warnings, ALL in the untracked .tmp-qa originals; tests/ 0 problems;
+  `--rule no-undef:error` on tests/ clean.
+- `npm test`: 883 / 883 (unchanged behaviour).
+- `npx next build`: success; /quote-print/[quoteId] dynamic.
+Guards:
+- Production scripts without the ACK: all 3 refuse (no production contact).
+- Runner with QUOTES_E2E_APP_URL=https://app.nemryn.com, an in-repo artifacts dir, or QUOTES_E2E_DB_CONTAINER=
+  supabase_db_ZenWard: each refuses.
+- Production scripts were NOT run (no production access in QA1).
+Isolated browser suites. Final `npm run test:e2e:quotes`: all 7, each after a verified fresh reset; exit 0.
+
+| Suite          | Result | S4 baseline |
+|----------------|--------|-------------|
+| s2             | 33 / 33 PASS | 33 |
+| s3a            | 31 / 31 PASS | 31 |
+| s3b            | 32 / 32 PASS | 32 |
+| s3c            | 54 / 54 PASS | 54 |
+| o1             | 27 / 27 PASS | 27 |
+| s4-integrated  | 69 / 69 PASS | 69 |
+| s4-a11y        | 18 PASS / 8 FAIL = KNOWN DEFECTS ONLY (U1 / U2) | 18 / 8 |
+
+- `npm run test:e2e:quotes:strict -- s4-a11y`: exit 1, "FAIL (known U1 / U2 defects -- UI-overhaul gate)", as
+  designed.
+
+Relevant SQL / privilege / tenant-isolation (each from a verified fresh reset): 24 suites, all 0 failures.
+
+| Suite                              | Result |
+|------------------------------------|--------|
+| plus_quotes                        | 0 / 83 |
+| plus_quotes_directory              | 0 / 34 |
+| plus_quotes_lifecycle              | 0 / 41 |
+| plus_tasks                         | 0 / 58 |
+| plus_opportunities                 | 0 / 75 |
+| plus_conversion_rebooking          | 0 / 44 |
+| plus_request_attributions          | 0 / 73 |
+| plus_contacts_activities           | 0 / 82 |
+| plus_access_helpers                | 0 / 170 |
+| plus_entitlement                   | 0 / 150 |
+| plus_entitlement_versioned         | 0 / 17 |
+| plus_member_grants                 | 0 / 76 |
+| plus_growth_agent                  | 0 / 40 |
+| plus_booking_service_type          | 0 / 27 |
+| privilege_contract                 | 0 violations of 29 |
+| client_privilege_surface           | 21 pass |
+| function_privilege                 | 7 pass |
+| mutation_privilege                 | 7 pass |
+| request_mutation_privilege         | 23 pass |
+| privilege_baseline_behavior        | 30 pass |
+| create_trip_privilege              | 5 pass |
+| driver_read_privilege              | 8 pass |
+| rls_adversarial                    | 33 pass |
+| tenant_settings_foundation         | 51 pass |
+
+Concurrency: plus_quotes 18 / 18, plus_tasks 4, plus_opportunities 6, plus_conversion_rebooking 11.
+
+Environment: isolated NemrynS1Iso only (migrations byte-identical to the repository), fictional data. Afterwards the
+app was stopped, `supabase stop` run (no NemrynS1Iso containers), .iso-env.tmp deleted and port 3100 freed. No
+other project's containers were touched.
+
+======================================================================
+6. EXPECTED VERSUS UNEXPECTED FAILURES
+======================================================================
+EXPECTED (owner-accepted, overhaul-mandatory; assertions NOT weakened): s4-a11y's 8 checks.
+- U1 colour contrast, WCAG 2.2 SC 1.4.3 (AA), axe color-contrast serious, #646a70 on #e8e9e6 = 4.48:1. Checks: AXE
+  create dialog, edit dialog, Mark sent dialog, Mark sent + DNC, Estimates & Quotes directory.
+- U2 focus not restored after Cancel / Close, WCAG 2.2 SC 2.4.3. Checks: KEY Edit draft → Cancel, Edit draft →
+  Close (X), Record accepted → Cancel.
+UNEXPECTED — found and resolved during QA1 (a fixture-coverage gap, not a product change):
+- On the first full runner pass, s4-a11y reported 19 PASS / 7 FAIL. The "AXE Estimates & Quotes directory" check
+  PASSED.
+- Cause: in S4 the a11y suite ran after the integrated journey on the same database, so the directory contained
+  Withdrawn / Superseded quotes whose StatusBadge "cancelled" tone carries the U1 contrast pair. With the runner's
+  per-suite fresh reset, the suite's own fixtures contained only draft / sent quotes, so that badge was never rendered.
+  That's a lost-coverage false pass, NOT a fix.
+- Resolution: the a11y suite now creates its own history rows (a revised-and-superseded quote and a withdrawn
+  draft), so every badge tone renders on any fresh database. Its assertions are unchanged. Re-run from a fresh reset:
+  18 / 8, the exact S4 baseline, and the final full pass confirms it.
+- Hardening: the runner now flags "REVIEW: only n of 8 known checks failed (partial fix or lost coverage)" whenever
+  some but not all known checks fail.
+Harness exceptions (pre-existing; documented; not part of the relevant subset run here):
+- request_decision_expand_compat 8 / 10;
+- mutation_concurrency CONCURRENCY-1 and request_lifecycle REQUEST-CONCURRENCY-1;
+- RTC-04 time of day.
+No other unexpected failure.
+
+======================================================================
+7. REGRESSION COVERAGE COMPARISON WITH S4
+======================================================================
+
+| Suite          | S4 checks (run-time) | QA1 checks | Assertion lines changed |
+|----------------|----------------------|------------|-------------------------|
+| s2             | 33                   | 33         | 0 |
+| s3a            | 31                   | 31         | 0 |
+| s3b            | 32                   | 32         | 0 |
+| s3c            | 54                   | 54         | 0 |
+| o1             | 27                   | 27         | 0 |
+| s4-integrated  | 69                   | 69         | 0 |
+| s4-a11y        | 26 (18 / 8)          | 26 (18 / 8) | 0 (fixtures added) |
+| preflight      | 12                   | 12         | 0 |
+| print-readonly | 24                   | 24         | 0 |
+| records        | 14                   | 14         | 0 |
+
+- Verified by diffing every check( / must( line between each .tmp-qa original and its tracked copy: 0 changed
+  lines in all 10 files.
+- Changes are confined to:
+  - configuration / imports / artifact paths and the seed guard;
+  - pdf text via the local pinned pdfjs-dist instead of the CDN in a browser tab (O1 E3, S4 j1, prod O1-P2), with the
+    same assertions on the same flattened text;
+  - axe via the local pinned axe-core instead of the CDN;
+  - the a11y history fixtures (section 6);
+  - the 2 lint fixes.
+- SQL / privilege / tenant-isolation: identical to the S4 / O1 baselines.
+
+======================================================================
+8. KNOWN LIMITATIONS
+======================================================================
+- The suites need a running isolated stack and a locally served build. They are not wired into automatic CI; that
+  would need a CI job provisioning a local Supabase and Chrome, which is a separate, owner-approved step. The
+  production scripts must never be in CI.
+- The CDP harness drives Chrome only (no Safari / Firefox). The default Chrome path is macOS (configurable).
+- A full run takes about 35–40 minutes because of the fresh reset per suite. --no-reset is available for manual use
+  (S3A then needs an empty quote database).
+- The README describes the isolated-stack setup, but the stack itself is not scripted in the repository
+  (project_id / ports are local choices).
+- The production scripts' live behaviour is unchanged from S4. They were deliberately NOT executed in QA1 (no
+  production access), so their tracked versions are verified statically (syntax, lint, guard refusal, assertion
+  diff, SQL keyword scan), not live.
+- Pre-existing npm audit findings (next, sharp, eslint-config-next and others) are outside QA1's scope and
+  unchanged.
+- OD-Q13, OD-Q14 OPEN; PD-10, PD-11 unresolved.
+
+======================================================================
+9. PR READINESS
+======================================================================
+READY. Proposed commit content (owner-controlled):
+- tests/e2e/plus-quotes/*, tests/prod-readonly/plus-quotes/* and tests/shared/cdp.mjs (17 files);
+- package.json and package-lock.json;
+- this report.
+Do NOT include: .tmp-qa/, env files, artifacts.
+Suggested title: "test(plus): preserve Estimates & Quotes regression suites".
+Notes for the owner:
+- The keychain git credential still holds ternivex, so a push needs a fresh approval of the one-command gh-token
+  method.
+- Nothing has been staged, committed or pushed.
+
+======================================================================
+10. RECOMMENDED PREPARATION FOR THE NEMRYN UI OVERHAUL
+======================================================================
+1. Merge this PR first, so the overhaul branch inherits the gate.
+2. Make `npm run test:e2e:quotes:strict` an overhaul acceptance criterion. It must exit 0, which means:
+   R-U1 contrast ≥ 4.5:1 for every canonical text / background pair (the overhaul must at least fix --color-text-muted
+   on --color-surface-secondary); R-U2 every Dialog close path restores focus to the trigger; all other suites stay
+   at their S4 baselines.
+3. Keep, during the redesign: the data-testid hooks, role="status" / alert messages, the print:hidden toolbar,
+   screen / print parity of status banners and the O1 notice, and the staff-statement wording.
+4. If an intentional product change alters an expected value, update the assertion in the same PR with its decision
+   reference. Never relax a check to make the run green.
+5. Run the full SQL / privilege / tenant-isolation set and the 7 isolated suites on the overhaul branch before merge.
+   Then run the production read-only scripts after deploy, with the owner's authorization.
+6. Consider a later, separately approved CI job (local Supabase + Chrome) for the isolated suites only.
+
+STOPPED — implementation, isolated verification and reporting complete. No staging, commit, push, merge, branch
+switch, worktree, reset / stash / clean, production access or write, deployment, migration, business-logic or
+canonical UI change.
