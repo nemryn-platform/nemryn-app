@@ -2882,6 +2882,23 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A request to change quote statuses automatically when an opportunity closes
 
+### ZD-227 — A superseded quote whose revision was later withdrawn shows "Replaced by a revision" (NP-P2-S5 O1-R1, Option A)
+
+- **Date:** 2026-10-19
+- **Category:** Product
+- **Decision:**
+  - ACCEPT the current wording. When a quote was superseded by a revision that was later withdrawn, the print view's SUPERSEDED banner reads "Replaced by a revision. This version is no longer the current price." It doesn't name the withdrawn revision. The opportunity panel likewise shows no "Replaced by Quote N" for that row.
+  - This is factually correct. The quote was replaced when the revision was marked sent (ZD-219 / ZD-221), and it stays superseded after the revision is withdrawn. History, statuses and audit are unchanged.
+  - Cause: since NP-P2-S5-S1, `plus_get_quote` and `plus_list_quotes` derive `superseded_by_quote_id` only from a successor whose status is not `withdrawn` (migration `20261018100000`).
+  - NO change: no replacement-lookup logic, RPC or migration change; no reinterpretation of historical statuses; no new lifecycle rule.
+  - A future traceability enhancement (for example naming a withdrawn replacement) is optional and needs separate owner authorization.
+- **Status:** CONFIRMED — OWNER-APPROVED, accepted limitation, not a release blocker (NP-P2-S5-S4 owner decision O1-R1 = Option A, 2026-10-19)
+- **Reason:** Found in the O1 production release verification. Pilot Simulation Quote 7 was superseded by Quote 8, which the S3C-R1 cleanup withdrew. The generic wording is accurate, and changing a read RPC isn't justified by a wording detail.
+- **Affected Product Areas:** `/quote-print/[quoteId]` SUPERSEDED banner; the opportunity quotes panel "Replaced by" line (display only)
+- **Dependencies:** ZD-219, ZD-221, ZD-224, ZD-226
+- **Owner:** Product
+- **Review Trigger:** A request for full revision traceability on printed or listed quotes
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

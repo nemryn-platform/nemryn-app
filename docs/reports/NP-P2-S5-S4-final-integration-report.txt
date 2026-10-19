@@ -1,0 +1,361 @@
+NP-P2-S5-S4 — ESTIMATES & QUOTES: FINAL INTEGRATION VERIFICATION REPORT
+=======================================================================
+Date: 2026-10-19. Revision 2 (adds the owner-authorized B1–B6 production read-only results and the final readiness
+verdict). Authorized scope: A (isolated), B (production read-only), D (release / regression).
+C1 / C2 / C3 (production writes): WAIVED by the owner. They are NOT RUN, and not counted as PASS.
+
+FINAL VERDICT: CONDITIONAL PASS — RELEASE-READY FOR THE ESTIMATES & QUOTES MODULE, WITH KNOWN ACCESSIBILITY LIMITATIONS.
+- PASS: A1–A5, B1–B6 and D1–D4.
+- Two platform-wide accessibility defects, U1 and U2, are owner-ACCEPTED as known, unresolved issues. They are
+  deferred as MANDATORY entry requirements for the canonical Nemryn UI overhaul; they are not dismissed and not
+  considered passed.
+- C1–C3 are waived. Zero production writes.
+
+======================================================================
+0. OWNER DECISIONS RECORDED (S4 continuation, 2026-10-19)
+======================================================================
+1. U1 (muted-text colour contrast) and U2 (shared Dialog focus restoration): ACCEPTED as known, unresolved
+   platform-wide accessibility defects.
+2. Their correction is DEFERRED to the canonical Nemryn UI overhaul as MANDATORY requirements (section 9).
+3. B1–B6 production read-only verification AUTHORIZED and executed (section 4).
+4. C1, C2 and C3 WAIVED. Marked NOT RUN. The evidence relied on instead is the S2–S3C production smoke tests plus the
+   isolated S4 runs.
+5. The current application shell and all quotation functionality are preserved. No canonical UI component was
+   changed.
+Still OPEN: OD-Q13, OD-Q14. Still unresolved: PD-10, PD-11.
+
+======================================================================
+1. BRANCH AND EXACT CODE BASELINE
+======================================================================
+- Branch: np-p2-s5-s4-final-integration, created from origin/main c8588d5dda7aa814d83534c9afd407085edfc7ff in place
+  and non-destructively. The previous tree (5d295d8) was byte-identical. All 313 untracked files were preserved;
+  no worktree, reset, stash or clean.
+- Re-verified before B: origin/main = GitHub main = c8588d5 (not advanced). The live build id at
+  https://app.nemryn.com is c8588d5dda7a.
+- Code under test: src/ and supabase/ identical to main. 92 migrations; the latest is 20261021100000. No migration,
+  RPC or product source change in S4.
+- Uncommitted documentation: decision-register.md (+17, ZD-227) and plus-domain-model.md (+1).
+- Untracked: the S4 plan revision 2, the S4 readiness review, and this report.
+- No staging, commit, push, merge, deployment or branch switch after the S4 branch was created.
+
+======================================================================
+2. PREREQUISITES
+======================================================================
+- P3: .tmp-qa/np-p2-s5-s4-integrated-e2e.mjs (A5 integrated journey).
+- P4: .tmp-qa/np-p2-s5-s4-a11y-e2e.mjs (A6: axe-core 4.10.2 pinned from cdnjs, plus keyboard).
+- P6: the expected-successor rule in the production read-only scripts now excludes withdrawn revisions (ZD-227).
+  Verified live in B3: Quote 7 → "Replaced by a revision"; Estimate 2 → "Replaced by Estimate 3".
+- New in this revision: .tmp-qa/np-p2-s5-s4-prod-b56-readonly.mjs (B5 timelines / audit / permissions / Core
+  boundary, and the B6 integrity snapshot). It is SELECT-only and refuses any other statement; UI checks are page
+  views only.
+- Harness corrections made while developing P3 / P4 were test-code mistakes only, each verified against the database
+  or the browser:
+  - the psql boolean text form;
+  - the panel badge label;
+  - the CDP Enter key needing text "\r";
+  - the modal dialog Tab boundary;
+  - the "closed" check (no open <dialog>).
+
+======================================================================
+3. RESULTS — A (ISOLATED, NemrynS1Iso, fictional data)
+======================================================================
+A1 SQL (69 suites, each from a verified fresh reset): 68 with 0 failures.
+
+  | Suite                       | Result                 |
+  |-----------------------------|------------------------|
+  | plus_quotes_tests           | 0 / 83 failures        |
+  | plus_quotes_directory_tests | 0 / 34 failures        |
+  | plus_quotes_lifecycle_tests | 0 / 41 failures        |
+  | plus_tasks_tests            | 0 / 58 failures        |
+  | plus_opportunities_tests    | 0 / 75 failures        |
+  | privilege_contract_tests    | 0 violations of 29     |
+
+  EXPECTED failure: request_decision_expand_compat_tests 8 / 10.
+
+A2 concurrency: all pass except the 2 EXPECTED harness failures (mutation_concurrency CONCURRENCY-1,
+request_lifecycle REQUEST-CONCURRENCY-1).
+
+  | Script                       | Result |
+  |------------------------------|--------|
+  | plus_quotes                  | 18 / 18 |
+  | plus_tasks                   | 4      |
+  | plus_opportunities           | 6      |
+  | plus_conversion_rebooking    | 11     |
+  | plus_request_attributions    | 6      |
+  | plus_contacts                | 4      |
+  | plus_growth_agent            | 5      |
+  | plus_member_grants           | 6      |
+  | plus_entitlement             | 5 + 4  |
+  | request_decision             | 21     |
+  | team_last_admin              | 14     |
+  | website / intake / recurring / tenant | all pass |
+
+A3 browser (each from a verified fresh reset):
+
+  | Suite             | Result  |
+  |-------------------|---------|
+  | S2 drafts         | 33 / 33 |
+  | S3A directory     | 31 / 31 |
+  | S3B lifecycle     | 32 / 32 |
+  | S3C print / follow-up | 54 / 54 |
+  | O1 closed notice  | 27 / 27 |
+
+A4 lifecycle / revisions: PASS.
+- draft create / edit / withdraw; Mark sent with the review;
+- the immutable snapshot (authenticated UPDATE refused; an owner-role UPDATE inside a rollback-only transaction
+  refused by the guard trigger);
+- accepted / declined; revise; supersede; sent withdrawal; derived Expired;
+- OD-Q12 under concurrency; the ZD-227 case.
+
+A5 integrated journey: 69 / 69 (fresh reset).
+- UI journey from Estimate draft through revision, acceptance and conversion.
+- Exactly one Core Request and no trip; conversion changes no quote.
+- The O1 notice after conversion.
+- PDF text including a whole 500-character terms note.
+- The ZD-227 branch; the directory filters; the timelines (OD-Q15); DNC refusals and acknowledgment (OD-Q16).
+- The full role matrix; exact audit; zero outbound; 1024 / 768 / 390 px.
+
+A6 accessibility: 18 PASS / 8 FAIL. The 8 failures are the 2 genuine shared-UI defects U1 and U2 (section 9).
+
+======================================================================
+4. RESULTS — B (PRODUCTION READ-ONLY; owner-authorized; executed 2026-10-19)
+======================================================================
+Target: https://app.nemryn.com (build c8588d5dda7a); Supabase project wyocbivzgrbekuyqdfts (linked); tenant Nemryn
+Pilot Simulation (25e3a19b-c8b5-45d2-943e-f20baf697cc5); synthetic SIM identities (credentials never printed).
+Every database statement was a SELECT; no form was submitted.
+
+B1 release: PASS.
+- GitHub main = origin/main = c8588d5 (PR #19 merge; not advanced).
+- Production deployment 7177366647 for c8588d5: success.
+- The live build id is c8588d5dda7a.
+- The print route is deployed (signed out → 307 sign-in; private / no-store).
+
+B2 database contract: PASS (np-p2-s5-s3c-prod-preflight.mjs, all checks). Production compared with the repository
+definitions applied to NemrynS1Iso:
+- migrations 92 = 92, head 20261021100000, missing = [], extra = [];
+- functions 214, policies 48, table ACL / RLS 43, constraints 363, indexes 166, triggers 48: all IDENTICAL;
+- the only production-only function is the documented platform helper rls_auto_enable();
+- privilege contract (scripts/verify-db-privileges.sh production): 0 violations of 29;
+- 16 quote / task RPCs, each once, SECURITY DEFINER, authenticated-only EXECUTE;
+- exactly one plus_mark_quote_sent (4-argument) with the DNC refusal;
+- OD-Q12 indexes present; no lifecycle function writes plus_tasks; the Core interfaces are unchanged.
+
+B3 print / O1 / ZD-227: PASS (np-p2-s5-o1-prod-readonly.mjs with P6; 48 / 48).
+
+  | Quote      | Stored     | Label + banner                                       | O1 notice |
+  |------------|------------|------------------------------------------------------|-----------|
+  | Estimate 1 | withdrawn  | Withdrawn + WITHDRAWN                                | ✔ |
+  | Estimate 2 | superseded | Superseded + "Replaced by Estimate 3"                | ✔ |
+  | Estimate 3 | accepted   | Accepted + ACCEPTED "recorded by staff"              | ✔ |
+  | Quote 4    | declined   | Declined + DECLINED                                  | ✔ |
+  | Quote 5    | withdrawn  | Withdrawn + WITHDRAWN                                | ✔ |
+  | Quote 6    | sent       | Sent, no banner                                      | ✔ |
+  | Quote 7    | superseded | Superseded + "Replaced by a revision" (ZD-227, as approved) | ✔ |
+  | Quote 8    | withdrawn  | Withdrawn + WITHDRAWN                                | ✔ |
+  | Quote 9    | withdrawn  | Withdrawn + WITHDRAWN                                | ✔ |
+
+- For all 9: the stored lines, discount, total, dates, terms and footer match the stored rows. Display name only:
+  no contact phone / email, opportunity title, withdrawal reason or lost note.
+- Print media hides the toolbar and shows the notice.
+- The PDF of Quote 6 (pdf.js text) contains "Opportunity closed", "Its recorded quotation status has not changed",
+  "Status: Sent" and $40.00, with no toolbar text.
+- Directory and panel Print links (new tab, noopener); the Back link works.
+- The response is 200 private / no-store (x-vercel-cache MISS); noindex.
+
+B4 access: PASS.
+- VERIFIED LIVE: signed out → /sign-in; no-grant Dispatcher → /operations (no document); Driver → /driver;
+  unknown / malformed id → the same safe 404.
+- READ-grant print and cross-tenant ids: ISOLATED evidence only. No READ grant exists and creating one would be a
+  permission change; no other organization has quotes. See A5f and S3C / O1.
+
+B5 records, activity, audit, permissions, Core boundary: PASS (np-p2-s5-s4-prod-b56-readonly.mjs; 14 / 14).
+- 17 quote activity events, all tenant-scoped to their own quote and opportunity, with no body.
+- Historical sequences intact:
+  - Estimate 2: sent → superseded;
+  - Estimate 3: revised → sent → accepted;
+  - Quote 7: sent → superseded;
+  - Quote 8: revised → sent → withdrawn;
+  - Quote 9: sent → withdrawn.
+- Quote audit for 7 / 8 / 9: exact. The single task: created → cancelled.
+- Permissions: 0 active Plus grants; Admin / Dispatcher / 2 Drivers active.
+- Core boundary: no Request attribution has been linked since the first quote existed; the quote module created no
+  Core record.
+- OD-Q12 holds tenant-wide.
+- UI views:
+  - the directory shows all 9 STORED statuses and 9 Print links, with no notice there (O1 is print-only);
+  - the opportunity history has staff wording and no amounts;
+  - the panel row for Quote 7 names no replacement (ZD-227), and there are no write controls on the closed
+    opportunity;
+  - the contact timeline and the Growth dashboard show the quote events.
+
+B6 integrity: PASS. The full snapshot before and after B3–B5 is BYTE-IDENTICAL. It covers:
+- quote rows (number / status / total / updated_at), opportunity rows (title / stage / updated_at), task rows;
+- activities 37, audit 104;
+- Requests 8 (latest update unchanged), trips 9, passengers 9, assignments 11, notifications 3, attributions 4,
+  grants 0;
+- contacts (flag / channel / updated_at), Plus modules (incl. the Zenward Mobility trial), memberships;
+- other organizations: Requests 43 (unchanged), trips 17, quotes 0, tasks 0, activities 0, opportunities,
+  notifications 26, audit 155.
+
+======================================================================
+5. RESULTS — D (RELEASE / REGRESSION)
+======================================================================
+- D1: tsc clean; eslint 0 errors (warnings only in untracked .tmp-qa); next build success; npm test 883 / 883.
+- D2: only the 2 intended documentation files are modified; src/ and supabase/ equal main. 92 migrations, no new
+  migration. .env.sim.local is git-ignored. Decision register ZD-212–ZD-227 is unique and sequential.
+- D3: PR #19 merged (c8588d5); main HEAD c8588d5; deployment 7177366647 success; live build c8588d5dda7a (B1).
+- D4: A1 / A2 / A3 equal the O1 release baseline exactly; the known exceptions are identical.
+
+======================================================================
+6. EXPECTED VERSUS UNEXPECTED FAILURES
+======================================================================
+- EXPECTED (pre-existing harness): request_decision_expand_compat 8 / 10; mutation_concurrency CONCURRENCY-1;
+  request_lifecycle REQUEST-CONCURRENCY-1.
+- UNEXPECTED, then owner-ACCEPTED as known defects: U1, U2 (section 9).
+- No unexpected failure in any functional, security, isolation, lifecycle, print, Core, audit, production or
+  regression check.
+
+======================================================================
+7. PRODUCTION BEFORE / AFTER INTEGRITY
+======================================================================
+B6 snapshot identical (section 4). No production record was created, edited, withdrawn, sent, converted or deleted.
+
+======================================================================
+8. TENANT-ISOLATION AND PERMISSION EVIDENCE
+======================================================================
+- Isolated (A5f):
+  - RPC ZW002 both ways between Org A and Org B; Org B ↔ Org A print id → 404 with no data;
+  - WRITE-grant writes; READ-grant reads and prints, with RPC writes ZW001;
+  - no-grant, Driver and platform admin refused; signed out → sign-in; Plus expired → read and print only.
+- Plus A1 tenant matrices, S3C P15–P26 and O1 F1–F8.
+- Production (B2, B4, B5): privilege contract 0 / 29; identical policies / ACLs / functions; live refusals for
+  signed out, no grant and Driver; the same 404 for unknown ids; tenant-scoped activity links.
+
+======================================================================
+9. ACCESSIBILITY — KNOWN DEFECTS AND MANDATORY UI-OVERHAUL ENTRY REQUIREMENTS
+======================================================================
+A6 PASS (18): axe 0 serious / critical on the quotes panel, the withdraw-draft / response / revise / withdraw-sent
+dialogs, the follow-up offer and task dialog, and the print page; keyboard open / trap / Escape / focus return on 5
+dialogs; the print toolbar tab order; ARIA roles and accessible names.
+
+U1 — Colour contrast. WCAG 2.2 SC 1.4.3 Contrast (Minimum), Level AA. axe rule `color-contrast` (impact
+serious). FAILING.
+- Failing pair: --color-text-muted #646a70 on --color-surface-secondary #e8e9e6 = 4.48:1 for 12 px / 400 text
+  (required ≥ 4.5:1).
+- Failing locations found:
+  - quote create and edit dialogs: "A preview. Nemryn calculates the saved total.";
+  - Mark sent review (with and without DNC): "Valid until …";
+  - the Estimates & Quotes directory: StatusBadge "cancelled" tone (bg-surface-secondary text-text-muted) on
+    Withdrawn / Superseded.
+- Reach: text-text-muted is used 282 times in src/; StatusBadge by 47 files.
+- ENTRY REQUIREMENT R-U1: every text / background pair in the canonical tokens meets ≥ 4.5:1 (≥ 3:1 for large text),
+  and A6 reports 0 serious / critical `color-contrast` violations on all quote surfaces.
+
+U2 — Focus not restored after closing a dialog with its own buttons. WCAG 2.2 SC 2.4.3 Focus Order (A); related
+SC 2.4.11 Focus Not Obscured (Minimum) (AA) and SC 3.2.1 On Focus. FAILING.
+- Keyboard-activating Cancel (Edit draft, Record accepted) or Close (X) closes the dialog but leaves focus on <body>,
+  not the trigger. Escape closes AND restores focus (passes).
+- Observed cause: the shared src/components/ui/Dialog.tsx unmounts on a React state change, with no native
+  dialog.close() and no explicit focus restore.
+- Reach: Dialog is imported by 36 files (platform-wide).
+- ENTRY REQUIREMENT R-U2: every Dialog close path (Escape, Cancel, Close X, backdrop, programmatic after success)
+  returns focus to the invoking control, or to a documented successor when the trigger no longer exists.
+
+Regression tests that must pass for the overhaul to be accepted (keep as a standing gate):
+- .tmp-qa/np-p2-s5-s4-a11y-e2e.mjs: today 18 PASS / 8 FAIL; required: ALL PASS, specifically:
+  - AXE create dialog / edit dialog / Mark sent dialog / Mark sent + DNC / directory: 0 serious / critical;
+  - KEY "Edit draft -> Cancel", "Edit draft -> Close (X)", "Record accepted -> Cancel": focus returns to the trigger;
+  - every currently passing AXE / KEY / ARIA check stays passing.
+- Plus the functional suites A1–A5 (unchanged expectations) to prove the overhaul preserves behaviour.
+Status: ACCEPTED known defects — NOT passed, NOT dismissed, DEFERRED to the canonical UI overhaul as mandatory.
+No canonical UI component was changed in S4.
+
+======================================================================
+10. PRODUCTION WRITE CONFIRMATION
+======================================================================
+- ZERO production writes in S4. No INSERT / UPDATE / DELETE, RPC mutation, quote, opportunity, conversion, status
+  change, task, permission, entitlement, migration or deployment.
+- Production access was SELECT queries plus signed-in page views by the SIM Admin / Dispatcher / Driver identities,
+  as in the earlier read-only runs.
+- C1, C2, C3: WAIVED by the owner, NOT RUN (not PASS).
+- Isolated environment: NemrynS1Iso fictional data only. The stack is stopped (no NemrynS1Iso containers),
+  .iso-env.tmp is deleted, and port 3100 is free. No other project's containers were touched.
+
+======================================================================
+11. S4 RELEASE-READINESS VERDICT
+======================================================================
+
+| Dimension                    | Verdict |
+|------------------------------|---------|
+| Functional readiness         | READY |
+| Security & tenant isolation  | READY |
+| Accessibility                | LIMITED (accepted known defects U1, U2) |
+| Production evidence          | VERIFIED READ-ONLY + earlier VERIFIED LIVE smokes |
+| Product & compliance limits  | OPEN items listed below |
+
+Functional readiness — READY.
+- S1 database, S2 drafts, S3A directory and S3B lifecycle (OD-Q12 / Q15 / Q16) all pass.
+- S3C print and optional follow-ups, O1 closed notice and ZD-227 wording all pass.
+- All pass in isolation (A1–A5) and are confirmed on live data (B3 / B5).
+Security & tenant isolation — READY.
+- Privilege contract 0 / 29 in production; schema identical to the repository.
+- RPC and UI cross-tenant refusals (isolated); role matrix (isolated and live); private / no-store; no public link
+  or outbound path.
+Accessibility — LIMITED.
+- U1 (WCAG 1.4.3) and U2 (WCAG 2.4.3) are accepted known defects, mandatory for the UI overhaul (section 9).
+- Other checked areas pass: axe on most surfaces, keyboard operation, ARIA roles and names.
+Production evidence — VERIFIED READ-ONLY (S4 B1–B6).
+- Plus VERIFIED LIVE in the earlier owner-approved smokes: S2, S3A (read-only), S3B 31 / 31, S3C-R1 42 / 42, and
+  the O1 release.
+- Not live (isolated only): READ-grant printing, cross-tenant ids, a quote on a Converted opportunity, Expired print.
+  C1–C3 were waived.
+Remaining product and compliance restrictions — OPEN:
+- OD-Q13 (quote total → estimated value) and OD-Q14 (pricing rules) OPEN.
+- PD-10 / PD-11 unresolved (saved PDFs are copies outside Nemryn).
+- No sending of quotes (NP-P4, consent-gated); no public link, online acceptance or e-signature.
+- USD only; "Estimate N" / "Quote N" references; no branding fields and no default validity; generic PDF file name.
+- Follow-up tasks have no quote link; derived expiry; closing never changes quotes (O1 is print-only).
+- ZD-227 wording.
+- Quote 6 stays Sent on a Lost opportunity (flagged by O1).
+- The duplicate-task wording; the empty business-contact container.
+OVERALL: the Estimates & Quotes module is RELEASE-READY and ready to enter the canonical Nemryn UI overhaul, with U1 /
+U2 as mandatory overhaul entry requirements and the open product / compliance items above.
+
+======================================================================
+12. QA SCRIPTS — SHOULD THEY BECOME TRACKED REGRESSION TESTS? (review only; nothing moved or staged)
+======================================================================
+Today these scripts live only in untracked .tmp-qa/:
+- browser: s2 / s3a / s3b / s3c / o1 / s4-integrated / s4-a11y;
+- production read-only: s3c-prod-preflight / o1-prod-readonly / s4-prod-b56-readonly;
+- shared: local-helper.mjs.
+They are the only automated browser coverage for the module, and A6 is the named regression gate for R-U1 / R-U2.
+Recommendation: YES, preserve them as tracked tests, in a separate owner-approved PR.
+- Proposed layout:
+  - tests/e2e/plus-quotes/ for the 7 isolated suites and the helper;
+  - tests/prod-readonly/plus-quotes/ for the 3 production read-only scripts, clearly marked SELECT-only.
+- Hardening before tracking:
+  (a) Make the container name, app URL and the scratchpad output paths configurable (they currently hard-code
+      supabase_db_NemrynS1Iso, :3100 and a session scratchpad path in the production scripts).
+  (b) Keep the existing guards: refuse non-localhost targets for the isolated suites; refuse non-SELECT in the
+      production scripts; read credentials from git-ignored .env.sim.local, never printed.
+  (c) Pin the CDN libraries (pdf.js 3.11.174, axe-core 4.10.2) or vendor them as dev dependencies.
+  (d) Remove unused variables (3 lint warnings).
+  (e) Add a README with the fresh-reset requirement (S3A) and the known harness exceptions.
+  (f) Keep them out of `npm test`, which runs only the node unit suites. Add an explicit script (e.g.
+      `npm run test:e2e:quotes`) run against an isolated stack.
+- Without tracking, the evidence trail and the UI-overhaul gate depend on untracked files that could be lost.
+Status: NOT moved and NOT staged (owner approval required).
+
+======================================================================
+13. OUTSTANDING DECISIONS (owner)
+======================================================================
+O-1. Commit path for ZD-227, the S4 plan, the readiness review and this report (branch
+     np-p2-s5-s4-final-integration, uncommitted). The keychain git credential still holds ternivex, so a push needs
+     a fresh approval for the one-command gh-token method.
+O-2. Whether to track the QA scripts (section 12) in a separate PR.
+O-3. Scheduling of the canonical UI overhaul with R-U1 / R-U2 as entry requirements.
+O-4. Optional housekeeping later: Quote 6 (fictional, Sent on a Lost opportunity). Not proposed now.
+Unchanged: OD-Q13, OD-Q14 OPEN; PD-10, PD-11 unresolved.
+
+STOPPED — final S4 report updated. No staging, commit, push, merge, branch switch, deployment, migration, production
+write or canonical UI change.

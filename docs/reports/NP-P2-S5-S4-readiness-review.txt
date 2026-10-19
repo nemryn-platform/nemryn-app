@@ -1,0 +1,167 @@
+NP-P2-S5-S4 — PRE-EXECUTION READINESS REVIEW (+ O1-R1 DECISION RECORD)
+======================================================================
+Date: 2026-10-19. Mode: DOCUMENTATION AND PLANNING ONLY.
+- No tests were executed for S4 and no production access of any kind was made in this phase: no query, page load or
+  write.
+- Nothing was committed, pushed, merged or deployed.
+
+VERDICT:
+- CONDITIONAL GO for S4 categories A (isolated), B (production read-only) and D (release / regression), once the
+  owner authorizes execution and prerequisites P3, P4 and P6 are completed.
+- NO-GO for category C (production writes): every item is BLOCKED PENDING OWNER APPROVAL.
+
+======================================================================
+1. CURRENT BRANCH AND HEAD
+======================================================================
+- Local branch: np-p2-s5-o1-closed-quote-print at 5d295d8 (the merged O1 feature commit).
+- origin/main HEAD: c8588d5dda7aa814d83534c9afd407085edfc7ff (the merge of PR #19). This is what production serves:
+  Vercel deployment 7177366647, live build id c8588d5dda7a.
+- `git diff 5d295d8 origin/main` is EMPTY, so the local tracked tree is identical to the released main.
+- Uncommitted: the two documentation edits in section 3 (tracked files), plus the untracked S4 plan revision and this
+  report.
+- Note for the owner: these edits sit on the already-merged feature branch. Committing them needs a new branch from
+  main (for example np-p2-s5-s4-o1r1-docs), at the owner's discretion. I didn't switch or create branches.
+
+======================================================================
+2. DOCUMENTS INSPECTED
+======================================================================
+- docs/reports/NP-P2-S5-O1-production-release.txt (47 checks passed + 1 wording discrepancy → O1-R1).
+- docs/reports/NP-P2-S5-S4-final-integration-test-plan.txt (revision 1).
+- docs/product/decision-register.md (ZD-212–ZD-226; ZD-227 free, no other reference to it in docs/).
+- docs/product/plus-product-spec.md (§4.5 S3C / O1 bullets).
+- docs/product/plus-domain-model.md (print view, follow-up and closed-notice entries).
+- Source checks (read-only), to ground the statements:
+  - plus_get_quote and plus_list_quotes (migration 20261018100000) derive superseded_by_quote_id with
+    `status <> 'withdrawn'`, so the panel follows the same rule as the print page;
+  - plus_withdraw_quote and plus_record_quote_response require an OPEN opportunity (_plus_quote_lock_open_opportunity);
+  - an accepted response advances the stage to quote_accepted.
+  These facts correct two details in the plan (C1 stage count; the C3 blocker).
+
+======================================================================
+3. EXACT DOCUMENTATION CHANGES (local, uncommitted)
+======================================================================
+3.1 docs/product/decision-register.md (+17): new ZD-227 "A superseded quote whose revision was later withdrawn shows
+    'Replaced by a revision' (NP-P2-S5 O1-R1, Option A)", inserted after ZD-226.
+    - It records the accepted wording, the historical explanation (Quote 7 superseded by Quote 8, which was later
+      withdrawn) and the RPC cause.
+    - It records NO change to lookup logic, RPCs, migrations, historical statuses or lifecycle rules.
+    - It notes that a future traceability enhancement is optional and needs separate authorization.
+    - Status: CONFIRMED — OWNER-APPROVED, accepted limitation, not a release blocker. No conflicting IDs.
+3.2 docs/product/plus-domain-model.md (+1): an "Accepted limitation (ZD-227, O1-R1 Option A)" line after the O1
+    entry.
+3.3 docs/reports/NP-P2-S5-S4-final-integration-test-plan.txt (untracked; rewritten as revision 2):
+    - reorganized into A isolated / B production read-only / C production-write (all BLOCKED) / D release and
+      regression, plus E exceptions and F order;
+    - adds prerequisites P1–P7, fixtures, pass / fail rules and cleanup;
+    - adds reconciliation R1–R5 with the released O1 and ZD-227;
+    - corrects C1 to +3 stage changes, and records the C3 Quote 6 withdrawal blocker (closed opportunity);
+    - the scope and expected results of revision 1 are preserved.
+3.4 This report (new, untracked).
+- plus-product-spec.md was not changed: it has no superseded-wording statement to reconcile.
+
+======================================================================
+4. TEST INVENTORY AND ENVIRONMENT MAPPING
+======================================================================
+
+| Cat | Item | Environment | Exists? | Expected |
+|-----|------|-------------|---------|----------|
+| A1 | All SQL suites (fresh reset each) | NemrynS1Iso | yes | quotes 83, directory 34, lifecycle 41, tasks 58, opportunities 75, privilege 0 / 29; all others 0 failures except E |
+| A2 | Concurrency scripts | NemrynS1Iso | yes | quotes 18, tasks 4, opportunities 6, conversion 11, attributions 6 … |
+| A3 | Browser S2 / S3A / S3B / S3C / O1 | NemrynS1Iso + next start :3100 | yes | 33 / 31 / 32 / 54 / 27 |
+| A4 | Lifecycle and revision checks (incl. a ZD-227 case) | within A1 / A3 / A5 | partly; the ZD-227 assertion is new | |
+| A5 | Integrated two-organization journey | NemrynS1Iso | NO (P3) | |
+| A6 | Accessibility: axe-core + keyboard | NemrynS1Iso | NO (P4) | 0 serious / critical |
+| B1–B2 | Release + DB contract (fingerprints vs repository) | production SELECT + iso reference | yes (np-p2-s5-s3c-prod-preflight.mjs) | |
+| B3 | Print all 9 quotes + O1 notice + ZD-227 wording + PDF | production pages | yes, needs P6 (successor rule) | |
+| B4–B6 | Access, directory / timelines, integrity snapshot | production | yes (extend B5 timeline reads) | |
+| C1–C3 | Live writes | production | n/a | BLOCKED |
+| C4 | READ-grant live | production | not proposed (permission change) | |
+| D1–D4 | Static gates, hygiene, release evidence, baseline comparison | local + GitHub / Vercel | yes | |
+
+Checks by theme:
+- Tenant isolation and permissions: A1 (RPC matrices), A3 (S3A / S3C / O1 role checks), A5f (full role matrix incl.
+  Org B, platform admin, Plus expired), and B4 (live: signed out, no-grant, Driver, unknown / malformed id). READ-grant
+  and cross-tenant are isolated-only.
+- Lifecycle and revisions: A1 lifecycle suite, A2 OD-Q12 races, A3 S3B, A5a / b (incl. ZD-227).
+- Print / PDF: A3 S3C / O1, A5j, B3 (pdf.js text extraction).
+- Growth-to-Core: A1 conversion suite, A2 conversion concurrency, A5i (exactly one Request, no trip); live only via
+  C2 (not recommended).
+- Data integrity: A5g / h audit and zero outbound; B6 before = after snapshot; D4 baseline equality.
+
+======================================================================
+5. READ-ONLY VERSUS WRITE-REQUIRED
+======================================================================
+- Read-only (allowed once S4 is authorized): all of B1–B6. They use the existing 9 Pilot Simulation quotes; the O1
+  notice is already on all 9.
+- Write-required (BLOCKED PENDING OWNER APPROVAL): each is documented with its purpose, exact records, safeguards,
+  cleanup and expected outcome in plan section C.
+  - C1, optional final live lifecycle pass: +1 opportunity, +1 quote, 0 tasks, +2 quote events, +3 stage changes.
+  - C2, Converted + quote live: writes a Core Request. Recommended NOT to run.
+  - C3, withdraw legacy Quote 6: needs a reopen first, because withdraw requires an open opportunity. Not
+    recommended.
+- Never proposed: READ-grant creation (a permission change), DNC flag changes, conversions without approval,
+  migrations, deletes.
+
+======================================================================
+6. KNOWN EXCEPTIONS (expected; not S4 failures)
+======================================================================
+- Harness:
+  - request_decision_expand_compat_tests 8 / 10 fail;
+  - mutation_concurrency CONCURRENCY-1 and request_lifecycle REQUEST-CONCURRENCY-1 (FOR UPDATE privilege);
+  - RTC-04 time of day;
+  - the S3A E2E needs a fresh reset;
+  - the production Back-click race (A10);
+  - PDF text via pdf.js in Chrome only.
+- Product: ZD-227 wording; OD-Q13 / OD-Q14 open; PD-10 / PD-11; no sending / public link / e-sign; USD only and
+  generic references; no quote link on tasks; derived expiry; the duplicate-task wording; the empty business header
+  container; Quote 6 Sent on a Lost opportunity (flagged).
+
+======================================================================
+7. OUTSTANDING DECISIONS (owner)
+======================================================================
+D-1. Authorize S4 execution of A + B + D. This plan doesn't authorize it by itself.
+D-2. Approve or waive each of C1, C2 and C3 individually. The recommendation: waive C2 and C3; C1 is optional.
+D-3. Where ZD-227 / the plan are committed: a new docs-only branch from main, then a PR (owner-controlled Git).
+D-4. Push credentials: the keychain still holds ternivex. Any push needs the owner's approval again for the
+     one-command gh-token method, or the owner switches the keychain.
+Still open and unaffected: OD-Q13, OD-Q14, PD-10, PD-11.
+
+======================================================================
+8. RISKS AND BLOCKERS
+======================================================================
+- Blocker for full A: P3 (integrated journey) and P4 (accessibility) scripts aren't written yet. The rest of A runs
+  today.
+- Blocker for clean B3: P6. Until the expected-successor rule is fixed in the read-only script, Quote 7 reports a
+  false failure, as in the O1 release run.
+- Coverage gaps by design: READ-grant and cross-tenant print are isolated-only in production; Converted + quote is
+  isolated-only unless C2 is approved.
+- Operational: the full A1 / A2 run takes about 60–75 minutes. The isolated stack must not run alongside other
+  projects' containers on conflicting ports (not touched).
+- The docs live on a merged branch (see D-3). There's no risk to main, but branch hygiene is needed before
+  committing.
+- No production risk in this phase: no production access occurred.
+
+======================================================================
+9. RECOMMENDED EXECUTION ORDER
+======================================================================
+1. The owner decides D-1 / D-2 / D-3.
+2. Complete P3, P4 and P6 (local QA scripts only).
+3. D1 static gates.
+4. A1 then A2 (long).
+5. Fresh reset, then A3, then A5, then A6.
+6. B1 → B6 (isolated stack up for the B2 fingerprints).
+7. D2 → D4.
+8. Write the S4 report.
+9. Only the C items the owner names, each followed by an integrity check and a report addendum.
+10. UI-overhaul readiness decision.
+
+======================================================================
+10. GO / NO-GO
+======================================================================
+- A (isolated): GO after authorization. A1–A3 are runnable now; A5 and A6 need P3 and P4 first.
+- B (production read-only): GO after authorization and P6.
+- C (production writes): NO-GO. BLOCKED PENDING OWNER APPROVAL (per item).
+- D (release / regression): GO.
+- Overall: CONDITIONAL GO. S4 has not started.
+
+STOPPED — awaiting ChatGPT / owner review.

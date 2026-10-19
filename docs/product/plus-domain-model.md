@@ -537,6 +537,7 @@ Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plu
   - The schema already supported it: `due_at` is nullable, the opportunity is a valid subject while the opportunity is open, the assignee is any eligible Plus writer, and a 30-second same-title duplicate window applies. No quote link column was added.
   - Quote lifecycle RPCs never read or write `plus_tasks`.
 - **Closed-opportunity print notice (NP-P2-S5-O1, ZD-226, no migration):** `getQuote` now maps `opportunity_stage`, which `plus_get_quote` already returned. `quotePrintModel` adds `closedNotice` for `lost` / `converted`. It is presentational only: quote status, prices, snapshots, stages, tasks, audit and activities are unchanged, and closing an opportunity still writes nothing to its quotes.
+- **Accepted limitation (ZD-227, O1-R1 Option A):** `superseded_by_quote_id` (from `plus_get_quote` / `plus_list_quotes`) ignores a `withdrawn` successor. A quote superseded by a revision that was later withdrawn therefore prints "Replaced by a revision" without a number, and the panel shows no "Replaced by" line. This is accepted as correct; there is no RPC or lifecycle change, and any traceability enhancement needs separate approval.
 - **Not decided / not encoded:**
   - OD-Q13: whether quote totals update `estimated_value_cents`. They don't today.
   - OD-Q14: pricing rules.
