@@ -12,6 +12,7 @@ import {
 } from "@/lib/plus/agent";
 import { recommendationTitle } from "@/lib/plus/agent-core";
 import { activityTypeLabel, formatContactTime } from "@/lib/plus/contacts-core";
+import { isQuoteActivity, quoteActivityLine } from "@/lib/plus/quotes-core";
 import { OPEN_STAGES, stageDisplayLabel, stageLabel } from "@/lib/plus/opportunities-core";
 import { listTasks, type TaskRow } from "@/lib/plus/tasks";
 import { dueLabel } from "@/lib/plus/tasks-core";
@@ -72,6 +73,7 @@ function TaskLines({ rows, tz, empty }: { rows: TaskRow[]; tz: string; empty: st
 
 function activityLine(a: RecentActivity): string {
   if (a.type === "stage_changed") return `${stageLabel(a.fromStage ?? "")} → ${stageDisplayLabel(a.toStage ?? "")}`;
+  if (isQuoteActivity(a.type)) return quoteActivityLine(a.type, a.quoteKind, a.quoteNumber, a.quoteStatus, null);
   return activityTypeLabel(a.type);
 }
 

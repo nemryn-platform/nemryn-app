@@ -347,9 +347,14 @@ c_fn(sig, roles) as (values
   ('_plus_next_quote_number(uuid)', ''),
   ('_plus_quote_advance_stage(plus_opportunities,text)', ''),
   ('_plus_quote_audit(plus_quotes,text,jsonb,text)', ''),
+  -- NP-P2-S5-S3B: quote timeline events (internal) + the activity guard trigger function
+  ('_plus_activities_quote_guard()', ''),
+  ('_plus_quote_activity(plus_opportunities,uuid,text,text)', ''),
+  ('_plus_quote_related_number(plus_quotes,text)', ''),
   ('plus_create_quote(uuid,uuid,text,text,text,boolean,numeric,bigint,bigint,bigint,bigint,bigint,bigint,bigint,bigint,text,bigint,text,date)', 'u'),
   ('plus_update_quote_draft(uuid,uuid,timestamp with time zone,text,text,boolean,numeric,bigint,bigint,bigint,bigint,bigint,bigint,bigint,bigint,text,bigint,text,date)', 'u'),
-  ('plus_mark_quote_sent(uuid,uuid,timestamp with time zone)', 'u'),
+  -- NP-P2-S5-S3B: + trailing p_dnc_acknowledged boolean DEFAULT false (DROP + CREATE: one function, no overload)
+  ('plus_mark_quote_sent(uuid,uuid,timestamp with time zone,boolean)', 'u'),
   ('plus_record_quote_response(uuid,uuid,timestamp with time zone,text)', 'u'),
   ('plus_revise_quote(uuid,uuid,text)', 'u'),
   ('plus_withdraw_quote(uuid,uuid,timestamp with time zone,text)', 'u'),

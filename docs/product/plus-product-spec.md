@@ -154,7 +154,7 @@ Rules:
 > - The fixed charge columns are base, mileage, wait, extra stops, mobility assistance, escort, return leg and other (labelled), minus a discount, in USD integer cents.
 > - Statuses: Draft → Sent → Accepted / Declined / Superseded / Withdrawn. **Expired is derived** from `valid_until` and is not a stored status.
 > - Mark sent advances the opportunity to Quote sent, and Record accepted advances it to Quote accepted. Both move forward only. A decline never marks the opportunity Lost.
-> - These are still open and are not built: print content and number format (OD-Q10), follow-up tasks (OD-Q11), quote totals feeding the estimated value (OD-Q13), pricing rules (OD-Q14), quote timeline rows (OD-Q15), and do-not-contact handling (OD-Q16).
+> - These are still open and are not built: print content and number format (OD-Q10), follow-up tasks (OD-Q11), quote totals feeding the estimated value (OD-Q13), pricing rules (OD-Q14),.
 > - **NP-P2-S5-S2:**
 >   - OD-Q12 = A (ZD-221): one active draft and one current sent quote per opportunity.
 >   - The Opportunity "Estimates & quotes" panel lists current and historical quotes. Writers create, edit and withdraw the draft, entering prices in dollars; the server total is authoritative.
@@ -164,6 +164,11 @@ Rules:
 >   - It is an organization-wide directory: counts (drafts / sent / accepted / expired), search, status filter including derived Expired, sort and server-side pages.
 >   - A row opens its opportunity's quote panel. New quotes still start from an opportunity.
 >   - The visual redesign is deferred to the planned UI overhaul.
+> - **NP-P2-S5-S3B:**
+>   - The quote lifecycle on the Opportunity panel: Mark sent (review, then confirm), record the customer's reported acceptance or decline, Revise, and withdraw a sent quote with a reason.
+>   - Quote events appear on the Opportunity, Contact and dashboard timelines (OD-Q15 = A, ZD-222).
+>   - For a do-not-contact contact, Mark sent shows a warning and needs an explicit acknowledgment that the server enforces and audits. It is not consent and Nemryn sends nothing (OD-Q16 = A, ZD-223).
+>   - Still not built: print / PDF (OD-Q10), follow-ups (OD-Q11), copying the quote total into the estimated value (OD-Q13), and pricing rules (OD-Q14).
 
 **Payment status** remains a separate, staff-reported field (None / Deposit reported / Paid reported / Refund reported). It is never revenue or settlement evidence and is never derived from a quote. No invoicing or billing is added in Plus.
 

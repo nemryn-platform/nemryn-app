@@ -142,6 +142,10 @@ export interface RecentActivity {
   opportunityTitle: string | null;
   actorName: string | null;
   occurredAt: string;
+  /** NP-P2-S5-S3B (ZD-222): quote lifecycle event reference (never an amount) */
+  quoteNumber: number | null;
+  quoteKind: string | null;
+  quoteStatus: string | null;
 }
 
 export async function listRecentActivities(organizationId: string, limit = 8): Promise<RecentActivity[]> {
@@ -159,5 +163,8 @@ export async function listRecentActivities(organizationId: string, limit = 8): P
     opportunityTitle: r.opportunity_title,
     actorName: r.actor_name,
     occurredAt: r.occurred_at,
+    quoteNumber: r.quote_number,
+    quoteKind: r.quote_kind,
+    quoteStatus: r.quote_status,
   }));
 }

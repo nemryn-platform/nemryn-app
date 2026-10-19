@@ -32,6 +32,7 @@ import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
 import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
 import { QuotesPanel } from "@/components/growth/QuotesPanel";
+import { isQuoteActivity, quoteActivityLine } from "@/lib/plus/quotes-core";
 import { getContact } from "@/lib/plus/contacts";
 import { listLinkedRequests } from "@/lib/plus/attribution";
 import { coreSourceForOpportunity } from "@/lib/plus/booking-core";
@@ -46,6 +47,7 @@ const SAVED: Record<string, string> = { created: "Opportunity created.", updated
 
 function historyLine(a: OpportunityActivity): string {
   if (a.type === "stage_changed") return `${stageLabel(a.fromStage ?? "")} → ${stageDisplayLabel(a.toStage ?? "")}`;
+  if (isQuoteActivity(a.type)) return quoteActivityLine(a.type, a.quoteKind, a.quoteNumber, a.quoteStatus, a.relatedQuoteNumber);
   return activityTypeLabel(a.type);
 }
 
@@ -55,8 +57,9 @@ function historyLine(a: OpportunityActivity): string {
  * foreign, unknown or inaccessible id renders the same 404. Write controls only for Plus write capability.
  * NP-P2-S4: "Create transportation request" converts an open opportunity into ONE pending Operations Request (Core
  * decides from there). No Passenger, Trip, quote document or payment record is created here.
- * NP-P2-S5-S2: "Estimates & quotes" lists this opportunity's quotes (read for every Growth reader) and lets writers on an
- * open opportunity create, edit and withdraw its one active draft (OD-Q12, ZD-221). Nothing is sent to the customer.
+ * NP-P2-S5-S2 / S3B: "Estimates & quotes" lists this opportunity's quotes (read for every Growth reader) and lets writers
+ * on an open opportunity manage the one active draft and the current sent quote (OD-Q12, ZD-221): mark sent (with the
+ * do-not-contact acknowledgment, ZD-223), record responses, revise, withdraw. Nothing is sent to the customer.
  */
 export default async function OpportunityDetailPage({
   params,
@@ -209,14 +212,21 @@ export default async function OpportunityDetailPage({
         </Panel>
       )}
 
-      <QuotesPanel organizationId={context.organizationId} timezone={tz} opportunityId={o.id} opportunityServiceType={o.serviceType} canWrite={canWrite && open} />
+      <QuotesPanel
+        organizationId={context.organizationId}
+        timezone={tz}
+        opportunityId={o.id}
+        opportunityServiceType={o.serviceType}
+        canWrite={canWrite && open}
+        contactDoNotContact={o.contactDoNotContact}
+      />
 
       <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id, label: o.title }} canWrite={canWrite && open} />
       <LinkedRequestsPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id }} />
 
       <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
         <div className="flex flex-col gap-zw-md">
-          <SectionHeader title="History" description="Stage and owner changes, newest first. Entries can't be edited." />
+          <SectionHeader title="History" description="Stage, owner and quote changes, newest first. Entries can't be edited." />
           {history === null ? (
             <AttentionState level="critical" title="History couldn't be loaded" description="Reload the page to try again." />
           ) : history.length === 0 ? (
@@ -260,7 +270,9 @@ export default async function OpportunityDetailPage({
                 {interactions.map((a) => (
                   <li key={a.id} className="border-t border-border-subtle py-zw-sm first:border-t-0 first:pt-0">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <span className={cn(typography.label, "text-text-primary")}>{activityTypeLabel(a.type)}</span>
+                      <span className={cn(typography.label, "text-text-primary")}>
+                        {isQuoteActivity(a.type) ? quoteActivityLine(a.type, a.quoteKind, a.quoteNumber, a.quoteStatus, a.relatedQuoteNumber) : activityTypeLabel(a.type)}
+                      </span>
                       <span className={cn(typography.metadata, "text-text-muted")}>
                         {formatContactTime(a.occurredAt, tz)}
                         {a.actorName ? ` · ${a.actorName}` : ""}

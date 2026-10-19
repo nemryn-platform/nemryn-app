@@ -26,6 +26,7 @@ import {
   validateQuoteForm,
   type QuoteFormValues,
 } from "@/lib/plus/quotes-core";
+import { MarkSentDialog, ResponseDialog, ReviseDialog, WithdrawSentDialog, type LifecycleTarget, type QuoteReview } from "@/components/growth/QuoteLifecycleDialogs";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -43,14 +44,29 @@ export interface DraftForEditing {
   kind: string;
   updatedAt: string;
   values: QuoteFormValues;
+  /** NP-P2-S5-S3B: the server-read snapshot shown in the Mark sent review */
+  review: QuoteReview;
 }
 
+/** NP-P2-S5-S3B: the opportunity's current sent quote, for responses, revision and sent withdrawal. */
+export interface SentForActions {
+  id: string;
+  reference: string;
+  updatedAt: string;
+  isExpired: boolean;
+}
+
+type Mode = "create" | "edit" | "withdraw" | "send" | "accept" | "decline" | "revise" | "withdraw-sent";
+
 /**
- * The Quotes panel's write controls (NP-P2-S5-S2), shown only to Plus writers on an open opportunity:
- *   no draft (and no current sent quote) -> "New estimate or quote";
- *   a draft                              -> "Edit draft" and "Withdraw draft".
- * Mark sent, responses and revisions are NOT offered here (S3). One component instance in a fixed place, so the
- * confirmation line survives the page refresh that follows a save.
+ * The Quotes panel's write controls, shown only to Plus writers on an open opportunity (NP-P2-S5-S2 / S3B):
+ *   no draft and no current sent quote -> "New estimate or quote";
+ *   a draft                            -> "Mark sent", "Edit draft", "Withdraw draft";
+ *   a current sent quote               -> "Record accepted" / "Record declined" (not once expired), "Revise" (when no
+ *                                         draft holds the slot), "Withdraw sent quote".
+ * Every lifecycle action is a STAFF STATEMENT; nothing is sent to the customer. One component instance in a fixed place,
+ * so the confirmation line survives the page refresh that follows an action; each dialog acts on the quote captured
+ * when it opened (D1).
  */
 export function QuoteDraftControls({
   organizationId,
@@ -59,6 +75,8 @@ export function QuoteDraftControls({
   serviceOptions,
   initialCreate,
   draft,
+  sent,
+  doNotContact,
   canCreate,
 }: {
   organizationId: string;
@@ -68,19 +86,24 @@ export function QuoteDraftControls({
   serviceOptions: ServiceChoice[];
   initialCreate: QuoteFormValues;
   draft: DraftForEditing | null;
+  sent: SentForActions | null;
+  /** the contact's stored do-not-contact flag when the page loaded (the database re-checks the current one) */
+  doNotContact: boolean;
   canCreate: boolean;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState<"create" | "edit" | "withdraw" | null>(null);
-  // D1 (NP-P2-S5-S3A): the draft an edit / withdraw dialog acts on is captured WHEN the dialog opens. The action's
-  // revalidation re-renders this page -- after a withdrawal the `draft` prop becomes null -- and the open dialog must not
-  // unmount before it has handed over its confirmation.
+  const [open, setOpen] = useState<Mode | null>(null);
+  // D1 (NP-P2-S5-S3A): the draft / sent quote a dialog acts on is captured WHEN the dialog opens. The action's
+  // revalidation re-renders this page (a withdrawn draft disappears, a sent quote changes status) and the open dialog
+  // must not unmount before it has handed over its confirmation.
   const [target, setTarget] = useState<DraftForEditing | null>(null);
+  const [sentTarget, setSentTarget] = useState<SentForActions | null>(null);
   const [instance, setInstance] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
-  const show = (mode: "create" | "edit" | "withdraw") => {
+  const show = (mode: Mode) => {
     setMessage(null);
-    setTarget(mode === "create" ? null : draft);
+    setTarget(["edit", "withdraw", "send"].includes(mode) ? draft : null);
+    setSentTarget(["accept", "decline", "revise", "withdraw-sent"].includes(mode) ? sent : null);
     setInstance((n) => n + 1);
     setOpen(mode);
   };
@@ -89,24 +112,55 @@ export function QuoteDraftControls({
     setMessage(text);
     router.refresh();
   };
+  const close = () => setOpen(null);
+  const reload = () => {
+    setOpen(null);
+    router.refresh();
+  };
+  const draftTarget: LifecycleTarget | null = target ? { id: target.id, updatedAt: target.updatedAt, reference: target.review.reference } : null;
+  const sentLifecycle: LifecycleTarget | null = sentTarget ? { id: sentTarget.id, updatedAt: sentTarget.updatedAt, reference: sentTarget.reference } : null;
   return (
     <div className="flex flex-col items-start gap-2 sm:items-end">
-      <div className="flex flex-wrap gap-2">
-        {draft ? (
-          <>
-            <Button type="button" size="sm" onClick={() => show("edit")} data-testid="quote-edit-open">
-              Edit draft
-            </Button>
-            <Button type="button" size="sm" variant="outline" onClick={() => show("withdraw")} data-testid="quote-withdraw-open">
-              Withdraw draft
-            </Button>
-          </>
-        ) : canCreate ? (
-          <Button type="button" size="sm" onClick={() => show("create")} data-testid="quote-create-open">
-            New estimate or quote
+      {draft && (
+        <div className="flex flex-wrap gap-2" data-testid="quote-draft-actions">
+          <Button type="button" size="sm" onClick={() => show("send")} data-testid="quote-send-open">
+            Mark sent
           </Button>
-        ) : null}
-      </div>
+          <Button type="button" size="sm" variant="outline" onClick={() => show("edit")} data-testid="quote-edit-open">
+            Edit draft
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => show("withdraw")} data-testid="quote-withdraw-open">
+            Withdraw draft
+          </Button>
+        </div>
+      )}
+      {sent && (
+        <div className="flex flex-wrap gap-2" data-testid="quote-sent-actions">
+          {!sent.isExpired && (
+            <>
+              <Button type="button" size="sm" variant="outline" onClick={() => show("accept")} data-testid="quote-accept-open">
+                Record accepted
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => show("decline")} data-testid="quote-decline-open">
+                Record declined
+              </Button>
+            </>
+          )}
+          {!draft && (
+            <Button type="button" size="sm" variant="outline" onClick={() => show("revise")} data-testid="quote-revise-open">
+              Revise
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="text" onClick={() => show("withdraw-sent")} data-testid="quote-withdraw-sent-open">
+            Withdraw sent quote
+          </Button>
+        </div>
+      )}
+      {!draft && !sent && canCreate && (
+        <Button type="button" size="sm" onClick={() => show("create")} data-testid="quote-create-open">
+          New estimate or quote
+        </Button>
+      )}
       {message && (
         <p role="status" className={cn(typography.bodySmall, "text-text-secondary")} data-testid="quote-saved">
           {message}
@@ -121,12 +175,9 @@ export function QuoteDraftControls({
           today={today}
           serviceOptions={serviceOptions}
           initial={initialCreate}
-          onClose={() => setOpen(null)}
+          onClose={close}
           onDone={done}
-          onReload={() => {
-            setOpen(null);
-            router.refresh();
-          }}
+          onReload={reload}
         />
       )}
       {open === "edit" && target && (
@@ -139,26 +190,42 @@ export function QuoteDraftControls({
           serviceOptions={serviceOptions}
           initial={target.values}
           draft={target}
-          onClose={() => setOpen(null)}
+          onClose={close}
           onDone={done}
-          onReload={() => {
-            setOpen(null);
-            router.refresh();
-          }}
+          onReload={reload}
         />
       )}
       {open === "withdraw" && target && (
-        <WithdrawDraftDialog
-          key={`w${instance}`}
+        <WithdrawDraftDialog key={`w${instance}`} organizationId={organizationId} draft={target} onClose={close} onDone={done} onReload={reload} />
+      )}
+      {open === "send" && target && draftTarget && (
+        <MarkSentDialog
+          key={`s${instance}`}
           organizationId={organizationId}
-          draft={target}
-          onClose={() => setOpen(null)}
+          target={draftTarget}
+          review={target.review}
+          doNotContact={doNotContact}
+          onClose={close}
           onDone={done}
-          onReload={() => {
-            setOpen(null);
-            router.refresh();
-          }}
+          onReload={reload}
         />
+      )}
+      {(open === "accept" || open === "decline") && sentLifecycle && (
+        <ResponseDialog
+          key={`r${instance}`}
+          organizationId={organizationId}
+          target={sentLifecycle}
+          response={open === "accept" ? "accepted" : "declined"}
+          onClose={close}
+          onDone={done}
+          onReload={reload}
+        />
+      )}
+      {open === "revise" && sentLifecycle && (
+        <ReviseDialog key={`v${instance}`} organizationId={organizationId} target={sentLifecycle} onClose={close} onDone={done} onReload={reload} />
+      )}
+      {open === "withdraw-sent" && sentLifecycle && (
+        <WithdrawSentDialog key={`x${instance}`} organizationId={organizationId} target={sentLifecycle} onClose={close} onDone={done} onReload={reload} />
       )}
     </div>
   );

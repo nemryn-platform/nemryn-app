@@ -22,6 +22,7 @@ import { ContactWriteActions } from "@/components/growth/ContactActions";
 import { listOpportunities, type OpportunityListRow } from "@/lib/plus/opportunities";
 import { stageDisplayLabel, stageTone } from "@/lib/plus/opportunities-core";
 import Link from "next/link";
+import { isQuoteActivity, quoteActivityLine } from "@/lib/plus/quotes-core";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
 import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
@@ -211,7 +212,9 @@ export default async function ContactDetailPage({
               {activities.map((a) => (
                 <li key={a.id} className="border-t border-border-subtle py-zw-md first:border-t-0 first:pt-0" data-testid="timeline-entry" data-type={a.type}>
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className={cn(typography.label, "text-text-primary")}>{activityTypeLabel(a.type)}</span>
+                    <span className={cn(typography.label, "text-text-primary")}>
+                      {isQuoteActivity(a.type) ? quoteActivityLine(a.type, a.quoteKind, a.quoteNumber, a.quoteStatus, a.relatedQuoteNumber) : activityTypeLabel(a.type)}
+                    </span>
                     <span className={cn(typography.metadata, "text-text-muted")}>
                       {formatContactTime(a.occurredAt, tz)}
                       {a.actorName ? ` · ${a.actorName}` : ""}
@@ -219,6 +222,11 @@ export default async function ContactDetailPage({
                     </span>
                   </div>
                   {a.body && <p className={cn(typography.bodySmall, "mt-1 whitespace-pre-wrap break-words text-text-primary")}>{a.body}</p>}
+                  {isQuoteActivity(a.type) && a.opportunityId && (
+                    <Link href={`/operations/growth/pipeline/${a.opportunityId}#quotes`} className={cn(typography.metadata, "text-text-link hover:underline")} data-testid="timeline-quote-link">
+                      Open the opportunity&apos;s quotes
+                    </Link>
+                  )}
                 </li>
               ))}
             </ol>

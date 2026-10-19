@@ -314,7 +314,9 @@ export const QUOTE_NOT_INVOICE_NOTE =
   "Estimates and quotes are prices your team gives the customer. They are not invoices, and Nemryn doesn't send them or take payment.";
 export const QUOTE_PRIVACY_HELP = "Commercial terms only. Don't include addresses, appointment details or medical information.";
 export const QUOTE_SENT_CURRENT_NOTE =
-  "A sent quote is current for this opportunity. To change its price, it will be revised from the quote itself in a later update; a separate new draft is not created here.";
+  "A sent quote is current for this opportunity. To change its price, revise it: the revision replaces it once you mark the revision sent.";
+export const QUOTE_EXPIRED_NOTE =
+  "The current quote's valid-until date has passed, so a response can't be recorded on it. Revise it with a new date, or withdraw it.";
 
 /**
  * Plain-words error copy for the draft actions. `reason` is the database exception message (it distinguishes refusals
@@ -325,6 +327,11 @@ export function quoteErrorMessage(code: string | undefined, reason?: string): st
     case "ZW003":
       return "Someone else changed this draft since you opened it. Reload to see the latest version, then make your changes again.";
     case "ZW004":
+      if (reason === "dnc_acknowledgment_required") return DNC_ACK_REQUIRED_MESSAGE;
+      if (reason === "quote_expired") return "This quote's valid-until date has passed. Revise it (or edit the draft's date) instead.";
+      if (reason === "revision_exists") return "This quote already has a revision in progress. Open the draft on this opportunity.";
+      if (reason === "sent_quote_exists") return "Another quote is currently sent for this opportunity. Revise that quote instead of sending a separate one.";
+      if (reason === "revision_base_not_current") return "The quote this revision replaces is no longer the current sent quote, so the revision can't be sent. Reload to see the latest.";
       if (reason === "draft_exists") return "This opportunity already has a draft. Reload the page to open it.";
       if (reason === "quote_not_draft") return "This quote is no longer a draft, so it can't be edited. Reload the page to see it.";
       if (reason === "opportunity_closed") return "This opportunity is closed, so its quotes can't be changed.";
@@ -423,3 +430,67 @@ export const DIRECTORY_DESCRIPTION =
   "Every estimate and quote your team has prepared, across all opportunities. Open a row to work on it from its opportunity.";
 export const DIRECTORY_NEW_NOTE =
   "Estimates and quotes always start from an opportunity: open one in the Pipeline and use its Estimates & quotes panel.";
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Lifecycle (NP-P2-S5-S3B): Mark sent (OD-Q16 acknowledgment), responses, revisions, sent withdrawal, timeline wording
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const SENT_WITHDRAW_REASON_MAX = 200;
+
+/** The staff-statement nature of every lifecycle action (shown in the dialogs). Nemryn itself sends nothing. */
+export const MARK_SENT_NOTE =
+  "Mark sent records that your team shared this price with the customer outside Nemryn. Nemryn doesn't send anything, and this isn't proof of delivery. Once marked sent, the prices can't be changed; a change needs a revision.";
+export const RESPONSE_NOTE =
+  "This records what the customer told your team. It isn't an online or verified acceptance, and it creates no booking, invoice or payment.";
+export const REVISE_NOTE =
+  "Revising creates a new draft copied from this quote. This quote stays sent and unchanged until the revision is marked sent, which then replaces it.";
+export const WITHDRAW_SENT_NOTE =
+  "The quote stays in the history as withdrawn with its prices. The opportunity isn't marked lost, and the customer isn't contacted.";
+
+/** OD-Q16 (ZD-223): the do-not-contact warning and acknowledgment copy. */
+export const DNC_WARNING_TITLE = "This person asked not to be contacted";
+export const DNC_WARNING_TEXT =
+  "Only mark this quote sent if your team has already shared it in a way the customer asked for. Acknowledging this doesn't change their preference, isn't consent, and doesn't allow emails, texts or future outreach.";
+export const DNC_ACK_LABEL = "I understand this person asked not to be contacted, and I'm recording a quote my team has already shared.";
+export const DNC_ACK_REQUIRED_MESSAGE =
+  "This person is marked do not contact. Read the warning and confirm the acknowledgment to record this quote as sent.";
+
+/** "true" from a checkbox / hidden field; anything else is false (never a default acknowledgment). */
+export function parseAcknowledgment(raw: unknown): boolean {
+  return raw === "true" || raw === "on";
+}
+
+/** A sent withdrawal needs a reason (1-200 characters after trimming); the database re-checks. */
+export function validateSentWithdrawReason(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+  const v = (raw ?? "").trim();
+  if (!v) return { ok: false, error: "Give a short reason for withdrawing this sent quote." };
+  if (v.length > SENT_WITHDRAW_REASON_MAX) return { ok: false, error: `Use ${SENT_WITHDRAW_REASON_MAX} characters or fewer.` };
+  return { ok: true, value: v };
+}
+
+export const QUOTE_ACTIVITY_TYPES = ["quote_sent", "quote_status_changed", "quote_revised"] as const;
+export const isQuoteActivity = (type: string) => (QUOTE_ACTIVITY_TYPES as readonly string[]).includes(type);
+
+/**
+ * One timeline line for a quote lifecycle event (ZD-222). Staff-recorded wording only -- never "the customer accepted
+ * online" -- and never an amount.
+ */
+export function quoteActivityLine(type: string, kind: string | null, quoteNumber: number | null, status: string | null, relatedNumber: number | null): string {
+  const ref = quoteNumber !== null ? quoteReference(kind ?? "quote", quoteNumber) : quoteKindLabel(kind ?? "quote");
+  const related = relatedNumber !== null ? quoteReference(kind ?? "quote", relatedNumber) : null;
+  if (type === "quote_sent") return `${ref} marked sent`;
+  if (type === "quote_revised") return related ? `${ref} created as a revision of ${related}` : `${ref} created as a revision`;
+  if (type === "quote_status_changed") {
+    switch (status) {
+      case "accepted":
+        return `Customer acceptance of ${ref} recorded`;
+      case "declined":
+        return `Customer decline of ${ref} recorded`;
+      case "superseded":
+        return related ? `${ref} replaced by revision ${related}` : `${ref} replaced by a revision`;
+      case "withdrawn":
+        return `Sent ${ref} withdrawn`;
+    }
+  }
+  return "Quote updated";
+}

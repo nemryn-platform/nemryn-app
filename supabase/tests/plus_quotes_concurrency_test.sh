@@ -2,8 +2,10 @@
 # Nemryn Plus -- Estimates & Quotes under REAL concurrency (NP-P2-S5-S1). Parallel psql processes, each holding its
 # locks ~1s after the call. After EVERY scenario the critical invariants are checked on the final rows:
 #   one intended create = ONE quote; quote numbers unique per organization; a revision chain has at most one live
-#   successor; an accepted quote is never superseded; a closed opportunity never gains a sent quote; and (NP-P2-S5-S2,
-#   OD-Q12 / ZD-221) no opportunity ever has two drafts or two sent quotes.
+#   successor; an accepted quote is never superseded; a closed opportunity never gains a sent quote; (NP-P2-S5-S2,
+#   OD-Q12 / ZD-221) no opportunity ever has two drafts or two sent quotes; and (NP-P2-S5-S3B, OD-Q15 / ZD-222) every
+#   quote has EXACTLY one timeline event per transition it went through (sent / response / superseded / sent-withdrawn /
+#   revision) -- never a duplicate, never one for a refused or no-op call.
 #
 #   1  double click: the same create (same key) twice at once                 -> 1 quote; t + f (replay)
 #   2  two staff, same key, same opportunity                                   -> 1 quote; t + f
@@ -21,6 +23,9 @@
 #   10 independent create vs Revise on an opportunity with a sent quote (OD-Q12) -> exactly one draft; the other draft_exists
 #   11 the same Mark sent twice at once                                        -> one sent; t + f
 #   12 Mark sent of the revision vs Withdraw of its sent predecessor (OD-Q12)  -> never two sent; exactly one wins
+#   13 do-not-contact turned ON while an unacknowledged Mark sent runs (OD-Q16) -> the send is refused (or happened before
+#      the change, audited with contact_do_not_contact = false) -- never sent unacknowledged while the flag was on
+#   13b Mark sent holding the contact first, the preference change waits         -> sent (false/false), then the flag is on
 #
 # Run with:  bash supabase/tests/plus_quotes_concurrency_test.sh
 # Throwaway organization (Plus active) + two throwaway Admins + fictional contacts / opportunities, removed on exit.
@@ -87,7 +92,12 @@ invariants() { $PSQL -c "select (select count(*) - count(distinct quote_number) 
   + (select count(*) from (select supersedes_quote_id from public.plus_quotes where organization_id = '$ORG' and supersedes_quote_id is not null and status <> 'withdrawn' group by 1 having count(*) > 1) d)
   + (select count(*) from public.plus_quotes q join public.plus_quotes s on s.supersedes_quote_id = q.id and s.status in ('sent', 'accepted', 'declined', 'superseded') where q.status = 'accepted')
   + (select count(*) from public.plus_quotes q join public.plus_opportunities o on o.id = q.opportunity_id where o.organization_id = '$ORG' and o.stage in ('lost', 'converted') and q.sent_at > o.closed_at)
-  + (select count(*) from (select 1 from public.plus_quotes where organization_id = '$ORG' and status in ('draft', 'sent') group by opportunity_id, status having count(*) > 1) d2)"; }
+  + (select count(*) from (select 1 from public.plus_quotes where organization_id = '$ORG' and status in ('draft', 'sent') group by opportunity_id, status having count(*) > 1) d2)
+  + (select count(*) from public.plus_quotes q where q.organization_id = '$ORG' and (
+       (select count(*) from public.plus_activities a where a.quote_id = q.id and a.activity_type = 'quote_sent') <> (case when q.sent_at is not null then 1 else 0 end)
+    or (select count(*) from public.plus_activities a where a.quote_id = q.id and a.activity_type = 'quote_status_changed')
+       <> (case when q.status in ('accepted', 'declined', 'superseded') or (q.status = 'withdrawn' and q.sent_at is not null) then 1 else 0 end)
+    or (select count(*) from public.plus_activities a where a.quote_id = q.id and a.activity_type = 'quote_revised') <> (case when q.supersedes_quote_id is not null then 1 else 0 end)))"; }
 outs() { cat "$@" | grep -E '^[tf]$' | sort | paste -sd, -; }
 errs() { cat "$@" | grep -oE '(invalid_input|stale_state|illegal_transition|quote_not_draft|revision_exists|revision_base_not_current|opportunity_closed|quote_expired|draft_exists|sent_quote_exists)' | sort | paste -sd, -; }
 
@@ -233,6 +243,35 @@ echo "outcomes=$(outs "$OUT/a.out" "$OUT/b.out") refusals=$(errs "$OUT/a.err" "$
 [ "$(outs "$OUT/a.out" "$OUT/b.out")" = "t" ] && [ -n "$(errs "$OUT/a.err" "$OUT/b.err")" ] && [ "$SENT" -le 1 ] && [ "$(invariants)" = "0" ] \
   && { { [ "$(st "$Q")" = "superseded" ] && [ "$(st "$REV")" = "sent" ]; } || { [ "$(st "$Q")" = "withdrawn" ] && [ "$(st "$REV")" = "draft" ]; }; }
 check "CONC-Q12 (send revision vs withdraw predecessor: exactly one wins; never two sent; never a half-applied supersession)" $?
+
+echo "=== 13: do-not-contact turned ON while an unacknowledged Mark sent runs (OD-Q16) ==="
+O=$(opportunity "QConc 13"); Q=$(create_id "$O" "qconc-key-thirteen")
+KC=$($PSQL -c "select primary_contact_id from public.plus_opportunities where id = '$O'")
+$PSQL > "$OUT/a.out" 2> "$OUT/a.err" <<SQL &
+begin;
+update public.plus_contacts set do_not_contact = true where id = '$KC';
+select pg_sleep(1.0);
+commit;
+SQL
+sleep 0.3; S=$(send_sql "$Q"); run_as "$OUT/b" "$AD2" "$S"; wait
+REFUSED=$(cat "$OUT/b.err" | grep -c dnc_acknowledgment_required)
+echo "send=$(outs "$OUT/b.out") refused=$REFUSED status=$(st "$Q") audit=$($PSQL -c "select coalesce(string_agg(after_data ->> 'contact_do_not_contact', ','), '-') from public.audit_events where entity_id = '$Q' and action = 'plus_quote_sent'") invariants=$(invariants)"
+[ "$REFUSED" = "1" ] && [ "$(st "$Q")" = "draft" ] && [ "$($PSQL -c "select count(*) from public.plus_activities where quote_id = '$Q'")" = "0" ] && [ "$(invariants)" = "0" ]
+check "CONC-Q13 (preference change committed first: the waiting unacknowledged send is refused; nothing written)" $?
+$PSQL >/dev/null -c "update public.plus_contacts set do_not_contact = false where id = '$KC'"
+O=$(opportunity "QConc 13b"); Q=$(create_id "$O" "qconc-key-thirteenb")
+KC=$($PSQL -c "select primary_contact_id from public.plus_opportunities where id = '$O'")
+S=$(send_sql "$Q")
+run_as "$OUT/b" "$AD2" "$S" &
+sleep 0.3
+START=$(date +%s)
+$PSQL > "$OUT/a.out" 2> "$OUT/a.err" -c "update public.plus_contacts set do_not_contact = true where id = '$KC'"
+WAITED=$(( $(date +%s) - START ))
+wait
+echo "send=$(outs "$OUT/b.out") change_waited_s=$WAITED status=$(st "$Q") audit=$($PSQL -c "select (after_data ->> 'contact_do_not_contact') || '/' || (after_data ->> 'dnc_acknowledged') from public.audit_events where entity_id = '$Q' and action = 'plus_quote_sent'") dnc_now=$($PSQL -c "select do_not_contact from public.plus_contacts where id = '$KC'") invariants=$(invariants)"
+[ "$(outs "$OUT/b.out")" = "t" ] && [ "$(st "$Q")" = "sent" ] && [ "$($PSQL -c "select (after_data ->> 'contact_do_not_contact') || '/' || (after_data ->> 'dnc_acknowledged') from public.audit_events where entity_id = '$Q' and action = 'plus_quote_sent'")" = "false/false" ] && [ "$($PSQL -c "select do_not_contact from public.plus_contacts where id = '$KC'")" = "t" ] && [ "$(invariants)" = "0" ]
+check "CONC-Q13b (send first holds the contact share lock; the preference change waits; the send is audited with the flag it saw)" $?
+$PSQL >/dev/null -c "update public.plus_contacts set do_not_contact = false where id = '$KC'"
 
 echo "=== TOTAL FAILURES: $FAIL ==="
 exit $FAIL

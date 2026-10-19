@@ -20,7 +20,16 @@ export type ContactStatusFilter = ContactStatus | "all";
 /** Staff-loggable timeline entries. owner_changed / record_archived are written by the system. */
 export const LOGGABLE_ACTIVITY_TYPES = ["note", "call_logged", "email_logged", "meeting_logged"] as const;
 export type LoggableActivityType = (typeof LOGGABLE_ACTIVITY_TYPES)[number];
-export type ActivityType = LoggableActivityType | "owner_changed" | "record_archived" | "stage_changed" | "request_linked" | "attribution_changed";
+export type ActivityType =
+  | LoggableActivityType
+  | "owner_changed"
+  | "record_archived"
+  | "stage_changed"
+  | "request_linked"
+  | "attribution_changed"
+  | "quote_sent"
+  | "quote_status_changed"
+  | "quote_revised";
 
 export const CONTACT_LIMITS = {
   name: 200,
@@ -53,6 +62,10 @@ const ACTIVITY_LABELS: Record<ActivityType, string> = {
   // NP-P2-S3: an existing Operations request was linked / its link corrected (never a conversion)
   request_linked: "Operations request linked",
   attribution_changed: "Request link corrected",
+  // NP-P2-S5-S3B (ZD-222): quote lifecycle events (the line itself comes from quotes-core quoteActivityLine)
+  quote_sent: "Quote marked sent",
+  quote_status_changed: "Quote status recorded",
+  quote_revised: "Quote revision created",
 };
 const LOG_ACTION_LABELS: Record<LoggableActivityType, string> = {
   note: "Add note",
