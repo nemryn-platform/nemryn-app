@@ -1,7 +1,9 @@
 -- Nemryn Plus -- Estimates & Quotes foundation (NP-P2-S5-S1). ROLLBACK-ONLY (one transaction, rolled back).
 --   docker exec -i supabase_db_ZenWard psql -U postgres -d postgres -f - < supabase/tests/plus_quotes_tests.sql
 -- Expect every "TEST ...: PASS" and a final "SUMMARY (failures = 0 of N tests)".
--- Covers 20261018100000_plus_quotes_foundation.sql. FICTIONAL seed fixtures only: Org A (admin a1, dispatcher a2,
+-- Covers 20261018100000_plus_quotes_foundation.sql and (NP-P2-S5-S2) 20261019100000_plus_quotes_single_active.sql:
+-- OD-Q12 Option A (ZD-221) -- at most ONE active draft and ONE current sent quote per opportunity. Each scenario that
+-- needs a free draft / sent slot uses its OWN opportunity. FICTIONAL seed fixtures only: Org A (admin a1, dispatcher a2,
 -- driver a3, inactive dispatcher a5, multi-org c1), Org B (admin b1, dispatcher b2), platform admin d1, no-membership
 -- e1. Calls go through the REAL RPCs as the signed-in staff member. Inside one transaction now() is constant: a
 -- "stale" version is simulated with an earlier timestamp; a past validity is simulated by a direct owner update of a
@@ -134,6 +136,7 @@ declare
   v_today_a date;
   k uuid; kb uuid; k_arch uuid;
   o uuid; o2 uuid; o3 uuid; o4 uuid; o5 uuid; o6 uuid; ob uuid; o_lost uuid; o_conv uuid; o_acc uuid;
+  o_val uuid; o7 uuid; o8 uuid; o9 uuid; o10 uuid; o11 uuid; o12 uuid; q4 uuid; q5 uuid;
   q uuid; q2 uuid; q3 uuid; qb uuid; r uuid; r2 uuid;
   v text; v2 text; v_n int; v_c int; v_a int;
   v_fn record; v_ok boolean;
@@ -198,35 +201,36 @@ begin
     and (select count(*) from public.plus_quotes where opportunity_id = o) = 1, v);
   o2 := pg_temp.opp(c_a, k, 'Q second opportunity', c_a1);
   perform pg_temp.t('C4 the same key on ANOTHER opportunity -> ZW006 (never the first quote)', pg_temp.cq(c_a1, c_a, o2, 'q-create-0001') = 'ZW006:invalid_input');
+  o_val := pg_temp.opp(c_a, k, 'Q validation (never gets a draft)', c_a1);
   v_c := (select count(*) from public.plus_quotes);
-  perform pg_temp.t('C5 discount greater than the subtotal -> ZW006', pg_temp.cq(c_a1, c_a, o, 'q-bad-0001', p_base => 1000, p_mileage => 0, p_discount => 1001) = 'ZW006:invalid_input');
-  perform pg_temp.t('C6 a negative line -> ZW006', pg_temp.cq(c_a1, c_a, o, 'q-bad-0002', p_wait => -1) = 'ZW006:invalid_input');
+  perform pg_temp.t('C5 discount greater than the subtotal -> ZW006', pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0001', p_base => 1000, p_mileage => 0, p_discount => 1001) = 'ZW006:invalid_input');
+  perform pg_temp.t('C6 a negative line -> ZW006', pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0002', p_wait => -1) = 'ZW006:invalid_input');
   perform pg_temp.t('C7 a line over $100,000.00 (10,000,001 cents) -> ZW006; exactly 10,000,000 is allowed',
-    pg_temp.cq(c_a1, c_a, o, 'q-bad-0003', p_base => 10000001) = 'ZW006:invalid_input'
+    pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0003', p_base => 10000001) = 'ZW006:invalid_input'
     and pg_temp.cq(c_a1, c_a, o2, 'q-max-0001', p_base => 10000000, p_mileage => 0) like 'ok:%,true,%,10000000');
   delete from public.plus_quotes where idempotency_key = 'q-max-0001';  -- owner cleanup of the boundary fixture inside the rolled-back transaction
   perform pg_temp.t('C8 fractional cents are impossible: a non-integer amount is not a valid bigint argument',
-    pg_temp.x(c_a1, format('select (public.plus_create_quote(%L, %L, ''q-bad-0004'', ''quote'', null, false, null, 12.5, 0, 0, 0, 0, 0, 0, 0, null, 0, null, %L)).quote_id', c_a, o, current_date + 7)) !~ '^ok:'
-    and pg_temp.x(c_a1, format('select (public.plus_create_quote(%L, %L, ''q-bad-0005'', ''quote'', null, false, null, ''12.50'', 0, 0, 0, 0, 0, 0, 0, null, 0, null, %L)).quote_id', c_a, o, current_date + 7)) !~ '^ok:');
+    pg_temp.x(c_a1, format('select (public.plus_create_quote(%L, %L, ''q-bad-0004'', ''quote'', null, false, null, 12.5, 0, 0, 0, 0, 0, 0, 0, null, 0, null, %L)).quote_id', c_a, o_val, current_date + 7)) !~ '^ok:'
+    and pg_temp.x(c_a1, format('select (public.plus_create_quote(%L, %L, ''q-bad-0005'', ''quote'', null, false, null, ''12.50'', 0, 0, 0, 0, 0, 0, 0, null, 0, null, %L)).quote_id', c_a, o_val, current_date + 7)) !~ '^ok:');
   perform pg_temp.t('C9 distance with more than one decimal / negative / over 99999.9 -> ZW006 (never rounded silently)',
-    pg_temp.cq(c_a1, c_a, o, 'q-bad-0006', p_distance => 12.34) = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0007', p_distance => -1) = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0008', p_distance => 100000) = 'ZW006:invalid_input');
+    pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0006', p_distance => 12.34) = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0007', p_distance => -1) = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0008', p_distance => 100000) = 'ZW006:invalid_input');
   perform pg_temp.t('C10 other charge without a label, a label without a charge, a 61-character label -> ZW006',
-    pg_temp.cq(c_a1, c_a, o, 'q-bad-0009', p_other => 500) = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0010', p_other_label => 'Toll') = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0011', p_other => 500, p_other_label => repeat('x', 61)) = 'ZW006:invalid_input');
+    pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0009', p_other => 500) = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0010', p_other_label => 'Toll') = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0011', p_other => 500, p_other_label => repeat('x', 61)) = 'ZW006:invalid_input');
   perform pg_temp.t('C11 kind not estimate|quote; service airport_transportation (not a Plus service) or unknown -> ZW006',
-    pg_temp.cq(c_a1, c_a, o, 'q-bad-0012', p_kind => 'invoice') = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0013', p_service => 'airport_transportation') = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0014', p_service => 'Dialysis') = 'ZW006:invalid_input');
+    pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0012', p_kind => 'invoice') = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0013', p_service => 'airport_transportation') = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0014', p_service => 'Dialysis') = 'ZW006:invalid_input');
   perform pg_temp.t('C12 terms over 500 characters -> ZW006; validity missing or before the organization''s today -> ZW006',
-    pg_temp.cq(c_a1, c_a, o, 'q-bad-0015', p_terms => repeat('t', 501)) = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0016', p_valid => null) = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'q-bad-0017', p_valid => v_today_a - 1) = 'ZW006:invalid_input');
-  perform pg_temp.t('C13 malformed idempotency key -> ZW006', pg_temp.cq(c_a1, c_a, o, 'short') = 'ZW006:invalid_input'
-    and pg_temp.cq(c_a1, c_a, o, 'bad key with spaces') = 'ZW006:invalid_input');
-  perform pg_temp.t('C14 refused creates wrote nothing', (select count(*) from public.plus_quotes) = v_c);
+    pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0015', p_terms => repeat('t', 501)) = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0016', p_valid => null) = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'q-bad-0017', p_valid => v_today_a - 1) = 'ZW006:invalid_input');
+  perform pg_temp.t('C13 malformed idempotency key -> ZW006', pg_temp.cq(c_a1, c_a, o_val, 'short') = 'ZW006:invalid_input'
+    and pg_temp.cq(c_a1, c_a, o_val, 'bad key with spaces') = 'ZW006:invalid_input');
+  perform pg_temp.t('C14 refused creates wrote nothing', (select count(*) from public.plus_quotes) = v_c and not exists (select 1 from public.plus_quotes where opportunity_id = o_val));
   begin
     update public.plus_quotes set total_cents = total_cents + 1 where id = q;
     v := 'no error';
@@ -240,7 +244,8 @@ begin
   exception when check_violation then v := 'check_violation';
   end;
   perform pg_temp.t('C16 USD only: a non-USD row is rejected by the CHECK (no API accepts a currency)', v = 'check_violation', v);
-  v := pg_temp.cq(c_a1, c_a, o, 'q-create-0002', p_base => 333, p_mileage => 333, p_wait => 334);
+  o7 := pg_temp.opp(c_a, k, 'Q arithmetic and editing', c_a1);
+  v := pg_temp.cq(c_a1, c_a, o7, 'q-create-0002', p_base => 333, p_mileage => 333, p_wait => 334);
   perform pg_temp.t('C17 integer arithmetic only: 333 + 333 + 334 = 1000 exactly', v like 'ok:%,true,%,1000', v);
   q2 := pg_temp.qid(v);
 
@@ -287,7 +292,7 @@ begin
     and pg_temp.x(c_a1, format('update public.plus_quotes set base_cents = 1 where id = %L returning id::text', q)) like '42501:%'
     and pg_temp.x(c_a1, format('delete from public.plus_quotes where id = %L returning id::text', q)) like '42501:%');
   perform pg_temp.t('A8 the multi-organization user c1 (Admin in A, Driver in B) can write in A but not in B',
-    pg_temp.cq('20000000-0000-0000-0000-0000000000c1', c_a, o2, 'q-multi-0001') like 'ok:%'
+    pg_temp.cq('20000000-0000-0000-0000-0000000000c1', c_a, pg_temp.opp(c_a, k, 'Q multi-org user', c_a1), 'q-multi-0001') like 'ok:%'
     and pg_temp.cq('20000000-0000-0000-0000-0000000000c1', c_b, ob, 'q-multi-0002') like 'ZW002:%');
   perform pg_temp.set_state(c_a, 'expired');
   perform pg_temp.t('A9 Plus expired (read-only): the Admin can still list / read; every write -> ZW001',
@@ -392,10 +397,11 @@ begin
   perform pg_temp.t('L14 an expired quote: Record response -> ZW004 quote_expired; Revise is allowed',
     pg_temp.respond(c_a1, c_a, q3, 'accepted') like 'ZW004:quote_expired' and pg_temp.revise(c_a1, c_a, q3, 'q-expire-rv1') like 'ok:%,true,%');
   -- a draft whose validity has passed cannot be marked sent (a direct owner update of a DRAFT is allowed by the guard)
-  r2 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o4, 'q-expire-002'));
+  o9 := pg_temp.opp(c_a, k, 'Q expired draft', c_a1, 'new_inquiry');
+  r2 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o9, 'q-expire-002'));
   update public.plus_quotes set valid_until = v_today_a - 1 where id = r2;
   perform pg_temp.t('L15 a draft past its validity cannot be marked sent (ZW004 quote_expired); the stage is untouched',
-    pg_temp.send(c_a1, c_a, r2) like 'ZW004:quote_expired' and pg_temp.st(r2) = 'draft');
+    pg_temp.send(c_a1, c_a, r2) like 'ZW004:quote_expired' and pg_temp.st(r2) = 'draft' and pg_temp.stage(o9) = 'new_inquiry');
 
   -- revisions
   o5 := pg_temp.opp(c_a, k, 'Q revision path', c_a1, 'qualified');
@@ -418,7 +424,8 @@ begin
   perform pg_temp.t('L19 a superseded quote is final (no response, no revise)',
     pg_temp.respond(c_a1, c_a, q3, 'accepted') like 'ZW004:%' and pg_temp.revise(c_a1, c_a, q3, 'q-revise-003') like 'ZW004:%');
   -- revision base no longer current: revise, then the original is accepted, then the revision cannot be sent
-  q3 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o5, 'q-revbase-02'));
+  o10 := pg_temp.opp(c_a, k, 'Q revision vs acceptance', c_a1);
+  q3 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o10, 'q-revbase-02'));
   perform pg_temp.send(c_a1, c_a, q3);
   r := pg_temp.qid(pg_temp.revise(c_a1, c_a, q3, 'q-revise-004'));
   perform pg_temp.respond(c_a1, c_a, q3, 'accepted');
@@ -432,7 +439,8 @@ begin
   perform pg_temp.t('L22 withdraw a draft without a reason -> withdrawn (kept); again -> changed=false',
     v = 'ok:withdrawn,true' and v2 = 'ok:withdrawn,false'
     and exists (select 1 from public.plus_quotes where id = r));
-  q3 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o5, 'q-withdr-001'));
+  o11 := pg_temp.opp(c_a, k, 'Q withdraw sent', c_a1);
+  q3 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o11, 'q-withdr-001'));
   perform pg_temp.send(c_a1, c_a, q3);
   v := pg_temp.withdraw(c_a1, c_a, q3, '  ');
   v2 := pg_temp.withdraw(c_a1, c_a, q3, 'Fictional: customer changed plans');
@@ -446,12 +454,73 @@ begin
   v2 := pg_temp.withdraw(c_a1, c_a, r2, null);
   perform pg_temp.t('L24 while a live revision exists another is refused; after withdrawing it, a new revision of the same quote is allowed',
     v like 'ZW004:revision_exists' and v2 = 'ok:withdrawn,true' and pg_temp.revise(c_a1, c_a, q3, 'q-expire-rv2') like 'ok:%,true,%', v || ' | ' || v2);
-  v := pg_temp.cq(c_a1, c_a, o5, 'q-parallel-1');
-  v2 := pg_temp.cq(c_a1, c_a, o5, 'q-parallel-2');
-  perform pg_temp.send(c_a1, c_a, pg_temp.qid(v));
-  perform pg_temp.send(c_a1, c_a, pg_temp.qid(v2));
-  perform pg_temp.t('L25 OD-Q12 not encoded: two independent quotes may both be sent and coexist as sent on one opportunity',
-    v like 'ok:%' and v2 like 'ok:%' and pg_temp.st(pg_temp.qid(v)) = 'sent' and pg_temp.st(pg_temp.qid(v2)) = 'sent', v || ' | ' || v2);
+  -- ===================================================================== Q. OD-Q12 Option A (ZD-221): one active draft, one current sent
+  perform pg_temp.t('Q1 the two OD-Q12 partial unique indexes exist (draft / sent per organization + opportunity); historical statuses are not restricted',
+    exists (select 1 from pg_indexes where indexname = 'plus_quotes_one_draft_per_opportunity_idx' and indexdef ~ '\(organization_id, opportunity_id\) WHERE \(status = ''draft''::text\)')
+    and exists (select 1 from pg_indexes where indexname = 'plus_quotes_one_sent_per_opportunity_idx' and indexdef ~ '\(organization_id, opportunity_id\) WHERE \(status = ''sent''::text\)'));
+  o12 := pg_temp.opp(c_a, k, 'Q single active', c_a1);
+  q4 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o12, 'q-single-001'));
+  v_c := (select count(*) from public.plus_quotes);
+  v_a := (select count(*) from public.audit_events where entity_type = 'plus_quote');
+  v := pg_temp.cq(c_a1, c_a, o12, 'q-single-002');
+  v2 := pg_temp.cq(c_a2, c_a, o12, 'q-single-003');  -- (a2 has no grant here: refused before the slot check)
+  perform pg_temp.t('Q2 a second draft on the same opportunity (different key) -> ZW004 draft_exists; nothing written, no number consumed, no audit',
+    v = 'ZW004:draft_exists' and v2 like 'ZW002:%' and (select count(*) from public.plus_quotes) = v_c
+    and (select count(*) from public.audit_events where entity_type = 'plus_quote') = v_a
+    and (select next_number from public.plus_quote_counters where organization_id = c_a) = (select max(quote_number) + 1 from public.plus_quotes where organization_id = c_a), v);
+  perform pg_temp.t('Q3 the SAME key while the draft exists is still an idempotent replay (the original, changed=false), not draft_exists',
+    pg_temp.cq(c_a1, c_a, o12, 'q-single-001') like 'ok:' || q4 || ',false,%');
+  perform pg_temp.t('Q4 other opportunities each keep their own draft (multiple opportunities, one draft each)',
+    (select count(*) from public.plus_quotes where organization_id = c_a and status = 'draft') > 1
+    and not exists (select 1 from public.plus_quotes where organization_id = c_a and status = 'draft' group by opportunity_id having count(*) > 1));
+  v := pg_temp.withdraw(c_a1, c_a, q4, null);
+  q5 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o12, 'q-single-004', p_base => 15000));
+  perform pg_temp.t('Q5 a WITHDRAWN draft no longer occupies the slot: a new draft is allowed; the withdrawn row is kept unchanged',
+    v = 'ok:withdrawn,true' and q5 is not null and pg_temp.st(q4) = 'withdrawn' and pg_temp.st(q5) = 'draft');
+  perform pg_temp.send(c_a1, c_a, q5);
+  q4 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o12, 'q-single-005', p_base => 9900));
+  v_a := (select count(*) from public.audit_events where entity_type = 'plus_quote');
+  v := pg_temp.send(c_a1, c_a, q4);
+  perform pg_temp.t('Q6 an independent draft can be created next to the current sent quote, but can NOT be marked sent while that quote is current -> ZW004 sent_quote_exists; nothing changed (both rows, stage, audit)',
+    q4 is not null and v = 'ZW004:sent_quote_exists' and pg_temp.st(q4) = 'draft' and pg_temp.st(q5) = 'sent'
+    and (select total_cents from public.plus_quotes where id = q5) = 17550 and pg_temp.stage(o12) = 'quote_sent'
+    and (select count(*) from public.audit_events where entity_type = 'plus_quote') = v_a, v);
+  v := pg_temp.revise(c_a1, c_a, q5, 'q-single-rev1');
+  perform pg_temp.t('Q7 revising the current sent quote while an unrelated draft holds the slot -> ZW004 draft_exists (the unrelated draft is never superseded or replaced)',
+    v = 'ZW004:draft_exists' and pg_temp.st(q4) = 'draft' and not exists (select 1 from public.plus_quotes where supersedes_quote_id = q5), v);
+  perform pg_temp.withdraw(c_a1, c_a, q4, null);
+  r := pg_temp.qid(pg_temp.revise(c_a1, c_a, q5, 'q-single-rev2'));
+  perform pg_temp.t('Q8 after the unrelated draft is withdrawn, the revision is created: the sent quote and its revision draft coexist (one draft + one sent)',
+    r is not null and pg_temp.st(r) = 'draft' and pg_temp.st(q5) = 'sent'
+    and (select count(*) from public.plus_quotes where opportunity_id = o12 and status in ('draft', 'sent')) = 2);
+  perform pg_temp.upd(c_a1, c_a, r, 14000, 0);
+  v := pg_temp.send(c_a1, c_a, r);
+  perform pg_temp.t('Q9 sending the revision supersedes its predecessor first, then becomes the ONE current sent quote; the predecessor snapshot is unchanged',
+    v like 'ok:sent,true,%' and pg_temp.st(q5) = 'superseded' and pg_temp.st(r) = 'sent'
+    and (select total_cents from public.plus_quotes where id = q5) = 17550
+    and (select count(*) from public.plus_quotes where opportunity_id = o12 and status = 'sent') = 1, v);
+  perform pg_temp.t('Q10 history is unrestricted: the opportunity keeps withdrawn, superseded and sent rows together',
+    (select string_agg(status, ',' order by status) from public.plus_quotes where opportunity_id = o12) = 'sent,superseded,withdrawn,withdrawn');
+  begin
+    insert into public.plus_quotes (organization_id, opportunity_id, quote_number, kind, total_cents, valid_until, idempotency_key, created_by)
+    values (c_a, o7, 99001, 'quote', 0, current_date + 1, 'q-direct-draft-1', c_a1);
+    v := 'no error';
+  exception when unique_violation then v := 'unique_violation';
+  end;
+  begin
+    update public.plus_quotes set status = 'sent', sent_at = now(), sent_by = c_a1 where id = q4;  -- withdrawn -> sent is also refused by the guard
+    v2 := 'no error';
+  exception when others then v2 := sqlstate || ':' || sqlerrm;
+  end;
+  perform pg_temp.t('Q11 the database itself refuses a second draft (owner INSERT -> unique_violation) and every other path to a second current sent quote',
+    v = 'unique_violation' and v2 like 'ZW004:%', v || ' | ' || v2);
+  -- an expired (derived) sent quote still occupies the current-sent slot
+  q3 := (select id from public.plus_quotes where idempotency_key = 'q-expire-001');
+  perform pg_temp.withdraw(c_a1, c_a, (select id from public.plus_quotes where idempotency_key = 'q-expire-rv2'), null);
+  q4 := pg_temp.qid(pg_temp.cq(c_a1, c_a, o4, 'q-expire-ind1'));
+  v := pg_temp.send(c_a1, c_a, q4);
+  perform pg_temp.t('Q12 a sent quote that is only DERIVED as expired is still the current sent quote: an independent draft cannot be sent (ZW004 sent_quote_exists)',
+    pg_temp.st(q3) = 'sent' and v = 'ZW004:sent_quote_exists' and pg_temp.st(q4) = 'draft', v);
 
   -- closed / archived source opportunities
   o_lost := pg_temp.opp(c_a, k, 'Q lost opportunity', c_a1);

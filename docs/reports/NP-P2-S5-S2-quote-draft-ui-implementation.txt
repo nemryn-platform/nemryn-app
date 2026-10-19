@@ -1,0 +1,643 @@
+NP-P2-S5-S2 -- QUOTE DRAFT CREATION & EDITING UI + OD-Q12 DATABASE ENFORCEMENT
+Nemryn Plus, Estimates & Quotes, stage Q1. Implementation report.
+Date: 2026-10-18/19
+Mode: controlled local implementation and isolated testing.
+- Isolated database only: Supabase project NemrynS1Iso (API 54361, DB 54362).
+- The local app ran with `next start -p 3100` against that stack.
+- Fictional data only.
+- No production change, no Git operation (nothing staged, committed or pushed; no branch switched), no deploy.
+Legend:
+- VERIFIED = executed, with the result shown;
+- READ-ONLY = a production SELECT / catalog / GitHub read;
+- NOT RUN = deliberately not executed.
+
+======================================================================
+1. EXECUTIVE SUMMARY
+======================================================================
+S2 delivers the first working Estimates & Quotes user interface, and OD-Q12 Option A enforced in the database.
+- Database: one NEW migration, 20261019100000_plus_quotes_single_active.sql. The released S1 migration is unchanged.
+  - A preflight refuses to run, and changes nothing, if existing data already violates OD-Q12.
+  - Two partial unique indexes: one draft per opportunity, one sent quote per opportunity.
+  - CREATE OR REPLACE of plus_create_quote / plus_revise_quote / plus_mark_quote_sent, with the same signatures and grants:
+    - a second draft gives ZW004 draft_exists;
+    - an independent draft cannot be sent while a sent quote is current (ZW004 sent_quote_exists);
+    - a revision supersedes its predecessor first and then becomes sent, in one transaction.
+- Decision register: ZD-221 records OD-Q12 = A. ZD-212 to ZD-220 are unchanged.
+- UI, on the existing Growth Opportunity page:
+  - an "Estimates & quotes" panel shows the Active draft, the Current sent quote and read-only History, with derived
+    expiry;
+  - writers on an open opportunity can create, edit and withdraw the one draft in an editor that takes dollar amounts;
+  - the editor shows a live preview total, but the server-confirmed total is what's displayed after saving.
+  - Readers see the panel without write controls. Mark sent, responses, revise, print and send are NOT built (S3).
+- Server: three narrowly scoped actions (create, update, withdraw a draft) that reuse the S1 RPCs. One pure, unit-tested
+  pricing module.
+- Evidence (all VERIFIED; details in sections 16–21):
+  - quote SQL suite 83/83, on a fresh database and on an upgraded one;
+  - quote concurrency 16/16;
+  - privilege contract 0/29;
+  - all 67 SQL suites from a verified fresh reset: 66 with 0 failures, and request_decision_expand_compat unchanged from its baseline (intermediate-schema only);
+  - upgrade rehearsal from S1 head 20261018100000: identical rows, functions, policies, ACLs and constraints; the OD-Q12
+    rules work on existing data;
+  - the invalid fixture is refused safely, with every row unchanged;
+  - browser E2E 33 / 33 PASS;
+  - unit tests 854/854; tsc 0 errors; ESLint 0 errors; next build passes.
+Verdict (section 25): READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR. Implementation and testing are complete, and no blocker remains.
+
+======================================================================
+2. VERIFIED BRANCH AND PRODUCTION BASELINE
+======================================================================
+Branch:
+- Preflight first stopped, because np-p2-s5-s2-quote-drafts did not exist and I am not permitted to create it. The owner
+  then created it from origin/main.
+- VERIFIED: current branch np-p2-s5-s2-quote-drafts. HEAD = origin/main = 6f5b19c04bf8764a5e7566c93fe38fb8462f6a2b
+  (Merge PR #14, the S1 database foundation). There were 0 tracked changes at the start.
+- The S1 migration 20261018100000_plus_quotes_foundation.sql is present.
+- database.types.ts already contained the S1 quote RPCs. Regenerating from the S2 database produces NO difference, because
+  no signature changed.
+Production (READ-ONLY):
+- GitHub: PR #14 MERGED 2026-10-18T20:28:23Z as 6f5b19c.
+- Production deployment 7160284859: sha 6f5b19c, state success, at 2026-10-18T20:28:58Z.
+- Live https://app.nemryn.com/sign-in embeds build id 6f5b19c04bf8, so production serves the S1 merge commit. The Vercel
+  deployment is therefore verified, not assumed from the merge.
+- `supabase migration list --linked` (project wyocbivzgrbekuyqdfts): every migration through 20261018100000 is applied
+  remotely, so the S1 migration is live. 20261019100000 exists locally only (remote empty), as expected.
+- Production privilege contract (scripts/verify-db-privileges.sh production): every check ok, 0 FAIL.
+- Production OD-Q12 duplicate check (docs/reports/NP-P2-S5-S2-od-q12-duplicate-check.sql, one SELECT): total_quotes 0,
+  drafts 0, sent 0, violation false. The S2 migration's preflight would therefore pass on production today.
+No production write, migration, smoke test or permission change was made.
+
+======================================================================
+3. OD-Q12 DECISION-REGISTER ENTRY
+======================================================================
+ZD-221 — One active draft and one current sent quote per opportunity (OD-Q12 Option A).
+- Status: CONFIRMED — OWNER-APPROVED (NP-P2-S5-S2 owner decision OD-Q12 = A, 2026-10-18; previously left open in
+  NP-P2-S5-S1).
+- It uses the register's existing format and the next free number. It was inserted after ZD-220 and before the closing
+  "No decisions have been REJECTED…" paragraph. ZD-212 to ZD-220 are not renumbered or rewritten.
+- Content:
+  - one draft and one sent quote per opportunity, enforced by partial unique indexes;
+  - history unrestricted; a withdrawn draft frees the slot;
+  - derived expiry still counts as sent;
+  - a revision supersedes its predecessor first, then becomes sent;
+  - no independent replacement of the current sent quote;
+  - draft_exists / sent_quote_exists errors;
+  - no deletion, merging or silent supersession;
+  - the migration refuses to run on violating data.
+
+======================================================================
+4. OTHER APPROVED DECISIONS PRESERVED
+======================================================================
+OD-Q1 to OD-Q9 (ZD-212 to ZD-220) are unchanged:
+- manual itemized prices; no rate engine, payment or invoice;
+- every quote belongs to an opportunity;
+- fixed columns, including extra stops and escort;
+- the kinds estimate and quote;
+- the lifecycle with derived expiry;
+- forward-only stage advance (unchanged in the replaced plus_mark_quote_sent);
+- USD integer cents;
+- Admins and WRITE-grant Dispatchers, with no second approver;
+- no addresses, routes, appointments or medical details. The editor has no such field, and it carries privacy help
+  text.
+
+======================================================================
+5. DEFERRED DECISIONS RETAINED (open; NOT implemented)
+======================================================================
+OD-Q10 print content / number display / validity default / branding:
+- no print view;
+- the reference is shown plainly as "<Estimate|Quote> <stored number>", with no invented prefix, padding or year;
+- Valid until is required and has no default; staff pick it, and the picker starts at the organization's today.
+OD-Q11 follow-up tasks: none are created.
+OD-Q13 estimated value: never copied or overwritten (E2E E11, SQL X2, upgrade rehearsal: 30000 unchanged).
+OD-Q14 pricing rules: no rate engine. Every amount is typed by staff.
+OD-Q15 quote timeline activity: no quote_id on plus_activities; no quote activity rows written.
+OD-Q16 do-not-contact for quote status actions: not consulted. S2 has no status actions; nothing is sent.
+None of these blocks S2.
+
+======================================================================
+6. EXACT FILES CREATED AND MODIFIED
+======================================================================
+New (untracked):
+  supabase/migrations/20261019100000_plus_quotes_single_active.sql   OD-Q12 enforcement (the only migration)
+  src/lib/plus/quotes-core.ts                                        pure pricing / validation / labels / grouping / copy
+  src/lib/plus/quotes-core.test.mjs                                  unit and source-inspection tests (16)
+  src/lib/plus/quotes.ts                                             server-only reads (plus_list_quotes, plus_get_quote)
+  src/app/operations/growth/quotes/actions.ts                        create / update / withdraw DRAFT server actions
+  src/components/growth/QuotesPanel.tsx                              server component: the panel
+  src/components/growth/QuoteDraftControls.tsx                       client: buttons, editor dialog, withdraw confirmation
+  docs/reports/NP-P2-S5-S2-od-q12-duplicate-check.sql                read-only release verification query
+  docs/reports/NP-P2-S5-S2-quote-draft-ui-implementation.txt         this report
+  .tmp-qa/np-p2-s5-s2-quote-drafts-e2e.mjs                           local browser E2E (QA scratch; not for commit)
+Modified:
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx        renders <QuotesPanel> (one import, one element, a doc comment)
+  supabase/tests/plus_quotes_tests.sql                               restructured for OD-Q12; 72 → 83 tests
+  supabase/tests/plus_quotes_concurrency_test.sh                     Q3 on six opportunities; new 3b / 10 / 11 / 12; OD-Q12 invariant
+  docs/product/decision-register.md                                  ZD-221
+  docs/product/plus-domain-model.md                                  §14: OD-Q12 implemented; S2 UI
+  docs/product/plus-product-spec.md                                  §4.5 S2 note
+  docs/data/mutation-api.md                                          S2 section
+  docs/security/plus-access-model.md                                 T28
+  docs/security/database-privilege-contract.md                       S2 changes (the contract itself is unchanged)
+Unchanged:
+- src/lib/supabase/database.types.ts: regenerated, identical;
+- supabase/tests/privilege_contract_tests.sql: no signature or grant change;
+- the S1 migration; every Core file; the conversion / rebooking RPCs; the app shell, navigation, branding and design
+  tokens.
+
+======================================================================
+7. NEW MIGRATION FILENAME
+======================================================================
+supabase/migrations/20261019100000_plus_quotes_single_active.sql. It sorts directly after the production head
+20261018100000.
+
+======================================================================
+8. DATABASE UNIQUENESS AND INVARIANT IMPLEMENTATION
+======================================================================
+1. Preflight (a DO block, first statement):
+   - counts opportunities with more than one 'draft' row and more than one 'sent' row;
+   - if any exist, it raises P0001 'od_q12_preflight_failed: …', so the whole migration rolls back and nothing is
+     created, deleted or changed. VERIFIED in section 19.
+2. Indexes:
+   - plus_quotes_one_draft_per_opportunity_idx: UNIQUE (organization_id, opportunity_id) WHERE status = 'draft';
+   - plus_quotes_one_sent_per_opportunity_idx: UNIQUE (organization_id, opportunity_id) WHERE status = 'sent'.
+   accepted / declined / superseded / withdrawn rows are not indexed, so history is unrestricted (SQL Q10). Indexes are
+   checked immediately, statement by statement.
+3. Why both an RPC check and an index:
+   - every quote writer locks the opportunity FOR UPDATE first (the S1 lock order), so a concurrent writer waits and
+     then sees the committed row: the domain check gives a clean ZW004;
+   - the index is the backstop for every other path (SQL Q11: an owner INSERT of a second draft → unique_violation);
+   - a backstop violation inside the RPCs is mapped to the same domain error, never to constraint text.
+4. Expired is not a status. A stored 'sent' quote past its validity still holds the sent slot (SQL Q12).
+Read-only release query: docs/reports/NP-P2-S5-S2-od-q12-duplicate-check.sql. It returns one summary row (total, drafts,
+sent, violation) plus offender ids only. Production result: 0 quotes, violation false.
+
+======================================================================
+9. RPC CHANGES AND SIGNATURES
+======================================================================
+Replaced with CREATE OR REPLACE. The signatures are unchanged, so callers and generated types are unaffected. Each
+keeps SECURITY DEFINER, search_path = public, pg_temp, and ACL {postgres, authenticated} (VERIFIED identical before and
+after in the upgrade rehearsal):
+  plus_create_quote(uuid, uuid, text, text, text, boolean, numeric, bigint ×8, text, bigint, text, date)
+  plus_revise_quote(uuid, uuid, text)
+  plus_mark_quote_sent(uuid, uuid, timestamptz)
+- plus_create_quote:
+  - unchanged order: _require_plus_write → key → advisory lock → replay check;
+  - an idempotent same-key replay still returns the original first (SQL Q3; upgrade rehearsal: a pre-migration key
+    replays);
+  - then the opportunity lock, then NEW: an existing draft gives ZW004 draft_exists, before the contact check,
+    validation and number allocation. A refusal consumes no number and writes no audit row (SQL Q2).
+- plus_revise_quote:
+  - after the existing revision_exists check, NEW: a draft occupying the slot gives ZW004 draft_exists (SQL Q7);
+  - the original sent quote is untouched until the revision is sent.
+- plus_mark_quote_sent:
+  - a revision locks its predecessor, requires it still 'sent', and supersedes it FIRST; then the revision becomes sent;
+  - NEW: a draft that is not a revision gives ZW004 sent_quote_exists if the opportunity has a sent quote;
+  - stage advance, audit, stale / expired checks and immutability are unchanged.
+Unchanged:
+- plus_update_quote_draft, plus_withdraw_quote, plus_record_quote_response, plus_list_quotes, plus_get_quote;
+- all internal helpers;
+- every Core and conversion / rebooking function (fingerprint identical across the upgrade: 206 functions).
+No DROP FUNCTION. Privilege contract unchanged: 0/29.
+
+======================================================================
+10. REVISION / SUPERSESSION COMPATIBILITY
+======================================================================
+- A sent quote and its revision draft coexist (one draft + one sent; SQL Q8).
+- Sending the revision supersedes the predecessor, then sends the revision. Exactly one sent remains, and the
+  predecessor's snapshot is unchanged (SQL Q9; upgrade rehearsal: predecessor superseded at total 21500, 1 sent row).
+- If the predecessor is no longer sent (accepted, withdrawn), the revision cannot be sent (ZW004
+  revision_base_not_current; S1 L20; concurrency Q6 / Q12).
+- A revision cannot cross organizations or opportunities: the composite FK on (supersedes_quote_id, organization_id,
+  opportunity_id) (S1 L21, still passing).
+- Concurrency:
+  - CONC-Q12: sending a revision while its predecessor is being withdrawn → exactly one wins; never two sent; never a
+    half-applied supersession;
+  - CONC-Q10: an independent create racing a revise → exactly one draft.
+- No revise UI in S2. A revision draft created through the RPC appears in the panel as the Active draft, labelled
+  "Revision of <ref>", and can be edited or withdrawn like any draft.
+
+======================================================================
+11. QUOTES PANEL IMPLEMENTATION
+======================================================================
+QuotesPanel (server component). It is placed on /operations/growth/pipeline/[id] after the Stage panel and before Open
+tasks. No existing panel was moved or changed.
+- Reads plus_list_quotes for the opportunity (Plus read; tenant-scoped).
+- For a writer's draft, it also reads plus_get_quote to prefill the editor.
+- Each row shows:
+  - the reference ("Estimate 3"), a status badge, the kind, the service (or "Service not specified") and round trip;
+  - the total in dollars plus "USD";
+  - Valid until (shown as a calendar date) and Created (in the organization's timezone);
+  - "Revision of <ref>" / "Replaced by <ref>".
+- Groups: Current (Active draft, Current sent) and History (newest first, read-only, with a note that history can't be
+  edited).
+- Expired comes from the RPC's is_expired: the badge reads "Expired" and the line says "(passed)". Nothing stored.
+- Write controls depend on the case:
+
+  | Case | Controls |
+  |---|---|
+  | Writer, open opportunity, no draft and no current sent | "New estimate or quote" |
+  | Writer, a draft exists | "Edit draft" and "Withdraw draft" |
+  | Writer, a current sent quote and no draft | no create button; a note explains that a sent quote is current and changing its price comes later, from the quote itself (S3); no independent replacement is suggested |
+  | READ grant, read-only Plus (expired), or closed (lost / converted) opportunity | no controls |
+  | No Plus access | the existing Growth access behaviour (requirePlusAccess); the page isn't reachable |
+
+- Load failures show an AttentionState and never an empty list.
+- The empty state reads "No estimates or quotes yet."
+- The copy says these are prices, not invoices, and that Nemryn doesn't send them or take payment.
+
+======================================================================
+12. DRAFT EDITOR FUNCTIONALITY
+======================================================================
+QuoteDraftControls → QuoteEditorDialog, using the existing Dialog / Input / Select / Textarea / Button / AttentionState
+components and typography tokens. There are no new colours, fonts or navigation.
+Sections:
+- What you're pricing:
+  - Type: Estimate / Quote, with help text for each;
+  - Service requested: "Not specified" + the 8 Plus services; no airport;
+  - Round trip: No / Yes;
+  - Estimated miles (optional, typed by staff; "Nemryn doesn't look up distances").
+- Charges (US dollars):
+  - base, mileage, waiting time, additional stops, mobility assistance, escort / attendant, return leg, other;
+  - right-aligned tabular inputs with the decimal keyboard;
+  - an other-charge description;
+  - discount;
+  - a live totals box (charges, discount, Total USD) marked "A preview. Nemryn calculates the saved total."
+- Terms:
+  - Valid until (required; the picker starts at the organization's today; no default);
+  - Terms note (optional, ≤ 500).
+  - Privacy help text: "Commercial terms only. Don't include addresses, appointment details or medical information."
+Behaviour:
+- Create: the opportunity's own service is the suggestion, which staff may change within the 8.
+- Edit: the editor is prefilled from the saved draft (cents shown as "75.00").
+- Save is disabled while pending, and the fieldsets are disabled, so a second submit can't happen.
+- Server field errors are shown per field. Typed fields get live errors (more than 2 decimals; discount above the
+  charges).
+- Stale (ZW003):
+  - "Someone else changed this draft since you opened it…", with a "Reload the latest version" button;
+  - Save is disabled until reload, so the other person's change is never overwritten (E2E E4).
+- No longer a draft (sent meanwhile): the save is refused. After a reload no edit control is shown. The database refuses
+  regardless (E2E E5).
+- Withdraw:
+  - a confirmation dialog ("kept in the quote history as withdrawn"; "Keep draft" / "Withdraw draft");
+  - no hard delete; the slot is freed (E2E E6).
+- After a save, the panel shows the server-confirmed line, e.g. "Estimate 3: Draft saved. Total $95.50.", then refreshes.
+Responsive:
+- The Operations shell renders the workspace only at ≥ 768 px (md). Below that it shows its existing "designed for tablet
+  and desktop use" notice. S2 does NOT change the shell.
+- The editor uses 1 column under 640 px and 2 columns at ≥ 640 px, and scrolls inside the dialog (max-h 92vh).
+- VERIFIED at 1440 px and at 768 px tablet portrait; the 390 px shell notice is VERIFIED unchanged (E2E E10).
+
+======================================================================
+13. PRICING PARSER AND SERVER TOTAL HANDLING
+======================================================================
+src/lib/plus/quotes-core.ts is pure and has no runtime imports.
+- parseMoneyToCents is exact string arithmetic:
+  - accepts "75", "75.00", ".5", "$1,234.56" (commas only as thousands separators);
+  - two decimals at most;
+  - refuses negatives, junk, exponents, extra decimals, and anything over $100,000.00 (the S1 per-line limit; the digit
+    length is checked before any conversion);
+  - cents = integer dollars × 100 + integer fraction, with no floating-point multiplication or rounding (a unit test
+    asserts there is no Math.round / parseFloat / toFixed);
+  - examples: 4.35 → 435, 1.10 → 110, 0.29 → 29.
+- formatCents uses integer arithmetic ("$1,234.56").
+- centsToInput round-trips with parseMoneyToCents (tested).
+- validateQuoteForm:
+  - the same rules run in the client preview and in the server action;
+  - totals are integer sums;
+  - discount ≤ charges;
+  - other label if and only if other > 0, ≤ 60;
+  - miles: one decimal at most, ≤ 99,999.9;
+  - kind / service / round trip closed sets;
+  - Valid until must be a real date on or after the organization-local today;
+  - terms ≤ 500.
+- JSON / bigint: the RPC arguments are plain JS integers, far inside the safe range. No BigInt is ever put in a payload.
+  bigint results arrive as JSON numbers and are read with Number().
+- Server authority:
+  - the actions send only the parsed components, never a total (asserted by a unit test);
+  - the database recomputes and CHECKs the total;
+  - the UI shows the RPC's returned total_cents and then re-reads the list.
+
+======================================================================
+14. SERVER ACTION AUTHORIZATION
+======================================================================
+src/app/operations/growth/quotes/actions.ts ("use server"): createQuoteDraftAction, updateQuoteDraftAction,
+withdrawQuoteDraftAction.
+Each action:
+- signs in and resolves the organization through requirePlusAccess(pathname): an existing Growth guard that redirects
+  when there's no user, no workspace or no Plus access;
+- rejects a form whose organizationId ≠ the session organization ("You switched to a different organization…");
+- requires canWriteGrowth (Plus write state + capability);
+- validates the ids (uuid) and the version (a parsable timestamp);
+- re-validates every field on the server;
+- calls the S1 RPC through createServerSupabaseClient (the per-request cookie client, never the service role) with
+  p_organization_id from the SESSION.
+The RPC then re-checks Plus write, tenancy (ZW002 for foreign or unknown), the open opportunity, OD-Q12, the version and
+the snapshot.
+- Withdraw re-reads the quote and refuses anything that isn't currently a draft. The RPC's version check also refuses a
+  draft that changed meanwhile.
+- ZW codes map to plain messages. Constraint names and SQL are never shown (unit test).
+- revalidatePath("/operations/growth", "layout") after a confirmed write.
+Reads use plus_list_quotes / plus_get_quote through the same per-request client (src/lib/plus/quotes.ts).
+VERIFIED: E2E E9c (a READ-grant Dispatcher's write is refused by the database, ZW001) and E9a / E9b (no controls).
+
+======================================================================
+15. IDEMPOTENCY AND CONCURRENCY
+======================================================================
+- Create:
+  - one idempotency key per intended draft ("quote-<uuid>"), generated when the editor opens;
+  - stored in sessionStorage (nemryn.plus.quote.create.<opportunity>) from submit until a confirmed result;
+  - a retry in the same dialog, a double click, or reopening after an ambiguous failure reuses the SAME key;
+  - the key is cleared only after a confirmed success;
+  - the database returns the original draft (changed=false), and the person sees "This draft had already been saved;
+    nothing new was added." (E2E E7a: the first attempt landed but its response was lost, then a double click → exactly
+    one draft).
+- Edit / withdraw: optimistic concurrency on the version that was opened.
+- Database, verified under real concurrency (section 16):
+  - same-key double create → 1;
+  - six different-key creates on one opportunity → 1 draft + 5 ZW004 draft_exists;
+  - six creates on six opportunities → consecutive numbers;
+  - create vs revise → 1 draft;
+  - double Mark sent → 1 transition and 1 stage row;
+  - revision send vs predecessor withdraw → one winner, never two sent;
+  - plus the S1 races (edit / edit, edit / send, revise / accept, two revisions, Lost / send, accept / withdraw).
+
+======================================================================
+16. SQL TEST RESULTS
+======================================================================
+supabase/tests/plus_quotes_tests.sql (rollback-only):
+- Fresh database: 0 failures of 83 tests (pass = 83), in the full fresh run and in the targeted runs.
+- Upgraded database (on top of the seeded S1 data): 0 failures of 83.
+- What changed:
+  - S1 tests that relied on several drafts on one opportunity now use their OWN opportunity: validation C5–C14, C17,
+    A8, L15, L20, L23. They are kept, not deleted.
+  - L25 ("OD-Q12 not encoded") is REPLACED by Q1–Q12:
+    - the indexes exist; a second draft → draft_exists, with nothing written, no number and no audit;
+    - a same-key replay still returns the original;
+    - other opportunities keep their own drafts; a withdrawn draft frees the slot;
+    - an independent draft can't be sent while a sent quote is current (sent_quote_exists; nothing changed);
+    - revise is blocked by an unrelated draft (draft_exists), then allowed after withdrawing it; sent + revision
+      coexist;
+    - sending the revision supersedes first, leaving exactly one sent with the predecessor snapshot unchanged;
+    - history is unrestricted;
+    - the owner INSERT backstop gives unique_violation;
+    - a derived-expired sent quote still holds the slot.
+  - All other S1 tests are kept: tenancy, roles (READ ZW001; driver / no grant / inactive / platform admin ZW002;
+    expired ZW001; locked ZW002; anon 42501), direct-write 42501, money, lifecycle, immutability, stage, and side
+    effects (no Core rows).
+supabase/tests/plus_quotes_concurrency_test.sh: 16 / 16 PASS (TOTAL FAILURES: 0), standalone and in the full run (PASS=16, exit 0). Q1 / Q2 same-key creates; Q3 numbering on six opportunities; Q3b six different-key creates on ONE opportunity → 1 draft + 5 draft_exists; Q4 / Q5 / Q5b edits and sends; Q6 / Q6b revise vs accept; Q7 two revisions; Q8 / Q8b Lost vs send; Q9 accept vs withdraw; Q10 create vs revise → 1 draft; Q11 double Mark sent → 1 transition; Q12 revision send vs predecessor withdraw → one winner, never two sent. The global invariants include "no opportunity with two drafts or two sent".
+Privilege contract: 0 violations of 29 (fresh and upgraded). The contract file is unchanged.
+
+======================================================================
+17. BROWSER E2E RESULTS
+======================================================================
+.tmp-qa/np-p2-s5-s2-quote-drafts-e2e.mjs. Real Chrome, the real UI and the real server actions, against the isolated
+stack (`next start -p 3100`, built from this working tree). Fictional seed users.
+FINAL RUN (final code): 33 / 33 PASS, exit 0.
+- E1 / E1b: the panel renders; empty state; other panels intact; one create action; no Mark sent / Revise / Print.
+- E2a / E2a2 / E2b: the opportunity's service is suggested; there is no default validity; there are 9 options (Not specified + 8, no airport); the
+  date picker min = the organization's today; the privacy help is shown.
+- E2c–E2e: live preview $95.50; discount above the charges gives an inline error and no total; three decimals are
+  refused.
+- E2f: saving without Valid until is refused by the server; nothing written.
+- E2g / E2h: saved. The confirmation shows the SERVER total ($95.50); DB 9550 cents (7500 / 2550 / 500, dialysis, the
+  chosen date). The panel shows the Active draft, with Edit and Withdraw and no second create.
+- E3a / E3b: the editor is prefilled ("75.00"…); an edit to $100.50 with kind, round trip, miles and service changed;
+  still one draft.
+- E4a–E4c: a stale save is refused with a plain message and Reload; Save is disabled; the other person's change is kept
+  (11050); after Reload the latest values show.
+- E5a / E5b: a draft that was sent meanwhile can't be edited; its sent snapshot is unchanged. After reload there are no
+  controls, the quote is Current sent, and the OD-Q12 note is shown.
+- E6a / E6b: withdraw needs confirmation. The row is kept as withdrawn (no delete), History shows Withdrawn, and the slot
+  is free again.
+- E7a: the first attempt landed but its response was lost; a SAME-key retry plus a double click gives exactly ONE draft,
+  and the person is told nothing new was added.
+- E7b: a second independent draft → the database's ZW004 draft_exists.
+- E8: a LOST opportunity has read-only quotes.
+- E9a–E9d: a READ-grant Dispatcher sees the draft and the current sent quote with no controls. The RPC refuses their
+  write (ZW001). With no grant, the existing Growth access behaviour applies.
+- E10a: at 390 px the UNCHANGED shell shows its "tablet and desktop" notice.
+- E10b–E10e: at 768 px the panel and editor are visible and fit; decimal keyboard; two charge columns; Save is
+  reachable; saving works ($72.50).
+- E11: no Request / Trip / Passenger / notification / task was created (counts equal before and after); estimated value
+  untouched.
+Earlier runs: the first full run passed every check it contained. One check was then replaced (a placeholder assertion became the date-picker
+min check), and the 390 px "mobile" checks were replaced by visibility checks at 768 px, because the shell hides the
+workspace below 768 px. Every later run passed.
+NOT RUN: real handheld devices; screen-reader audits beyond labelled controls and aria-live totals.
+Screenshots (local QA scratch, fictional data): .tmp-qa/screens/np-p2-s5-s2/ (create form, panel with draft, withdrawn
+history, tablet form and panel).
+
+======================================================================
+18. UNIT AND BUILD RESULTS
+======================================================================
+  npm test (node --test, all *.test.mjs)    854 / 854 pass, 0 fail (16 of them new, in quotes-core.test.mjs)
+  npx tsc --noEmit                           exit 0
+  npx eslint                                 exit 0: 0 errors, 107 warnings. The S2 files have none; the warnings are in
+                                             untracked .tmp-qa scripts and existing code. One react-hooks/purity
+                                             error in QuotesPanel (Date.now() during render) was fixed with the
+                                             repository's new Date() pattern.
+  npx next build                             exit 0 (the final build of this working tree; also used for the final E2E run)
+Unit coverage:
+- money parsing (exact cases, float traps, refusals); formatting and round-trips;
+- totals and discounts (above / equal); every field error;
+- the 8-service parity with opportunities-core (no airport); status / expiry labels; grouping; error copy;
+- the idempotency-key shape;
+- source checks of the server actions:
+  - access, organization binding and write guard;
+  - server validation;
+  - no client total and no service role;
+  - the session organization, the version and the key;
+  - draft-only withdraw;
+  - no S3 RPCs;
+- the UI boundaries (no Mark sent / responses / revise / print / send; write controls only for writers);
+- the migration (safe preflight, indexes, supersede before send, no DROP).
+
+======================================================================
+19. UPGRADE-REHEARSAL RESULTS (deployed S1 head 20261018100000 → 20261019100000)
+======================================================================
+Procedure:
+- The S2 migration was held back. The database was reset to exactly 20261018100000 (verified fresh).
+- Seeded THROUGH THE S1 RPCs with fictional data:
+  - one draft; one current sent quote (21500);
+  - history: sent → revised → revision sent (original superseded) → accepted; a withdrawn draft;
+  - a sent-then-declined quote;
+  - an opportunity with no quotes; two opportunities with independent drafts;
+  - 8 quotes, max number 8.
+- Rows of 19 tables were snapshotted, plus fingerprints of functions, policies, table ACLs and constraints.
+- Then `supabase migration up --local` applied only 20261019100000.
+Results (VERIFIED):
+  migration up rc=0 (Applying 20261019100000_plus_quotes_single_active.sql); head 20261019100000
+  pre-existing rows byte-identical in all 19 tables, including plus_quotes, plus_quote_counters and audit_events: yes
+  untouched functions identical (signature, SECURITY DEFINER, ACL, search_path, body md5): yes, 206 functions
+  the 3 replaced RPCs keep signature, SECURITY DEFINER, ACL {postgres, authenticated} and search_path: yes
+  policies / table ACLs + RLS / constraints identical: yes / yes / yes
+  new indexes: plus_quotes_one_draft_per_opportunity_idx, plus_quotes_one_sent_per_opportunity_idx
+  a second draft on the opportunity that has one                    → ZW004 draft_exists
+  an old caller (the same 19-argument call) on the no-quote opp      → number 9 (max before 8): numbering continues
+  idempotent replay of a pre-migration key                          → returns the original quote
+  an independent draft sent while a sent quote is current            → ZW004 sent_quote_exists; current sent unchanged (21500)
+  revising the current sent while that draft holds the slot         → ZW004 draft_exists
+  after withdrawing it, a legitimate revision → draft → sent        → predecessor superseded (21500 unchanged); 1 sent row
+  historical accepted quote, direct owner UPDATE                    → ERROR quote_immutable
+  independent drafts on two opportunities                           → still drafts
+  estimated_value_cents                                             → 30000 (untouched)
+  privilege contract                                                → 0 violations of 29
+  quote suite on the upgraded database                              → 0 failures of 83
+Invalid fixture (part 1b):
+- Reset to 20261018100000. Under S1 rules, two drafts were created on one opportunity and two quotes sent on another.
+- The read-only release query reported violation = t with the two offenders (ids only).
+Results (VERIFIED):
+  migration up rc=1: the migration was REFUSED
+  head still 20261018100000; OD-Q12 indexes created: 0
+  every row unchanged (nothing deleted, merged or superseded): yes
+  functions unchanged; the S1 plus_create_quote body is still in place
+  The exact refusal (the same preflight block, reproduced inside a rolled-back transaction with two drafts on one
+  opportunity):
+    ERROR:  od_q12_preflight_failed: 1 opportunit(ies) with more than one draft and 0 with more than one sent quote;
+    resolve them through the quote RPCs (withdraw / respond) before applying this migration. Nothing was changed.
+
+======================================================================
+20. RLS AND PRIVILEGE-CONTRACT RESULTS
+======================================================================
+- No table, column, policy or grant change. plus_quotes stays class B (SELECT via plus_can_read), and
+  plus_quote_counters class A.
+- Policies and table ACLs are identical across the upgrade.
+- The replaced RPCs keep authenticated-only EXECUTE (no PUBLIC / anon / service_role) and SECURITY DEFINER with
+  search_path pinned. The quote suite's S4 asserts this for every quote function.
+- Privilege contract: 0 / 29 locally, fresh and upgraded. Production is unchanged (all ok; read-only).
+- RLS: the quote suite's A5 / A6 (foreign tenant ZW002, no oracle; Org B sees 0 Org A rows; a Driver sees 0) and A7
+  (direct INSERT / UPDATE / DELETE 42501) pass. rls_adversarial_tests: section 21.
+
+======================================================================
+21. EXISTING CORE AND GROWTH REGRESSION RESULTS
+======================================================================
+Full isolated run (run-p2s5s2.sh part 2): 67 SQL suites, each after a VERIFIED fresh reset at 20261019100000.
+- 66 suites with 0 failures (2,417 PASS lines). Among them:
+  - plus_quotes 83/83; plus_opportunities 75/75; plus_conversion_rebooking 44/44 (P2-S4); plus_booking_service_type
+    27/27 (S2 service type);
+  - core_staff_request_service_type 50/50; core_intake_airport 24/24;
+  - plus_request_attributions 73/73, plus_tasks 58/58, plus_growth_agent 40/40, plus_contacts_activities 82/82;
+  - plus_access_helpers 170/170, plus_entitlement 150/150, plus_entitlement_versioned 17/17, plus_member_grants 76/76;
+  - rls_adversarial 33/33, client_privilege_surface 21/21, privilege_baseline_behavior 30/30, function / mutation /
+    driver-read / create-trip privilege suites;
+  - privilege contract 0 violations of 29;
+  - request_decision_workflow 60, request_mutation 39, request_mutation_privilege 23, request_recurring_care 42,
+    request_trip_passenger_integrity, request_mutation_atomicity;
+  - public_request_intake 42, team_services_operations 106, website_request_form_publication 50, and every remaining
+    Core suite.
+- request_decision_expand_compat_tests: 8 PASS, 9 FAIL plus 1 ERROR. This is identical to every earlier baseline: it
+  only applies to the intermediate P1-OPS-R1 EXPAND-only schema. Not a regression.
+Concurrency (one verified fresh reset, 27 scripts): 25 pass, including:
+- plus_quotes 16, plus_conversion_rebooking 11, plus_opportunities 6, plus_request_attributions 6, plus_tasks 4,
+  plus_contacts 4, plus_growth_agent 5, plus_entitlement 5 + 4, plus_member_grants 6;
+- request_decision 21, team_last_admin 14;
+- website_connection_lifecycle 15 (passed this time), website_request_form_publication 29, website_requests_form 37.
+The two failures, mutation_concurrency_test and request_lifecycle_concurrency_test, are PRE-EXISTING. The harness's
+client-role SELECT … FOR UPDATE gets "permission denied", and in S1 this was shown to fail identically at production head
+20261017110000. Neither touches quotes.
+Application: unit tests 854/854, tsc 0, ESLint 0 errors, next build exit 0 (section 18).
+
+======================================================================
+22. NEW DEFECTS OR LIMITATIONS
+======================================================================
+- No new product defect was found.
+- Limitations, by design or by decision:
+  - Phone widths: the existing Operations shell shows its "tablet and desktop" notice below 768 px. The quote editor is
+    responsive (one column on narrow widths), but it is used at ≥ 768 px. Changing that would be a shell change, which
+    is out of S2's scope.
+  - When a quote is current and sent, there is no UI path to change its price until S3 delivers Revise. A writer sees
+    an explanatory note.
+  - Ambiguous retry with changed values: if the first attempt was saved but its response was lost, the same-key retry
+    returns the ORIGINAL draft (changed=false), and the person is told nothing new was added. Their newer values must
+    then be applied with Edit draft.
+  - The quote reference is the plain stored number (OD-Q10 open).
+  - OD-Q10, Q11, Q13, Q14, Q15 and Q16 remain open (section 5).
+- Pre-existing items, unchanged and unrelated to S2:
+  - request_decision_expand_compat_tests only applies to an intermediate schema state;
+  - mutation_concurrency_test / request_lifecycle_concurrency_test have a harness defect that reproduces at the
+    production head (documented in the S1 report);
+  - the website_connection_lifecycle timing flake.
+- QA tooling note: the E2E's first "mobile" pass used 390 px. I found from the screenshot that the shell intentionally
+  hides the workspace at that width, which made that pass misleading. It was replaced by real visibility checks at the
+  narrowest supported width (768 px), plus an explicit check that the 390 px shell notice is unchanged.
+
+======================================================================
+23. CONTROLLED COMMIT INVENTORY (proposed; not executed)
+======================================================================
+Proposed single commit "feat(plus): quote drafts UI and one-draft / one-sent enforcement (NP-P2-S5-S2)":
+  A supabase/migrations/20261019100000_plus_quotes_single_active.sql
+  M supabase/tests/plus_quotes_tests.sql
+  M supabase/tests/plus_quotes_concurrency_test.sh
+  A src/lib/plus/quotes-core.ts
+  A src/lib/plus/quotes-core.test.mjs
+  A src/lib/plus/quotes.ts
+  A src/app/operations/growth/quotes/actions.ts
+  A src/components/growth/QuotesPanel.tsx
+  A src/components/growth/QuoteDraftControls.tsx
+  M src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  M docs/product/decision-register.md
+  M docs/product/plus-domain-model.md
+  M docs/product/plus-product-spec.md
+  M docs/data/mutation-api.md
+  M docs/security/plus-access-model.md
+  M docs/security/database-privilege-contract.md
+  A docs/reports/NP-P2-S5-S2-od-q12-duplicate-check.sql
+  A docs/reports/NP-P2-S5-S2-quote-draft-ui-implementation.txt (optional)
+EXCLUDE: .tmp-qa/* (including the new E2E script and screenshots), the other untracked docs/reports/*, and every
+scratchpad file. Before committing, confirm that git diff --cached --name-only shows exactly these paths.
+
+======================================================================
+24. REQUIRED PRODUCTION MIGRATION-FIRST RELEASE SEQUENCE (documentation only; nothing executed)
+======================================================================
+1. Owner review and approval; PR from np-p2-s5-s2-quote-drafts; CI green.
+2. Read-only pre-checks on production:
+   - head is 20261018100000;
+   - privilege contract 0 / 29;
+   - run docs/reports/NP-P2-S5-S2-od-q12-duplicate-check.sql; violation must be false (today: 0 quotes).
+3. With the owner's approval, apply ONLY 20261019100000 to production, BEFORE the app deploy.
+   - The new UI needs nothing new from the database (same RPC signatures). Migration-first still makes the one-draft
+     rule live before any UI can create drafts.
+   - If the preflight raises od_q12_preflight_failed, STOP. Nothing will have changed. Resolve the offenders through the
+     quote RPCs (withdraw / respond), never by deleting rows, and re-run.
+4. Post-migration read-only checks:
+   - head 20261019100000; both indexes exist; privilege contract 0 / 29;
+   - the three replaced RPCs' ACL / SECURITY DEFINER / search_path match the isolated build;
+   - the duplicate check still shows violation false.
+5. Merge the PR so Vercel deploys. Verify the deployment state is success and that the live build id equals the merge
+   commit.
+6. Production smoke only on the Pilot Simulation tenant, with explicit owner approval and fictional data. It is NOT part
+   of S2. Suggested checks: create a draft, edit it, a stale refusal, withdraw, READ-only view, no duplicate draft.
+Rollback (documentation):
+- the UI can be rolled back by redeploying 6f5b19c;
+- the migration's effect can be removed by dropping the two indexes and re-running the S1 function bodies. That is only
+  needed if OD-Q12 is reversed; data is never affected.
+
+======================================================================
+25. FINAL PR-READINESS VERDICT
+======================================================================
+READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR (NP-P2-S5-S2).
+- OD-Q12 Option A is enforced in the database by a new, safe migration:
+  - it refuses to run on violating data and never repairs data;
+  - partial unique indexes plus the domain checks in the RPCs;
+  - supersede-before-send ordering;
+  - the same RPC signatures and grants.
+  It is recorded as ZD-221, and ZD-212 to ZD-220 are unchanged.
+- The S1 tests that assumed parallel quotes were restructured, not removed, and the OD-Q12 tests were added:
+  - SQL 83/83, on fresh and upgraded databases;
+  - concurrency 16/16.
+- The Quotes panel and draft editor are integrated into the existing Opportunity page: dollar input with exact cents,
+  server-authoritative totals, optimistic concurrency, safe idempotent retries, a withdraw confirmation, and read-only
+  history. Writers get controls; readers don't. The server actions enforce the same rules independently.
+- Browser E2E 33/33; unit tests 854/854; tsc / ESLint 0 errors; the build passes.
+- The upgrade rehearsal from the deployed S1 head preserved every row, function, policy, ACL and constraint. The invalid
+  fixture was refused safely.
+- Regressions are green. The only failures are pre-existing and documented with evidence.
+- Production is verified read-only: S1 is deployed (6f5b19c, live) and applied (head 20261018100000); 0 quotes, so no
+  OD-Q12 violation; privilege contract all ok.
+Not done (by instruction or scope):
+- Git operations, the PR, production migration, deploy and production smoke — the owner controls these (section 24);
+- S3 features (Mark sent, responses, revise UI, print, timeline, follow-ups).
+Suggested S3 follow-up: the existing Stage panel note "Nemryn hasn't created, sent or received a quote" was left
+unchanged (outside S2's files). Once drafts exist, consider rewording it.
+
+STOP. No Git operations, no deployment, no production change. The isolated stack and the local app were stopped after
+testing.
