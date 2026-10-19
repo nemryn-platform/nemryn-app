@@ -1,0 +1,317 @@
+NP-P2-S5-S4 — ESTIMATES & QUOTES: FINAL INTEGRATED VERIFICATION PLAN (revision 2)
+==================================================================================
+Date: 2026-10-19. Status: PLAN ONLY. Nothing here has been executed for S4, and this plan does not by itself
+authorize running any test.
+- Revision 1 (same date) proposed parts A / B / C.
+- Revision 2 reorganizes the same scope into execution categories A–D, adds fixtures, prerequisites, order,
+  pass / fail and cleanup, and reconciles with the released O1 (ZD-226) and the accepted O1-R1 (ZD-227).
+
+Module scope (unchanged):
+- S1 database;
+- S2 drafts;
+- S3A directory;
+- S3B lifecycle, OD-Q15 timelines and OD-Q16 do-not-contact;
+- S3C printing and optional follow-ups;
+- O1 closed-opportunity print notice.
+
+Production baseline (verified 2026-10-19):
+- main = c8588d5 (O1 merge of PR #19; S3C merge f5c0f87 before it);
+- Vercel Production deployment 7177366647 succeeded, and the live build id is c8588d5dda7a;
+- Supabase head 20261021100000 with 92 migrations; privilege contract 0 / 29.
+
+Decisions in force:
+- ZD-212–ZD-227 (OD-Q1–Q12, Q15, Q16, ZD-224 print, ZD-225 follow-up, ZD-226 O1, ZD-227 O1-R1);
+- OD-Q13 and OD-Q14 OPEN; PD-10 and PD-11 unresolved.
+
+Evidence labels for the S4 report: ISOLATED, VERIFIED READ-ONLY, VERIFIED LIVE (owner-approved writes only),
+NOT RUN, BLOCKED PENDING OWNER APPROVAL.
+
+======================================================================
+0. RECONCILIATION WITH THE RELEASED O1 AND THE ACCEPTED O1-R1
+======================================================================
+R1. Revision 1's entry criterion E1 (O1 merged and deployed) is MET: c8588d5 is live.
+R2. Revision 1's B3 (the O1 notice on live records) was effectively executed in the O1 release verification
+    (docs/reports/NP-P2-S5-O1-production-release.txt): 9 / 9 quotes showed the notice. S4 B re-runs it as a
+    regression, not as first evidence.
+R3. ZD-227: a quote superseded by a later-withdrawn revision prints "Replaced by a revision". The expected values in
+    every check must follow the RPC rule (a successor counts only when its status <> 'withdrawn'):
+    - Pilot Simulation Quote 7 → "Replaced by a revision";
+    - Estimate 2 → "Replaced by Estimate 3".
+    PREREQUISITE P6: correct the expected-model successor lookup in .tmp-qa/np-p2-s5-o1-prod-readonly.mjs (and the
+    S3C-R1 copy), which currently uses supersedes_quote_id without the withdrawn filter. That was the source of the
+    1 "failure" in the O1 release run.
+R4. Every Pilot Simulation opportunity with quotes is Lost, and its two Converted opportunities have no quotes. So
+    "Converted + quote" can only be verified ISOLATED unless the owner approves a write (C-optional).
+R5. Accessibility (axe-core, keyboard) and the integrated journey script are NEW in S4 and not yet written (P3, P4).
+
+======================================================================
+1. PREREQUISITES (all before execution)
+======================================================================
+P1. Owner authorization for S4 execution: A and D are local; B is read-only production; each C item separately.
+P2. Isolated stack NemrynS1Iso (Docker; ports 54361…; container supabase_db_NemrynS1Iso):
+    - migrations byte-identical to main (diff -rq);
+    - started with `supabase start -x analytics,edge-runtime,functions,imgproxy,inbucket,meta,realtime,storage,studio,vector`;
+    - `.iso-env.tmp` regenerated from `supabase status -o env` (0600; deleted afterwards);
+    - app built and served by `next build` + `next start -p 3100` against it.
+    The working tree must equal main c8588d5 for code. Today the local branch np-p2-s5-o1-closed-quote-print has an
+    identical tree, plus the uncommitted ZD-227 docs.
+P3. Write .tmp-qa/np-p2-s5-s4-integrated-e2e.mjs (journey A5 below).
+P4. Write .tmp-qa/np-p2-s5-s4-a11y-e2e.mjs: axe-core from cdnjs at an exact pinned version, plus keyboard checks.
+P5. Production read access:
+    - `supabase projects list` shows wyocbivzgrbekuyqdfts linked (a 403 means the wrong CLI account);
+    - the gh account nemryn (GH_CONFIG_DIR=~/.config/gh-nemryn);
+    - .env.sim.local SIM identities (never printed).
+P6. Fix the expected-successor rule in the read-only production scripts (R3).
+P7. Chrome available for the CDP harness (.tmp-qa/local-helper.mjs); network access to cdnjs for pdf.js 3.11.174
+    and axe-core.
+
+======================================================================
+A. LOCAL / ISOLATED VERIFICATION (NemrynS1Iso; fictional seed: Org A / Org B, org-a-admin, org-a-dispatcher,
+   org-a-driver-a, org-b-admin; password local-test-only-fictional-pw)
+======================================================================
+Fixtures: created by each script through the real RPCs (plus_create_quote / mark_sent / record_response / revise /
+withdraw, plus_mark_opportunity_lost, plus_convert_opportunity_to_request, plus_create_task), with STAMP-suffixed
+fictional names. Expired is made by back-dating valid_until with the guard trigger disabled inside one
+transaction, in fixtures only. Each browser suite runs from a FRESH reset (S3A requires it).
+
+A1. Database suites (each from a verified fresh reset; pass = SUMMARY 0 failures):
+
+    | Area                            | Suite                           | Expected |
+    |---------------------------------|---------------------------------|----------|
+    | S1 foundation                   | plus_quotes_tests               | 83 |
+    | S3A directory                   | plus_quotes_directory_tests     | 34 |
+    | S3B / OD-Q15 / OD-Q16           | plus_quotes_lifecycle_tests     | 41 |
+    | Tasks                           | plus_tasks_tests                | 58 |
+    | Opportunities                   | plus_opportunities_tests        | 75 |
+    | Conversion / rebooking, contacts, member grants, entitlements, attribution, growth agent | their suites | 0 failures |
+    | Privilege suites                | function / mutation / client-surface / baseline-behaviour | 0 failures |
+    | Privilege contract              | privilege_contract_tests        | 0 / 29 |
+    | Every other suite               | supabase/tests                  | 0 failures, except section E |
+
+A2. Concurrency (one fresh reset, every *_test.sh):
+    - plus_quotes 18 / 18: OD-Q12 races; send / revise / Lost serialization; one event per transition;
+    - plus_tasks 4; plus_opportunities 6; plus_conversion_rebooking 11; plus_request_attributions 6;
+    - all others pass except section E.
+
+A3. Browser regression (fresh reset each; 1440 px unless stated):
+
+    | Suite | Script                                              | Expected |
+    |-------|-----------------------------------------------------|----------|
+    | S2    | .tmp-qa/np-p2-s5-s2-quote-drafts-e2e.mjs            | 33 |
+    | S3A   | .tmp-qa/np-p2-s5-s3a-quotes-directory-e2e.mjs       | 31 |
+    | S3B   | .tmp-qa/np-p2-s5-s3b-quote-lifecycle-e2e.mjs        | 32 |
+    | S3C   | .tmp-qa/np-p2-s5-s3c-print-followup-e2e.mjs         | 54 |
+    | O1    | .tmp-qa/np-p2-s5-o1-closed-quote-print-e2e.mjs      | 27 |
+
+A4. Lifecycle and revision checks (inside A1 / A3 / A5):
+    - draft create / edit / withdraw;
+    - Mark sent: review, immutable snapshot (guard trigger), DNC acknowledgment;
+    - accepted / declined (not when expired);
+    - revise: stable key, one draft;
+    - revision sent supersedes the original;
+    - sent withdrawal: reason required, never printed;
+    - derived Expired;
+    - OD-Q12: one draft plus one sent per opportunity, under concurrency;
+    - the ZD-227 case: supersede, then withdraw the revision → the original prints "Replaced by a revision". This is
+      a NEW assertion added to A5.
+
+A5. NEW integrated journey (P3), two organizations, end to end:
+    a. Admin: contact → opportunity → Estimate draft → edit → withdraw → Quote draft → Mark sent → follow-up offered →
+       task saved once (no due date, self) → Revise → edit → revision sent (supersede; "1 open task" notice) →
+       No thanks → Record accepted → print each version → Create transportation request (Converted; exactly one
+       Core Request, no trip) → print again (O1 notice + ACCEPTED).
+    b. ZD-227 branch on a second opportunity: send → revise → revision sent → withdraw the revision → the original
+       prints "Replaced by a revision" + SUPERSEDED, and the panel row has no "Replaced by" line.
+    c. Directory: every status filter, derived Expired, search, paging, the Print link; stored statuses unchanged
+       by closing.
+    d. Timelines (OD-Q15): exactly one event per transition on the opportunity, contact and dashboard; no amounts;
+       staff wording.
+    e. DNC (OD-Q16): a refused send without the acknowledgment (UI and direct RPC); an acknowledged send is audited;
+       the flag is unchanged; the follow-up is internal-only ("Review Quote N internally").
+    f. Tenant isolation and permissions:
+
+       | Role                       | Expected                                            |
+       |----------------------------|-----------------------------------------------------|
+       | Admin                      | write                                               |
+       | WRITE-grant Dispatcher     | write                                               |
+       | READ-grant Dispatcher      | read and print; no controls; no offer               |
+       | No-grant Dispatcher        | refused                                             |
+       | Driver                     | refused                                             |
+       | Plus expired               | read and print only                                 |
+       | Platform admin             | not a tenant reader                                 |
+       | Signed out                 | sign-in                                             |
+       | Org B                      | 404 on every Org A quote / print id; RPC ZW002      |
+
+    g. Audit integrity: exactly one audit row per action, with the expected names; no prices in timeline bodies.
+    h. Zero outbound: notification_events and the email / SMS audit unchanged; no mailto / sms / share / public
+       link.
+    i. Growth-to-Core: Requests / trips / passengers / assignments change ONLY through the explicit conversion
+       (+1 Request, 0 trips). Quotes never create Requests. Closing never touches quotes.
+    j. Print / PDF: print media hides the toolbar. The PDF text (pdf.js) contains the reference, status, banner,
+       O1 notice, stored lines and total, and the footer. A 500-character terms note checks multi-page layout.
+    k. Responsive:
+       - 1440 / 1024: full layout;
+       - 768: panel, dialogs, offer and directory without page overflow;
+       - 390: the Operations "wider screen" notice; the print page is readable with no overflow.
+
+A6. Accessibility (P4):
+    - axe-core: 0 serious / critical violations on the quotes panel, every quote dialog (incl. DNC and the follow-up
+      task dialog), the directory and the print page;
+    - keyboard: dialog open / close (Escape), tab order, focus return;
+    - role="status" / alert messages; role="note" banners; accessible names for the Print links.
+
+A pass / fail rule: every expected count is met. Any failure outside section E is a FAIL to investigate, and S4 does
+not proceed to B until it is resolved or explained.
+A cleanup: none in production. Stop the app, `supabase stop`, delete .iso-env.tmp, and touch no other project's
+containers.
+
+======================================================================
+B. PRODUCTION READ-ONLY VERIFICATION (no writes; SELECT-only; SIM identities; Pilot Simulation)
+======================================================================
+Fixtures: the EXISTING Pilot Simulation records only.
+
+| Quote      | Status     | Total   |
+|------------|------------|---------|
+| Estimate 1 | withdrawn  | $115.00 |
+| Estimate 2 | superseded | $100.00 |
+| Estimate 3 | accepted   | $110.00 |
+| Quote 4    | declined   | $60.00  |
+| Quote 5    | withdrawn  | $50.00  |
+| Quote 6    | sent       | $40.00  |
+| Quote 7    | superseded | $100.00 |
+| Quote 8    | withdrawn  | $100.00 |
+| Quote 9    | withdrawn  | $45.00  |
+
+All are on Lost opportunities. There is 1 cancelled task, and Dana is do-not-contact.
+
+B1. Release: main HEAD; the deployment for that sha succeeded; the live build id equals it; the print route is
+    deployed (signed out → 307 sign-in, private / no-store).
+B2. Database contract:
+    - migrations equal the repository (head 20261021100000, 92);
+    - the schema fingerprints equal the repository: functions (signature, SECURITY DEFINER, ACL, search_path, body
+      md5), policies, table ACL / RLS, constraints, indexes and triggers; the rls_auto_enable exception is
+      documented. This needs the isolated stack up for the reference;
+    - privilege contract 0 / 29;
+    - exactly one 4-argument plus_mark_quote_sent with the DNC check;
+    - OD-Q12 indexes present;
+    - no lifecycle function references plus_tasks.
+    Script: .tmp-qa/np-p2-s5-s3c-prod-preflight.mjs.
+B3. Print of all 9 quotes against the stored rows (script .tmp-qa/np-p2-s5-o1-prod-readonly.mjs after P6):
+    - status labels and banners;
+    - the O1 notice on all 9;
+    - ZD-227 wording on Quote 7;
+    - stored totals;
+    - privacy (no contact phone / email, opportunity title, withdrawal reason or lost note);
+    - print media, and PDF text (Quote 6) with the notice.
+B4. Access:
+    - VERIFIED LIVE: signed out, no-grant Dispatcher and Driver refused; unknown / malformed ids → the same 404;
+      noindex; no sharing action.
+    - A READ-grant user and a cross-tenant id CAN'T be exercised live: no READ grant exists, and no other
+      organization has quotes. They stay ISOLATED.
+B5. Directory, panel and timelines: the stored statuses (Quote 6 "Sent"); a Print link on every row; the opportunity
+    / contact / dashboard timelines show the existing 17 quote events with staff wording and no amounts.
+B6. Integrity, before = after:
+    - Pilot Simulation counts: quotes 9, opportunities 8, tasks 1, activities 37, audit 104, Requests 8, trips 9,
+      passengers 9, assignments 11, notifications 3, attributions 4, grants 0;
+    - contacts (flag / channel / updated_at), Plus modules (incl. the Zenward Mobility trial), memberships;
+    - other organizations' counts;
+    - the per-quote status / total / updated_at / stage snapshot.
+
+B pass / fail rule: every check passes (Quote 7 as "Replaced by a revision"). Any write, contract mismatch or
+cross-tenant data means STOP and report.
+
+======================================================================
+C. PRODUCTION-WRITE SCENARIOS — ALL BLOCKED PENDING OWNER APPROVAL
+======================================================================
+None of these may run without a separate, explicit owner approval naming the scenario. Every write goes through the
+normal production UI as the SIM Admin, in the Pilot Simulation tenant only, each action submitted once. An ambiguous
+result stops the run (never resubmit). No hard deletes.
+
+C1. Final live lifecycle pass (OPTIONAL; recommended only if the owner wants one more live end-to-end).
+    - Purpose: prove draft edit → send → accept → close on the current build in one flow.
+    - Records affected: +1 opportunity "SIM S4 Final" (contact Pat, not DNC); +1 Quote draft ($90.00, valid until
+      ≥ 14 days ahead), edited once ($95.00); Mark sent; No thanks (0 tasks); Record accepted; print (ACCEPTED, no
+      notice); mark Lost (Other, "S4 fictional production smoke test completed."); print (ACCEPTED + O1 notice).
+    - Expected change:
+      - +1 opportunity, +1 quote (accepted);
+      - +2 quote events (sent, accepted) and +3 stage changes (new_inquiry → quote_sent on send, quote_sent →
+        quote_accepted on the recorded acceptance (verified in plus_record_quote_response), → lost);
+      - audit: opportunity created, quote created / updated / sent / accepted, lost;
+      - 0 tasks;
+      - Core, notifications, contacts, grants and other organizations unchanged.
+    - Safeguards: a pre-check that no "SIM S4%" opportunity exists; Pat's do_not_contact = false; stop on any
+      unexpected delta.
+    - Cleanup: none beyond Lost (the accepted quote is history; it prints with the O1 notice).
+    - Status: BLOCKED PENDING OWNER APPROVAL.
+C2. Converted + quote print, live (OPTIONAL).
+    - Purpose: the only path without live evidence (R4).
+    - Records affected: +1 opportunity, +1 quote sent, then "Create transportation request". This writes a Core
+      Request (+1 transportation_request, pending), which Operations then sees.
+    - Expected: print shows "Status: Sent" + the O1 notice; no trip; notifications unchanged.
+    - Cleanup: the Request must be declined / cancelled through the Core UI by the owner's process. That is a Core
+      write, so approval is needed for it too.
+    - Recommendation: DO NOT RUN; ISOLATED evidence (O1 C1–C3, A5a) is sufficient.
+    - Status: BLOCKED PENDING OWNER APPROVAL.
+C3. Withdraw legacy Quote 6 (OPTIONAL housekeeping, not a test).
+    - Purpose: no fictional Sent quote left on a Lost opportunity.
+    - Records affected: Quote 6 → withdrawn (reason "Fictional S4 housekeeping"), +1 event, +1 audit row.
+    - Blocked by: plus_withdraw_quote requires an OPEN opportunity. That would need a Reopen first (+ stage changes)
+      and then Lost again. Not recommended; the O1 notice already flags it.
+    - Status: BLOCKED PENDING OWNER APPROVAL.
+C4. READ-grant print live: NOT PROPOSED. It needs a permission change, which is prohibited without explicit
+    approval. Stays ISOLATED.
+
+======================================================================
+D. RELEASE AND REGRESSION CHECKS
+======================================================================
+D1. Static gates on main: tsc --noEmit; eslint . (0 errors); next build (/quote-print/[quoteId] dynamic);
+    npm test (all node suites).
+D2. Repository hygiene:
+    - only the intended files are tracked;
+    - .tmp-qa / env / scratch files are untracked;
+    - no migration since 20261021100000;
+    - the decision register has no conflicting IDs (ZD-212–ZD-227 unique).
+D3. Release evidence: PR / merge / deployment / live build id, as in B1, for any docs-only PR that records ZD-227
+    (owner-controlled).
+D4. Regression baseline comparison: the A1 / A2 / A3 results equal the O1 release baseline (SQL 68 / 69,
+    concurrency all but 2, browser 33 / 31 / 32 / 54 / 27), and the known exceptions are identical.
+
+======================================================================
+E. KNOWN EXCEPTIONS AND LIMITATIONS (expected; not S4 failures)
+======================================================================
+Harness:
+- request_decision_expand_compat_tests: 8 pass / 10 fail (needs an intermediate EXPAND schema).
+- mutation_concurrency CONCURRENCY-1 and request_lifecycle REQUEST-CONCURRENCY-1: the harness client lacks FOR
+  UPDATE. Core-only.
+- RTC-04 depends on the time of day.
+- The S3A E2E needs a fresh reset.
+- Production A10 (Back click) once raced navigation; the re-run passed.
+- There are no PDF tools on the workstation; pdf.js runs in headless Chrome instead.
+Product (accepted or open):
+- ZD-227: "Replaced by a revision" when the revision was later withdrawn.
+- OD-Q13 and OD-Q14 OPEN. PD-10 and PD-11 unresolved.
+- No sending of quotes (NP-P4); no public link, online acceptance or e-signature.
+- USD only. References are "Estimate N" / "Quote N". No branding fields and no default validity. The PDF file name is
+  generic.
+- Follow-up tasks have no quote link, and the open-task notice counts every opportunity task.
+- Expiry is derived. Closing never changes quotes; O1 is print-only.
+- After a double submit the task dialog says "That task was already added."
+- The print header renders an empty container when there are no business fields.
+- Quote 6 stays Sent on a Lost opportunity (flagged by O1).
+
+======================================================================
+F. EXECUTION ORDER
+======================================================================
+1. Owner approves S4 A + B + D execution (C stays blocked unless named).
+2. P2–P7 prerequisites (write the A5 / A6 scripts; fix the P6 expectation).
+3. D1 static gates on a main-equivalent tree.
+4. A1 SQL suites, then A2 concurrency (long; about 60–75 minutes).
+5. Fresh reset, then A3 browser regression, then A5 integrated journey, then A6 accessibility.
+6. B production read-only (B1 → B6), with the isolated stack up for the B2 fingerprints.
+7. D2–D4 regression and hygiene comparison.
+8. S4 report. Then, only if the owner approves specific C items, run them, verify integrity, and add an addendum.
+9. Readiness for the UI overhaul: recommended once A, B and D pass and C is executed or waived. Preserve the
+   data-testid hooks, the role="status" / alert messages, the print:hidden toolbar and the screen / print parity of
+   banners and notices.
+
+S4 EXECUTION HAS NOT STARTED.
