@@ -159,6 +159,11 @@ Rules:
 >   - OD-Q12 = A (ZD-221): one active draft and one current sent quote per opportunity.
 >   - The Opportunity "Estimates & quotes" panel lists current and historical quotes. Writers create, edit and withdraw the draft, entering prices in dollars; the server total is authoritative.
 >   - Mark sent, responses, revisions and the printable view come in S3.
+> - **NP-P2-S5-S3A:**
+>   - Growth navigation gains **Estimates & Quotes**, between Contacts and Tasks.
+>   - It is an organization-wide directory: counts (drafts / sent / accepted / expired), search, status filter including derived Expired, sort and server-side pages.
+>   - A row opens its opportunity's quote panel. New quotes still start from an opportunity.
+>   - The visual redesign is deferred to the planned UI overhaul.
 
 **Payment status** remains a separate, staff-reported field (None / Deposit reported / Paid reported / Refund reported). It is never revenue or settlement evidence and is never derived from a quote. No invoicing or billing is added in Plus.
 

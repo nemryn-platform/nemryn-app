@@ -4257,6 +4257,36 @@ export type Database = {
           total_count: number
         }[]
       }
+      plus_list_organization_quotes: {
+        Args: {
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_search: string
+          p_sort: string
+          p_status: string
+        }
+        Returns: {
+          contact_id: string
+          contact_name: string
+          created_at: string
+          currency: string
+          is_expired: boolean
+          kind: string
+          opportunity_id: string
+          opportunity_stage: string
+          opportunity_title: string
+          quote_id: string
+          quote_number: number
+          service_type: string
+          status: string
+          supersedes_quote_id: string
+          total_cents: number
+          total_count: number
+          updated_at: string
+          valid_until: string
+        }[]
+      }
       plus_list_quotes: {
         Args: {
           p_contact_id: string
@@ -4395,6 +4425,15 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      plus_quote_directory_summary: {
+        Args: { p_organization_id: string }
+        Returns: {
+          accepted: number
+          drafts: number
+          expired: number
+          sent: number
+        }[]
       }
       plus_reassign_task: {
         Args: {

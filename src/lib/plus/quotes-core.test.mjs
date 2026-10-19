@@ -194,3 +194,71 @@ test("OD-Q12 migration: fails safely on existing duplicates, partial unique inde
   assert.ok(send.indexOf("set status = 'superseded'") < send.indexOf("set status = 'sent'"), "the predecessor is superseded first");
   assert.doesNotMatch(sql, /drop function/i, "CREATE OR REPLACE keeps signatures and grants");
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-P2-S5-S3A -- organization-wide directory
+// ---------------------------------------------------------------------------------------------------------------------
+
+test("parseDirectoryParams: safe defaults; unknown status / sort / page fall back; search trimmed and bounded", () => {
+  assert.deepEqual(q.parseDirectoryParams({}), { search: "", status: "all", sort: "newest", page: 1 });
+  assert.deepEqual(q.parseDirectoryParams({ q: "  Pat  ", status: "expired", sort: "valid_until", page: "3" }), { search: "Pat", status: "expired", sort: "valid_until", page: 3 });
+  for (const status of ["Draft", "expired_soon", "' or 1=1", ""]) assert.equal(q.parseDirectoryParams({ status }).status, "all", status);
+  for (const sort of ["random", "NEWEST", "created_at desc"]) assert.equal(q.parseDirectoryParams({ sort }).sort, "newest", sort);
+  for (const page of ["0", "-2", "abc", ""]) assert.equal(q.parseDirectoryParams({ page }).page, 1, page);
+  assert.equal(q.parseDirectoryParams({ page: "999999999" }).page, 4001, "capped at the database's max offset");
+  assert.equal(q.parseDirectoryParams({ q: "x".repeat(500) }).search.length, 200);
+  assert.equal(q.parseDirectoryParams({ q: ["first", "second"] }).search, "first");
+});
+
+test("directory statuses mirror the database contract (derived expired; no stored Expired status)", () => {
+  assert.deepEqual([...q.DIRECTORY_STATUSES], ["all", "draft", "sent", "accepted", "declined", "withdrawn", "superseded", "expired"]);
+  assert.deepEqual([...q.DIRECTORY_SORTS], ["newest", "oldest", "valid_until", "number"]);
+  const sql = readFileSync(new URL("../../../supabase/migrations/20261020100000_plus_quotes_directory.sql", import.meta.url), "utf8");
+  assert.match(sql, /v_status not in \('all', 'draft', 'sent', 'accepted', 'declined', 'withdrawn', 'superseded', 'expired'\)/);
+  assert.match(sql, /v_sort not in \('newest', 'oldest', 'valid_until', 'number'\)/);
+  assert.ok(!q.QUOTE_STATUSES.includes("expired"));
+});
+
+test("directoryHref / directoryRange / directoryPageCount", () => {
+  const p = { search: "Pat & Co", status: "sent", sort: "number", page: 2 };
+  assert.equal(q.directoryHref(p), "/operations/growth/quotes?q=Pat+%26+Co&status=sent&sort=number&page=2");
+  assert.equal(q.directoryHref(p, { page: 1, status: "all", sort: "newest", search: "" }), "/operations/growth/quotes");
+  assert.deepEqual(q.directoryRange(1), { limit: 25, offset: 0 });
+  assert.deepEqual(q.directoryRange(3), { limit: 25, offset: 50 });
+  assert.equal(q.directoryRange(10_000_000).offset, 100_000);
+  assert.equal(q.directoryPageCount(0), 1);
+  assert.equal(q.directoryPageCount(25), 1);
+  assert.equal(q.directoryPageCount(26), 2);
+});
+
+test("formatQuoteDate: a calendar date, never shifted by a timezone", () => {
+  assert.equal(q.formatQuoteDate("2026-11-02"), "Nov 2, 2026");
+  assert.equal(q.formatQuoteDate("2026-01-01"), "Jan 1, 2026");
+  assert.equal(q.formatQuoteDate("bad"), "bad");
+});
+
+test("directory page: server-side reads only (one bounded page + counts), no mutation, no service role; errors are not empty lists", () => {
+  const page = readFileSync(new URL("../../app/operations/growth/quotes/page.tsx", import.meta.url), "utf8");
+  const helpers = readFileSync(new URL("./quotes.ts", import.meta.url), "utf8");
+  assert.match(page, /requirePlusAccess\(pathname\)/);
+  assert.match(page, /listOrganizationQuotes\(context\.organizationId, \{ search: params\.search, status: params\.status, sort: params\.sort, limit, offset \}\)/);
+  assert.match(page, /getQuoteDirectorySummary\(context\.organizationId\)/);
+  assert.match(page, /list === null \?/, "a failed read renders the error state, never the empty state");
+  assert.match(page, /data-testid="quotes-directory-error"/);
+  assert.doesNotMatch(page, /Action\(|plus_create_quote|plus_update_quote_draft|plus_withdraw_quote|plus_mark_quote_sent|plus_revise_quote/);
+  assert.match(page, /canWrite \? \(\s*<LinkButton href=\{PIPELINE\}/, "new quotes start from an opportunity (Pipeline); no second editor");
+  assert.match(helpers, /plus_list_organization_quotes/);
+  assert.match(helpers, /plus_quote_directory_summary/);
+  assert.doesNotMatch(helpers.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""), /service[_-]?role|createAdminClient|SERVICE_ROLE/i, "no service-role client in code");
+  const table = readFileSync(new URL("../../components/growth/QuotesDirectoryTable.tsx", import.meta.url), "utf8");
+  assert.match(table, /\/operations\/growth\/pipeline\/\$\{opportunityId\}#quotes/, "a row opens its opportunity at the Quotes panel");
+});
+
+test("D1: the edit / withdraw dialog acts on the draft captured when it opened (survives revalidation)", () => {
+  const src = readFileSync(new URL("../../components/growth/QuoteDraftControls.tsx", import.meta.url), "utf8");
+  assert.match(src, /setTarget\(mode === "create" \? null : draft\)/);
+  assert.match(src, /open === "withdraw" && target &&/);
+  assert.match(src, /open === "edit" && target &&/);
+  assert.doesNotMatch(src, /open === "withdraw" && draft &&/);
+  assert.match(src, /role="status"[^>]*data-testid="quote-saved"/);
+});

@@ -8,6 +8,7 @@ import {
   centsToInput,
   emptyQuoteForm,
   formatCents,
+  formatQuoteDate,
   groupQuotes,
   quoteKindLabel,
   quoteReference,
@@ -22,13 +23,6 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { QuoteDraftControls, type DraftForEditing } from "@/components/growth/QuoteDraftControls";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
-
-/** "Oct 20, 2026" for a calendar date (no timezone shift: it is a date, not an instant). */
-function formatDateKey(dateKey: string): string {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  if (!y || !m || !d) return dateKey;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
-}
 
 function toFormValues(d: QuoteDetail): QuoteFormValues {
   return {
@@ -70,7 +64,7 @@ function QuoteRow({ q, byId, timezone, emphasis }: { q: QuoteSummary; byId: Map<
       </div>
       <p className={cn(typography.bodySmall, "text-text-secondary")}>
         {quoteKindLabel(q.kind)} · {q.serviceType ? serviceTypeLabel(q.serviceType) : "Service not specified"}
-        {q.roundTrip ? " · Round trip" : ""} · Valid until {formatDateKey(q.validUntil)}
+        {q.roundTrip ? " · Round trip" : ""} · Valid until {formatQuoteDate(q.validUntil)}
         {q.status === "sent" && q.isExpired ? " (passed)" : ""}
       </p>
       <p className={cn(typography.metadata, "text-text-muted")}>
@@ -126,7 +120,7 @@ export async function QuotesPanel({
   const showControls = canWrite && groups !== null && !draftUnavailable && (groups.draft ? draft !== null : !groups.sent);
 
   return (
-    <div className="flex flex-col gap-zw-md" data-testid="opportunity-quotes">
+    <div id="quotes" className="flex scroll-mt-4 flex-col gap-zw-md" data-testid="opportunity-quotes">
       <SectionHeader
         title="Estimates & quotes"
         description={QUOTE_NOT_INVOICE_NOTE}
