@@ -26,6 +26,7 @@ import {
   CalendarCheck,
   Repeat,
   TrendUp,
+  FileText,
 } from "@phosphor-icons/react/dist/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -60,6 +61,8 @@ export const navIcons: Record<string, Icon> = {
   contacts: AddressBook,
   pipeline: Kanban,
   tasks: CheckSquare,
+  // NP-P2-S5-S3A: Growth -> Estimates & Quotes (a document glyph; Receipt stays Billing so quotes never read as invoices)
+  quotes: FileText,
 };
 
 export type NavIconKey = keyof typeof navIcons;

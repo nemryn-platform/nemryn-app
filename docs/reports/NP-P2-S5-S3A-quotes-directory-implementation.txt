@@ -1,0 +1,441 @@
+NP-P2-S5-S3A -- DEDICATED ESTIMATES & QUOTES WORKSPACE (ARCHITECTURE FIRST) -- IMPLEMENTATION REPORT
+Nemryn Plus Growth.
+Date: 2026-10-19
+Mode: controlled local implementation and isolated testing.
+- Isolated database NemrynS1Iso only; the local app ran with `next start -p 3100` against it.
+- Fictional data only.
+- No production access or changes.
+- No Git operations: nothing staged, committed or pushed; no branch switched.
+Legend:
+- VERIFIED = executed, with the result shown;
+- NOT RUN = deliberately not executed.
+
+======================================================================
+1. VERIFIED BASELINE
+======================================================================
+- Branch np-p2-s5-s3a-quotes-hub. HEAD = origin/main = 6050207d1591caf0898e6227732f7282ead31726 (Merge PR #15, S2).
+  There were 0 tracked changes at the start.
+- The S2 migration 20261019100000_plus_quotes_single_active.sql is present in origin/main (the merged release).
+- Production head 20261019100000 and live build 6050207 were verified read-only in NP-P2-S5-S2-R1 (2026-10-19). No
+  production access was made in this phase.
+- The deployed S1 / S2 migrations are not modified.
+
+======================================================================
+2. EXACT FILES CHANGED
+======================================================================
+New (untracked):
+  supabase/migrations/20261020100000_plus_quotes_directory.sql      2 read RPCs + 1 index (additive)
+  supabase/tests/plus_quotes_directory_tests.sql                   rollback-only suite (34 tests)
+  src/app/operations/growth/quotes/page.tsx                        the Estimates & Quotes page (server component)
+  src/components/growth/QuotesDirectoryTable.tsx                   client table: rows open the opportunity
+  docs/reports/NP-P2-S5-S3A-quotes-directory-implementation.txt    this report
+  .tmp-qa/np-p2-s5-s3a-quotes-directory-e2e.mjs                    local browser E2E (QA scratch; not for commit)
+Modified:
+  src/lib/plus/growth-nav-core.ts               + "Estimates & Quotes" child (between Contacts and Tasks)
+  src/lib/plus/growth-nav-core.test.mjs         order / active-state tests for the new child
+  src/design/icons.ts                           + `quotes: FileText` in the central Phosphor nav icon map
+  src/lib/plus/quotes-core.ts                   directory params / href / range / page count; formatQuoteDate; copy
+  src/lib/plus/quotes-core.test.mjs             directory, date and D1 tests (22 tests in total)
+  src/lib/plus/quotes.ts                        listOrganizationQuotes, getQuoteDirectorySummary (server-only)
+  src/components/growth/QuoteDraftControls.tsx  D1 fix: the dialog acts on the draft captured when it opened
+  src/components/growth/QuotesPanel.tsx         id="quotes" anchor; uses the shared formatQuoteDate
+  src/lib/supabase/database.types.ts            regenerated: + the 2 RPCs only (no line removed)
+  supabase/tests/privilege_contract_tests.sql   + the 2 RPCs as 'u' (authenticated EXECUTE)
+  docs/data/mutation-api.md                     directory contract section
+  docs/security/database-privilege-contract.md  S3A additions
+  docs/security/plus-access-model.md            T28
+  docs/product/plus-domain-model.md             §14 directory note
+  docs/product/plus-product-spec.md             §4.5 S3A note
+Unchanged: Core; conversion / rebooking; the app shell, OperationsShell, GrowthNavGroup component, theme, typography
+and colours; every existing RPC.
+
+======================================================================
+3. MIGRATION AND RPC INVENTORY
+======================================================================
+20261020100000_plus_quotes_directory.sql (additive; read-only; no table, policy, grant or existing-function change):
+- plus_list_organization_quotes(p_organization_id uuid, p_search text, p_status text, p_sort text, p_limit integer,
+  p_offset integer)
+  RETURNS TABLE(quote_id, quote_number, kind, status, is_expired, opportunity_id, opportunity_title, opportunity_stage,
+  contact_id, contact_name, service_type, total_cents, currency, valid_until, supersedes_quote_id, created_at,
+  updated_at, total_count)
+- plus_quote_directory_summary(p_organization_id uuid) RETURNS TABLE(drafts, sent, accepted, expired)
+Both are SECURITY DEFINER, STABLE, search_path = public, pg_temp, and ACL {postgres, authenticated} (no PUBLIC, anon or
+service_role).
+- index plus_quotes_org_status_valid_idx ON plus_quotes (organization_id, status, valid_until).
+Existing quote RPCs, including plus_list_quotes / plus_get_quote, are unchanged: no broadened signatures.
+
+======================================================================
+4. AUTHORIZATION AND TENANT ISOLATION
+======================================================================
+The contract is the same as the existing Plus reads:
+- auth.uid() is required (ZW001);
+- plus_can_read(org) is required (ZW002 otherwise);
+- every row is filtered by organization_id and joined to its opportunity and contact on (id, organization_id).
+Results by caller (SQL suite):
+
+| Caller | Result | Test |
+|---|---|---|
+| Organization Admin | full directory and summary | A1 |
+| WRITE-grant and READ-grant Dispatcher | identical directory and summary | A2 |
+| No-grant Dispatcher, Driver, inactive member, Platform Admin without membership, no-membership user | ZW002 | A3 |
+| No user | ZW001 | A4 |
+| anon | 42501 (no EXECUTE) | A4 |
+| Org B admin asking for Org A; a random organization | ZW002, same as unknown | A5 |
+| Plus expired (read-only) | readable | A7 |
+| Plus locked | ZW002 | A8 |
+
+- The same contact name exists in two organizations; each sees only its own (A6).
+- Direct INSERT / UPDATE / DELETE as a client → 42501 (A9). No client grant or RLS change (S2).
+- The application layer applies the same rule: requirePlusAccess on the page (existing Growth guard); the
+  per-request cookie client; no service role (unit test).
+- Mutation controls (the "New estimate or quote" route) appear only for canWriteGrowth. READ-grant users get none (E2E
+  A1 / A2).
+
+======================================================================
+5. SEARCH AND PAGINATION DESIGN
+======================================================================
+- Input validation (database): status in a closed set; sort in a closed set; limit 1–100; offset 0–100000; search
+  ≤ 200 characters. Anything else → ZW006. Never a silent default.
+- The app's parseDirectoryParams maps unknown URL values to the defaults before calling, so a hand-edited URL never
+  errors (E2E F8). The page number is capped at the maximum offset.
+- Search:
+  - case-insensitive substring on opportunity title and contact display name;
+  - an exact quote number for "12", "#12", "Quote 12", "Estimate 12";
+  - an exact kind for "estimate(s)" / "quote(s)".
+  - The user's text becomes a LIKE pattern with \ % _ escaped. It is a bound value, never concatenated into SQL (SQL Q4 /
+    Q5; E2E F2 / F3).
+  - Free text (terms, labels, notes, withdrawal reasons) is never searched (Q6). No medical or route data exists in
+    quotes.
+  - A bare number also matches titles or names containing those digits (documented, by design).
+- Pagination:
+  - server-side LIMIT / OFFSET, 25 per page in the UI;
+  - total_count is the filtered total (a window count) and is returned on every row;
+  - a page past the end returns no rows, and the page says so with a link to page 1 (it doesn't show an empty
+    directory);
+  - pages cover every quote exactly once (SQL P1; E2E P3 / P4).
+- Sort:
+  - newest (default) / oldest (created_at), valid_until (soonest first), number (highest first);
+  - every order ends with quote_number desc, id, a unique tie-breaker, so pages are stable (P1, P5).
+- The rules live in the database and the pure core (quotes-core.ts). The visual components only render already-formatted
+  rows.
+
+======================================================================
+6. SUMMARY METRICS IMPLEMENTATION
+======================================================================
+plus_quote_directory_summary counts in the database, with one aggregate over the organization's quotes (filtered
+COUNTs):
+- drafts = stored draft;
+- sent = every stored sent (the OD-Q12 current-sent slots, including derived-expired ones);
+- accepted = stored accepted;
+- expired = stored sent with valid_until before the organization-local date (_plus_org_local_today, organizations.timezone).
+  Expired is a subset of sent.
+- No amounts, revenue or accounting figures.
+- The page states the semantics under the strip ("Sent counts every quote currently sent, including expired ones…").
+- VERIFIED: the counts equal direct counts (SQL C1; upgrade rehearsal; E2E P2 against the database).
+- An organization without quotes gives zeros, not an error (SQL C3; E2E S1).
+- If the summary fails, the page shows "Counts couldn't be loaded"; the list is unaffected.
+
+======================================================================
+7. ROUTE AND SIDEBAR INTEGRATION
+======================================================================
+- GROWTH_CHILDREN (growth-nav-core.ts) is now: Dashboard, Pipeline, Contacts, Estimates & Quotes, Tasks.
+  - Href /operations/growth/quotes.
+  - The existing GrowthNavGroup renders it: expanded list, rail and flyout, with the same styling and active state
+    (aria-current=page).
+  - Icon: Phosphor FileText, added to the central nav icon map. Receipt stays Billing, so quotes never look like invoices.
+- The route /operations/growth/quotes/page.tsx sits beside the existing S2 server actions (actions.ts) in the same
+  segment.
+- It uses existing components only: PageHeader, SummaryStrip (inline), Input, Select, Button, LinkButton,
+  AttentionState, DataTable, StatusBadge, and typography tokens. There is no new theme, font, colour, logo or navigation
+  model.
+- VERIFIED (E2E):
+  - N1: the order is correct;
+  - N2: clicking opens the route and exactly that item is active;
+  - N3: the shell is intact;
+  - T1: at 768 px (the narrowest supported Operations width) the summary, filters, table and pagination are visible,
+    with no page-level horizontal overflow (the table scrolls in its own container).
+
+======================================================================
+8. EXISTING OPPORTUNITY WORKFLOW REUSE
+======================================================================
+- The directory is read-only. A row (and its reference link) opens /operations/growth/pipeline/<opportunity>#quotes. The
+  existing S2 Estimates & quotes panel (id="quotes") is where drafts are created, edited and withdrawn (E2E R1–R3).
+- "New estimate or quote" (writers only) routes to the Pipeline, with the note "Estimates and quotes always start from
+  an opportunity…".
+  - There is no second editor, picker, mutation path or automatic opportunity.
+  - S3A doesn't build an opportunity picker; the Pipeline is the existing way to choose one.
+- No Mark sent / responses / revise / print controls anywhere (E2E R4; unit tests).
+
+======================================================================
+9. D1 UX FIX
+======================================================================
+- Defect: the S2 production smoke found that after "Withdraw draft" the confirmation could vanish. The dialog was rendered
+  as `open === "withdraw" && draft && …`. The action's revalidation re-rendered the page with draft = null and unmounted
+  the dialog before its success effect posted the message.
+- Fix (QuoteDraftControls.tsx, narrow):
+  - when the edit or withdraw dialog opens, the draft is captured in state (`target`);
+  - the dialog renders from that snapshot (`open === "withdraw" && target && …`), so it stays mounted through the
+    revalidation, hands over its confirmation once (ref-guarded), then closes.
+  - The confirmation line is an accessible role="status" region in the controls, which remain mounted (the panel offers
+    the create control again).
+  - The editor and withdraw dialogs themselves are unchanged.
+- VERIFIED (E2E D1): three consecutive withdrawals on three opportunities. After each, and 2.5 s after the revalidation:
+  - "Draft withdrawn. It stays in the quote history." is visible, with role=status;
+  - the quote is withdrawn in the database and shown in History;
+  - no draft remains;
+  - exactly one quote row and one plus_quote_withdrawn audit row (no duplicate withdrawal, no delete).
+  Result: 3 of 3.
+- The unit test asserts the snapshot pattern and that no `open === "withdraw" && draft` remains.
+
+======================================================================
+10. TEST RESULTS
+======================================================================
+SQL, new: supabase/tests/plus_quotes_directory_tests.sql. Fresh database: 0 failures of 34 (full run; again after the final edit). Upgraded database: 0 failures of 34 (after the expectations were made data-relative, see section 12).
+  Groups:
+  - S1–S2: contract (SECURITY DEFINER, STABLE, pinned path, ACL; no new table or grant; the index);
+  - A1–A9: the role / state / tenant matrix and the direct-write refusal;
+  - F1–F6: status filters (each stored status; sent includes expired; derived expired; stored status preserved;
+    today's validity is not expired; all / blank);
+  - Q1–Q7: search (number forms, kind, title, contact with an apostrophe, literal % and _, backslash, SQL-looking text,
+    free text not searched, combined with status, the length limit);
+  - P1–P6: pagination coverage and stability, the total, the last and past-end pages, bounds (ZW006), invalid status /
+    sort, each sort order, display metadata;
+  - C1–C3: summary versus direct counts, per organization, zeros;
+  - X1: the reads write nothing.
+SQL, existing: plus_quotes_tests.sql 83/83 and plus_quotes_concurrency_test.sh 16/16 (section 11).
+Unit: npm test 860 / 860 pass, 0 fail.
+  - quotes-core.test.mjs 22 / 22: S2 tests plus directory params / statuses (in parity with the SQL) / href / range /
+    page count / formatQuoteDate / page and table source rules / D1;
+  - growth-nav-core.test.mjs 3 / 3.
+TypeScript: npx tsc --noEmit exit 0.  ESLint: exit 0, 0 errors, 107 warnings (none in S3A files; the existing .tmp-qa / legacy warnings).  Build: next build exit 0 (route ƒ /operations/growth/quotes).
+Browser E2E (.tmp-qa/np-p2-s5-s3a-quotes-directory-e2e.mjs; real Chrome; isolated stack): 35 / 35 PASS, exit 0.
+  - N1–N3: the navigation order, click, active state, shell intact.
+  - P1–P5:
+    - the page renders;
+    - summary = database counts (24 / 3 / 1 / 1 on the fixture);
+    - page 1 has 25 rows and "31 … page 1 of 2"; Next gives 6 rows with no overlap;
+    - a page past the end gives a message, not an empty list.
+  - F1–F8:
+    - title search; literal %_ search; SQL-looking text gives "no match", not an error;
+    - Expired shows only the expired quote (badge Expired, data-status sent);
+    - Draft equals the database; Sent includes expired; sort by number;
+    - bogus URL values fall back to the defaults.
+  - R1–R4: a row opens /pipeline/<id>#quotes with the panel; the reference link matches; the existing panel shows Edit /
+    Withdraw; the directory has no mutation and "New" routes to the Pipeline.
+  - D1: 3 of 3 confirmations visible after revalidation (section 9).
+  - S1–S3:
+    - Org B with no quotes gives "No estimates or quotes yet.", a Pipeline link and zero counts;
+    - with EXECUTE on the list RPC temporarily revoked in the isolated database, the page shows the ERROR state with
+      Retry, not the empty state; the summary still loads and the filters are kept;
+    - after the grant was restored, the list is back.
+  - A1–A6:
+    - READ grant: the directory, no New action; the opened opportunity has no edit controls;
+    - WRITE grant: the New route;
+    - no grant → redirected to /operations; a Driver → /driver;
+    - Plus expired: readable, with the notice and no New action.
+  - T1: 768 px usable with no page overflow.
+Screenshots (local QA scratch, fictional): .tmp-qa/screens/np-p2-s5-s3a/ (directory, D1 confirmation, error state,
+tablet).
+NOT RUN: real handheld devices; widths below 768 px (the existing shell shows its "tablet and desktop" notice there by
+design and was not changed).
+
+======================================================================
+11. CONCURRENCY AND REGRESSIONS
+======================================================================
+Full isolated run (run-p2s5s3a.sh part 2): 68 SQL suites, each after a VERIFIED fresh reset at 20261020100000.
+- 66 suites with 0 failures (2,450 PASS lines). Among them:
+  - plus_quotes 83/83 (OD-Q12 uniqueness included), plus_quotes_directory 34/34;
+  - plus_opportunities 75/75, plus_contacts_activities 82/82;
+  - plus_conversion_rebooking 44/44 (P2-S4), plus_booking_service_type 27/27 (S2);
+  - core_staff_request_service_type 50/50, core_intake_airport 24/24;
+  - rls_adversarial 33/33, privilege contract 0/29;
+  - every other Plus and Core suite.
+- request_decision_expand_compat_tests: 8 PASS / 9 FAIL + 1 ERROR, identical to every earlier baseline. It only applies
+  to the intermediate P1-OPS-R1 schema. Not a regression.
+- recurring_trip_creation_tests RTC-04 "past date accepted" (23/24): PRE-EXISTING and time-of-day dependent.
+  - The test passes UTC current_date - 1 as the "past" date. The run happened at 02:32 UTC (22:32 the previous evening in
+    America/New_York, the seed organization's timezone), so "UTC yesterday" was still TODAY for the organization and was
+    correctly accepted.
+  - The same failure appears in the earlier p2s4r2 baseline and passes at other times.
+  - S3A touches no recurring code. Suggested separate test fix: use the organization-local date.
+Concurrency (one verified fresh reset, 27 scripts): 25 pass, including:
+- plus_quotes 16 (OD-Q12: Q3b / Q10 / Q11 / Q12), plus_conversion_rebooking 11, plus_opportunities 6;
+- plus_request_attributions 6, plus_tasks 4, plus_contacts 4;
+- request_decision 21, website_* and the rest.
+The 2 failures, mutation_concurrency_test and request_lifecycle_concurrency_test, are the PRE-EXISTING harness defect:
+a client-role SELECT … FOR UPDATE gets "permission denied", which reproduces at older production heads (S1 / S2
+reports). They don't touch quotes.
+Application: unit 860/860; tsc 0; ESLint 0 errors; build exit 0; browser E2E 35/35 (section 10).
+
+======================================================================
+12. UPGRADE REHEARSAL (deployed head 20261019100000 → 20261020100000)
+======================================================================
+Procedure:
+- The S3A migration was held back. The database was reset to exactly 20261019100000 (verified fresh).
+- Seeded THROUGH the S1 / S2 RPCs with fictional data:
+  - a draft; a current sent quote;
+  - sent → revised → revision sent (original superseded) → accepted; a withdrawn draft;
+  - sent → declined;
+  - an opportunity with no quotes; two independent drafts;
+  - 8 quotes in total.
+- Rows of 19 tables were snapshotted, plus fingerprints of every function, policy, table ACL and constraint.
+- `supabase migration up --local` then applied only 20261020100000.
+Results (VERIFIED):
+  migration up rc=0 (Applying 20261020100000_plus_quotes_directory.sql); head 20261020100000
+  pre-existing rows byte-identical in 19 tables (including plus_quotes, plus_quote_counters, audit_events): yes
+  all 209 pre-existing functions identical (signature, SECURITY DEFINER, ACL, search_path, body md5): yes
+  new directory RPCs: absent before; after, both SECURITY DEFINER, ACL {postgres, authenticated}, pinned search_path
+  policies / table ACLs + RLS / constraints identical: yes / yes / yes
+  new index: plus_quotes_org_status_valid_idx (organization_id, status, valid_until)
+  summary RPC vs direct counts on upgraded data: 3/1/1/0 vs 3/1/1/0
+  directory total_count vs quotes: 8 vs 8; the superseded / accepted filters return those stored statuses
+  existing write paths unchanged: a second draft → ZW004 draft_exists; numbering continues (9 after max 8)
+  privilege contract 0 / 29
+  plus_quotes_tests on the upgraded database: 0 failures of 83
+  plus_quotes_directory_tests on the upgraded database: 0 failures of 34. The first rehearsal run reported 6 failures of 34: the suite hard-coded fresh-database counts (for
+  example "10 quotes", summary "3/3/1/1", quote number 5) that do not hold when Org A already has quotes. The expectations
+  were changed to derive from the database (counts and numbers computed by the same predicates); no product code changed.
+  Re-run: fresh 0 / 34, upgraded 0 / 34.
+
+======================================================================
+13. PRIVILEGE CONTRACT
+======================================================================
+- privilege_contract_tests.sql lists the two new RPCs as 'u' (authenticated EXECUTE only).
+- Result: 0 violations of 29, on the fresh database and after the upgrade.
+- No table, policy or grant change. plus_quotes stays class B with one SELECT policy (SQL S2).
+- docs/security/database-privilege-contract.md is updated.
+
+======================================================================
+14. PERFORMANCE CONSIDERATIONS
+======================================================================
+- One page per request (≤ 100 rows; 25 in the UI) and one summary aggregate. Nothing is mass-fetched to the browser.
+- Index:
+  - plus_quotes_org_status_valid_idx (organization_id, status, valid_until) serves the status filters, the derived
+    Expired filter (status = 'sent' AND valid_until < today) and the four filtered counts;
+  - the organization filter alone is served by the existing org-leading indexes (organization_id, opportunity_id,
+    created_at desc) and unique (organization_id, quote_number).
+- Sort: the ORDER BY uses a sort-mode CASE, so the database sorts the filtered rows of ONE organization. The cost grows
+  with that organization's own quote count (n log n). A sort-specific index was deliberately not added, because no
+  single index serves all four modes.
+- Search: substring ILIKE on title / contact name scans the organization's joined rows. No trigram index is added (not
+  justified at this volume).
+- total_count is a window count over the filtered set.
+- OFFSET pagination: deep pages scan and skip earlier rows. The offset is capped at 100000.
+- Expected behaviour as volume grows:
+  - up to tens of thousands of quotes per organization: comfortably interactive;
+  - at hundreds of thousands per organization, consider keyset pagination (the stable tie-breaker already exists) and
+    a pg_trgm index for search. Both would be additive, with no change to the RPC result shape for the UI.
+- No query plans were captured at volume. These figures are design estimates, not benchmarks (NOT RUN).
+
+======================================================================
+15. KNOWN LIMITATIONS
+======================================================================
+- "New estimate or quote" routes to the Pipeline. There is no in-page opportunity picker (none exists to reuse; a second
+  workflow was not built).
+- A bare-number search also matches titles or names that contain those digits (by design: it's both a number search and
+  a text search).
+- Filter changes apply on "Apply" (a GET form, like the existing Tasks and Contacts pages), not on every keystroke.
+- The table's "Reference" column repeats the kind as a sub-line. This is cosmetic and left for the planned UI overhaul,
+  as is the premium visual redesign (owner decision).
+- Below 768 px the existing shell notice applies (unchanged).
+- Performance at very large volumes was not benchmarked (section 14).
+- Existing, unchanged:
+  - request_decision_expand_compat applies only to an intermediate schema;
+  - the mutation / request_lifecycle concurrency harness defect is pre-existing;
+  - the Stage-panel copy follow-up.
+
+======================================================================
+16. DEFERRED PRODUCT DECISIONS
+======================================================================
+Preserved: OD-Q1 to OD-Q9 (ZD-212 to ZD-220) and OD-Q12 = A (ZD-221).
+- Every quote still belongs to an opportunity. The directory never creates one and adds no contact-only quote.
+- OD-Q12: read-only here; the unchanged write RPCs still enforce it (upgrade rehearsal).
+- USD only; no address or medical data; the Plus entitlement model is unchanged.
+Still OPEN and not implemented:
+- OD-Q10: no print view or number-format change; the reference stays "<Kind> <number>";
+- OD-Q11: no follow-ups;
+- OD-Q13: estimated value untouched;
+- OD-Q14: no pricing rules;
+- OD-Q15: no quote activity rows;
+- OD-Q16: no do-not-contact handling.
+No new decision was needed for S3A.
+
+======================================================================
+17. PROPOSED COMMIT INVENTORY (not executed)
+======================================================================
+Proposed commit "feat(plus): estimates & quotes directory and withdraw confirmation fix (NP-P2-S5-S3A)":
+  A supabase/migrations/20261020100000_plus_quotes_directory.sql
+  A supabase/tests/plus_quotes_directory_tests.sql
+  M supabase/tests/privilege_contract_tests.sql
+  M src/lib/supabase/database.types.ts
+  A src/app/operations/growth/quotes/page.tsx
+  A src/components/growth/QuotesDirectoryTable.tsx
+  M src/components/growth/QuoteDraftControls.tsx
+  M src/components/growth/QuotesPanel.tsx
+  M src/lib/plus/quotes.ts
+  M src/lib/plus/quotes-core.ts
+  M src/lib/plus/quotes-core.test.mjs
+  M src/lib/plus/growth-nav-core.ts
+  M src/lib/plus/growth-nav-core.test.mjs
+  M src/design/icons.ts
+  M docs/data/mutation-api.md
+  M docs/security/database-privilege-contract.md
+  M docs/security/plus-access-model.md
+  M docs/product/plus-domain-model.md
+  M docs/product/plus-product-spec.md
+  A docs/reports/NP-P2-S5-S3A-quotes-directory-implementation.txt (optional)
+EXCLUDE: .tmp-qa/* and every other untracked report or scratch file. Before committing, confirm git diff --cached
+--name-only shows exactly these paths.
+
+======================================================================
+18. MIGRATION-FIRST RELEASE PROCEDURE (documentation only; nothing executed)
+======================================================================
+1. Owner review; PR from np-p2-s5-s3a-quotes-hub; CI green.
+2. Read-only pre-checks on production: head 20261019100000; privilege contract 0 / 29.
+3. With owner approval, apply ONLY 20261020100000 BEFORE the app deploy. The new page calls the two new RPCs, so the
+   database must have them first. The migration is additive: two functions and one index. On an empty or small
+   plus_quotes table the index builds instantly (production had 0 quotes plus 1 withdrawn test quote at the S2 smoke).
+4. Post-migration read-only checks:
+   - head 20261020100000;
+   - privilege contract 0 / 29;
+   - both RPCs exist exactly once with SECURITY DEFINER, pinned search_path, authenticated-only EXECUTE, and bodies
+     matching the repository (md5);
+   - the index exists.
+5. Merge, then verify that Vercel production is Ready and the live build id equals the merge commit.
+6. Production smoke only on the Pilot Simulation tenant, with explicit owner approval (NOT part of S3A):
+   - the navigation item and the page;
+   - counts against read-only SQL;
+   - a search and filter;
+   - a row opens its opportunity;
+   - optionally, a withdraw confirmation (create, then withdraw one fictional draft).
+Rollback (documentation):
+- redeploy 6050207 for the UI;
+- dropping the two functions and the index removes the migration safely (read-only objects; no data).
+
+======================================================================
+19. FINAL PR-READINESS VERDICT
+======================================================================
+READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR (NP-P2-S5-S3A).
+- A dedicated Growth → Estimates & Quotes page is integrated into the existing sidebar and design. It is functional,
+  not a placeholder: real counts, search, status filters (including derived Expired), sort, and server-side pages. Rows
+  open the opportunity's existing quote panel, so there is no second workflow.
+- The read architecture is a new additive, read-only migration: two SECURITY DEFINER Plus-read RPCs and one justified
+  index. It has a reusable server contract for the planned UI overhaul.
+- Authorization and tenant isolation follow the existing Plus model and are tested for every role and Plus state.
+- The D1 withdraw-confirmation defect is fixed narrowly and proven reliable (3 of 3 after revalidation).
+- Tests:
+  - SQL: directory 34/34 and quotes 83/83 (fresh and upgraded);
+  - concurrency 16/16;
+  - privilege contract 0/29;
+  - browser E2E 35/35;
+  - unit 860/860; tsc / ESLint 0 errors; build passes.
+- The upgrade from the deployed head preserved every row, function, policy, ACL and constraint.
+- The only failures are pre-existing and documented with evidence:
+  - expand-compat (intermediate schema only);
+  - the RTC-04 time-of-day test;
+  - two concurrency harness scripts.
+- Not done (by instruction): Git operations, the PR, production migration, deploy and production smoke (section 18);
+  S3 lifecycle features; the visual redesign.
+
+STOP. No Git operations, no deployment, no production change. The isolated stack and the local app were stopped after
+testing.

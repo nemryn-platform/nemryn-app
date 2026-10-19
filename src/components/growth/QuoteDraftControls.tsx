@@ -72,10 +72,15 @@ export function QuoteDraftControls({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState<"create" | "edit" | "withdraw" | null>(null);
+  // D1 (NP-P2-S5-S3A): the draft an edit / withdraw dialog acts on is captured WHEN the dialog opens. The action's
+  // revalidation re-renders this page -- after a withdrawal the `draft` prop becomes null -- and the open dialog must not
+  // unmount before it has handed over its confirmation.
+  const [target, setTarget] = useState<DraftForEditing | null>(null);
   const [instance, setInstance] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const show = (mode: "create" | "edit" | "withdraw") => {
     setMessage(null);
+    setTarget(mode === "create" ? null : draft);
     setInstance((n) => n + 1);
     setOpen(mode);
   };
@@ -124,7 +129,7 @@ export function QuoteDraftControls({
           }}
         />
       )}
-      {open === "edit" && draft && (
+      {open === "edit" && target && (
         <QuoteEditorDialog
           key={`e${instance}`}
           mode="edit"
@@ -132,8 +137,8 @@ export function QuoteDraftControls({
           opportunityId={opportunityId}
           today={today}
           serviceOptions={serviceOptions}
-          initial={draft.values}
-          draft={draft}
+          initial={target.values}
+          draft={target}
           onClose={() => setOpen(null)}
           onDone={done}
           onReload={() => {
@@ -142,11 +147,11 @@ export function QuoteDraftControls({
           }}
         />
       )}
-      {open === "withdraw" && draft && (
+      {open === "withdraw" && target && (
         <WithdrawDraftDialog
           key={`w${instance}`}
           organizationId={organizationId}
-          draft={draft}
+          draft={target}
           onClose={() => setOpen(null)}
           onDone={done}
           onReload={() => {

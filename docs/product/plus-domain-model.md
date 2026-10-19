@@ -521,6 +521,11 @@ Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plu
   - a second draft gives ZW004 `draft_exists`; sending an independent draft while another quote is the current sent gives ZW004 `sent_quote_exists`;
   - a revision supersedes its predecessor first, then becomes sent, in one transaction.
 - **UI (NP-P2-S5-S2):** the Opportunity page has an "Estimates & quotes" panel. Writers on an open opportunity can create, edit and withdraw the one active draft. Everyone with Plus read sees current and historical quotes. Mark sent, responses, revisions and the print view are S3.
+- **Directory (NP-P2-S5-S3A):**
+  - Growth → Estimates & Quotes (`/operations/growth/quotes`) is a read-only, organization-wide view over `plus_quotes`.
+  - It uses `plus_list_organization_quotes` (paged, searched, filtered and sorted in the database) and `plus_quote_directory_summary`.
+  - Expired is a derived filter: stored sent past the organization-local `valid_until`.
+  - Quotes still start from an opportunity's panel.
 - **Not decided / not encoded:**
   - OD-Q10: print content, number format, default validity, branding.
   - OD-Q11: follow-up tasks.

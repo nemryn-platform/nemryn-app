@@ -716,3 +716,27 @@ Tests:
 - `plus_quotes_tests.sql` (83 tests, including Q1–Q12 for OD-Q12);
 - `plus_quotes_concurrency_test.sh` (16 races, including 3b / 10 / 11 / 12 for OD-Q12);
 - `src/lib/plus/quotes-core.test.mjs`.
+
+### NP-P2-S5-S3A — organization-wide quote directory (read-only)
+
+Migration `20261020100000_plus_quotes_directory.sql`. It is additive: two read RPCs and one index. There is no new table, no write path, and no change to any existing function, policy or grant. Both RPCs are SECURITY DEFINER, STABLE, `search_path` pinned and authenticated EXECUTE only.
+
+Authorization (both RPCs):
+- no user: ZW001;
+- `plus_can_read(org)` false: ZW002. This covers no grant, Driver, inactive member, Platform Admin without a membership, a foreign organization and locked Plus.
+- Expired / read-only Plus can still read.
+
+| RPC | Contract |
+|---|---|
+| `plus_list_organization_quotes(org, search, status, sort, limit, offset)` | One bounded page and the filtered `total_count` (window count). <br>• `status`: null / `all`, `draft`, `sent` (EVERY stored sent, including derived-expired), `accepted`, `declined`, `withdrawn`, `superseded`, `expired` (stored sent with `valid_until` before the organization-local date). <br>• `sort`: `newest` (default), `oldest`, `valid_until` (soonest first), `number` (highest first); always ending in `quote_number desc, id`, so pages are stable. <br>• `limit` 1–100 (default 25); `offset` 0–100000. <br>• `search` (≤ 200, case-insensitive, LIKE wildcards escaped): quote number ("12", "#12", "Quote 12"), kind ("estimate" / "quote"), opportunity title, contact display name. Never terms, labels, notes or reasons. <br>• Rows: quote id / number / kind / STORED status / `is_expired` / opportunity id, title and stage / contact id and name / service / `total_cents` / currency / `valid_until` / `supersedes_quote_id` / created / updated. <br>• Invalid input: ZW006. |
+| `plus_quote_directory_summary(org)` | `drafts`, `sent` (every stored sent, including expired), `accepted`, `expired` (a subset of sent). Counted in the database; no amounts. |
+
+Index: `plus_quotes_org_status_valid_idx (organization_id, status, valid_until)`. It serves the status filters and the summary counts. The organization filter is already served by the existing org-leading indexes.
+
+Server helpers are `listOrganizationQuotes` / `getQuoteDirectorySummary` in `src/lib/plus/quotes.ts` (per-request client only). URL parsing is `parseDirectoryParams` / `directoryHref` / `directoryRange` in `quotes-core.ts`.
+
+Page: `/operations/growth/quotes`. A row opens `/operations/growth/pipeline/<opportunity>#quotes`. No quote is created or changed on this page, and no opportunity is created automatically.
+
+Tests:
+- `supabase/tests/plus_quotes_directory_tests.sql` (rollback-only);
+- `quotes-core.test.mjs` and `growth-nav-core.test.mjs`.

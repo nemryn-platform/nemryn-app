@@ -114,6 +114,13 @@ export function formatCents(cents: number): string {
   return `${negative ? "−" : ""}$${dollars}.${rest}`;
 }
 
+/** "Oct 20, 2026" for a calendar date (YYYY-MM-DD; no timezone shift: it is a date, not an instant). */
+export function formatQuoteDate(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  if (!y || !m || !d) return dateKey;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
 /** Cents -> the text a person edits ("75.00"; "" for 0 so empty optional lines stay empty). */
 export function centsToInput(cents: number): string {
   if (!cents) return "";
@@ -335,3 +342,84 @@ export function quoteErrorMessage(code: string | undefined, reason?: string): st
       return "The draft couldn't be confirmed. It's safe to try again -- it will never be created twice.";
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Organization-wide directory (NP-P2-S5-S3A): URL parameters <-> plus_list_organization_quotes inputs
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Mirrors plus_list_organization_quotes: status filter values ("expired" is DERIVED: stored sent past valid_until). */
+export const DIRECTORY_STATUSES = ["all", "draft", "sent", "accepted", "declined", "withdrawn", "superseded", "expired"] as const;
+export type DirectoryStatus = (typeof DIRECTORY_STATUSES)[number];
+export const DIRECTORY_STATUS_OPTIONS: { value: DirectoryStatus; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "draft", label: "Draft" },
+  { value: "sent", label: "Sent (incl. expired)" },
+  { value: "accepted", label: "Accepted" },
+  { value: "declined", label: "Declined" },
+  { value: "withdrawn", label: "Withdrawn" },
+  { value: "superseded", label: "Replaced by a revision" },
+  { value: "expired", label: "Expired (sent, past valid until)" },
+];
+export const DIRECTORY_SORTS = ["newest", "oldest", "valid_until", "number"] as const;
+export type DirectorySort = (typeof DIRECTORY_SORTS)[number];
+export const DIRECTORY_SORT_OPTIONS: { value: DirectorySort; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "valid_until", label: "Valid until (soonest first)" },
+  { value: "number", label: "Number (highest first)" },
+];
+/** Page size and the database's bounds (limit 1-100, offset 0-100000). */
+export const DIRECTORY_PAGE_SIZE = 25;
+export const DIRECTORY_MAX_OFFSET = 100_000;
+export const DIRECTORY_SEARCH_MAX = 200;
+export const DIRECTORY_ROOT = "/operations/growth/quotes";
+
+export interface DirectoryParams {
+  search: string;
+  status: DirectoryStatus;
+  sort: DirectorySort;
+  page: number;
+}
+
+function first(raw: string | string[] | undefined): string {
+  return typeof raw === "string" ? raw : Array.isArray(raw) ? (raw[0] ?? "") : "";
+}
+
+/** URL search params -> safe directory parameters (unknown values fall back to the defaults; never sent raw). */
+export function parseDirectoryParams(params: Record<string, string | string[] | undefined>): DirectoryParams {
+  const status = first(params.status);
+  const sort = first(params.sort);
+  const pageNum = Number.parseInt(first(params.page), 10);
+  const maxPage = Math.floor(DIRECTORY_MAX_OFFSET / DIRECTORY_PAGE_SIZE) + 1;
+  return {
+    search: first(params.q).trim().slice(0, DIRECTORY_SEARCH_MAX),
+    status: (DIRECTORY_STATUSES as readonly string[]).includes(status) ? (status as DirectoryStatus) : "all",
+    sort: (DIRECTORY_SORTS as readonly string[]).includes(sort) ? (sort as DirectorySort) : "newest",
+    page: Number.isSafeInteger(pageNum) && pageNum >= 1 ? Math.min(pageNum, maxPage) : 1,
+  };
+}
+
+export function directoryHref(p: DirectoryParams, overrides: Partial<DirectoryParams> = {}): string {
+  const v = { ...p, ...overrides };
+  const qs = new URLSearchParams();
+  if (v.search) qs.set("q", v.search);
+  if (v.status !== "all") qs.set("status", v.status);
+  if (v.sort !== "newest") qs.set("sort", v.sort);
+  if (v.page > 1) qs.set("page", String(v.page));
+  const s = qs.toString();
+  return `${DIRECTORY_ROOT}${s ? `?${s}` : ""}`;
+}
+
+/** page -> the RPC's limit / offset (bounded). */
+export function directoryRange(page: number): { limit: number; offset: number } {
+  return { limit: DIRECTORY_PAGE_SIZE, offset: Math.min((Math.max(1, page) - 1) * DIRECTORY_PAGE_SIZE, DIRECTORY_MAX_OFFSET) };
+}
+
+export function directoryPageCount(total: number): number {
+  return Math.max(1, Math.ceil(total / DIRECTORY_PAGE_SIZE));
+}
+
+export const DIRECTORY_DESCRIPTION =
+  "Every estimate and quote your team has prepared, across all opportunities. Open a row to work on it from its opportunity.";
+export const DIRECTORY_NEW_NOTE =
+  "Estimates and quotes always start from an opportunity: open one in the Pipeline and use its Estimates & quotes panel.";

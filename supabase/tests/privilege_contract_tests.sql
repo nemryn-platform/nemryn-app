@@ -354,7 +354,10 @@ c_fn(sig, roles) as (values
   ('plus_revise_quote(uuid,uuid,text)', 'u'),
   ('plus_withdraw_quote(uuid,uuid,timestamp with time zone,text)', 'u'),
   ('plus_list_quotes(uuid,uuid,uuid)', 'u'),
-  ('plus_get_quote(uuid,uuid)', 'u')
+  ('plus_get_quote(uuid,uuid)', 'u'),
+  -- NP-P2-S5-S3A: organization-wide quote directory reads (Plus read; authenticated EXECUTE only)
+  ('plus_list_organization_quotes(uuid,text,text,text,integer,integer)', 'u'),
+  ('plus_quote_directory_summary(uuid)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

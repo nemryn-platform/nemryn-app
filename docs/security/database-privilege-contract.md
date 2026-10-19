@@ -137,6 +137,9 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
   * `plus_create_quote`, `plus_revise_quote` and `plus_mark_quote_sent` are replaced with CREATE OR REPLACE: the same signatures, grants (authenticated EXECUTE only), SECURITY DEFINER and pinned `search_path`.
   * Two partial unique indexes are added on `plus_quotes`.
   * No table, column, policy, grant or other function changes, so the privilege contract is unchanged.
+* **NP-P2-S5-S3A additions (Plus quote directory, read-only):**
+  * D gains `plus_list_organization_quotes(uuid,text,text,text,integer,integer)` and `plus_quote_directory_summary(uuid)`. Both are SECURITY DEFINER and STABLE, with `search_path` pinned, authenticated EXECUTE only, and Plus read re-checked inside.
+  * A new index on `plus_quotes`. No table, policy, grant or other function changes.
 * **NC-REQUEST-SERVICE-TYPE-S1 changes (Core):**
   * `log_transportation_request` gains a trailing `p_service_type text DEFAULT NULL`. It is replaced by DROP + CREATE (exact 14-argument identity, no CASCADE): ONE function remains, never an overload. Its new contract signature is `(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text)`. It stays SECURITY DEFINER with `search_path` pinned, and EXECUTE is `authenticated` only (no PUBLIC, `anon` or `service_role`).
   * `get_organization_service_offerings` (owner-approved, read-only) now admits an active Organization Admin OR Dispatcher of that organization. The signature, grant and SECURITY DEFINER are unchanged, and it returns only the enabled service identifiers. `set_organization_service_offerings` stays Organization Admin only, and `organization_service_offerings` keeps RLS on, with no policy and no client grant.

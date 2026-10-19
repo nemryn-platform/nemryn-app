@@ -122,3 +122,86 @@ export async function getQuote(organizationId: string, quoteId: string): Promise
     withdrawnReason: r.withdrawn_reason,
   };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Organization-wide directory (NP-P2-S5-S3A): plus_list_organization_quotes / plus_quote_directory_summary. One bounded
+// page per call (the database filters, searches, sorts and counts); nothing is fetched in bulk for the browser.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export interface DirectoryQuoteRow {
+  id: string;
+  quoteNumber: number;
+  kind: string;
+  /** the STORED lifecycle status (an expired quote stays "sent") */
+  status: string;
+  /** derived: sent and valid_until before the organization-local date */
+  isExpired: boolean;
+  opportunityId: string;
+  opportunityTitle: string;
+  opportunityStage: string;
+  contactId: string;
+  contactName: string;
+  serviceType: string | null;
+  totalCents: number;
+  currency: string;
+  validUntil: string;
+  supersedesQuoteId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DirectoryQuery {
+  search: string;
+  status: string;
+  sort: string;
+  limit: number;
+  offset: number;
+}
+
+export async function listOrganizationQuotes(organizationId: string, query: DirectoryQuery): Promise<{ rows: DirectoryQuoteRow[]; total: number }> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_list_organization_quotes", {
+    p_organization_id: organizationId,
+    p_search: (query.search || null) as string,
+    p_status: query.status,
+    p_sort: query.sort,
+    p_limit: query.limit,
+    p_offset: query.offset,
+  });
+  if (error) throw new QuotesError(error.code);
+  const rows = (data ?? []).map((r) => ({
+    id: r.quote_id,
+    quoteNumber: r.quote_number,
+    kind: r.kind,
+    status: r.status,
+    isExpired: r.is_expired === true,
+    opportunityId: r.opportunity_id,
+    opportunityTitle: r.opportunity_title,
+    opportunityStage: r.opportunity_stage,
+    contactId: r.contact_id,
+    contactName: r.contact_name,
+    serviceType: r.service_type,
+    totalCents: n(r.total_cents),
+    currency: r.currency,
+    validUntil: r.valid_until,
+    supersedesQuoteId: r.supersedes_quote_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+  return { rows, total: data && data.length > 0 ? Number(data[0].total_count) : 0 };
+}
+
+export interface DirectorySummary {
+  drafts: number;
+  sent: number;
+  accepted: number;
+  expired: number;
+}
+
+export async function getQuoteDirectorySummary(organizationId: string): Promise<DirectorySummary> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_quote_directory_summary", { p_organization_id: organizationId });
+  if (error) throw new QuotesError(error.code);
+  const r = data?.[0];
+  return { drafts: n(r?.drafts ?? 0), sent: n(r?.sent ?? 0), accepted: n(r?.accepted ?? 0), expired: n(r?.expired ?? 0) };
+}
