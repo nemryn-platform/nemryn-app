@@ -2764,6 +2764,27 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Security
 - **Review Trigger:** A resolution of PD-10, or a request to print trip details on a quote
 
+### ZD-221 — One active draft and one current sent quote per opportunity (OD-Q12 Option A)
+
+- **Date:** 2026-10-18
+- **Category:** Data / Lifecycle
+- **Decision:**
+  - An opportunity has at most **one active draft** (`status = 'draft'`) and at most **one current sent quote** (`status = 'sent'`).
+  - Two partial unique indexes on `(organization_id, opportunity_id)` enforce this.
+  - Historical quotations (accepted, declined, superseded, withdrawn) are always kept and are **not** restricted.
+  - A withdrawn draft no longer occupies the draft slot.
+  - Expiry stays derived: a stored `sent` quote whose validity has passed is still the current sent quote until an authorized transition changes its stored status.
+  - A revision creates the opportunity's one new draft. Sending a valid revision atomically supersedes the current sent quote: the predecessor first, then the revision becomes sent.
+  - An independent draft can never be sent while another quote is the current sent quote (ZW004 `sent_quote_exists`), and is never used to silently replace it.
+  - A second draft is refused (ZW004 `draft_exists`).
+  - No record is ever hard-deleted, merged or silently superseded to satisfy this rule. The enforcing migration refuses to run if existing data already violates it.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S2 owner decision OD-Q12 = A, 2026-10-18; previously left open in NP-P2-S5-S1)
+- **Reason:** Staff and customers need one unambiguous current price per opportunity, and a clean revision history, before quotes are sent and answered from the UI (S3).
+- **Affected Product Areas:** migration `20261019100000_plus_quotes_single_active.sql`; `plus_create_quote`, `plus_revise_quote`, `plus_mark_quote_sent` (same signatures); Growth Opportunity Quotes panel (NP-P2-S5-S2)
+- **Dependencies:** ZD-213, ZD-216, ZD-217
+- **Owner:** Product / Engineering
+- **Review Trigger:** A request for parallel alternative quotes (for example two service options) on one opportunity
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

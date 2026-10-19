@@ -31,6 +31,7 @@ import { OpportunityStageControls } from "@/components/growth/OpportunityStageCo
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
 import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
+import { QuotesPanel } from "@/components/growth/QuotesPanel";
 import { getContact } from "@/lib/plus/contacts";
 import { listLinkedRequests } from "@/lib/plus/attribution";
 import { coreSourceForOpportunity } from "@/lib/plus/booking-core";
@@ -54,6 +55,8 @@ function historyLine(a: OpportunityActivity): string {
  * foreign, unknown or inaccessible id renders the same 404. Write controls only for Plus write capability.
  * NP-P2-S4: "Create transportation request" converts an open opportunity into ONE pending Operations Request (Core
  * decides from there). No Passenger, Trip, quote document or payment record is created here.
+ * NP-P2-S5-S2: "Estimates & quotes" lists this opportunity's quotes (read for every Growth reader) and lets writers on an
+ * open opportunity create, edit and withdraw its one active draft (OD-Q12, ZD-221). Nothing is sent to the customer.
  */
 export default async function OpportunityDetailPage({
   params,
@@ -205,6 +208,8 @@ export default async function OpportunityDetailPage({
           <OpportunityStageControls organizationId={context.organizationId} opportunityId={o.id} expectedVersion={o.updatedAt} stage={o.stage} />
         </Panel>
       )}
+
+      <QuotesPanel organizationId={context.organizationId} timezone={tz} opportunityId={o.id} opportunityServiceType={o.serviceType} canWrite={canWrite && open} />
 
       <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id, label: o.title }} canWrite={canWrite && open} />
       <LinkedRequestsPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id }} />

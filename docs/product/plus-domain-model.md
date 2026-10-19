@@ -515,10 +515,15 @@ Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plu
   - Converted and lost opportunities are frozen for all quote writes.
   - A stage advance writes the existing `stage_changed` activity.
 - **History:** every quote change is in `audit_events` (entity `plus_quote`; no prices). The activity types `quote_sent` and `quote_status_changed` are allowed by the CHECK, but S1 does **not** write them: a quote reference on `plus_activities` is OD-Q15 (open).
+- **OD-Q12 = A (ZD-221, NP-P2-S5-S2, migration `20261019100000_plus_quotes_single_active.sql`):**
+  - at most ONE active draft and ONE current sent quote per opportunity, enforced by the partial unique indexes `plus_quotes_one_draft_per_opportunity_idx` / `plus_quotes_one_sent_per_opportunity_idx`;
+  - history is unrestricted, and a withdrawn draft frees the slot;
+  - a second draft gives ZW004 `draft_exists`; sending an independent draft while another quote is the current sent gives ZW004 `sent_quote_exists`;
+  - a revision supersedes its predecessor first, then becomes sent, in one transaction.
+- **UI (NP-P2-S5-S2):** the Opportunity page has an "Estimates & quotes" panel. Writers on an open opportunity can create, edit and withdraw the one active draft. Everyone with Plus read sees current and historical quotes. Mark sent, responses, revisions and the print view are S3.
 - **Not decided / not encoded:**
   - OD-Q10: print content, number format, default validity, branding.
   - OD-Q11: follow-up tasks.
-  - OD-Q12: one current quote per opportunity versus parallel quotes. Parallel quotes are allowed today.
   - OD-Q13: whether quote totals update `estimated_value_cents`. They don't today.
   - OD-Q14: pricing rules.
   - OD-Q15: a quote link on activities.

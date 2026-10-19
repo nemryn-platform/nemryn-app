@@ -2,11 +2,13 @@
 # Nemryn Plus -- Estimates & Quotes under REAL concurrency (NP-P2-S5-S1). Parallel psql processes, each holding its
 # locks ~1s after the call. After EVERY scenario the critical invariants are checked on the final rows:
 #   one intended create = ONE quote; quote numbers unique per organization; a revision chain has at most one live
-#   successor; an accepted quote is never superseded; a closed opportunity never gains a sent quote.
+#   successor; an accepted quote is never superseded; a closed opportunity never gains a sent quote; and (NP-P2-S5-S2,
+#   OD-Q12 / ZD-221) no opportunity ever has two drafts or two sent quotes.
 #
 #   1  double click: the same create (same key) twice at once                 -> 1 quote; t + f (replay)
 #   2  two staff, same key, same opportunity                                   -> 1 quote; t + f
-#   3  six parallel creates (different keys)                                   -> six distinct, gap-free numbers
+#   3  six parallel creates on six opportunities                               -> six distinct, gap-free numbers
+#   3b six parallel creates (different keys) on ONE opportunity (OD-Q12)       -> exactly one draft; five ZW004 draft_exists
 #   4  two draft edits from the same version                                   -> one t; the other ZW003 stale
 #   5  draft edit first, Mark sent from the old version waits                  -> send ZW003 stale; quote still a draft
 #   5b Mark sent first, draft edit waits                                       -> edit ZW004 quote_not_draft
@@ -16,6 +18,9 @@
 #   8  opportunity marked Lost first, Mark sent waits                          -> send ZW004 opportunity_closed; stage stays lost
 #   8b Mark sent first, mark Lost waits from the old version                   -> Lost ZW003 stale (the stage advance bumped the version)
 #   9  Record accepted vs Withdraw on one sent quote                           -> exactly one wins
+#   10 independent create vs Revise on an opportunity with a sent quote (OD-Q12) -> exactly one draft; the other draft_exists
+#   11 the same Mark sent twice at once                                        -> one sent; t + f
+#   12 Mark sent of the revision vs Withdraw of its sent predecessor (OD-Q12)  -> never two sent; exactly one wins
 #
 # Run with:  bash supabase/tests/plus_quotes_concurrency_test.sh
 # Throwaway organization (Plus active) + two throwaway Admins + fictional contacts / opportunities, removed on exit.
@@ -81,9 +86,10 @@ quotes_for_opp() { $PSQL -c "select count(*) from public.plus_quotes where oppor
 invariants() { $PSQL -c "select (select count(*) - count(distinct quote_number) from public.plus_quotes where organization_id = '$ORG')
   + (select count(*) from (select supersedes_quote_id from public.plus_quotes where organization_id = '$ORG' and supersedes_quote_id is not null and status <> 'withdrawn' group by 1 having count(*) > 1) d)
   + (select count(*) from public.plus_quotes q join public.plus_quotes s on s.supersedes_quote_id = q.id and s.status in ('sent', 'accepted', 'declined', 'superseded') where q.status = 'accepted')
-  + (select count(*) from public.plus_quotes q join public.plus_opportunities o on o.id = q.opportunity_id where o.organization_id = '$ORG' and o.stage in ('lost', 'converted') and q.sent_at > o.closed_at)"; }
+  + (select count(*) from public.plus_quotes q join public.plus_opportunities o on o.id = q.opportunity_id where o.organization_id = '$ORG' and o.stage in ('lost', 'converted') and q.sent_at > o.closed_at)
+  + (select count(*) from (select 1 from public.plus_quotes where organization_id = '$ORG' and status in ('draft', 'sent') group by opportunity_id, status having count(*) > 1) d2)"; }
 outs() { cat "$@" | grep -E '^[tf]$' | sort | paste -sd, -; }
-errs() { cat "$@" | grep -oE '(invalid_input|stale_state|illegal_transition|quote_not_draft|revision_exists|revision_base_not_current|opportunity_closed|quote_expired)' | sort | paste -sd, -; }
+errs() { cat "$@" | grep -oE '(invalid_input|stale_state|illegal_transition|quote_not_draft|revision_exists|revision_base_not_current|opportunity_closed|quote_expired|draft_exists|sent_quote_exists)' | sort | paste -sd, -; }
 
 echo "=== 1: double click (same key, same opportunity) ==="
 O=$(opportunity "QConc 1")
@@ -99,19 +105,34 @@ echo "outcomes=$(outs "$OUT/a.out" "$OUT/b.out") quotes=$(quotes_for_opp "$O") i
 [ "$(outs "$OUT/a.out" "$OUT/b.out")" = "f,t" ] && [ "$(quotes_for_opp "$O")" = "1" ] && [ "$(invariants)" = "0" ]
 check "CONC-Q2 (two staff, same key: one quote; the other returns it)" $?
 
-echo "=== 3: six parallel creates with different keys ==="
-O=$(opportunity "QConc 3")
+echo "=== 3: six parallel creates on six opportunities ==="
 MAX0=$($PSQL -c "select coalesce(max(quote_number), 0) from public.plus_quotes where organization_id = '$ORG'")
+OPPS=""
 for i in 1 2 3 4 5 6; do
+  O3=$(opportunity "QConc 3-$i"); OPPS="$OPPS '$O3',"
   if [ $((i % 2)) = 0 ]; then U="$AD2"; else U="$AD1"; fi
-  run_as "$OUT/n$i" "$U" "$(create_sql "$O" "qconc-key-three-0$i")" &
+  run_as "$OUT/n$i" "$U" "$(create_sql "$O3" "qconc-key-three-0$i")" &
 done
 wait
-NUMS=$($PSQL -c "select string_agg(quote_number::text, ',' order by quote_number) from public.plus_quotes where opportunity_id = '$O'")
+OPPS=${OPPS%,}
+NUMS=$($PSQL -c "select string_agg(quote_number::text, ',' order by quote_number) from public.plus_quotes where opportunity_id in ($OPPS)")
 EXPECT=$(seq $((MAX0 + 1)) $((MAX0 + 6)) | paste -sd, -)
 echo "numbers=$NUMS expected=$EXPECT invariants=$(invariants)"
 [ "$NUMS" = "$EXPECT" ] && [ "$(invariants)" = "0" ]
-check "CONC-Q3 (parallel creates: distinct, consecutive numbers per organization)" $?
+check "CONC-Q3 (parallel creates on six opportunities: distinct, consecutive numbers per organization)" $?
+
+echo "=== 3b: six parallel creates (different keys) on ONE opportunity (OD-Q12) ==="
+O=$(opportunity "QConc 3b")
+for i in 1 2 3 4 5 6; do
+  if [ $((i % 2)) = 0 ]; then U="$AD2"; else U="$AD1"; fi
+  run_as "$OUT/m$i" "$U" "$(create_sql "$O" "qconc-key-threeb-0$i")" &
+done
+wait
+DRAFTS=$($PSQL -c "select count(*) from public.plus_quotes where opportunity_id = '$O' and status = 'draft'")
+REFUSED=$(cat "$OUT"/m*.err | grep -c draft_exists)
+echo "outcomes=$(outs "$OUT"/m*.out) drafts=$DRAFTS draft_exists_refusals=$REFUSED invariants=$(invariants)"
+[ "$(outs "$OUT"/m*.out)" = "t" ] && [ "$DRAFTS" = "1" ] && [ "$REFUSED" = "5" ] && [ "$(invariants)" = "0" ]
+check "CONC-Q3b (six different-key creates on one opportunity: ONE draft; five ZW004 draft_exists)" $?
 
 echo "=== 4: two draft edits from the same version ==="
 O=$(opportunity "QConc 4"); Q=$(create_id "$O" "qconc-key-four-01")
@@ -184,6 +205,34 @@ FINAL=$(st "$Q")
 echo "outcomes=$(outs "$OUT/a.out" "$OUT/b.out") refusals=$(errs "$OUT/a.err" "$OUT/b.err") status=$FINAL stage=$(stage "$O")"
 [ "$(outs "$OUT/a.out" "$OUT/b.out")" = "t" ] && [ -n "$(errs "$OUT/a.err" "$OUT/b.err")" ] && { [ "$FINAL" = "accepted" ] || [ "$FINAL" = "withdrawn" ]; }
 check "CONC-Q9 (accept vs withdraw: exactly one transition wins; the other is refused)" $?
+
+echo "=== 10: independent create vs Revise on an opportunity with a sent quote (OD-Q12) ==="
+O=$(opportunity "QConc 10"); Q=$(create_id "$O" "qconc-key-ten-001"); send_now "$Q"
+run_as "$OUT/a" "$AD1" "$(create_sql "$O" "qconc-key-ten-new")" & run_as "$OUT/b" "$AD2" "$(revise_sql "$Q" "qconc-key-ten-rev")" & wait
+DRAFTS=$($PSQL -c "select count(*) from public.plus_quotes where opportunity_id = '$O' and status = 'draft'")
+echo "outcomes=$(outs "$OUT/a.out" "$OUT/b.out") refusals=$(errs "$OUT/a.err" "$OUT/b.err") drafts=$DRAFTS sent=$(st "$Q") invariants=$(invariants)"
+[ "$(outs "$OUT/a.out" "$OUT/b.out")" = "t" ] && [ "$(errs "$OUT/a.err" "$OUT/b.err")" = "draft_exists" ] && [ "$DRAFTS" = "1" ] && [ "$(st "$Q")" = "sent" ] && [ "$(invariants)" = "0" ]
+check "CONC-Q10 (create vs revise: exactly ONE draft; the other ZW004 draft_exists; the sent quote unchanged)" $?
+
+echo "=== 11: the same Mark sent twice at once ==="
+O=$(opportunity "QConc 11"); Q=$(create_id "$O" "qconc-key-eleven-1")
+S=$(send_sql "$Q")
+run_as "$OUT/a" "$AD1" "$S" & run_as "$OUT/b" "$AD2" "$S" & wait
+echo "outcomes=$(outs "$OUT/a.out" "$OUT/b.out") refusals=$(errs "$OUT/a.err" "$OUT/b.err") status=$(st "$Q") sent_rows=$($PSQL -c "select count(*) from public.plus_quotes where opportunity_id = '$O' and status = 'sent'") stage_rows=$($PSQL -c "select count(*) from public.plus_activities where opportunity_id = '$O' and activity_type = 'stage_changed'") invariants=$(invariants)"
+[ "$(outs "$OUT/a.out" "$OUT/b.out")" = "f,t" ] && [ "$(st "$Q")" = "sent" ] && [ "$($PSQL -c "select count(*) from public.plus_activities where opportunity_id = '$O' and activity_type = 'stage_changed'")" = "1" ] && [ "$(invariants)" = "0" ]
+check "CONC-Q11 (double Mark sent: one transition, one stage row; the other a no-change replay)" $?
+
+echo "=== 12: Mark sent of the revision vs Withdraw of its sent predecessor (OD-Q12) ==="
+O=$(opportunity "QConc 12"); Q=$(create_id "$O" "qconc-key-twelve-1"); send_now "$Q"
+as_admin "$(revise_sql "$Q" "qconc-key-twelve-r")" >/dev/null
+REV=$($PSQL -c "select id from public.plus_quotes where supersedes_quote_id = '$Q'")
+S=$(send_sql "$REV"); W=$(withdraw_sql "$Q")
+run_as "$OUT/a" "$AD1" "$S" & run_as "$OUT/b" "$AD2" "$W" & wait
+SENT=$($PSQL -c "select count(*) from public.plus_quotes where opportunity_id = '$O' and status = 'sent'")
+echo "outcomes=$(outs "$OUT/a.out" "$OUT/b.out") refusals=$(errs "$OUT/a.err" "$OUT/b.err") original=$(st "$Q") revision=$(st "$REV") sent_rows=$SENT invariants=$(invariants)"
+[ "$(outs "$OUT/a.out" "$OUT/b.out")" = "t" ] && [ -n "$(errs "$OUT/a.err" "$OUT/b.err")" ] && [ "$SENT" -le 1 ] && [ "$(invariants)" = "0" ] \
+  && { { [ "$(st "$Q")" = "superseded" ] && [ "$(st "$REV")" = "sent" ]; } || { [ "$(st "$Q")" = "withdrawn" ] && [ "$(st "$REV")" = "draft" ]; }; }
+check "CONC-Q12 (send revision vs withdraw predecessor: exactly one wins; never two sent; never a half-applied supersession)" $?
 
 echo "=== TOTAL FAILURES: $FAIL ==="
 exit $FAIL

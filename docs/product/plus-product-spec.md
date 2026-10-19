@@ -154,8 +154,11 @@ Rules:
 > - The fixed charge columns are base, mileage, wait, extra stops, mobility assistance, escort, return leg and other (labelled), minus a discount, in USD integer cents.
 > - Statuses: Draft → Sent → Accepted / Declined / Superseded / Withdrawn. **Expired is derived** from `valid_until` and is not a stored status.
 > - Mark sent advances the opportunity to Quote sent, and Record accepted advances it to Quote accepted. Both move forward only. A decline never marks the opportunity Lost.
-> - These are still open and are not built: print content and number format (OD-Q10), follow-up tasks (OD-Q11), one current quote versus parallel quotes (OD-Q12), quote totals feeding the estimated value (OD-Q13), pricing rules (OD-Q14), quote timeline rows (OD-Q15), and do-not-contact handling (OD-Q16).
-> - The Opportunity quotes panel and the printable view come in later P2-S5 slices.
+> - These are still open and are not built: print content and number format (OD-Q10), follow-up tasks (OD-Q11), quote totals feeding the estimated value (OD-Q13), pricing rules (OD-Q14), quote timeline rows (OD-Q15), and do-not-contact handling (OD-Q16).
+> - **NP-P2-S5-S2:**
+>   - OD-Q12 = A (ZD-221): one active draft and one current sent quote per opportunity.
+>   - The Opportunity "Estimates & quotes" panel lists current and historical quotes. Writers create, edit and withdraw the draft, entering prices in dollars; the server total is authoritative.
+>   - Mark sent, responses, revisions and the printable view come in S3.
 
 **Payment status** remains a separate, staff-reported field (None / Deposit reported / Paid reported / Refund reported). It is never revenue or settlement evidence and is never derived from a quote. No invoicing or billing is added in Plus.
 

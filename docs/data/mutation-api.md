@@ -685,9 +685,34 @@ Every write returns `plus_quote_write_result(quote_id, quote_number, status, opp
 
 **Not written or not decided:**
 - Quote activity rows (OD-Q15) are not written.
-- Not enforced or not decided: one live quote per opportunity (OD-Q12), changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16), print content and number format (OD-Q10), follow-up tasks (OD-Q11), and pricing rules (OD-Q14).
+- Not enforced or not decided: changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16), print content and number format (OD-Q10), follow-up tasks (OD-Q11), and pricing rules (OD-Q14).
 - No Request, Trip, Passenger, payment, notification or outbound message is ever created.
 
 Tests:
 - `supabase/tests/plus_quotes_tests.sql` (rollback-only);
 - `supabase/tests/plus_quotes_concurrency_test.sh` (twelve races).
+
+### NP-P2-S5-S2 — OD-Q12 = A (ZD-221) and the draft UI
+
+Migration `20261019100000_plus_quotes_single_active.sql`:
+- PREFLIGHT: raises `od_q12_preflight_failed` and changes nothing if any opportunity already has two drafts or two sent quotes. It never deletes or repairs data.
+- Partial unique indexes `plus_quotes_one_draft_per_opportunity_idx` (`status = 'draft'`) and `plus_quotes_one_sent_per_opportunity_idx` (`status = 'sent'`) on `(organization_id, opportunity_id)`.
+- `CREATE OR REPLACE` with the same signatures, grants, SECURITY DEFINER and `search_path`:
+  - `plus_create_quote`: a second draft on the opportunity gives ZW004 `draft_exists`. The check runs after the opportunity lock. A same-key replay still returns the original first.
+  - `plus_revise_quote`: the revision needs a free draft slot (ZW004 `draft_exists`, checked after `revision_exists`).
+  - `plus_mark_quote_sent`: a revision supersedes its still-sent predecessor FIRST, then becomes sent. A draft that is not a revision gives ZW004 `sent_quote_exists` while the opportunity has a current sent quote.
+  - A backstop unique violation is reported as the same domain error, never as constraint text.
+
+Server actions (`src/app/operations/growth/quotes/actions.ts`), reusing the S1 RPCs only:
+- `createQuoteDraftAction`, `updateQuoteDraftAction`, `withdrawQuoteDraftAction`.
+- Each re-checks Growth access, the organization binding of the form and Plus write, then validates on the server (`src/lib/plus/quotes-core.ts`: exact decimal-to-cents parsing).
+- No client total is sent, and the organization comes from the session.
+- Create carries the form's stable idempotency key; edit and withdraw carry the opened version.
+- Withdraw refuses anything that is not currently a draft. Sent-quote withdrawal is S3.
+
+Reads: `src/lib/plus/quotes.ts` (`plus_list_quotes`, `plus_get_quote`; the per-request client only).
+
+Tests:
+- `plus_quotes_tests.sql` (83 tests, including Q1–Q12 for OD-Q12);
+- `plus_quotes_concurrency_test.sh` (16 races, including 3b / 10 / 11 / 12 for OD-Q12);
+- `src/lib/plus/quotes-core.test.mjs`.
