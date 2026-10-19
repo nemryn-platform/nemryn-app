@@ -1,0 +1,197 @@
+NP-P2-S5-O1 — CLOSED-OPPORTUNITY NOTICE ON THE PRINTABLE QUOTE — IMPLEMENTATION REPORT
+===================================================================================
+Branch: np-p2-s5-o1-closed-quote-print (owner-created) at f5c0f87, the S3C merge, equal to origin/main. The tracked
+tree was clean at the start. Date: 2026-10-19.
+Status: IMPLEMENTED AND VERIFIED LOCALLY (NemrynS1Iso, fictional data only). Nothing staged, committed, pushed or
+merged. No migration, deployment, production read / write, or permission or entitlement change.
+PR-READINESS VERDICT: READY for the owner to commit and open a PR.
+
+======================================================================
+1. REVIEW AND AUTHORITATIVE STAGE
+======================================================================
+- Read: the S3C production sign-off (observation O1), the S3C implementation report, and the decision register.
+- Inspected: src/app/quote-print/[quoteId]/page.tsx, src/lib/plus/quotes-core.ts, src/lib/plus/quotes.ts and
+  src/components/growth/QuotePrintToolbar.tsx.
+- plus_get_quote ALREADY returns opportunity_stage (o.stage of the quote's own opportunity, read under the same
+  Plus-read check). The generated types include it, but getQuote didn't map it.
+- Stages (opportunities-core): open = new_inquiry, contacted, qualified, quote_sent, quote_accepted; closed = lost,
+  converted.
+- Conclusion: no new query, RPC or migration. The value is threaded through the existing read model, so no scope
+  expansion was needed.
+
+======================================================================
+2. DECISION RECORDED
+======================================================================
+ZD-226 "The printable quote shows a closed-opportunity notice (NP-P2-S5 observation O1, Option B)", CONFIRMED —
+OWNER-APPROVED.
+- It is the next free ID after ZD-225; no conflicts.
+- Preserved without change: ZD-212–ZD-225 (OD-Q1–Q12, Q15, Q16).
+- OD-Q13 and OD-Q14 remain OPEN. PD-10 and PD-11 remain unresolved.
+
+======================================================================
+3. WHAT CHANGED (presentational only)
+======================================================================
+Final copy (meaning as approved; "Opportunity" in lower case inside the sentence):
+  Opportunity closed
+  This quotation is associated with a closed opportunity. Its recorded quotation status has not changed. Confirm
+  that the quotation is still applicable before sharing or relying on it.
+
+- src/lib/plus/quotes.ts: QuoteDetail gains opportunityStage = r.opportunity_stage, the existing RPC column.
+- src/lib/plus/quotes-core.ts:
+  - QUOTE_PRINT_CLOSED_NOTICE and isClosedOpportunityStage() (lost / converted only);
+  - QuotePrintInput.opportunityStage (optional);
+  - QuotePrintModel.closedNotice. This is a separate field: the status label and banner logic are untouched, so
+    every status banner still appears alongside the notice.
+- src/app/quote-print/[quoteId]/page.tsx:
+  - passes q.opportunityStage to the model;
+  - renders the notice as role="note" with data-testid="quote-print-closed-notice", between the status banner and
+    the header. It has a neutral border (lighter than the caution banner), no print:hidden, and uses the existing
+    print-page styles.
+  - No opportunity title, lost reason or note, and no medical information, is shown.
+- Unchanged: quote statuses, prices, snapshots, stages, Core, contacts, audit, activities, tasks, authorization,
+  the directory and panel status semantics, the toolbar, and caching (force-dynamic / private / no-store).
+- Docs: plus-product-spec (O1 bullet) and plus-domain-model (closed-notice line).
+
+======================================================================
+4. CHANGED-FILE INVENTORY (git diff --stat: 7 files, +90 / −1)
+======================================================================
+
+| File                                         | Change   |
+|----------------------------------------------|----------|
+| docs/product/decision-register.md            | +16 (ZD-226) |
+| docs/product/plus-domain-model.md            | +1       |
+| docs/product/plus-product-spec.md            | +1       |
+| src/app/quote-print/[quoteId]/page.tsx       | +10      |
+| src/lib/plus/quotes-core.ts                  | +12      |
+| src/lib/plus/quotes-print-followup.test.mjs  | +48 / −1 (the model key list gains closedNotice; three O1 tests) |
+| src/lib/plus/quotes.ts                       | +3       |
+
+New, untracked:
+- docs/reports/NP-P2-S5-O1-closed-quote-print-implementation.txt (this report);
+- docs/reports/NP-P2-S5-S4-final-integration-test-plan.txt;
+- .tmp-qa/np-p2-s5-o1-closed-quote-print-e2e.mjs (QA).
+Migrations: NONE (the head is still 20261021100000).
+
+======================================================================
+5. TEST RESULTS
+======================================================================
+Static and unit
+- tsc --noEmit: clean.
+- eslint .: 0 errors. All 108 warnings are in older untracked .tmp-qa scripts; none are in src/.
+- next build: success; /quote-print/[quoteId] is still dynamic (ƒ).
+- npm test: 883 / 883 pass (880 before, plus 3 new O1 tests):
+  - closed notice for lost / converted × all 7 statuses (incl. derived Expired); open stages, null, "" and "LOST"
+    give none; with the notice removed, the model is otherwise IDENTICAL (status label, banner, amounts, details
+    unchanged);
+  - the copy is neutral: it never says invalid / cancelled / withdrawn / void and carries no lost-reason or medical
+    words;
+  - source rules: the stage comes from r.opportunity_stage; the page passes it and renders the testid; the notice
+    is not print:hidden; still exactly two getQuote calls (the quote and the successor for superseded), no
+    getOpportunity; the latest migration is unchanged.
+
+Browser E2E — NEW .tmp-qa/np-p2-s5-o1-closed-quote-print-e2e.mjs: 27 / 27 PASS (fresh database)
+Fixtures go through the real RPCs: 6 opportunities marked Lost with plus_mark_opportunity_lost, and 2 Converted with
+the real plus_convert_opportunity_to_request (one Core Request each).
+
+| Area | Check(s) | Result |
+|------|----------|--------|
+| D0   | Closing changed NO stored quote: status, total and updated_at identical before / after Lost / Converted for all 9 | PASS |
+| A    | Open + Sent: no notice, no banner. Open + Draft: DRAFT banner, no notice | PASS |
+| B    | Lost + Sent: notice, status still Sent, no invented banner, no title / lost note / contact phone / email. Lost + Accepted: ACCEPTED + notice. Lost + Withdrawn: WITHDRAWN + notice, reason not printed. Lost + Draft: DRAFT + notice | PASS |
+| C    | Converted + Sent: notice; no Request pickup / destination / id in the document. Converted + Superseded: SUPERSEDED ("Replaced by Quote N") + notice, its own $120.00. Converted + the revision: notice | PASS |
+| D    | Lost + Declined: DECLINED + notice. Lost + derived Expired: EXPIRED + notice, stored status still "sent" | PASS |
+| E1   | Print media: the notice and the banner are visible; the toolbar is hidden | PASS |
+| E2   | Stored price ($120.00) and terms unchanged | PASS |
+| E3   | The browser-generated PDF (Page.printToPDF; text extracted with pdf.js in a blank tab) contains "Opportunity closed", the full sentence, ACCEPTED and $120.00, and NOT the toolbar text | PASS |
+| F    | Foreign (Org B) id → 404 with no data; unknown id → the same 404; signed out → sign-in; READ-grant Dispatcher prints and sees the notice; no-grant Dispatcher refused; 200 private / no-store; no mailto / sms / share / public link | PASS |
+| F8   | Viewing and printing wrote nothing: quotes (count, max version), opportunities (count, max version), audit, activities, tasks, Requests and notifications identical | PASS |
+| G1   | The directory still shows the stored "Sent" for the Lost opportunity's quote, with no notice and no new status | PASS |
+
+Screenshots and PDF: .tmp-qa/screens/np-p2-s5-o1/.
+
+Browser regression (same build)
+
+| Suite                         | Result |
+|-------------------------------|--------|
+| S3C print / follow-up         | 54 / 54 |
+| S3B lifecycle                 | 32 / 32 |
+| S2 drafts                     | 33 / 33 |
+| S3A directory (fresh reset)   | 31 / 31 |
+
+SQL regression (run-o1.sh: every suite from a verified fresh reset)
+- 69 suites; 68 with 0 failures, including:
+
+  | Suite                       | Result                  |
+  |-----------------------------|-------------------------|
+  | plus_quotes_tests           | 0 / 83 failures         |
+  | plus_quotes_directory_tests | 0 / 34 failures         |
+  | plus_quotes_lifecycle_tests | 0 / 41 failures         |
+  | plus_tasks_tests            | 0 / 58 failures         |
+  | plus_opportunities_tests    | 0 / 75 failures         |
+  | privilege_contract_tests    | 0 violations of 29      |
+
+  All privilege and tenant-isolation suites pass.
+- PRE-EXISTING (predates O1, unchanged): request_decision_expand_compat_tests 8 pass / 10 fail. It is valid only
+  against an intermediate EXPAND schema.
+
+Concurrency (one fresh reset; every script)
+- Pass: plus_quotes 18 / 18, plus_tasks 4, plus_opportunities 6, plus_conversion_rebooking 11,
+  plus_request_attributions 6, plus_contacts 4, plus_growth_agent 5, plus_member_grants 6, plus_entitlement 5 + 4,
+  request_decision 21, team_last_admin 14, and all website / intake / recurring / tenant scripts.
+- PRE-EXISTING (predate O1, unchanged): mutation_concurrency CONCURRENCY-1 and request_lifecycle
+  REQUEST-CONCURRENCY-1. The harness client lacks the FOR UPDATE privilege; these are Core-only and identical in the
+  S3B and S3C runs.
+
+Not applicable or not run
+- Upgrade rehearsal: N/A (no migration).
+- Production: not run in this phase. The S4 plan covers it, and O1 can be verified there read-only because every
+  Pilot Simulation opportunity is already closed.
+- Cross-browser (Safari / Firefox) print: not run (headless Chrome only).
+
+======================================================================
+6. AUTHORIZATION EVIDENCE
+======================================================================
+- The notice is derived from the SAME plus_get_quote row the page already reads, through the per-request client,
+  after requirePlusAccess (Plus READ or above). There is no new read path, so the authorization is exactly the
+  S3C one.
+- Verified live in isolation:
+  - READ-grant: allowed;
+  - no grant: refused;
+  - signed out: refused;
+  - Org B id: 404;
+  - unknown id: 404;
+  - responses private / no-store.
+- No service-role client.
+
+======================================================================
+7. COMPATIBILITY ASSESSMENT
+======================================================================
+- Database: none touched. The RPC contract and the generated types are unchanged; the column was already returned.
+- API / types: QuoteDetail gains one field and QuotePrintModel gains closedNotice, both additive. QuotePrintInput's
+  opportunityStage is optional, so earlier callers and tests compile unchanged (S3C unit tests pass).
+- UI: the notice appears only on the print page. The panel, directory, dialogs and status labels are identical
+  (S2 / S3A / S3B / S3C E2E unchanged).
+- Production data: deployed, every Pilot Simulation quote (including Quote 6) would show the notice, because all
+  its opportunities are Lost or Converted. That is intended, and it is the O1 case.
+
+======================================================================
+8. ENVIRONMENT CLEANUP
+======================================================================
+- The isolated app was stopped. The isolated Supabase stack was stopped (no NemrynS1Iso containers left). The
+  temporary .iso-env.tmp was deleted.
+- No other project's containers were touched.
+- No Git operation of any kind.
+
+======================================================================
+9. VERDICT
+======================================================================
+PR-READY.
+- O1 Option B is implemented exactly as approved and is presentational only.
+- No migration or RPC change.
+- All new and regression tests pass, apart from three documented failures that predate O1.
+Owner next steps:
+1. Commit and open a PR from np-p2-s5-o1-closed-quote-print.
+2. Merge and deploy.
+3. Run S4 per docs/reports/NP-P2-S5-S4-final-integration-test-plan.txt (part B covers O1 read-only in production;
+   part C writes need approval).
+STOPPED.

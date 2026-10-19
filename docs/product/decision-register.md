@@ -2866,6 +2866,22 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A request for automatic follow-ups or quote-linked tasks
 
+### ZD-226 — The printable quote shows a closed-opportunity notice (NP-P2-S5 observation O1, Option B)
+
+- **Date:** 2026-10-19
+- **Category:** Product
+- **Decision:**
+  - When a quote's opportunity is Lost or Converted, the staff print view shows a prominent, neutral notice: "Opportunity closed. This quotation is associated with a closed opportunity. Its recorded quotation status has not changed. Confirm that the quotation is still applicable before sharing or relying on it."
+  - The notice appears on screen and in printed / PDF output, for every stored status. It sits alongside the ZD-224 status banners (Draft, Expired, Accepted, Declined, Superseded, Withdrawn), which are unchanged.
+  - It is presentational only. Closing an opportunity does NOT change, invalidate, cancel or withdraw a quote; the stored status, prices, history, stages, tasks, audit and activities are untouched. The stage comes from the existing `plus_get_quote` result (no new query, RPC or migration).
+  - The notice names no opportunity details (no title, lost reason or note) and no medical information.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-O1 owner decision O1 = Option B, 2026-10-19)
+- **Reason:** S3C production smoke observation O1: a quote still stored "sent" on a Lost opportunity printed with no banner and could read as a current offer.
+- **Affected Product Areas:** `/quote-print/[quoteId]`; `quotePrintModel` (quotes-core); `getQuote` read model
+- **Dependencies:** ZD-224, ZD-219
+- **Owner:** Product
+- **Review Trigger:** A request to change quote statuses automatically when an opportunity closes
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

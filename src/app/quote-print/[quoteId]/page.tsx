@@ -18,6 +18,8 @@ export const dynamic = "force-dynamic";
  * member of the current workspace with Plus READ or above (requirePlusAccess). The quote is read through plus_get_quote
  * on the per-request client -- never the service role -- so an unknown, foreign or inaccessible id is the same 404.
  * There is no public link, token, email or share action; nothing is cached or stored. Customer display name only.
+ * NP-P2-S5-O1 (ZD-226): when the opportunity (stage from the same plus_get_quote row) is Lost or Converted, a neutral
+ * "Opportunity closed" notice is added next to the status banner. Presentational only: nothing is changed.
  */
 export default async function QuotePrintPage({ params }: { params: Promise<{ quoteId: string }> }) {
   const { quoteId } = await params;
@@ -54,6 +56,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ quo
     respondedDate: dateOf(q.respondedAt),
     customerName: q.contactName,
     successor,
+    opportunityStage: q.opportunityStage,
   });
 
   return (
@@ -68,6 +71,13 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ quo
         >
           <p className="text-lg font-bold tracking-wide">{m.banner.heading}</p>
           <p className="text-sm">{m.banner.text}</p>
+        </div>
+      )}
+
+      {m.closedNotice && (
+        <div role="note" className="mb-6 border border-black/50 px-4 py-3" data-testid="quote-print-closed-notice">
+          <p className="text-base font-semibold">{m.closedNotice.heading}</p>
+          <p className="text-sm">{m.closedNotice.text}</p>
         </div>
       )}
 

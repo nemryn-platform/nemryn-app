@@ -50,6 +50,8 @@ export interface QuoteDetail extends QuoteSummary {
   /** NP-P2-S5-S3C print view: the opportunity (for the back link) and the contact's display name only */
   opportunityId: string;
   contactName: string;
+  /** NP-P2-S5-O1 (ZD-226): the opportunity's CURRENT stage, already returned by plus_get_quote */
+  opportunityStage: string;
 }
 
 const n = (v: number | string | null) => (v === null ? 0 : Number(v));
@@ -125,6 +127,7 @@ export async function getQuote(organizationId: string, quoteId: string): Promise
     withdrawnReason: r.withdrawn_reason,
     opportunityId: r.opportunity_id,
     contactName: r.contact_name,
+    opportunityStage: r.opportunity_stage,
   };
 }
 
