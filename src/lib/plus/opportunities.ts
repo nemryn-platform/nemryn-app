@@ -126,6 +126,12 @@ export interface OpportunityActivity {
   body: string | null;
   actorName: string | null;
   occurredAt: string;
+  /** NP-P2-S5-S3B (ZD-222): quote lifecycle event reference (null for every other activity); never an amount */
+  quoteId: string | null;
+  quoteNumber: number | null;
+  quoteKind: string | null;
+  quoteStatus: string | null;
+  relatedQuoteNumber: number | null;
 }
 
 export async function listOpportunityActivities(organizationId: string, opportunityId: string): Promise<OpportunityActivity[]> {
@@ -145,5 +151,10 @@ export async function listOpportunityActivities(organizationId: string, opportun
     body: r.body,
     actorName: r.actor_name,
     occurredAt: r.occurred_at,
+    quoteId: r.quote_id,
+    quoteNumber: r.quote_number,
+    quoteKind: r.quote_kind,
+    quoteStatus: r.quote_status,
+    relatedQuoteNumber: r.related_quote_number,
   }));
 }

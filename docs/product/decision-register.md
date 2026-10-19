@@ -2785,6 +2785,45 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Engineering
 - **Review Trigger:** A request for parallel alternative quotes (for example two service options) on one opportunity
 
+### ZD-222 — Quote lifecycle events appear on the Growth timelines (OD-Q15 Option A)
+
+- **Date:** 2026-10-19
+- **Category:** Data / Product
+- **Decision:**
+  - Quote lifecycle events are written to `plus_activities` in the SAME transaction as the transition:
+    - `quote_sent`: marked sent;
+    - `quote_status_changed`: acceptance recorded, decline recorded, superseded by a sent revision, a sent quote withdrawn;
+    - `quote_revised`: a revision draft created. This is the one new activity type.
+  - They appear on the Opportunity history, the Contact timeline (the opportunity's primary contact at the time) and the dashboard feed.
+  - `plus_activities` gains a nullable, tenant-scoped `quote_id`, with a composite FK `(quote_id, organization_id, opportunity_id)` to `plus_quotes`, and `quote_status`, the status the event produced.
+  - Quote events carry NO body and copy no prices, terms, withdrawal reasons, medical, address or contact details.
+  - Idempotent no-ops and refusals write nothing.
+  - Draft creation, edits and draft withdrawal stay audit-only.
+  - Existing activities are untouched (no backfill).
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S3B owner decision OD-Q15 = A, 2026-10-19)
+- **Reason:** Staff need one chronological history of what happened with a customer. Quote events belong there without exposing commercial details on the generic timeline.
+- **Affected Product Areas:** migration `20261021100000_plus_quote_lifecycle_activity.sql`; `plus_mark_quote_sent`, `plus_record_quote_response`, `plus_revise_quote`, `plus_withdraw_quote`; `plus_list_contact_activities`, `plus_list_opportunity_activities`, `plus_list_recent_activities`; the Opportunity / Contact / Growth dashboard timelines
+- **Dependencies:** ZD-211, ZD-216, ZD-221
+- **Owner:** Product / Engineering
+- **Review Trigger:** A request to show draft work or amounts on the timeline
+
+### ZD-223 — Marking a quote sent for a do-not-contact contact requires an explicit, audited staff acknowledgment (OD-Q16 Option A)
+
+- **Date:** 2026-10-19
+- **Category:** Security / Compliance / Product
+- **Decision:**
+  - When staff mark a quote sent, the database reads the CURRENT stored `do_not_contact` flag of the opportunity's primary contact under a lock.
+  - If the flag is true, the transition is refused (ZW004 `dnc_acknowledgment_required`) unless the staff member explicitly acknowledges a warning. The acknowledgment is passed as `p_dnc_acknowledged = true` to `plus_mark_quote_sent(org, quote, expected_updated_at, p_dnc_acknowledged boolean DEFAULT false)`, which is the only Mark sent function. Older 3-argument calls cannot bypass it.
+  - The `plus_quote_sent` audit row records `contact_do_not_contact` and `dnc_acknowledged`.
+  - The acknowledgment is a STAFF statement that the quote was already shared outside Nemryn. It does NOT change `do_not_contact` or `preferred_channel`, is NOT consent, does NOT allow email / SMS or future outreach, and does NOT prove delivery.
+  - Nemryn sends nothing.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S5-S3B owner decision OD-Q16 = A, 2026-10-19)
+- **Reason:** It respects a recorded do-not-contact preference without blocking staff from recording what already happened, and leaves an accountable trail.
+- **Affected Product Areas:** `plus_mark_quote_sent`; the Mark sent dialog; `audit_events`
+- **Dependencies:** ZD-219, PD-11, OD-6 (NP-P2-S4-R3)
+- **Owner:** Product / Compliance
+- **Review Trigger:** Any outbound quote delivery (email / SMS / link), or a consent-management design
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

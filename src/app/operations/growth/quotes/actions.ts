@@ -9,7 +9,9 @@ import { localDateKeyOf } from "@/lib/operations/local-time-core";
 import { getQuote } from "@/lib/plus/quotes";
 import {
   isQuoteKey,
+  parseAcknowledgment,
   quoteErrorMessage,
+  validateSentWithdrawReason,
   validateQuoteForm,
   type QuoteFieldErrors,
   type QuoteFormValues,
@@ -22,7 +24,10 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
  * (requirePlusAccess), the organization binding of the form and the write capability, validates every field again on
  * the server, and then calls the S1 RPC -- which re-checks Plus write, tenancy, the opportunity, OD-Q12's one-draft rule
  * (ZD-221), the version and the snapshot, and computes the stored total. The client total is never sent. Nothing is
- * sent to the customer; Mark sent, responses and revisions are not offered here (S3).
+ * sent to the customer.
+ * NP-P2-S5-S3B adds the lifecycle actions below: Mark sent (with the server-enforced do-not-contact acknowledgment,
+ * OD-Q16 / ZD-223), record the customer's reported response, revise a sent quote, withdraw a sent quote. Every one is
+ * a staff statement; the database writes the timeline event (OD-Q15 / ZD-222) in the same transaction.
  */
 
 const WRONG_ORGANIZATION = "You switched to a different organization since this page was loaded. Reload the page before making changes.";
@@ -208,4 +213,141 @@ export async function withdrawQuoteDraftAction(_prev: QuoteWithdrawState, formDa
   }
   refresh();
   return { status: "success", message: data.changed === false ? "This draft was already withdrawn." : "Draft withdrawn. It stays in the quote history." };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-P2-S5-S3B lifecycle actions
+// ---------------------------------------------------------------------------------------------------------------------
+
+export interface QuoteLifecycleState {
+  status: "idle" | "success" | "error";
+  message?: string;
+  /** ZW003 / no longer in the expected state: offer a reload instead of retrying blindly */
+  stale?: boolean;
+  /** OD-Q16: the database refused because the contact is do-not-contact and no acknowledgment was given */
+  dncRequired?: boolean;
+  /** field error (withdraw reason) */
+  reasonError?: string;
+  quoteId?: string;
+  replayed?: boolean;
+}
+
+function lifecycleError(error: { code?: string; message?: string } | null, label: string): QuoteLifecycleState {
+  console.error(`[plus] quote ${label} failed`, error?.code ?? "no_data");
+  const stale = error?.code === "ZW003" || (error?.code === "ZW004" && ["illegal_transition", "quote_not_draft", "revision_base_not_current"].includes(error?.message ?? ""));
+  return {
+    status: "error",
+    message: quoteErrorMessage(error?.code, error?.message),
+    stale,
+    dncRequired: error?.code === "ZW004" && error?.message === "dnc_acknowledgment_required",
+  };
+}
+
+/** Draft -> sent: STAFF report they shared it outside Nemryn. The acknowledgment is only ever what the person ticked. */
+export async function markQuoteSentAction(_prev: QuoteLifecycleState, formData: FormData): Promise<QuoteLifecycleState> {
+  const guard = await guardWrite(formData);
+  if ("error" in guard) return { status: "error", message: guard.error };
+  const quoteId = text(formData, "quoteId");
+  const expected = text(formData, "expectedVersion");
+  if (!isUuid(quoteId) || !expected || Number.isNaN(Date.parse(expected))) return { status: "error", message: RELOAD };
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_mark_quote_sent", {
+    p_organization_id: guard.context.organizationId,
+    p_quote_id: quoteId,
+    p_expected_updated_at: expected,
+    p_dnc_acknowledged: parseAcknowledgment(formData.get("dncAcknowledged")),
+  });
+  if (error || !data) return lifecycleError(error, "mark sent");
+  refresh();
+  return {
+    status: "success",
+    quoteId: data.quote_id ?? undefined,
+    replayed: data.changed === false,
+    message: data.changed === false ? "This quote was already marked sent." : "Marked sent. The prices are now final; a change needs a revision.",
+  };
+}
+
+/** Sent -> accepted | declined, as reported by the customer to staff (never a verified acceptance). */
+export async function recordQuoteResponseAction(_prev: QuoteLifecycleState, formData: FormData): Promise<QuoteLifecycleState> {
+  const guard = await guardWrite(formData);
+  if ("error" in guard) return { status: "error", message: guard.error };
+  const quoteId = text(formData, "quoteId");
+  const expected = text(formData, "expectedVersion");
+  const response = text(formData, "response");
+  if (!isUuid(quoteId) || !expected || Number.isNaN(Date.parse(expected)) || (response !== "accepted" && response !== "declined")) {
+    return { status: "error", message: RELOAD };
+  }
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_record_quote_response", {
+    p_organization_id: guard.context.organizationId,
+    p_quote_id: quoteId,
+    p_expected_updated_at: expected,
+    p_response: response,
+  });
+  if (error || !data) return lifecycleError(error, "response");
+  refresh();
+  const what = response === "accepted" ? "acceptance" : "decline";
+  return {
+    status: "success",
+    quoteId: data.quote_id ?? undefined,
+    replayed: data.changed === false,
+    message: data.changed === false ? `The customer's ${what} was already recorded.` : `The customer's ${what} is recorded.`,
+  };
+}
+
+/** Sent -> a NEW revision draft (the original stays sent until the revision is marked sent). One key per intended revision. */
+export async function reviseQuoteAction(_prev: QuoteLifecycleState, formData: FormData): Promise<QuoteLifecycleState> {
+  const guard = await guardWrite(formData);
+  if ("error" in guard) return { status: "error", message: guard.error };
+  const quoteId = text(formData, "quoteId");
+  const key = text(formData, "idempotencyKey");
+  if (!isUuid(quoteId) || !isQuoteKey(key)) return { status: "error", message: RELOAD };
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_revise_quote", {
+    p_organization_id: guard.context.organizationId,
+    p_quote_id: quoteId,
+    p_idempotency_key: key,
+  });
+  if (error || !data) return lifecycleError(error, "revise");
+  refresh();
+  return {
+    status: "success",
+    quoteId: data.quote_id ?? undefined,
+    replayed: data.changed === false,
+    message: data.changed === false ? "This revision had already been created. Edit it below." : "Revision draft created. Edit it, then mark it sent to replace the current quote.",
+  };
+}
+
+/** Sent -> withdrawn, with a required reason (kept on the quote and its audit row, never on the timeline). */
+export async function withdrawSentQuoteAction(_prev: QuoteLifecycleState, formData: FormData): Promise<QuoteLifecycleState> {
+  const guard = await guardWrite(formData);
+  if ("error" in guard) return { status: "error", message: guard.error };
+  const quoteId = text(formData, "quoteId");
+  const expected = text(formData, "expectedVersion");
+  if (!isUuid(quoteId) || !expected || Number.isNaN(Date.parse(expected))) return { status: "error", message: RELOAD };
+  const reason = validateSentWithdrawReason(text(formData, "reason").slice(0, 1000));
+  if (!reason.ok) return { status: "error", reasonError: reason.error, message: "Check the reason." };
+  let current;
+  try {
+    current = await getQuote(guard.context.organizationId, quoteId);
+  } catch {
+    return { status: "error", message: quoteErrorMessage(undefined) };
+  }
+  if (!current) return { status: "error", message: quoteErrorMessage("ZW002") };
+  if (current.status !== "sent" && current.status !== "withdrawn") return { status: "error", message: quoteErrorMessage("ZW004", "illegal_transition"), stale: true };
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_withdraw_quote", {
+    p_organization_id: guard.context.organizationId,
+    p_quote_id: quoteId,
+    p_expected_updated_at: expected,
+    p_reason: reason.value,
+  });
+  if (error || !data) return lifecycleError(error, "withdraw sent");
+  refresh();
+  return {
+    status: "success",
+    quoteId: data.quote_id ?? undefined,
+    replayed: data.changed === false,
+    message: data.changed === false ? "This quote was already withdrawn." : "Sent quote withdrawn. It stays in the quote history.",
+  };
 }

@@ -27,11 +27,11 @@ const STAGE_LABELS: Record<OpportunityStage, string> = {
 };
 
 /**
- * Until structured quotes exist (P2-S5), the two quote stages are what STAFF REPORT about their own conversation:
- * Nemryn has not generated, sent or recorded any quote document.
+ * The two quote stages are STAFF-RECORDED: set by hand here, or by "Mark sent" / "Record accepted" on an estimate or
+ * quote (NP-P2-S5-S3B). Nemryn keeps the quote records but never sends a quote or verifies delivery or acceptance.
  */
 export const REPORTED_QUOTE_STAGE_NOTE =
-  "Quote stages are recorded by your team. Nemryn hasn't created, sent or received a quote.";
+  "Quote stages are recorded by your team, by hand or when a quote is marked sent or its acceptance is recorded. Nemryn doesn't send quotes or verify delivery or acceptance.";
 
 export const CONVERTED_RESERVED_NOTE =
   "Converted is set only by “Create transportation request”, which creates a pending request for Operations to review.";

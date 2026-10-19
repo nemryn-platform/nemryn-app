@@ -1,0 +1,624 @@
+NP-P2-S5-S3B -- QUOTATION LIFECYCLE, REVISIONS, GROWTH TIMELINE AND DO-NOT-CONTACT ACKNOWLEDGMENT
+Nemryn Plus Growth -- implementation report (architecture first; the visual redesign is deferred).
+Date: 2026-10-19
+Mode: controlled local implementation.
+- Isolated database NemrynS1Iso only; the local app ran with `next start -p 3100` against it.
+- Fictional data only.
+- No production access or change.
+- No Git operations: nothing staged, committed or pushed; branch unchanged.
+Legend:
+- VERIFIED = executed, with the result shown;
+- NOT RUN = deliberately not executed.
+
+======================================================================
+1. EXECUTIVE SUMMARY
+======================================================================
+S3B completes the operational quote lifecycle on the existing Opportunity "Estimates & quotes" panel, using existing
+components only:
+- Mark sent: a review of the server snapshot, then a confirmation;
+- record the customer's reported acceptance or decline;
+- Revise: a new draft with a stable key, edited with the existing editor; marking it sent supersedes the original
+  atomically;
+- withdraw a SENT quote, with a required reason.
+It also implements two newly approved decisions:
+- OD-Q15 = A, recorded as ZD-222. Quote lifecycle events are written to plus_activities in the same transaction as the
+  transition. They have a tenant-scoped quote reference (composite FK (quote_id, organization_id, opportunity_id)) and
+  carry no body or amounts. They appear on the Opportunity history, the Contact timeline and the Growth dashboard feed.
+- OD-Q16 = A, recorded as ZD-223. Mark sent for a do-not-contact contact requires an explicit staff acknowledgment.
+  - It is enforced in the DATABASE: one plus_mark_quote_sent with a trailing p_dnc_acknowledged boolean DEFAULT false.
+    It reads the CURRENT flag under a lock.
+  - It is audited. It is never consent, never changes the contact, and nothing is sent.
+- The outdated Stage-panel note ("Nemryn hasn't created, sent or received a quote") is replaced with truthful,
+  staff-recorded wording.
+Evidence (all VERIFIED on NemrynS1Iso; details in sections 20–24):
+- SQL suites, fresh reset each: new lifecycle 41/41, quotes 83/83, directory 34/34;
+- all 69 SQL suites: 68 with 0 failures + 1 known intermediate-schema suite;
+- concurrency: quotes 18/18 (2 new races plus the one-event-per-transition invariant); 25 of 27 scripts pass, the other
+  2 being the pre-existing harness defect;
+- privilege contract 0/29;
+- browser E2E 32/32;
+- unit tests 865/865; tsc 0 errors; ESLint 0 errors; next build passes;
+- upgrade rehearsal from the S3A head 20261020100000: data, functions, policies, ACLs and constraints preserved; old
+  callers safe; do-not-contact enforced.
+Verdict (section 28): READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR. No blocker.
+
+======================================================================
+2. VERIFIED BRANCH AND PRODUCTION BASELINE
+======================================================================
+- VERIFIED: branch np-p2-s5-s3b-quote-lifecycle. HEAD = origin/main = 9c74077 (Merge PR #16, S3A). There were 0 tracked
+  changes at the start.
+- The S1 / S2 / S3A quote migrations are present (20261018100000, 20261019100000, 20261020100000).
+- The quote RPC signatures and ACLs matched the released contract: in S3A-R1, the 13 production md5s were identical to
+  the repository.
+- Production baseline (from the S3A-R1 sign-off, read-only, 2026-10-19): app 9c74077 live, head 20261020100000,
+  privilege contract 0/29.
+- No production access in this phase.
+- Activity subject constraints were reviewed before the change:
+  - activity_type CHECK;
+  - quote_subject_check (quote types need an opportunity);
+  - stage_check (non-stage types must have no from / to stage);
+  - subject_check;
+  - the composite contact / opportunity / request FKs.
+
+======================================================================
+3. OD-Q15 APPROVAL RECORDED IN THE DECISION REGISTER
+======================================================================
+ZD-222 — "Quote lifecycle events appear on the Growth timelines (OD-Q15 Option A)". CONFIRMED — OWNER-APPROVED
+(2026-10-19). It uses the existing format.
+I checked first that ZD-222 and ZD-223 were free (the highest existing entry was ZD-221). They were inserted before the
+closing paragraph. No earlier entry was renumbered or rewritten.
+
+======================================================================
+4. OD-Q16 APPROVAL RECORDED IN THE DECISION REGISTER
+======================================================================
+ZD-223 — "Marking a quote sent for a do-not-contact contact requires an explicit, audited staff acknowledgment (OD-Q16
+Option A)". CONFIRMED — OWNER-APPROVED (2026-10-19).
+
+======================================================================
+5. EXISTING APPROVED DECISIONS PRESERVED
+======================================================================
+- OD-Q1 to OD-Q9 (ZD-212 to ZD-220) and OD-Q12 (ZD-221) are unchanged:
+  - manual itemized prices; no pricing engine, invoice or payment;
+  - every quote belongs to an opportunity;
+  - fixed columns;
+  - Estimate / Quote;
+  - the lifecycle with derived expiry;
+  - forward-only stage moves; declined never marks the opportunity Lost;
+  - USD cents;
+  - Admin and WRITE-grant Dispatcher;
+  - no addresses or medical details;
+  - one draft and one current sent quote (the OD-Q12 checks are unchanged inside the replaced functions).
+- Re-verified by the quote suite (83/83), the lifecycle suite and the concurrency invariants.
+
+======================================================================
+6. DEFERRED DECISIONS RETAINED
+======================================================================
+OD-Q10 (print / PDF / number format / default validity / branding), OD-Q11 (follow-up tasks), OD-Q13 (copying a total
+into estimated_value_cents) and OD-Q14 (pricing rules) are all NOT implemented:
+- no print or PDF;
+- no task is created;
+- the estimated value is untouched;
+- no rate engine;
+- no outbound communication or customer link.
+
+======================================================================
+7. EXACT FILES CREATED AND MODIFIED
+======================================================================
+New (untracked):
+  supabase/migrations/20261021100000_plus_quote_lifecycle_activity.sql    594 lines
+  supabase/tests/plus_quotes_lifecycle_tests.sql                         rollback-only, 41 tests
+  src/components/growth/QuoteLifecycleDialogs.tsx                        Mark sent / response / revise / withdraw-sent dialogs
+  docs/reports/NP-P2-S5-S3B-quote-lifecycle-implementation.txt           this report
+  .tmp-qa/np-p2-s5-s3b-quote-lifecycle-e2e.mjs                           browser E2E (QA scratch; not for commit)
+Modified:
+  src/app/operations/growth/quotes/actions.ts           + markQuoteSentAction, recordQuoteResponseAction, reviseQuoteAction, withdrawSentQuoteAction
+  src/components/growth/QuoteDraftControls.tsx          lifecycle buttons; per-dialog target snapshots (D1 pattern extended)
+  src/components/growth/QuotesPanel.tsx                 server-read review snapshot; sent-quote target; DNC flag; expired / sent notes
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx   passes contactDoNotContact; quote lines in History and "Latest with this contact"
+  src/app/operations/growth/contacts/[contactId]/page.tsx       quote lines on the Contact timeline + a link to the opportunity's quotes
+  src/app/operations/growth/page.tsx                    quote lines in the dashboard "Recent activity"
+  src/lib/plus/quotes-core.ts                           copy (Mark sent / DNC / response / revise / withdraw), parseAcknowledgment,
+                                                        validateSentWithdrawReason, quoteActivityLine, isQuoteActivity, new error copy
+  src/lib/plus/quotes-core.test.mjs                     S3B tests; the S2 "no Mark sent / revise" boundary tests replaced by the S3B contract
+  src/lib/plus/contacts-core.ts                         ActivityType + labels for the three quote event types
+  src/lib/plus/contacts.ts, opportunities.ts, agent.ts  map the new read columns (quote reference; the contact list's opportunity id)
+  src/lib/plus/opportunities-core.ts (+ .test.mjs)      the truthful REPORTED_QUOTE_STAGE_NOTE
+  src/lib/supabase/database.types.ts                    regenerated (additive)
+  supabase/tests/privilege_contract_tests.sql           new Mark sent signature + 3 internals
+  supabase/tests/plus_quotes_tests.sql                  L3: now asserts the ONE quote_sent event (was "no activity", OD-Q15 open)
+  supabase/tests/plus_quotes_concurrency_test.sh        + Q13 / Q13b (DNC races) + the one-event-per-transition invariant
+  supabase/tests/plus_contacts_activities_tests.sql     K7 / K8: activity column list and FK targets now include the approved quote reference
+  docs/product/decision-register.md                     ZD-222, ZD-223
+  docs/product/plus-domain-model.md, plus-product-spec.md, docs/data/mutation-api.md,
+  docs/security/plus-access-model.md, docs/security/database-privilege-contract.md
+Unchanged: Core; conversion / rebooking; the directory RPCs; the S1 / S2 / S3A migrations; the shell, theme and fonts.
+
+======================================================================
+8. NEW MIGRATION NAME AND OBJECTS
+======================================================================
+20261021100000_plus_quote_lifecycle_activity.sql. It sorts after 20261020100000 and is the only S3B migration.
+- plus_activities changes:
+  - + quote_id uuid, + quote_status text (nullable);
+  - + FK plus_activities_quote_fkey (quote_id, organization_id, opportunity_id) → plus_quotes (id, organization_id,
+    opportunity_id), using the existing unique key on plus_quotes;
+  - activity_type CHECK widened additively with ONE new type, quote_revised;
+  - plus_activities_quote_subject_check replaced:
+    - quote events require opportunity_id, quote_id and the status matching their type, and body IS NULL;
+    - every other type requires quote_id / quote_status NULL;
+  - + trigger plus_activities_quote_guard (BEFORE INSERT): the contact of a well-formed quote event must be its
+    opportunity's primary contact. Malformed rows are left to the CHECK.
+- Internal functions (no client EXECUTE): _plus_quote_activity (writes one event), _plus_quote_related_number (the
+  revised / replacing quote number, for display), _plus_activities_quote_guard.
+- plus_mark_quote_sent: DROP + CREATE with a trailing p_dnc_acknowledged boolean DEFAULT false.
+- plus_record_quote_response, plus_revise_quote, plus_withdraw_quote: CREATE OR REPLACE (same signatures) and write
+  their timeline events.
+- plus_list_contact_activities, plus_list_opportunity_activities, plus_list_recent_activities: DROP + CREATE (same
+  arguments; the return type gains the quote reference). The ACL is restored explicitly (authenticated only).
+- No table grant, policy or RLS change. No Core object. No data backfill.
+
+======================================================================
+9. QUOTE ACTIVITY-LINKAGE ARCHITECTURE
+======================================================================
+- Tenant scope: the composite FK makes it impossible for a quote event to reference another organization's quote, or a
+  quote of another opportunity in the same organization.
+  - VERIFIED (lifecycle F1): both raise 23503.
+- The contact matches the opportunity: _plus_quote_activity always writes the LOCKED opportunity's primary_contact_id,
+  and the guard trigger refuses any other contact (F2: ZW006).
+  - Historical events keep the contact of the time if the opportunity's contact later changes.
+- Required reference: quote types without opportunity / quote → CHECK (F4). Non-quote types with a quote reference →
+  CHECK (F4). Body on a quote event → CHECK (F3). A status that doesn't match the type → CHECK (F3).
+- Existing activities: nullable columns; all constraints validated; no rows changed (upgrade rehearsal: identical on
+  the 12 original columns, new columns NULL).
+- Clients cannot insert or update activities: no privilege, 42501 (F5).
+- Reads: the three timeline RPCs join plus_quotes on (quote_id, organization_id) and return quote_id, quote_number,
+  quote_kind, quote_status and related_quote_number. They never return prices (T12).
+
+======================================================================
+10. ACTIVITY EVENT SEMANTICS
+======================================================================
+| Event | Written when | quote_id | quote_status |
+|---|---|---|---|
+| quote_sent | a draft is marked sent | the sent quote | sent |
+| quote_status_changed | acceptance recorded / decline recorded | that quote | accepted / declined |
+| quote_status_changed | a revision is marked sent | the PREDECESSOR | superseded |
+| quote_status_changed | a SENT quote is withdrawn (draft withdrawal is audit-only) | that quote | withdrawn |
+| quote_revised (new type) | a revision draft is created | the NEW revision | draft |
+
+- Draft creation, draft edits and draft withdrawal write no timeline event (work in progress; audit only).
+- A revision event names the revised quote and a superseded event names the replacing revision, through
+  related_quote_number.
+- Display wording (quoteActivityLine; never an amount; never "online"):
+  - "Quote 3 marked sent";
+  - "Customer acceptance of Quote 4 recorded" / "Customer decline of Quote 4 recorded";
+  - "Quote 6 created as a revision of Quote 4";
+  - "Quote 4 replaced by revision Quote 6";
+  - "Sent Quote 4 withdrawn".
+- Idempotent repeats (already sent, the same response, the same revise key, already withdrawn) write nothing (T10).
+  Refusals write nothing (T11; D1).
+
+======================================================================
+11. DNC WARNING AND SERVER ENFORCEMENT
+======================================================================
+- Database (plus_mark_quote_sent):
+  - after the opportunity FOR UPDATE lock (the established order), it reads
+    `select do_not_contact … from plus_contacts … FOR SHARE` for the opportunity's primary contact;
+  - if the flag is true and p_dnc_acknowledged is not true, it raises ZW004 dnc_acknowledgment_required before any write;
+  - the audit row plus_quote_sent gains contact_do_not_contact (the flag it saw) and dnc_acknowledged (true only when the
+    flag was on and acknowledged);
+  - the contact row is never updated (asserted in SQL D5, unit tests and E2E N3).
+- Bypass attempts (VERIFIED):
+  - the 3-argument call, an explicit false, NULL, and a PostgREST-style named call without the parameter are all
+    refused (D1–D3, E2E N4, upgrade rehearsal);
+  - there is exactly one function, so there is no overload to pick (S1).
+- A flag change between opening the dialog and submitting:
+  - turned ON: the unacknowledged submit is refused; the dialog then shows the warning and requires the checkbox; the
+    acknowledged retry succeeds (SQL D9, E2E N5 / N6);
+  - turned OFF: an acknowledged submit succeeds and is audited truthfully as false / false (D8).
+- Concurrency (FOR SHARE versus the contact updater's FOR UPDATE):
+  - a preference change committed first means the waiting send is refused (CONC-Q13);
+  - a send first means the change waits and the send is audited with the flag it saw (CONC-Q13b);
+  - the wait in Q13b was below the script's 1-second timer resolution, so the ordering was asserted from the outcome,
+    not from timing.
+- Retries: a repeated acknowledged confirmation is a no-op, with no duplicate event or audit (D6, E2E X1).
+- UI copy: Mark sent records that the team shared the price outside Nemryn; Nemryn sends nothing; it isn't proof of
+  delivery. The warning says the acknowledgment doesn't change the preference, isn't consent, and doesn't allow emails,
+  texts or future outreach. The confirm button stays disabled until the box is ticked.
+
+======================================================================
+12. RPC SIGNATURES AND BACKWARD COMPATIBILITY
+======================================================================
+- plus_mark_quote_sent(uuid, uuid, timestamptz, boolean DEFAULT false): exactly ONE function (the old 3-argument
+  identity was dropped inside the migration transaction). SECURITY DEFINER, pinned search_path, EXECUTE authenticated
+  only.
+  - Old 3-argument calls (positional or named) resolve to it with the acknowledgment false.
+  - The deployed S3A app does not call it at all (there was no Mark sent UI before S3B).
+- plus_record_quote_response, plus_revise_quote, plus_withdraw_quote: identical signatures, results and grants;
+  behaviour is unchanged apart from the extra event.
+- The timeline reads keep their arguments and grants. Extra result columns are ignored by the deployed app's helpers,
+  which select by name (upgrade rehearsal: "old 4-arg timeline reads still answer").
+- Conclusion: after the migration, and before the S3B app deploy, the deployed app stays fully operational and safe.
+  Its reads work; it has no Mark sent path; nothing can bypass the do-not-contact check.
+
+======================================================================
+13. MARK SENT IMPLEMENTATION
+======================================================================
+- Panel → "Mark sent" (drafts only) → MarkSentDialog. The dialog shows the SERVER-read snapshot of the draft
+  (plus_get_quote, formatted on the server):
+  - kind, service;
+  - only the charges that are set;
+  - discount, Total (USD), valid until;
+  - for a revision, "This revision replaces Quote N, which becomes history".
+- The dialog states that prices become final, and the do-not-contact warning and acknowledgment when needed.
+- The form carries the version the person reviewed. If the draft changed meanwhile → ZW003, the dialog shows "This
+  quote changed" with Reload; nothing is finalized silently.
+- The client never sends a total. The database supersedes a revision's predecessor first, then marks it sent,
+  atomically (S2 behaviour kept).
+- The result message comes from the server.
+- revalidatePath("/operations/growth", "layout") refreshes the panel, the timelines and the directory.
+
+======================================================================
+14. RESPONSE RECORDING IMPLEMENTATION
+======================================================================
+- "Record accepted" / "Record declined" appear only on the current, NOT-expired sent quote. For an expired one, a note
+  says to revise or withdraw it; the database also refuses with quote_expired.
+- ResponseDialog explains that it records what the customer told the team and isn't an online or verified acceptance.
+  - Accepted: the opportunity moves to Quote accepted; conversion stays a separate step.
+  - Declined: the opportunity stays open.
+- recordQuoteResponseAction → plus_record_quote_response with the opened version.
+- Terminal states, stale versions, closed opportunities and expiry are refused by the existing RPC rules.
+- No Request, Trip, Passenger, invoice, payment, task or message is created (SQL X1; E2E A2 checks that no attribution
+  was created).
+
+======================================================================
+15. REVISION AND SUPERSESSION IMPLEMENTATION
+======================================================================
+- "Revise" appears on the current sent quote only when no draft holds the slot (OD-Q12).
+- ReviseDialog explains the consequences. It uses ONE idempotency key per intended revision, kept in sessionStorage
+  from submit until a confirmed result, so an ambiguous retry returns the same revision. Nothing happens on navigation.
+- plus_revise_quote creates exactly one draft copied from the original (E2E R2: a double click gave one revision).
+- The revision is edited with the EXISTING S2 editor (R4). The original is unchanged (R4: 12000 kept).
+- Mark sent on the revision supersedes the original first, then sends the revision, in one transaction (R6; SQL T7):
+  exactly one sent quote; events superseded + sent.
+- Already handled by the RPCs and tested:
+  - an existing draft (draft_exists);
+  - an existing revision (revision_exists);
+  - an expired sent quote (revise allowed);
+  - accepted / declined / withdrawn quotes (illegal_transition);
+  - closed opportunities;
+  - concurrent revisions (CONC-Q7, Q10);
+  - revise versus accept (Q6 / Q6b).
+
+======================================================================
+16. SENT WITHDRAWAL IMPLEMENTATION
+======================================================================
+- "Withdraw sent quote" → WithdrawSentDialog:
+  - a required reason (1–200 characters, checked on the client, in the action and in the database);
+  - confirm is disabled without a reason;
+  - the dialog says the quote stays in the history as withdrawn with its prices, the opportunity isn't marked lost and
+    the customer isn't contacted.
+- withdrawSentQuoteAction re-reads the quote and only proceeds for sent, or already withdrawn (a no-op), with the opened
+  version.
+- The reason is kept on the quote and its audit row, never on the timeline (SQL T8; E2E W2).
+- The slot is released by the stored status change, and create is offered again.
+- The S2 draft withdrawal is unchanged (draft-only, no reason, audit-only).
+
+======================================================================
+17. GROWTH ACTIVITY HISTORY INTEGRATION
+======================================================================
+- Opportunity history ("Stage, owner and quote changes"), the Opportunity's "Latest with this contact", the Contact
+  timeline (with an "Open the opportunity's quotes" link) and the Growth dashboard "Recent activity" all render quote
+  events with quoteActivityLine.
+- Chronological order and actor display are unchanged. No component was redesigned.
+- VERIFIED: E2E M5, R7, A2, A3, D1, W2, X5; SQL T2 / T3.
+- The Stage panel note now reads: "Quote stages are recorded by your team, by hand or when a quote is marked sent or
+  its acceptance is recorded. Nemryn doesn't send quotes or verify delivery or acceptance." (E2E M0; unit test.)
+
+======================================================================
+18. UI AND SERVER ACTIONS
+======================================================================
+- The UI uses existing components only (Dialog, Button, Textarea, AttentionState, typography). There is no new shell,
+  palette, font or animation, and the directory is not redesigned.
+- Dialogs render from a target captured when they open (the D1 pattern, extended to sent-quote actions). Each confirmed
+  result is handed over exactly once.
+- The confirmation is an accessible role=status line.
+- Panel actions:
+  - draft: Mark sent / Edit draft / Withdraw draft;
+  - current sent: Record accepted / Record declined (not once expired) / Revise (when the slot is free) / Withdraw sent
+    quote.
+  - READ-only users and closed opportunities get none (E2E X3).
+- Server actions (src/app/operations/growth/quotes/actions.ts):
+  - each re-checks requirePlusAccess, the organization binding and canWriteGrowth, validates the ids and version, and
+    uses the per-request client (no service role);
+  - the do-not-contact acknowledgment passed is only what the person ticked (parseAcknowledgment; a unit test asserts
+    no hard-coded true);
+  - errors map to plain copy; a stale result offers Reload.
+- 768 px: the Mark sent dialog with the review and the warning fits, with the acknowledgment and confirm reachable
+  (E2E X6).
+
+======================================================================
+19. AUTHORIZATION AND TENANT ISOLATION
+======================================================================
+(SQL A1–A7; the earlier quote and directory suites still pass.)
+
+| Caller | Lifecycle writes | Timeline reads |
+|---|---|---|
+| Organization Admin | allowed | allowed |
+| WRITE-grant Dispatcher | allowed; the event actor = the Dispatcher | allowed |
+| READ-grant Dispatcher | every write → ZW001 | allowed |
+| No-grant Dispatcher, Driver, inactive member, Platform Admin without membership, no-membership user | ZW002 | ZW002 |
+| No user | ZW001 | ZW001 |
+| anon | no EXECUTE (42501) | no EXECUTE (42501) |
+| Plus expired | ZW001 | allowed |
+| Plus locked | ZW002 | ZW002 |
+| Foreign tenant | ZW002 | ZW002 |
+
+- Forged cross-tenant links are refused at the database level (section 9).
+- RLS is unchanged.
+
+======================================================================
+20. SQL AND CONCURRENCY RESULTS
+======================================================================
+New supabase/tests/plus_quotes_lifecycle_tests.sql: 0 failures of 41, on a fresh and an upgraded database.
+- S1–S3: contract;
+- T0–T13: timeline events, idempotency, refusals, minimisation, existing rows;
+- F1–F5: forged links;
+- D1–D10: do-not-contact;
+- A1–A7: authorization;
+- X1–X2: side effects and OD-Q12.
+Updated suites: plus_quotes_tests 83/83 (L3 now asserts the OD-Q15 event); plus_contacts_activities_tests 82/82 (K7 /
+K8 include the approved quote reference); plus_quotes_directory_tests 34/34; privilege contract 0/29.
+plus_quotes_concurrency_test.sh: 18/18 PASS.
+- The S1 / S2 races still pass.
+- New global invariant, checked after EVERY race: each quote has exactly one quote_sent event if sent; exactly one
+  quote_status_changed event if accepted, declined, superseded or sent-then-withdrawn; and exactly one quote_revised
+  event if it is a revision.
+- New race CONC-Q13: do-not-contact turned on first → the unacknowledged send is refused and nothing is written.
+- New race CONC-Q13b: the send holds the contact first → the change waits; the send is audited false / false; the flag
+  is then on.
+- Two staff marking the same draft sent (Q11), edit versus send (Q5 / Q5b), revise versus accept (Q6 / Q6b), revision
+  send versus predecessor withdrawal (Q12), two revisions (Q7): all pass with exactly one event each.
+Process notes:
+- Inside one rolled-back transaction recorded_at is constant, so the suite compares events sorted.
+- Calls whose order matters are sequenced into variables, because SQL AND does not guarantee left-to-right evaluation.
+  Two first-run failures (D7 / D8) came from that and were fixed in the test.
+
+======================================================================
+21. BROWSER AND UNIT TEST RESULTS
+======================================================================
+Browser E2E (.tmp-qa/np-p2-s5-s3b-quote-lifecycle-e2e.mjs; real Chrome; isolated stack): 32 / 32 PASS, exit 0.
+- M0–M6: the truthful Stage note; draft actions; the review snapshot (charges, discount, total $120.00, valid until,
+  "prices final"); no warning for a non-DNC contact; marked sent; one event; the history line; the sent actions.
+- R1–R7: revise consequences; a double click gives ONE revision; "Revision of"; edited with the existing editor; the
+  replaces line; atomic supersession; history wording.
+- A1–A3: the acceptance dialog copy; accepted plus stage plus one event, no Request; the Contact timeline shows the
+  events and links to the quotes.
+- D1: declined; not Lost.
+- W1–W2: reason required (confirm disabled); withdrawn and kept; the reason is not on the timeline; the slot is free.
+- N1–N6:
+  - the do-not-contact warning, with confirm disabled until acknowledged;
+  - sent with the acknowledgment, audited true / true, contact unchanged, no notification;
+  - a direct RPC call without the acknowledgment is refused;
+  - the flag turned on after the dialog opened → the server refuses → the warning appears → acknowledge → sent.
+- X1–X6: a double click on Mark sent gives one event and one audit row; an expired quote hides responses and shows the
+  note; READ grant sees no controls; the directory shows every stored status; the dashboard shows quote events; the
+  768 px dialog fits.
+- Note: the E2E ran before the guard trigger was narrowed (section 25). The app code did not change after the E2E, and
+  the change only affects malformed direct inserts. It was re-verified by the full SQL run.
+Unit: npm test 865 / 865, 0 fail.
+- quotes-core.test.mjs 27 / 27: the S3B event wording, parseAcknowledgment, the withdraw reason, OD-Q16 copy, the
+  migration contract, and the action / UI boundary source checks;
+- opportunities-core.test.mjs 11 / 11: the new Stage note.
+tsc: exit 0.
+ESLint: exit 0 — 0 errors, 108 warnings. None are in S3B files. The +1 warning since S3A is in the untracked QA script
+.tmp-qa/np-p2-s5-s3a-prod-smoke.mjs.
+next build: exit 0.
+Screenshots (fictional, local QA scratch): .tmp-qa/screens/np-p2-s5-s3b/ — the review, accepted history, the DNC
+warning, and the tablet dialog.
+NOT RUN: real handheld devices; screen-reader audits beyond labelled controls and role=status / alert regions.
+
+======================================================================
+22. UPGRADE-REHEARSAL RESULTS (S3A head 20261020100000 → 20261021100000)
+======================================================================
+Procedure:
+- The S3B migration was held back. The database was reset to exactly 20261020100000 (verified fresh).
+- Seeded through the RPCs:
+  - a draft; a current sent quote (21500);
+  - sent → revised → revision sent → accepted; a withdrawn draft; a declined quote;
+  - an opportunity with no quotes; two independent drafts;
+  - a do-not-contact contact with a draft;
+  - an existing note plus stage_changed activities (5 activities, none of them quote events);
+  - the seed's Core Requests.
+- Rows of 19 tables were snapshotted, plus function / policy / ACL / constraint fingerprints.
+- `supabase migration up --local` then applied only 20261021100000.
+Results (VERIFIED):
+  migration up rc=0; head 20261021100000
+  pre-existing rows byte-identical in 19 tables (plus_activities compared on its 12 pre-existing columns): yes
+  pre-existing activities have NULL quote_id / quote_status: yes; activity count unchanged (5); plus_activities constraints validated
+  all 204 untouched functions identical (signature, SECURITY DEFINER, ACL, search_path, body md5): yes
+  exactly one plus_mark_quote_sent (…, p_dnc_acknowledged boolean DEFAULT false)
+  policies / table ACLs + RLS / constraints outside plus_activities identical: yes / yes / yes
+  old 3-arg Mark sent on a NON-DNC draft → sent, event quote_sent:sent
+  old 3-arg Mark sent on the DNC contact's draft → ZW004 dnc_acknowledgment_required (still a draft)
+  acknowledged Mark sent on the DNC draft → sent; audit true/true; the contact is still DNC
+  record accepted on the pre-existing sent quote → accepted, event quote_status_changed:accepted
+  historical quotes got no backfilled events: 0
+  the old 4-argument timeline reads still answer (contact 3 / opportunity 3 / recent 10)
+  OD-Q12 still enforced (second draft → draft_exists)
+  privilege contract 0 / 29
+  on the upgraded database: plus_quotes_tests 0/83, plus_quotes_directory_tests 0/34, plus_quotes_lifecycle_tests 0/41,
+  plus_contacts_activities_tests 0/82 failures
+  on the upgraded database: plus_opportunities_tests 2/75 (F1, F2) and plus_growth_agent_tests 1/40 (B1) failures.
+  These are PRE-EXISTING:
+  - the IDENTICAL failures occur at the S3A head with the same seeded data BEFORE the S3B migration (baseline run);
+  - they are list / count assertions that assume an empty Org A;
+  - both suites pass 75/75 and 40/40 on a fresh database.
+
+======================================================================
+23. CORE / GROWTH REGRESSION EVIDENCE
+======================================================================
+Full isolated run (run-p2s5s3b.sh part 2): 69 SQL suites, each after a VERIFIED fresh reset at 20261021100000.
+- 68 suites with 0 failures (2,492 PASS lines). Among them:
+  - plus_quotes 83/83, plus_quotes_directory 34/34, plus_quotes_lifecycle 41/41;
+  - plus_opportunities 75/75, plus_contacts_activities 82/82, plus_tasks 58/58, plus_growth_agent 40/40;
+  - plus_conversion_rebooking 44/44 (P2-S4), plus_booking_service_type 27/27 (S2);
+  - core_staff_request_service_type 50/50, core_intake_airport 24/24;
+  - rls_adversarial 33/33, privilege contract 0/29;
+  - every other Plus and Core suite (recurring_trip_creation passed this time; RTC-04 is time-of-day dependent, see the
+    S3A report).
+- request_decision_expand_compat_tests: 8 PASS / 9 FAIL + 1 ERROR, identical to every baseline. It applies only to the
+  intermediate P1-OPS-R1 schema.
+Concurrency (27 scripts): 25 pass, including:
+- plus_quotes 18, plus_conversion_rebooking 11, plus_opportunities 6, plus_tasks 4, plus_contacts 4;
+- request_decision 21, website_*.
+The 2 failures, mutation_concurrency and request_lifecycle_concurrency, are the PRE-EXISTING harness defect (client-role
+FOR UPDATE permission), as documented since S1.
+First-pass findings during S3B, both fixed:
+- the guard trigger initially pre-empted the P2-S1 CHECK error for malformed quote events (the opportunities suite
+  aborted); it now defers malformed rows to the CHECK;
+- K7 / K8 and L3 were updated to the approved schema and behaviour.
+
+======================================================================
+24. PRIVILEGE CONTRACT RESULTS
+======================================================================
+- privilege_contract_tests.sql now lists:
+  - plus_mark_quote_sent(uuid,uuid,timestamp with time zone,boolean) 'u';
+  - _plus_activities_quote_guard(), _plus_quote_activity(plus_opportunities,uuid,text,text) and
+    _plus_quote_related_number(plus_quotes,text) '' (no client EXECUTE).
+- Result: 0 violations of 29, fresh and upgraded.
+- The re-created timeline RPCs keep authenticated-only EXECUTE (lifecycle S2).
+- No table grant or policy change. docs/security/database-privilege-contract.md is updated.
+
+======================================================================
+25. KNOWN RISKS OR UNRESOLVED ISSUES
+======================================================================
+- After the browser E2E, the guard trigger was narrowed so malformed quote events are left to the CHECK. That affects
+  only direct owner inserts, which no app path makes. It was re-verified by the full SQL run, the lifecycle suite and the
+  upgrade rehearsal. The E2E was not re-run after this database-only change.
+- Do-not-contact semantics: Mark sent for a DNC contact remains possible with the acknowledgment, by decision. The audit
+  shows who acknowledged.
+- Historical quotes from before S3B have no timeline events (no backfill, by design). Their history remains in
+  audit_events.
+- A quote event's contact is the opportunity's contact at the time of the event. A later contact change on the
+  opportunity does not move earlier events.
+- The older suites plus_opportunities_tests (F1 / F2) and plus_growth_agent_tests (B1) assume an empty organization and
+  fail on a seeded database regardless of S3B (section 22). A separate test-hardening follow-up is suggested.
+- Pre-existing items, unchanged: the expand-compat suite; the concurrency harness defect; the RTC-04 time-of-day test;
+  the Zenward Mobility trial (production).
+- PD-10 / PD-11 remain open: fictional data only.
+
+======================================================================
+26. CONTROLLED COMMIT INVENTORY (proposed; not executed)
+======================================================================
+Proposed commit "feat(plus): quote lifecycle, growth timeline events and do-not-contact acknowledgment (NP-P2-S5-S3B)":
+  A supabase/migrations/20261021100000_plus_quote_lifecycle_activity.sql
+  A supabase/tests/plus_quotes_lifecycle_tests.sql
+  M supabase/tests/plus_quotes_tests.sql
+  M supabase/tests/plus_quotes_concurrency_test.sh
+  M supabase/tests/plus_contacts_activities_tests.sql
+  M supabase/tests/privilege_contract_tests.sql
+  M src/lib/supabase/database.types.ts
+  A src/components/growth/QuoteLifecycleDialogs.tsx
+  M src/components/growth/QuoteDraftControls.tsx
+  M src/components/growth/QuotesPanel.tsx
+  M src/app/operations/growth/quotes/actions.ts
+  M src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  M src/app/operations/growth/contacts/[contactId]/page.tsx
+  M src/app/operations/growth/page.tsx
+  M src/lib/plus/quotes-core.ts
+  M src/lib/plus/quotes-core.test.mjs
+  M src/lib/plus/contacts-core.ts
+  M src/lib/plus/contacts.ts
+  M src/lib/plus/opportunities.ts
+  M src/lib/plus/opportunities-core.ts
+  M src/lib/plus/opportunities-core.test.mjs
+  M src/lib/plus/agent.ts
+  M docs/product/decision-register.md
+  M docs/product/plus-domain-model.md
+  M docs/product/plus-product-spec.md
+  M docs/data/mutation-api.md
+  M docs/security/plus-access-model.md
+  M docs/security/database-privilege-contract.md
+  A docs/reports/NP-P2-S5-S3B-quote-lifecycle-implementation.txt (optional)
+EXCLUDE: .tmp-qa/* and every other untracked report or scratch file. Before committing, confirm that git diff --cached
+--name-only matches exactly.
+
+======================================================================
+27. REQUIRED PRODUCTION RELEASE SEQUENCE (documentation only; nothing executed)
+======================================================================
+1. Owner review; PR from np-p2-s5-s3b-quote-lifecycle.
+2. Green CI and preview.
+3. Fresh production backup, and a check that it can be restored.
+4. A dry run (`supabase db push --dry-run`, or the migration list) that shows ONLY 20261021100000.
+5. Apply the database migration FIRST, with owner approval. It is safe before the app deploy (section 12): the deployed
+   app's reads keep working and it has no Mark sent path.
+6. Read-only verification:
+   - head 20261021100000;
+   - exactly one plus_mark_quote_sent with the 4-argument signature;
+   - every replaced or re-created function SECURITY DEFINER, pinned, authenticated-only, with bodies md5-equal to the
+     repository;
+   - the plus_activities FK, CHECK and trigger present; the internals with no client EXECUTE;
+   - privilege contract 0/29; RLS / policies unchanged.
+7. Merge and deploy the app.
+8. Verify the live Vercel build id equals the merge commit.
+9. Owner-approved fictional Pilot Simulation smoke. Suggested: mark sent; record accepted; revise, edit and send the
+   revision; withdraw a sent quote; check the timelines; check the do-not-contact warning on a fictional DNC contact.
+10. Final sign-off.
+
+======================================================================
+28. FINAL PR-READINESS VERDICT
+======================================================================
+READY FOR OWNER REVIEW AND A CONTROLLED COMMIT / PR (NP-P2-S5-S3B). No compatibility or security blocker.
+- The full lifecycle is operational on the existing panel: Mark sent with review, responses, revise, sent withdrawal.
+- OD-Q15 and OD-Q16 are implemented as approved and recorded (ZD-222 / ZD-223):
+  - lifecycle events are tenant-scoped, minimal and exactly-once on the Growth timelines;
+  - the do-not-contact acknowledgment is enforced and audited by the database, with no bypass through old calls;
+  - the contact is never modified and nothing is sent.
+- OD-Q1 to OD-Q9 and OD-Q12 are preserved; OD-Q10, Q11, Q13 and Q14 remain open and unimplemented.
+- Evidence: lifecycle SQL 41/41; quotes 83/83; directory 34/34; concurrency 18/18; privilege contract 0/29; browser
+  E2E 32/32; unit 865/865; tsc / ESLint 0 errors; the build passes.
+- The upgrade from the deployed S3A head preserved data, functions, policies and ACLs, and kept old callers safe.
+- Remaining failures are pre-existing and evidenced (section 23 / 25).
+Not done (by instruction): Git operations, the PR, production migration, deploy and production smoke (section 27).
+
+STOP. No Git operations, deployments, migrations or production writes. The isolated stack and the local app are stopped.
+
+======================================================================
+29. FINAL PRE-COMMIT QA (2026-10-19, NemrynS1Iso only)
+======================================================================
+Purpose: re-run the browser E2E against the FINAL migration (with the narrowed guard trigger) and the current
+application code, closing the gap noted in sections 21 and 25.
+Steps and results (all VERIFIED):
+1. Branch np-p2-s5-s3b-quote-lifecycle; nothing staged.
+   - The repository migration 20261021100000_plus_quote_lifecycle_activity.sql (md5 eb0dcef08bc3fedca9760efca1e45f33)
+     was synced to the isolated stack unchanged.
+   - `supabase db reset --local`, verified fresh: head 20261021100000, 16 seed memberships, 0 quotes.
+   - The deployed guard function contains the narrowed condition ("new.opportunity_id is not null and new.quote_id is
+     not null").
+2. A fresh `next build` of the current working tree (exit 0), then `next start -p 3100` against the isolated stack.
+3. Full S3B browser E2E (.tmp-qa/np-p2-s5-s3b-quote-lifecycle-e2e.mjs): 32 / 32 PASS, exit 0, "ALL PASS". No failures:
+   - M0–M6, R1–R7, A1–A3, D1, W1–W2;
+   - N1–N6 (the do-not-contact warning; the acknowledgment; the direct-call refusal; the flag turned on mid-dialog);
+   - X1–X6.
+4. Focused lifecycle SQL suite (plus_quotes_lifecycle_tests.sql): 0 failures of 41 (on the post-E2E database).
+   Privilege contract: 0 violations of 29.
+5. OD-Q15 / OD-Q16 integrity (catalog):
+   - plus_activities_quote_fkey = FOREIGN KEY (quote_id, organization_id, opportunity_id) REFERENCES plus_quotes(id,
+     organization_id, opportunity_id);
+   - plus_activities_quote_subject_check present as designed (quote events need opportunity + quote + the matching
+     status, and no body; other types have no quote fields);
+   - the activity_type CHECK includes quote_revised;
+   - every plus_activities constraint is validated;
+   - trigger plus_activities_quote_guard is enabled (→ _plus_activities_quote_guard);
+   - exactly ONE plus_mark_quote_sent (p_organization_id, p_quote_id, p_expected_updated_at, p_dnc_acknowledged
+     boolean DEFAULT false): SECURITY DEFINER, ACL {postgres, authenticated}; its body contains the FOR SHARE read and
+     the dnc_acknowledgment_required refusal;
+   - the 13 quote events written by the E2E are all well-formed (quote_id and opportunity_id set, body NULL).
+6. Migrations: origin/main ends at 20261020100000_plus_quotes_directory.sql. The ONLY new migration on this branch is
+   20261021100000_plus_quote_lifecycle_activity.sql (untracked; no other migration file added or changed).
+7. File changes during final QA: NONE to code, tests or migrations. The only change is this appended section 29 of the
+   report. The working tree still has the same 28 S3B entries (25 modified + 3 new files) plus untracked QA scratch and
+   older reports.
+8. The isolated app and stack were stopped after QA. No production access, Git operation, staging, commit, push, PR or
+   deploy.
+QA verdict: PASS. The gap in sections 21 / 25 is closed: the browser E2E now passes 32 / 32 against the final migration
+and code. The PR-readiness verdict (section 28) stands.

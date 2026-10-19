@@ -103,6 +103,14 @@ export interface ContactActivity {
   actorName: string | null;
   occurredAt: string;
   recordedAt: string;
+  /** the opportunity a quote event belongs to (null for contact-only activities) */
+  opportunityId: string | null;
+  /** NP-P2-S5-S3B (ZD-222): quote lifecycle event reference (null for every other activity); never an amount */
+  quoteId: string | null;
+  quoteNumber: number | null;
+  quoteKind: string | null;
+  quoteStatus: string | null;
+  relatedQuoteNumber: number | null;
 }
 
 export async function listContactActivities(organizationId: string, contactId: string, limit = 100): Promise<{ rows: ContactActivity[]; total: number }> {
@@ -122,6 +130,12 @@ export async function listContactActivities(organizationId: string, contactId: s
       actorName: r.actor_name,
       occurredAt: r.occurred_at,
       recordedAt: r.recorded_at,
+      opportunityId: r.opportunity_id,
+      quoteId: r.quote_id,
+      quoteNumber: r.quote_number,
+      quoteKind: r.quote_kind,
+      quoteStatus: r.quote_status,
+      relatedQuoteNumber: r.related_quote_number,
     })),
     total: data && data.length > 0 ? Number(data[0].total_count) : 0,
   };

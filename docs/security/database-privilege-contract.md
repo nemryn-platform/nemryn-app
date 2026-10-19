@@ -140,6 +140,12 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
 * **NP-P2-S5-S3A additions (Plus quote directory, read-only):**
   * D gains `plus_list_organization_quotes(uuid,text,text,text,integer,integer)` and `plus_quote_directory_summary(uuid)`. Both are SECURITY DEFINER and STABLE, with `search_path` pinned, authenticated EXECUTE only, and Plus read re-checked inside.
   * A new index on `plus_quotes`. No table, policy, grant or other function changes.
+* **NP-P2-S5-S3B changes (Plus quote lifecycle timeline + do-not-contact acknowledgment):**
+  * `plus_mark_quote_sent` gains a trailing `p_dnc_acknowledged boolean DEFAULT false`. It is replaced by DROP + CREATE (exact 3-argument identity, no CASCADE): one function, no overload. Contract signature: `(uuid,uuid,timestamp with time zone,boolean)`. It stays SECURITY DEFINER with `search_path` pinned, and EXECUTE is authenticated only.
+  * `plus_record_quote_response`, `plus_revise_quote` and `plus_withdraw_quote` are CREATE OR REPLACE with the same signatures and grants.
+  * `plus_list_contact_activities`, `plus_list_opportunity_activities` and `plus_list_recent_activities` are re-created (DROP + CREATE; the return type gains the quote reference) with the same arguments and authenticated-only EXECUTE.
+  * A gains `_plus_quote_activity`, `_plus_quote_related_number` and the trigger function `_plus_activities_quote_guard`.
+  * `plus_activities` gains `quote_id` / `quote_status`, a composite FK, a CHECK and a trigger. Its privileges are unchanged (class B, SELECT only).
 * **NC-REQUEST-SERVICE-TYPE-S1 changes (Core):**
   * `log_transportation_request` gains a trailing `p_service_type text DEFAULT NULL`. It is replaced by DROP + CREATE (exact 14-argument identity, no CASCADE): ONE function remains, never an overload. Its new contract signature is `(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text)`. It stays SECURITY DEFINER with `search_path` pinned, and EXECUTE is `authenticated` only (no PUBLIC, `anon` or `service_role`).
   * `get_organization_service_offerings` (owner-approved, read-only) now admits an active Organization Admin OR Dispatcher of that organization. The signature, grant and SECURITY DEFINER are unchanged, and it returns only the enabled service identifiers. `set_organization_service_offerings` stays Organization Admin only, and `organization_service_offerings` keeps RLS on, with no policy and no client grant.

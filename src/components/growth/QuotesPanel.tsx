@@ -4,6 +4,7 @@ import { formatContactTime } from "@/lib/plus/contacts-core";
 import { SERVICE_OPTIONS, serviceTypeLabel } from "@/lib/plus/opportunities-core";
 import {
   QUOTE_NOT_INVOICE_NOTE,
+  QUOTE_EXPIRED_NOTE,
   QUOTE_SENT_CURRENT_NOTE,
   centsToInput,
   emptyQuoteForm,
@@ -20,9 +21,34 @@ import { AttentionState } from "@/components/ui/AttentionState";
 import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { QuoteDraftControls, type DraftForEditing } from "@/components/growth/QuoteDraftControls";
+import { QuoteDraftControls, type DraftForEditing, type SentForActions } from "@/components/growth/QuoteDraftControls";
+import type { QuoteReview } from "@/components/growth/QuoteLifecycleDialogs";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
+
+/** The server-read snapshot for the Mark sent review (amounts formatted from stored integer cents). */
+function toReview(d: QuoteDetail, predecessor: QuoteSummary | undefined): QuoteReview {
+  const charges: [string, number][] = [
+    ["Base transportation", d.baseCents],
+    ["Mileage charge", d.mileageCents],
+    ["Waiting time", d.waitCents],
+    ["Additional stops", d.extraStopsCents],
+    ["Mobility assistance", d.mobilityAssistanceCents],
+    ["Escort / attendant", d.escortCents],
+    ["Return leg", d.returnLegCents],
+    [d.otherLabel ? `Other: ${d.otherLabel}` : "Other charge", d.otherCents],
+  ];
+  return {
+    reference: quoteReference(d.kind, d.quoteNumber),
+    kindLabel: quoteKindLabel(d.kind),
+    serviceLabel: d.serviceType ? serviceTypeLabel(d.serviceType) : "Service not specified",
+    lines: charges.filter(([, c]) => c > 0).map(([label, c]) => ({ label, amount: formatCents(c) })),
+    discount: d.discountCents > 0 ? formatCents(d.discountCents) : null,
+    total: formatCents(d.totalCents),
+    validUntil: formatQuoteDate(d.validUntil),
+    replaces: predecessor && predecessor.status === "sent" ? quoteReference(predecessor.kind, predecessor.quoteNumber) : null,
+  };
+}
 
 function toFormValues(d: QuoteDetail): QuoteFormValues {
   return {
@@ -80,7 +106,8 @@ function QuoteRow({ q, byId, timezone, emphasis }: { q: QuoteSummary; byId: Map<
  * Estimates & quotes on an Opportunity (NP-P2-S5-S2). Server component: reads through plus_list_quotes (Plus read;
  * tenant-scoped) and, for a writer's draft, plus_get_quote. OD-Q12 (ZD-221): at most one active draft and one current
  * sent quote; everything else is read-only history. Expiry is the read RPC's derived is_expired. Writers on an open
- * opportunity may create, edit and withdraw a DRAFT; Mark sent / responses / revisions arrive in S3.
+ * opportunity may create, edit, mark sent and withdraw the DRAFT, and record responses to, revise or withdraw the current
+ * SENT quote (NP-P2-S5-S3B); every action is a staff statement and the database writes its timeline event.
  */
 export async function QuotesPanel({
   organizationId,
@@ -88,6 +115,7 @@ export async function QuotesPanel({
   opportunityId,
   opportunityServiceType,
   canWrite,
+  contactDoNotContact = false,
 }: {
   organizationId: string;
   timezone: string;
@@ -95,6 +123,8 @@ export async function QuotesPanel({
   opportunityServiceType: string | null;
   /** Plus write AND an open opportunity (the database re-checks both) */
   canWrite: boolean;
+  /** the contact's stored do-not-contact flag (OD-Q16 warning; the database re-checks the current flag) */
+  contactDoNotContact?: boolean;
 }) {
   let rows: QuoteSummary[] | null = null;
   try {
@@ -108,7 +138,10 @@ export async function QuotesPanel({
   if (canWrite && groups?.draft) {
     try {
       const d = await getQuote(organizationId, groups.draft.id);
-      if (d && d.status === "draft") draft = { id: d.id, quoteNumber: d.quoteNumber, kind: d.kind, updatedAt: d.updatedAt, values: toFormValues(d) };
+      if (d && d.status === "draft") {
+        const predecessor = d.supersedesQuoteId ? rows?.find((r) => r.id === d.supersedesQuoteId) : undefined;
+        draft = { id: d.id, quoteNumber: d.quoteNumber, kind: d.kind, updatedAt: d.updatedAt, values: toFormValues(d), review: toReview(d, predecessor) };
+      }
       else draftUnavailable = true;
     } catch {
       draftUnavailable = true;
@@ -117,7 +150,10 @@ export async function QuotesPanel({
   const byId = new Map((rows ?? []).map((r) => [r.id, r]));
   const today = localDateKeyOf(new Date().getTime(), timezone);
   const serviceOptions = [{ value: "", label: "Not specified" }, ...SERVICE_OPTIONS];
-  const showControls = canWrite && groups !== null && !draftUnavailable && (groups.draft ? draft !== null : !groups.sent);
+  const sent: SentForActions | null = groups?.sent
+    ? { id: groups.sent.id, reference: quoteReference(groups.sent.kind, groups.sent.quoteNumber), updatedAt: groups.sent.updatedAt, isExpired: groups.sent.isExpired }
+    : null;
+  const showControls = canWrite && groups !== null && !draftUnavailable && (groups.draft ? draft !== null : true);
 
   return (
     <div id="quotes" className="flex scroll-mt-4 flex-col gap-zw-md" data-testid="opportunity-quotes">
@@ -133,6 +169,8 @@ export async function QuotesPanel({
               serviceOptions={serviceOptions}
               initialCreate={emptyQuoteForm(opportunityServiceType)}
               draft={draft}
+              sent={sent}
+              doNotContact={contactDoNotContact}
               canCreate={!groups.draft && !groups.sent}
             />
           ) : undefined
@@ -148,6 +186,11 @@ export async function QuotesPanel({
           {canWrite && !groups.draft && groups.sent && (
             <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="quote-sent-current-note">
               {QUOTE_SENT_CURRENT_NOTE}
+            </p>
+          )}
+          {canWrite && groups.sent?.isExpired && (
+            <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="quote-expired-note">
+              {QUOTE_EXPIRED_NOTE}
             </p>
           )}
           {rows && rows.length === 0 ? (

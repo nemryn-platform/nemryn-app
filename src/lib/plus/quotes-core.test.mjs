@@ -163,22 +163,32 @@ test("server actions: re-check access, organization binding and write capability
   assert.match(src, /p_organization_id: guard\.context\.organizationId/, "the organization comes from the session, never the form");
   assert.match(src, /isQuoteKey\(key\)/, "create requires the client's stable idempotency key");
   assert.match(src, /p_expected_updated_at: expected/, "edits and withdrawals carry the opened version");
-  // withdraw is for DRAFTS only in S2 (sent withdrawal / Mark sent / responses / revisions are S3)
+  // the S2 draft withdrawal stays draft-only (no reason); the S3B sent withdrawal is a separate action with a reason
   assert.match(src, /current\.status !== "draft"/);
   assert.match(src, /p_reason: null/);
-  assert.doesNotMatch(src, /plus_mark_quote_sent|plus_record_quote_response|plus_revise_quote/);
+  assert.match(src, /validateSentWithdrawReason\(/);
+  // NP-P2-S5-S3B lifecycle: the existing RPCs only; the acknowledgment is only ever what the person ticked
+  assert.match(src, /rpc\("plus_mark_quote_sent"/);
+  assert.match(src, /p_dnc_acknowledged: parseAcknowledgment\(formData\.get\("dncAcknowledged"\)\)/);
+  assert.match(src, /rpc\("plus_record_quote_response"/);
+  assert.match(src, /rpc\("plus_revise_quote"/);
+  assert.doesNotMatch(src, /p_dnc_acknowledged: true/, "never a hard-coded acknowledgment");
 });
 
-test("UI boundaries: no Mark sent, response, revise, print or send controls; read-only users get no write controls", () => {
+test("UI boundaries: lifecycle controls (S3B) but no print, send, email / SMS or invoice; read-only users get no write controls", () => {
   const controls = readFileSync(new URL("../../components/growth/QuoteDraftControls.tsx", import.meta.url), "utf8");
+  const dialogs = readFileSync(new URL("../../components/growth/QuoteLifecycleDialogs.tsx", import.meta.url), "utf8");
   const panel = readFileSync(new URL("../../components/growth/QuotesPanel.tsx", import.meta.url), "utf8");
   const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  for (const src of [controls, panel]) {
-    assert.doesNotMatch(code(src), /Mark (as )?sent|Record (accepted|declined)|Revise|Print|Send to|Email|SMS|\binvoice\b|plus_mark_quote_sent|plus_revise_quote/);
+  for (const src of [controls, dialogs, panel]) {
+    assert.doesNotMatch(code(src), /Print|PDF|Send to customer|Send email|Send SMS|\binvoice\b|mailto:|sms:/);
   }
+  assert.match(code(controls), /Mark sent/);
+  assert.match(code(controls), /Record accepted/);
+  assert.match(code(controls), /Revise/);
   assert.match(panel, /showControls = canWrite &&/, "write controls only for Plus writers on an open opportunity");
   const page = readFileSync(new URL("../../app/operations/growth/pipeline/[opportunityId]/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /<QuotesPanel [^>]*canWrite=\{canWrite && open\}/);
+  assert.match(page, /<QuotesPanel[\s\S]*?canWrite=\{canWrite && open\}[\s\S]*?contactDoNotContact=\{o\.contactDoNotContact\}/);
   // one key per intended draft, kept across an ambiguous failure / reload
   assert.match(controls, /nemryn\.plus\.quote\.create\./);
   assert.match(controls, /sessionStorage\.setItem\(storageKey, idempotencyKey\)/);
@@ -256,9 +266,66 @@ test("directory page: server-side reads only (one bounded page + counts), no mut
 
 test("D1: the edit / withdraw dialog acts on the draft captured when it opened (survives revalidation)", () => {
   const src = readFileSync(new URL("../../components/growth/QuoteDraftControls.tsx", import.meta.url), "utf8");
-  assert.match(src, /setTarget\(mode === "create" \? null : draft\)/);
+  assert.match(src, /setTarget\(\["edit", "withdraw", "send"\]\.includes\(mode\) \? draft : null\)/);
+  assert.match(src, /setSentTarget\(\["accept", "decline", "revise", "withdraw-sent"\]\.includes\(mode\) \? sent : null\)/);
   assert.match(src, /open === "withdraw" && target &&/);
   assert.match(src, /open === "edit" && target &&/);
+  assert.match(src, /open === "send" && target &&/);
+  assert.match(src, /open === "withdraw-sent" && sentLifecycle &&/);
   assert.doesNotMatch(src, /open === "withdraw" && draft &&/);
   assert.match(src, /role="status"[^>]*data-testid="quote-saved"/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-P2-S5-S3B -- lifecycle helpers, timeline wording, OD-Q16 copy
+// ---------------------------------------------------------------------------------------------------------------------
+
+test("quoteActivityLine: staff-recorded wording for every quote event; never an amount; never 'online' acceptance", () => {
+  assert.equal(q.quoteActivityLine("quote_sent", "estimate", 3, "sent", null), "Estimate 3 marked sent");
+  assert.equal(q.quoteActivityLine("quote_status_changed", "quote", 4, "accepted", null), "Customer acceptance of Quote 4 recorded");
+  assert.equal(q.quoteActivityLine("quote_status_changed", "quote", 4, "declined", null), "Customer decline of Quote 4 recorded");
+  assert.equal(q.quoteActivityLine("quote_status_changed", "quote", 4, "superseded", 6), "Quote 4 replaced by revision Quote 6");
+  assert.equal(q.quoteActivityLine("quote_status_changed", "quote", 4, "withdrawn", null), "Sent Quote 4 withdrawn");
+  assert.equal(q.quoteActivityLine("quote_revised", "quote", 6, "draft", 4), "Quote 6 created as a revision of Quote 4");
+  for (const line of [q.quoteActivityLine("quote_status_changed", "quote", 1, "accepted", null), q.quoteActivityLine("quote_sent", "quote", 1, "sent", null)]) {
+    assert.doesNotMatch(line, /\$|online|verified|email|SMS/i);
+  }
+  assert.equal(q.isQuoteActivity("quote_revised"), true);
+  assert.equal(q.isQuoteActivity("note"), false);
+});
+
+test("parseAcknowledgment: only an explicit 'true' / 'on' counts (never a default)", () => {
+  assert.equal(q.parseAcknowledgment("true"), true);
+  assert.equal(q.parseAcknowledgment("on"), true);
+  for (const v of ["false", "", null, undefined, "1", "yes", "TRUE"]) assert.equal(q.parseAcknowledgment(v), false, String(v));
+});
+
+test("validateSentWithdrawReason: required, trimmed, at most 200 characters", () => {
+  assert.equal(q.validateSentWithdrawReason("  ").ok, false);
+  assert.equal(q.validateSentWithdrawReason("x".repeat(201)).ok, false);
+  assert.deepEqual(q.validateSentWithdrawReason("  Fictional: plans changed "), { ok: true, value: "Fictional: plans changed" });
+});
+
+test("OD-Q16 copy: Nemryn sends nothing; the acknowledgment is not consent and changes no preference", () => {
+  assert.match(q.MARK_SENT_NOTE, /outside Nemryn/);
+  assert.match(q.MARK_SENT_NOTE, /isn't proof of delivery/);
+  assert.match(q.DNC_WARNING_TEXT, /doesn't change their preference/);
+  assert.match(q.DNC_WARNING_TEXT, /isn't consent/);
+  assert.match(q.DNC_WARNING_TEXT, /doesn't allow emails, texts or future outreach/);
+  assert.match(q.RESPONSE_NOTE, /isn't an online or verified acceptance/);
+  assert.match(q.quoteErrorMessage("ZW004", "dnc_acknowledgment_required"), /do not contact/);
+  const dialogs = readFileSync(new URL("../../components/growth/QuoteLifecycleDialogs.tsx", import.meta.url), "utf8");
+  assert.match(dialogs, /needsAck && !ack/, "the confirm button stays disabled until the acknowledgment is ticked");
+  assert.match(dialogs, /doNotContact \|\| state\.dncRequired === true/, "a server refusal (flag turned on meanwhile) shows the warning too");
+});
+
+test("OD-Q15 / OD-Q16 migration: activity linkage, DNC enforcement in the database, one Mark sent function", () => {
+  const sql = readFileSync(new URL("../../../supabase/migrations/20261021100000_plus_quote_lifecycle_activity.sql", import.meta.url), "utf8");
+  assert.match(sql, /foreign key \(quote_id, organization_id, opportunity_id\) references public\.plus_quotes \(id, organization_id, opportunity_id\)/);
+  assert.match(sql, /drop function public\.plus_mark_quote_sent\(uuid, uuid, timestamptz\);/);
+  assert.match(sql, /p_dnc_acknowledged boolean default false/);
+  assert.match(sql, /raise exception 'dnc_acknowledgment_required' using errcode = 'ZW004'/);
+  assert.match(sql, /for share;/, "the current preference is read under a lock");
+  assert.doesNotMatch(sql, /update public\.plus_contacts/i, "the contact is never modified");
+  assert.doesNotMatch(sql, /\bdelete from\b/i);
 });

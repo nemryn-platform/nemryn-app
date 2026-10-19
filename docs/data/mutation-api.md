@@ -684,8 +684,8 @@ Every write returns `plus_quote_write_result(quote_id, quote_number, status, opp
 - Unique `(organization_id, quote_number)` and `(organization_id, idempotency_key)`.
 
 **Not written or not decided:**
-- Quote activity rows (OD-Q15) are not written.
-- Not enforced or not decided: changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16), print content and number format (OD-Q10), follow-up tasks (OD-Q11), and pricing rules (OD-Q14).
+- Quote activity rows (OD-Q15) were not written in S1. NP-P2-S5-S3B (ZD-222) now writes them; see below.
+- Not enforced or not decided: changes to `estimated_value_cents` (OD-Q13), do-not-contact checks (OD-Q16; decided and implemented in NP-P2-S5-S3B, ZD-223), print content and number format (OD-Q10), follow-up tasks (OD-Q11), and pricing rules (OD-Q14).
 - No Request, Trip, Passenger, payment, notification or outbound message is ever created.
 
 Tests:
@@ -740,3 +740,29 @@ Page: `/operations/growth/quotes`. A row opens `/operations/growth/pipeline/<opp
 Tests:
 - `supabase/tests/plus_quotes_directory_tests.sql` (rollback-only);
 - `quotes-core.test.mjs` and `growth-nav-core.test.mjs`.
+
+### NP-P2-S5-S3B — quote lifecycle, timeline events (ZD-222) and do-not-contact acknowledgment (ZD-223)
+
+Migration `20261021100000_plus_quote_lifecycle_activity.sql`.
+
+| RPC | Change |
+|---|---|
+| `plus_mark_quote_sent(org, quote_id, expected_updated_at, p_dnc_acknowledged boolean DEFAULT false)` | Reads the opportunity contact's CURRENT `do_not_contact` under FOR SHARE (after the opportunity lock). If it is true and the call isn't acknowledged: ZW004 `dnc_acknowledgment_required`, and nothing is written. Writes `quote_sent` (and `quote_status_changed:superseded` for a revision's predecessor). The `plus_quote_sent` audit row gains `contact_do_not_contact` and `dnc_acknowledged`. 3-argument and named calls resolve to it, with the acknowledgment false. |
+| `plus_record_quote_response` | + `quote_status_changed:accepted` / `declined` |
+| `plus_revise_quote` | + `quote_revised:draft` on the new revision |
+| `plus_withdraw_quote` | + `quote_status_changed:withdrawn` when a SENT quote is withdrawn (the reason is never copied) |
+| `plus_list_contact_activities` / `plus_list_opportunity_activities` | + `quote_id`, `quote_number`, `quote_kind`, `quote_status`, `related_quote_number` (the contact list also returns `opportunity_id`) |
+| `plus_list_recent_activities` | + `quote_id`, `quote_number`, `quote_kind`, `quote_status` |
+
+`plus_activities` rules:
+- `quote_id` has a composite FK (quote, organization, opportunity).
+- Quote events require an opportunity, a quote and their produced status, and carry no body.
+- Every other type carries no quote fields.
+- A guard trigger requires the event's contact to be the opportunity's primary contact.
+
+Server actions (`src/app/operations/growth/quotes/actions.ts`): `markQuoteSentAction` (passes only the checkbox acknowledgment), `recordQuoteResponseAction`, `reviseQuoteAction` (a stable key per dialog), `withdrawSentQuoteAction` (reason 1–200 characters).
+
+Tests:
+- `supabase/tests/plus_quotes_lifecycle_tests.sql`;
+- `plus_quotes_concurrency_test.sh` (Q13 / Q13b plus the one-event-per-transition invariant);
+- `quotes-core.test.mjs`.

@@ -34,7 +34,11 @@ test("quote stages are always labelled as staff-reported; no quote is implied", 
   assert.equal(o.stageDisplayLabel("quote_sent"), "Quote sent (reported)");
   assert.equal(o.stageDisplayLabel("quote_accepted"), "Quote accepted (reported)");
   assert.equal(o.stageDisplayLabel("qualified"), "Qualified");
-  assert.match(o.REPORTED_QUOTE_STAGE_NOTE, /hasn't created, sent or received a quote/);
+  // NP-P2-S5-S3B: quotes now exist, so the note no longer claims none were created; it stays explicit that the stages
+  // are staff-recorded and that Nemryn never sends a quote or verifies delivery / acceptance
+  assert.match(o.REPORTED_QUOTE_STAGE_NOTE, /recorded by your team/);
+  assert.match(o.REPORTED_QUOTE_STAGE_NOTE, /doesn't send quotes or verify delivery or acceptance/);
+  assert.doesNotMatch(o.REPORTED_QUOTE_STAGE_NOTE, /hasn't created/);
   assert.match(o.CONVERTED_RESERVED_NOTE, /Create transportation request/); // NP-P2-S4: conversion now exists
 });
 

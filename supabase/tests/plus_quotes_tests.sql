@@ -332,8 +332,10 @@ begin
   v := pg_temp.send(c_a1, c_a, q);
   perform pg_temp.t('L2 repeated Mark sent -> changed=false; no second stage history', v = 'ok:sent,false,quote_sent'
     and (select count(*) from public.plus_activities where opportunity_id = o and activity_type = 'stage_changed') = v_n + 1, v);
-  perform pg_temp.t('L3 no quote activity rows are written in S1 (OD-Q15 open): history is in audit_events',
-    not exists (select 1 from public.plus_activities where activity_type in ('quote_sent', 'quote_status_changed')));
+  perform pg_temp.t('L3 (NP-P2-S5-S3B, OD-Q15 = A) Mark sent writes ONE quote_sent timeline event (quote, opportunity, the opportunity''s contact, status sent, no body); the repeat wrote none; audit kept',
+    (select count(*) from public.plus_activities where quote_id = q and activity_type = 'quote_sent') = 1
+    and (select count(*) from public.plus_activities where quote_id = q and activity_type = 'quote_sent' and opportunity_id = o and contact_id = k and quote_status = 'sent' and body is null) = 1
+    and (select count(*) from public.audit_events where entity_id = q and action = 'plus_quote_sent') = 1);
   begin
     update public.plus_quotes set base_cents = base_cents + 100, total_cents = total_cents + 100 where id = q;
     v := 'no error';

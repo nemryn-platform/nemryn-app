@@ -781,6 +781,8 @@ export type Database = {
           occurred_at: string
           opportunity_id: string | null
           organization_id: string
+          quote_id: string | null
+          quote_status: string | null
           recorded_at: string
           request_id: string | null
           to_stage: string | null
@@ -795,6 +797,8 @@ export type Database = {
           occurred_at?: string
           opportunity_id?: string | null
           organization_id: string
+          quote_id?: string | null
+          quote_status?: string | null
           recorded_at?: string
           request_id?: string | null
           to_stage?: string | null
@@ -809,6 +813,8 @@ export type Database = {
           occurred_at?: string
           opportunity_id?: string | null
           organization_id?: string
+          quote_id?: string | null
+          quote_status?: string | null
           recorded_at?: string
           request_id?: string | null
           to_stage?: string | null
@@ -834,6 +840,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_activities_quote_fkey"
+            columns: ["quote_id", "organization_id", "opportunity_id"]
+            isOneToOne: false
+            referencedRelation: "plus_quotes"
+            referencedColumns: ["id", "organization_id", "opportunity_id"]
           },
           {
             foreignKeyName: "plus_activities_request_fkey"
@@ -2625,6 +2638,15 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_quote_activity: {
+        Args: {
+          p_opp: Database["public"]["Tables"]["plus_opportunities"]["Row"]
+          p_quote_id: string
+          p_status: string
+          p_type: string
+        }
+        Returns: undefined
+      }
       _plus_quote_advance_stage: {
         Args: {
           p_opp: Database["public"]["Tables"]["plus_opportunities"]["Row"]
@@ -2720,6 +2742,13 @@ export type Database = {
       _plus_quote_opportunity: {
         Args: { p_organization_id: string; p_quote_id: string }
         Returns: string
+      }
+      _plus_quote_related_number: {
+        Args: {
+          p_event_status: string
+          p_quote: Database["public"]["Tables"]["plus_quotes"]["Row"]
+        }
+        Returns: number
       }
       _plus_quote_validate: {
         Args: {
@@ -4158,7 +4187,13 @@ export type Database = {
           actor_name: string
           body: string
           occurred_at: string
+          opportunity_id: string
+          quote_id: string
+          quote_kind: string
+          quote_number: number
+          quote_status: string
           recorded_at: string
+          related_quote_number: number
           total_count: number
         }[]
       }
@@ -4252,7 +4287,12 @@ export type Database = {
           body: string
           from_stage: string
           occurred_at: string
+          quote_id: string
+          quote_kind: string
+          quote_number: number
+          quote_status: string
           recorded_at: string
+          related_quote_number: number
           to_stage: string
           total_count: number
         }[]
@@ -4328,6 +4368,10 @@ export type Database = {
           occurred_at: string
           opportunity_id: string
           opportunity_title: string
+          quote_id: string
+          quote_kind: string
+          quote_number: number
+          quote_status: string
           to_stage: string
         }[]
       }
@@ -4414,6 +4458,7 @@ export type Database = {
       }
       plus_mark_quote_sent: {
         Args: {
+          p_dnc_acknowledged?: boolean
           p_expected_updated_at: string
           p_organization_id: string
           p_quote_id: string

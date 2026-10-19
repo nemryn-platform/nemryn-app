@@ -514,7 +514,7 @@ Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plu
   - Declined changes nothing.
   - Converted and lost opportunities are frozen for all quote writes.
   - A stage advance writes the existing `stage_changed` activity.
-- **History:** every quote change is in `audit_events` (entity `plus_quote`; no prices). The activity types `quote_sent` and `quote_status_changed` are allowed by the CHECK, but S1 does **not** write them: a quote reference on `plus_activities` is OD-Q15 (open).
+- **History:** every quote change is in `audit_events` (entity `plus_quote`; no prices). Since NP-P2-S5-S3B (ZD-222) the lifecycle events (`quote_sent`, `quote_status_changed`, `quote_revised`) are also on the Growth timelines; draft work stays audit-only.
 - **OD-Q12 = A (ZD-221, NP-P2-S5-S2, migration `20261019100000_plus_quotes_single_active.sql`):**
   - at most ONE active draft and ONE current sent quote per opportunity, enforced by the partial unique indexes `plus_quotes_one_draft_per_opportunity_idx` / `plus_quotes_one_sent_per_opportunity_idx`;
   - history is unrestricted, and a withdrawn draft frees the slot;
@@ -526,13 +526,15 @@ Owner decisions ZD-212 to ZD-220 (OD-Q1 to OD-Q9). Migration `20261018100000_plu
   - It uses `plus_list_organization_quotes` (paged, searched, filtered and sorted in the database) and `plus_quote_directory_summary`.
   - Expired is a derived filter: stored sent past the organization-local `valid_until`.
   - Quotes still start from an opportunity's panel.
+- **Lifecycle UI + timeline + do-not-contact (NP-P2-S5-S3B, migration `20261021100000_plus_quote_lifecycle_activity.sql`):**
+  - The Opportunity quotes panel offers Mark sent (a review of the server snapshot), record the customer's accepted / declined response, Revise (a new draft with a stable key), and withdraw a sent quote (with a reason).
+  - OD-Q15 = A (ZD-222): `plus_activities.quote_id` (composite FK `(quote_id, organization_id, opportunity_id)`) and `quote_status`. The events are `quote_sent`, `quote_status_changed` and `quote_revised`. They are written in the same transaction, carry no body and no amounts, and are shown on the Opportunity, Contact and dashboard timelines.
+  - OD-Q16 = A (ZD-223): `plus_mark_quote_sent(..., p_dnc_acknowledged boolean DEFAULT false)` refuses a do-not-contact contact without an explicit acknowledgment. The acknowledgment is audited and is not consent.
 - **Not decided / not encoded:**
   - OD-Q10: print content, number format, default validity, branding.
   - OD-Q11: follow-up tasks.
   - OD-Q13: whether quote totals update `estimated_value_cents`. They don't today.
   - OD-Q14: pricing rules.
-  - OD-Q15: a quote link on activities.
-  - OD-Q16: do-not-contact for quote actions. It isn't checked today.
 - **Labelled everywhere** as "Estimate" or "Quote", **never** "Invoice", "Bill" or "Payment". Accepting a quote changes only the opportunity's stage. It records no money movement, creates no Request and creates no receivable.
 - "Sending" in Q1 means **marking it as sent**. Staff share it themselves: printed or read out on a call. Emailing a quote PDF is NP-P4 and consent-gated.
 - **No addresses, routes, appointment details or medical narrative** in a quote (ZD-220).
