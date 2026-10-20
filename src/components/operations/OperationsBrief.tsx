@@ -1,6 +1,24 @@
 import Link from "next/link";
-import { WarningCircle, ArrowRight } from "@phosphor-icons/react/dist/ssr";
-import { Panel } from "@/components/ui/Panel";
+import type { ReactNode } from "react";
+import {
+  WarningCircle,
+  ArrowRight,
+  CaretRight,
+  Tray,
+  CalendarCheck,
+  Repeat,
+  ShieldCheck,
+  IdentificationCard,
+  Clock,
+  Lightning,
+  NavigationArrow,
+  Path,
+  Storefront,
+  PlugsConnected,
+  SteeringWheel,
+  ListChecks,
+} from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader, PanelSection, iconToneClasses, type PanelTone } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -30,6 +48,8 @@ export interface OperationsBriefProps {
   isAdmin: boolean;
   /** The caller has an active linked Driver (owner-as-driver). */
   hasLinkedDriver: boolean;
+  /** NP-UI-P1b: today's fact tiles (the page's real summary counts), shown under the heading on a standard Brief. */
+  summaryTiles?: ReactNode;
 }
 
 /**
@@ -50,37 +70,47 @@ export interface OperationsBriefProps {
  *     is never shown as zero, and never silently dropped).
  * The individual blocks keep their existing data, copy and actions.
  */
-export function OperationsBrief({ brief, composition, timezone, nextTodayPickupAt, isAdmin, hasLinkedDriver }: OperationsBriefProps) {
+export function OperationsBrief({ brief, composition, timezone, nextTodayPickupAt, isAdmin, hasLinkedDriver, summaryTiles }: OperationsBriefProps) {
   const { attention, activeNow, nextDepartures, unassignedCount, requestSummary, tomorrowReadiness, recurringCare, proofOfService } = brief;
 
   const heading = (
     <div>
-      <h2 className={cn(typography.sectionHeading, "text-text-primary")}>Operations Brief</h2>
+      <h2 className={cn(typography.sectionHeading, "text-text-primary")} id="operations-brief-heading">
+        Operations Brief
+      </h2>
       <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>What needs your attention and what is happening next.</p>
     </div>
   );
 
   if (composition.kind === "fresh") {
     return (
-      <div className="flex flex-col gap-zw-lg" data-testid="brief" data-brief-kind="fresh">
+      <section className="flex flex-col gap-zw-md" data-testid="brief" data-brief-kind="fresh" aria-labelledby="operations-brief-heading">
+      {/* NP-UI-P1b: heading 16px above its first card. */}
         {heading}
-        <GetStartedPanel timezone={timezone} isAdmin={isAdmin} hasLinkedDriver={hasLinkedDriver} />
-        {composition.showRequests && (
-          <div data-brief-section="requests">
-            <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
-          </div>
-        )}
+        {/* NP-UI-P1b (Concept B): Get started and Requests awaiting review side by side when both are present. */}
+        <div className={cn("grid grid-cols-1 gap-zw-lg", composition.showRequests && "lg:grid-cols-2")}>
+          <GetStartedPanel timezone={timezone} isAdmin={isAdmin} hasLinkedDriver={hasLinkedDriver} />
+          {composition.showRequests && (
+            <div data-brief-section="requests" className="[&>*]:h-full">
+              <RequestsAwaitingReviewBlock summary={requestSummary} timezone={timezone} />
+            </div>
+          )}
+        </div>
         {composition.requestsUnavailable && (
           <CalmGroup lines={[{ key: "unavailable", section: "requests" }]} brief={brief} />
         )}
-      </div>
+      </section>
     );
   }
 
   const noOtherWork = composition.work.every((section) => section === "today");
   return (
-    <div className="flex flex-col gap-zw-lg" data-testid="brief" data-brief-kind="standard">
-      {heading}
+    <section className="flex flex-col gap-zw-lg" data-testid="brief" data-brief-kind="standard" aria-labelledby="operations-brief-heading">
+      {/* NP-UI-P1b rhythm: heading -> its fact tiles 16px; then 24px between the Brief's cards. */}
+      <div className="flex flex-col gap-zw-md">
+        {heading}
+        {summaryTiles}
+      </div>
       <TodayHeadline
         headline={composition.headline}
         detail={composition.todayDetail}
@@ -88,8 +118,11 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
         nextTodayPickupAt={nextTodayPickupAt}
         timezone={timezone}
       />
-      {composition.work.map((section) => (
-        <div key={section} data-brief-section={section}>
+      {/* NP-UI-P1b: the WORK sections keep their fixed P0..P5 order (reading order is row by row); the wide blocks
+          (Needs Attention, Today) span both columns at lg, the compact single-row blocks pair up. */}
+      <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
+      {composition.work.map((section, index) => (
+        <div key={section} data-brief-section={section} className={cn(spansFullRow(composition.work, index) ? "lg:col-span-2" : "[&>*]:h-full")}>
           {section === "attention" && (
             <NeedsAttentionBlock items={attention ?? []} unassignedCount={unassignedCount ?? 0} timezone={timezone} />
           )}
@@ -111,9 +144,26 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
           {section === "proof" && <ProofOfServiceBlock summary={proofOfService} />}
         </div>
       ))}
+      </div>
       {composition.calm.length > 0 && <CalmGroup lines={composition.calm} brief={brief} />}
-    </div>
+    </section>
   );
+}
+
+const WIDE_SECTIONS = new Set<string>(["attention", "today"]);
+
+/**
+ * Wide sections always span the row. Compact sections pair up in reading order; one left without a partner (a run of
+ * compact sections with an odd length) spans the row instead of leaving an empty half.
+ */
+function spansFullRow(work: readonly string[], index: number): boolean {
+  if (WIDE_SECTIONS.has(work[index])) return true;
+  let runStart = index;
+  while (runStart > 0 && !WIDE_SECTIONS.has(work[runStart - 1])) runStart--;
+  let runEnd = index;
+  while (runEnd < work.length - 1 && !WIDE_SECTIONS.has(work[runEnd + 1])) runEnd++;
+  const runLength = runEnd - runStart + 1;
+  return runLength % 2 === 1 && index === runEnd;
 }
 
 /** The Today headline: one calm line (or the existing contained panels for unavailable / all clear). */
@@ -168,72 +218,104 @@ function TodayHeadline({
 
 /** Fresh organization (never had a trip, setup incomplete): one concise Get started panel instead of empty widgets. */
 function GetStartedPanel({ timezone, isAdmin, hasLinkedDriver }: { timezone: string; isAdmin: boolean; hasLinkedDriver: boolean }) {
+  // NP-UI-P1b (Concept B "Get started"): each action is one row link (icon, action, one-line purpose, chevron). The
+  // destinations and their role gating are unchanged; admin-only links stay admin-only (and server-guarded).
   return (
-    <Panel className="flex flex-col gap-zw-md" data-testid="get-started">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Get started</h3>
-        <LinkButton href="/operations/trips/new" size="sm">
-          Create your first trip
-        </LinkButton>
+    <Panel padding="none" elevated className="flex flex-col" data-testid="get-started">
+      <div className="p-zw-lg pb-zw-md">
+        <PanelHeader
+          icon={<ListChecks className="size-5" />}
+          tone="info"
+          title="Get started"
+          description="Set up your workspace and schedule your first trip."
+        />
       </div>
-      <ul className="flex flex-col divide-y divide-border-subtle">
-        <li className="flex flex-wrap items-center justify-between gap-3 py-zw-sm first:pt-0">
-          <div>
-            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Business basics</p>
-            {/* The stored value is shown as a fact -- never claimed as "confirmed" (no persisted confirmation exists). */}
-            <p className={cn(typography.metadata, "text-text-secondary")} data-testid="get-started-timezone">
-              Timezone: {timezone}
-            </p>
-          </div>
-          {isAdmin && (
-            <LinkButton href="/onboarding/basics" variant="outline" size="sm">
-              Review business basics
-            </LinkButton>
-          )}
-        </li>
+      <ul className="mx-zw-lg mb-zw-lg flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
+        <QuickActionRow href="/operations/trips/new" icon={<Path className="size-5" />} title="Create your first trip" description="Put a trip on the schedule." />
+        {isAdmin ? (
+          <QuickActionRow
+            href="/onboarding/basics"
+            icon={<Storefront className="size-5" />}
+            title="Review business basics"
+            // The stored value is shown as a fact -- never claimed as "confirmed" (no persisted confirmation exists).
+            description={<span data-testid="get-started-timezone">Timezone: {timezone}</span>}
+          />
+        ) : (
+          <QuickActionRow icon={<Storefront className="size-5" />} title="Business basics" description={<span data-testid="get-started-timezone">Timezone: {timezone}</span>} />
+        )}
         {isAdmin && (
-          <li className="flex flex-wrap items-center justify-between gap-3 py-zw-sm">
-            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Website requests</p>
-            <LinkButton href="/operations/settings/website-requests" variant="outline" size="sm">
-              Open
-            </LinkButton>
-          </li>
+          <QuickActionRow
+            href="/operations/settings/website-requests"
+            icon={<PlugsConnected className="size-5" />}
+            title="Open website requests"
+            description="Set up and manage requests from your website."
+          />
         )}
         {isAdmin && !hasLinkedDriver && (
-          <li className="flex flex-wrap items-center justify-between gap-3 py-zw-sm last:pb-0">
-            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Do you also drive?</p>
-            <LinkButton href="/operations/settings/my-access" variant="outline" size="sm">
-              I also drive
-            </LinkButton>
-          </li>
+          <QuickActionRow
+            href="/operations/settings/my-access"
+            icon={<SteeringWheel className="size-5" />}
+            title="I also drive"
+            description="Do you also drive? Link your own driver profile."
+          />
         )}
       </ul>
     </Panel>
   );
 }
 
+/** One quick-action row: a whole-row link when there is a destination, otherwise a static fact row (no chevron). */
+function QuickActionRow({ href, icon, title, description }: { href?: string; icon: ReactNode; title: string; description: ReactNode }) {
+  const body = (
+    <>
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-surface-secondary text-text-secondary" aria-hidden>
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className={cn(typography.bodySmall, "block font-medium text-text-primary")}>{title}</span>
+        <span className={cn(typography.metadata, "block text-text-secondary")}>{description}</span>
+      </span>
+      {href && <CaretRight className="size-4 shrink-0 text-text-muted" aria-hidden />}
+    </>
+  );
+  return (
+    <li>
+      {href ? (
+        <Link href={href} className="flex items-center gap-3 px-zw-md py-zw-sm transition-colors duration-base first:rounded-t-md hover:bg-surface-hover">
+          {body}
+        </Link>
+      ) : (
+        <div className="flex items-center gap-3 px-zw-md py-zw-sm">{body}</div>
+      )}
+    </li>
+  );
+}
+
 /** Trips exist but no active Driver can be assigned (activeDriverCount = 0). Admin gets the setup link; a Dispatcher gets a factual note. */
 function NoActiveDriversRow({ isAdmin }: { isAdmin: boolean }) {
   return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Drivers</h3>
-        <p className={cn(typography.bodySmall, "mt-1 text-warning-text")}>No active drivers — trips can&apos;t be assigned.</p>
-        {!isAdmin && <p className={cn(typography.metadata, "mt-1 text-text-muted")}>An organization admin can add drivers.</p>}
-      </div>
-      {isAdmin && (
-        <LinkButton href="/operations/drivers" variant="outline" size="sm">
-          Set up drivers
-        </LinkButton>
-      )}
-    </Panel>
+    <CompactBlock
+      icon={<IdentificationCard className="size-5" />}
+      tone="attention"
+      title="Drivers"
+      action={
+        isAdmin ? (
+          <LinkButton href="/operations/drivers" variant="outline" size="sm">
+            Set up drivers
+          </LinkButton>
+        ) : undefined
+      }
+    >
+      <p className={cn(typography.bodySmall, "text-warning-text")}>No active drivers — trips can&apos;t be assigned.</p>
+      {!isAdmin && <p className={cn(typography.metadata, "mt-1 text-text-muted")}>An organization admin can add drivers.</p>}
+    </CompactBlock>
   );
 }
 
 /** One compact group of single-line summaries -- no zero tiles, no percentages. */
 function CalmGroup({ lines, brief }: { lines: BriefCalmLine[]; brief: OperationsBriefData }) {
   return (
-    <Panel data-testid="brief-calm">
+    <Panel padding="dense" elevated data-testid="brief-calm">
       <ul className="divide-y divide-border-subtle">
         {lines.map((line) => {
           const row = calmRow(line, brief);
@@ -245,7 +327,7 @@ function CalmGroup({ lines, brief }: { lines: BriefCalmLine[]; brief: Operations
               data-testid={line.key === "tomorrow" ? "brief-tomorrow" : undefined}
             >
               <div className="min-w-0">
-                <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>{row.title}</p>
+                <p className={cn(typography.metadata, "font-medium text-text-muted")}>{row.title}</p>
                 <p
                   className={cn(typography.bodySmall, line.key === "unavailable" ? "text-text-muted" : "text-text-secondary")}
                   data-testid={line.key === "tomorrow" ? "brief-tomorrow-line" : undefined}
@@ -320,66 +402,59 @@ function NeedsAttentionBlock({
   const visible = items.slice(0, ATTENTION_ROW_LIMIT);
   const overflowCount = items.length - visible.length;
 
+  // NP-UI-P1b card rhythm: header (icon, title, count) · body (one row per trip: time column, passenger + reason,
+  // route, explanation, the row's one action) · footer only when more items wait in Dispatch. Same rows, limit,
+  // reasons, explanations and destinations as before.
   return (
-    <Panel className="p-0">
-      <div className="flex items-start justify-between gap-4 p-zw-lg pb-0">
-        <div className="flex items-center gap-2">
-          <WarningCircle className="size-5 text-warning-strong" weight="fill" aria-hidden />
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Needs Attention</h3>
-        </div>
-        {items.length > 0 && (
-          <StatusBadge label={`${items.length} ${items.length === 1 ? "Item" : "Items"}`} category="warning" />
+    <Panel padding="none" elevated className="flex h-full flex-col">
+      <PanelSection part="header">
+        <PanelHeader
+          icon={<WarningCircle className="size-5" weight="fill" />}
+          tone={items.length > 0 ? "attention" : "neutral"}
+          title="Needs Attention"
+          description="Trips with an open issue, no driver, or a location concern."
+          actions={items.length > 0 ? <StatusBadge label={`${items.length} ${items.length === 1 ? "Item" : "Items"}`} category="warning" /> : undefined}
+        />
+      </PanelSection>
+      <PanelSection part="body">
+        {unassignedCount > 0 && (
+          <p className={cn(typography.bodySmall, "mb-zw-sm font-medium text-text-secondary")}>
+            {unassignedCount} {unassignedCount === 1 ? "trip needs" : "trips need"} a driver.
+          </p>
         )}
-      </div>
-
-      {unassignedCount > 0 && (
-        <p className={cn(typography.bodySmall, "px-zw-lg pt-zw-sm text-text-secondary")}>
-          {unassignedCount} {unassignedCount === 1 ? "trip needs" : "trips need"} a driver.
-        </p>
-      )}
-
-      <div className="p-zw-lg">
         {items.length === 0 ? (
-          <EmptyState title="Nothing needs attention" description="No open issues, unassigned trips, or location concerns right now." />
+          <EmptyState size="compact" title="Nothing needs attention" description="No open issues, unassigned trips, or location concerns right now." />
         ) : (
           <ul className="divide-y divide-border-subtle">
             {visible.map((item) => (
-              <li
-                key={item.trip.id}
-                className="flex flex-col gap-2 py-zw-sm first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-              >
-                <div className="min-w-0 flex-1">
+              <li key={item.trip.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2 py-zw-md first:pt-zw-xs last:pb-zw-xs sm:grid-cols-[4.5rem_minmax(0,1fr)_auto]">
+                <p className={cn(typography.label, "pt-0.5 tabular-nums text-text-primary")}>{formatOperationsTime(item.trip.scheduledPickupAt, timezone)}</p>
+                <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>
-                      {formatOperationsTime(item.trip.scheduledPickupAt, timezone)} · {item.trip.passengerName}
-                    </p>
+                    <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{item.trip.passengerName}</p>
                     <StatusBadge label={item.assurance.label} category={assuranceStatusCategory(item.assurance.code)} />
                   </div>
-                  <p className={cn(typography.metadata, "truncate text-text-muted")}>
+                  <p className={cn(typography.metadata, "mt-1 truncate text-text-muted")}>
                     {item.trip.pickupDescription} <ArrowRight className="inline size-3" aria-hidden />{" "}
                     {item.trip.destinationDescription}
                   </p>
-                  <p className={cn(typography.metadata, "text-text-secondary")}>{item.assurance.explanation}</p>
+                  <p className={cn(typography.metadata, "mt-0.5 text-text-secondary")}>{item.assurance.explanation}</p>
                 </div>
-                <LinkButton href={attentionItemHref(item)} variant="outline" size="sm" className="shrink-0">
+                <LinkButton href={attentionItemHref(item)} variant="outline" size="sm" className="col-start-2 justify-self-start sm:col-start-auto sm:self-center sm:justify-self-end">
                   {item.assurance.code === "NEEDS_ASSIGNMENT" ? "Assign" : "Open Trip"}
                 </LinkButton>
               </li>
             ))}
           </ul>
         )}
-
-        {overflowCount > 0 && (
-          <div className="mt-zw-md border-t border-border-subtle pt-zw-md text-center">
-            <Link
-              href="/operations/dispatch"
-              className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}
-            >
-              +{overflowCount} more in Dispatch <ArrowRight className="size-4" aria-hidden />
-            </Link>
-          </div>
-        )}
-      </div>
+      </PanelSection>
+      {overflowCount > 0 && (
+        <PanelSection part="footer">
+          <Link href="/operations/dispatch" className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}>
+            +{overflowCount} more in Dispatch <ArrowRight className="size-4" aria-hidden />
+          </Link>
+        </PanelSection>
+      )}
     </Panel>
   );
 }
@@ -390,48 +465,96 @@ function NeedsAttentionBlock({
  * must see Brief -> its 4 blocks as a real h2 -> h3 nesting, not a second,
  * competing set of page-level h2s alongside the existing Needs Attention/
  * Upcoming Trips/Active Trips/Activity Log panels below). */
-function BlockHeading({ title, description }: { title: string; description?: string }) {
+function BlockHeading({ title, description, icon }: { title: string; description?: string; icon?: ReactNode }) {
+  return <PanelHeader title={title} description={description} icon={icon} tone="info" />;
+}
+
+/**
+ * NP-UI-P1b compact Brief block (Concept B card anatomy): a header (icon tile + fixed h3 title), the block's own
+ * varying body, and its one action in a quiet footer. The copy, the action and the heading identity of every block
+ * are unchanged.
+ */
+function CompactBlock({
+  icon,
+  tone = "neutral",
+  title,
+  action,
+  children,
+  testId,
+}: {
+  icon: ReactNode;
+  tone?: PanelTone;
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+  testId?: string;
+}) {
   return (
-    <div>
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>{title}</h3>
-      {description && <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>{description}</p>}
-    </div>
+    <Panel padding="none" elevated className="flex flex-col" data-testid={testId}>
+      <PanelSection part="header" className="pb-zw-lg">
+        <div className="flex items-start gap-3">
+          <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-md", iconToneClasses[tone])} aria-hidden>
+            {icon}
+          </span>
+          <div className="min-w-0 flex-1 pt-0.5">
+            <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>{title}</h3>
+            <div className="mt-1">{children}</div>
+          </div>
+        </div>
+      </PanelSection>
+      {action && <PanelSection part="footer">{action}</PanelSection>}
+    </Panel>
+  );
+}
+
+/** NP-UI-P1b: one trip row in a Brief list — a fixed time column, then passenger and route, then the status. */
+function BriefTripRow({ trip, timezone, status }: { trip: TodaysOperationsTrip; timezone: string; status: ReactNode }) {
+  return (
+    <li>
+      <Link
+        href={`/operations/trips/${trip.id}`}
+        className="-mx-zw-sm grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-start gap-x-3 rounded-sm px-zw-sm py-zw-sm transition-colors duration-base hover:bg-surface-hover"
+      >
+        <span className={cn(typography.label, "pt-0.5 tabular-nums text-text-primary")}>{formatOperationsTime(trip.scheduledPickupAt, timezone)}</span>
+        <span className="min-w-0">
+          <span className={cn(typography.bodySmall, "block truncate font-medium text-text-primary")}>{trip.passengerName}</span>
+          <span className={cn(typography.metadata, "block truncate text-text-muted")}>
+            {trip.pickupDescription} → {trip.destinationDescription}
+          </span>
+        </span>
+        {status}
+      </Link>
+    </li>
   );
 }
 
 function ActiveNowBlock({ trips, timezone }: { trips: TodaysOperationsTrip[]; timezone: string }) {
   return (
-    <Panel>
-      <BlockHeading title="Active Now" description="What's happening right now." />
-      <div className="mt-zw-md">
+    <Panel padding="none" elevated className="flex h-full flex-col">
+      <PanelSection part="header">
+        <BlockHeading title="Active Now" description="What's happening right now." icon={<Lightning className="size-5" />} />
+      </PanelSection>
+      <PanelSection part="body" className="flex-1">
         {trips.length === 0 ? (
-          <EmptyState title="Nothing in progress" description="Trips currently underway will appear here." />
+          <EmptyState size="compact" title="Nothing in progress" description="Trips currently underway will appear here." />
         ) : (
           <ul className="divide-y divide-border-subtle">
             {trips.map((trip) => (
-              <li key={trip.id} className="py-zw-sm first:pt-0 last:pb-0">
-                <Link
-                  href={`/operations/trips/${trip.id}`}
-                  className="flex items-center justify-between gap-3 rounded-sm px-zw-sm py-zw-xs hover:bg-surface-hover"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
+              <BriefTripRow
+                key={trip.id}
+                trip={trip}
+                timezone={timezone}
+                status={
+                  <span className={cn(typography.bodySmall, "inline-flex items-center gap-1.5 pt-0.5 font-medium text-info-text")}>
                     <span className="size-2 shrink-0 rounded-full bg-info-strong" aria-hidden />
-                    <div className="min-w-0">
-                      <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
-                        {formatOperationsTime(trip.scheduledPickupAt, timezone)} · {trip.passengerName}
-                      </p>
-                      <p className={cn(typography.metadata, "truncate text-text-muted")}>
-                        {trip.pickupDescription} → {trip.destinationDescription}
-                      </p>
-                    </div>
-                  </div>
-                  <span className={cn(typography.bodySmall, "shrink-0 font-medium text-info-text")}>{trip.statusLabel}</span>
-                </Link>
-              </li>
+                    {trip.statusLabel}
+                  </span>
+                }
+              />
             ))}
           </ul>
         )}
-      </div>
+      </PanelSection>
     </Panel>
   );
 }
@@ -442,41 +565,28 @@ function NextDeparturesBlock({ trips: allTrips, timezone }: { trips: TodaysOpera
   const trips = allTrips.slice(0, BRIEF_ROW_LIMIT);
   const overflow = allTrips.length - trips.length;
   return (
-    <Panel>
-      <BlockHeading title="Next Departures" description="Scheduled to depart within 2 hours." />
-      <div className="mt-zw-md">
+    <Panel padding="none" elevated className="flex h-full flex-col">
+      <PanelSection part="header">
+        <BlockHeading title="Next Departures" description="Scheduled to depart within 2 hours." icon={<NavigationArrow className="size-5" />} />
+      </PanelSection>
+      <PanelSection part="body" className="flex-1">
         {trips.length === 0 ? (
-          <EmptyState title="Nothing departing soon" description="No trips scheduled to depart in the next 2 hours." />
+          <EmptyState size="compact" title="Nothing departing soon" description="No trips scheduled to depart in the next 2 hours." />
         ) : (
           <ul className="divide-y divide-border-subtle">
             {trips.map((trip) => (
-              <li key={trip.id} className="py-zw-sm first:pt-0 last:pb-0">
-                <Link
-                  href={`/operations/trips/${trip.id}`}
-                  className="flex items-center justify-between gap-3 rounded-sm px-zw-sm py-zw-xs hover:bg-surface-hover"
-                >
-                  <div className="min-w-0">
-                    <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
-                      {formatOperationsTime(trip.scheduledPickupAt, timezone)} · {trip.passengerName}
-                    </p>
-                    <p className={cn(typography.metadata, "truncate text-text-muted")}>
-                      {trip.pickupDescription} → {trip.destinationDescription}
-                    </p>
-                  </div>
-                  <span className={cn(typography.metadata, "shrink-0 text-text-muted")}>{trip.statusLabel}</span>
-                </Link>
-              </li>
+              <BriefTripRow key={trip.id} trip={trip} timezone={timezone} status={<span className={cn(typography.metadata, "pt-0.5 text-text-muted")}>{trip.statusLabel}</span>} />
             ))}
           </ul>
         )}
-        {overflow > 0 && (
-          <div className="mt-zw-md border-t border-border-subtle pt-zw-md text-center">
-            <Link href="#today-trips" className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}>
-              View today&apos;s trips <ArrowRight className="size-4" aria-hidden />
-            </Link>
-          </div>
-        )}
-      </div>
+      </PanelSection>
+      {overflow > 0 && (
+        <PanelSection part="footer">
+          <Link href="#today-trips" className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}>
+            View today&apos;s trips <ArrowRight className="size-4" aria-hidden />
+          </Link>
+        </PanelSection>
+      )}
     </Panel>
   );
 }
@@ -507,15 +617,9 @@ function RequestsAwaitingReviewBlock({
     // requests awaiting review" (that copy is reserved for the real,
     // successfully-fetched `pendingRequestCount === 0` case).
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Requests awaiting review</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Request summary unavailable</p>
-        </div>
-        <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm">
-          Review requests
-        </LinkButton>
-      </Panel>
+      <CompactBlock icon={<Tray className="size-5" />} title="Requests awaiting review" action={<ReviewRequestsLink />}>
+        <p className={cn(typography.bodySmall, "text-text-muted")}>Request summary unavailable</p>
+      </CompactBlock>
     );
   }
 
@@ -524,30 +628,49 @@ function RequestsAwaitingReviewBlock({
   // P1-PILOT-R2B (PR-03): a plain fact line, no score / aging / severity; zero or unknown -> nothing.
   const strandedLine = strandedRequestsLine(strandedAcceptedCount ?? 0);
 
+  // NP-UI-P1b (Concept B): the pending count is the block's headline figure; the oldest request and the stranded
+  // accepted requests are fact rows beneath it. Same facts, same copy, same links as before.
   return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Requests awaiting review</h3>
-        <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-          {hasPending ? `${pendingRequestCount} ${pendingRequestCount === 1 ? "request" : "requests"}` : "No requests awaiting review"}
-        </p>
-        {hasPending && oldestPendingRequestCreatedAt && (
-          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-            Oldest request received {formatOperationsLongDate(new Date(oldestPendingRequestCreatedAt), timezone)}
-          </p>
+    <CompactBlock icon={<Tray className="size-5" />} tone={hasPending ? "info" : "neutral"} title="Requests awaiting review" action={<ReviewRequestsLink />}>
+      <p className={cn(typography.bodySmall, "text-text-secondary")}>
+        {hasPending ? (
+          <>
+            <span className={cn(typography.metricValue, "text-text-primary")}>{pendingRequestCount}</span>{" "}
+            {pendingRequestCount === 1 ? "request" : "requests"}
+          </>
+        ) : (
+          "No requests awaiting review"
         )}
-        {strandedLine && (
-          <p className={cn(typography.bodySmall, "mt-1")} data-testid="brief-stranded-requests">
-            <Link href={STRANDED_REQUESTS_HREF} className="text-text-link hover:underline">
-              {strandedLine}
-            </Link>
-          </p>
-        )}
-      </div>
-      <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm">
-        Review requests
-      </LinkButton>
-    </Panel>
+      </p>
+      {((hasPending && oldestPendingRequestCreatedAt) || strandedLine) && (
+        <ul className="mt-zw-md flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface-app px-zw-sm">
+          {hasPending && oldestPendingRequestCreatedAt && (
+            <li className={cn(typography.metadata, "flex items-center gap-2 py-zw-sm text-text-muted")}>
+              <Clock className="size-4 shrink-0" aria-hidden />
+              <span>Oldest request received {formatOperationsLongDate(new Date(oldestPendingRequestCreatedAt), timezone)}</span>
+            </li>
+          )}
+          {strandedLine && (
+            <li className="py-zw-sm">
+              <p className={cn(typography.bodySmall, "flex items-center gap-2")} data-testid="brief-stranded-requests">
+                <Path className="size-4 shrink-0 text-text-muted" aria-hidden />
+                <Link href={STRANDED_REQUESTS_HREF} className="text-text-link underline-offset-2 hover:underline">
+                  {strandedLine}
+                </Link>
+              </p>
+            </li>
+          )}
+        </ul>
+      )}
+    </CompactBlock>
+  );
+}
+
+function ReviewRequestsLink() {
+  return (
+    <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm" trailingIcon={<ArrowRight className="size-4" aria-hidden />}>
+      Review requests
+    </LinkButton>
   );
 }
 
@@ -576,17 +699,20 @@ function TomorrowReadinessBlock({ summary }: { summary: OperationsBriefData["tom
   // from the derived aggregate, no percentage, no stored status.
   const line = deriveTomorrowSummaryLine(summary);
   return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3" data-testid="brief-tomorrow">
-      <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Tomorrow</h3>
-        <p className={cn(typography.bodySmall, "mt-1", summary === null ? "text-text-muted" : "text-text-secondary")} data-testid="brief-tomorrow-line">
-          {line}
-        </p>
-      </div>
-      <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
-        Review tomorrow
-      </LinkButton>
-    </Panel>
+    <CompactBlock
+      testId="brief-tomorrow"
+      icon={<CalendarCheck className="size-5" />}
+      title="Tomorrow"
+      action={
+        <LinkButton href="/operations/tomorrow" variant="outline" size="sm">
+          Review tomorrow
+        </LinkButton>
+      }
+    >
+      <p className={cn(typography.bodySmall, summary === null ? "text-text-muted" : "text-text-secondary")} data-testid="brief-tomorrow-line">
+        {line}
+      </p>
+    </CompactBlock>
   );
 }
 
@@ -625,15 +751,18 @@ function TomorrowReadinessBlock({ summary }: { summary: OperationsBriefData["tom
 function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurringCare"] }) {
   if (summary === null) {
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Recurring care unavailable</p>
-        </div>
-        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-          View recurring care
-        </LinkButton>
-      </Panel>
+      <CompactBlock
+        icon={<Repeat className="size-5" />}
+        tone="neutral"
+        title="Recurring care"
+        action={
+          <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+            View recurring care
+          </LinkButton>
+        }
+      >
+        <p className={cn(typography.bodySmall, "text-text-muted")}>Recurring care unavailable</p>
+      </CompactBlock>
     );
   }
 
@@ -641,49 +770,58 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
 
   if (activeArrangementCount === 0) {
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>No recurring transportation set up</p>
-        </div>
-        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-          Set up recurring care
-        </LinkButton>
-      </Panel>
+      <CompactBlock
+        icon={<Repeat className="size-5" />}
+        tone="neutral"
+        title="Recurring care"
+        action={
+          <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+            Set up recurring care
+          </LinkButton>
+        }
+      >
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>No recurring transportation set up</p>
+      </CompactBlock>
     );
   }
 
   if (missingOccurrenceCount === 0) {
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Recurring care is covered</p>
-          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>All expected rides in the next 14 days have trips scheduled.</p>
-        </div>
-        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-          View recurring care
-        </LinkButton>
-      </Panel>
+      <CompactBlock
+        icon={<Repeat className="size-5" />}
+        tone="neutral"
+        title="Recurring care"
+        action={
+          <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+            View recurring care
+          </LinkButton>
+        }
+      >
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>Recurring care is covered</p>
+        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>All expected rides in the next 14 days have trips scheduled.</p>
+      </CompactBlock>
     );
   }
 
   return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
-        <p className={cn(typography.bodySmall, "mt-1 text-warning-text")}>
-          {missingOccurrenceCount} recurring {missingOccurrenceCount === 1 ? "ride" : "rides"} need{missingOccurrenceCount === 1 ? "s" : ""} scheduling
-        </p>
-        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-          Across {arrangementsWithMissingCount} {arrangementsWithMissingCount === 1 ? "arrangement" : "arrangements"}
-          {nextMissingDate && ` · Next gap: ${formatServiceDateLabel(nextMissingDate)}`}
-        </p>
-      </div>
-      <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-        Review recurring care
-      </LinkButton>
-    </Panel>
+    <CompactBlock
+      icon={<Repeat className="size-5" />}
+      tone="attention"
+      title="Recurring care"
+      action={
+        <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
+          Review recurring care
+        </LinkButton>
+      }
+    >
+      <p className={cn(typography.bodySmall, "text-warning-text")}>
+        {missingOccurrenceCount} recurring {missingOccurrenceCount === 1 ? "ride" : "rides"} need{missingOccurrenceCount === 1 ? "s" : ""} scheduling
+      </p>
+      <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+        Across {arrangementsWithMissingCount} {arrangementsWithMissingCount === 1 ? "arrangement" : "arrangements"}
+        {nextMissingDate && ` · Next gap: ${formatServiceDateLabel(nextMissingDate)}`}
+      </p>
+    </CompactBlock>
   );
 }
 
@@ -735,15 +873,18 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
 function ProofOfServiceBlock({ summary }: { summary: OperationsBriefData["proofOfService"] }) {
   if (summary === null) {
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-muted")}>Proof-of-service review unavailable</p>
-        </div>
-        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
-          View proof of service
-        </LinkButton>
-      </Panel>
+      <CompactBlock
+        icon={<ShieldCheck className="size-5" />}
+        tone="neutral"
+        title="Proof of service"
+        action={
+          <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+            View proof of service
+          </LinkButton>
+        }
+      >
+        <p className={cn(typography.bodySmall, "text-text-muted")}>Proof-of-service review unavailable</p>
+      </CompactBlock>
     );
   }
 
@@ -751,54 +892,63 @@ function ProofOfServiceBlock({ summary }: { summary: OperationsBriefData["proofO
 
   if (completedTripCount === 0) {
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>No completed trips to review from yesterday.</p>
-        </div>
-        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
-          View proof of service
-        </LinkButton>
-      </Panel>
+      <CompactBlock
+        icon={<ShieldCheck className="size-5" />}
+        tone="neutral"
+        title="Proof of service"
+        action={
+          <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+            View proof of service
+          </LinkButton>
+        }
+      >
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>No completed trips to review from yesterday.</p>
+      </CompactBlock>
     );
   }
 
   if (needsReviewCount === 0) {
     return (
-      <Panel className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Yesterday&apos;s completed trips are ready for review.</p>
-          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-            {completedTripCount} completed {completedTripCount === 1 ? "trip has" : "trips have"} the required operational evidence.
-          </p>
-        </div>
-        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
-          View proof of service
-        </LinkButton>
-      </Panel>
+      <CompactBlock
+        icon={<ShieldCheck className="size-5" />}
+        tone="neutral"
+        title="Proof of service"
+        action={
+          <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+            View proof of service
+          </LinkButton>
+        }
+      >
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>Yesterday&apos;s completed trips are ready for review.</p>
+        <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+          {completedTripCount} completed {completedTripCount === 1 ? "trip has" : "trips have"} the required operational evidence.
+        </p>
+      </CompactBlock>
     );
   }
 
   return (
-    <Panel className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Proof of service</h3>
-        <p className={cn(typography.bodySmall, "mt-1 text-warning-text")}>
-          {needsReviewCount} completed {needsReviewCount === 1 ? "trip needs" : "trips need"} review
-        </p>
+    <CompactBlock
+      icon={<ShieldCheck className="size-5" />}
+      tone="attention"
+      title="Proof of service"
+      action={
+        <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
+          Review proof of service
+        </LinkButton>
+      }
+    >
+      <p className={cn(typography.bodySmall, "text-warning-text")}>
+        {needsReviewCount} completed {needsReviewCount === 1 ? "trip needs" : "trips need"} review
+      </p>
+      <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+        From {completedTripCount} completed {completedTripCount === 1 ? "trip" : "trips"} yesterday.
+      </p>
+      {evidenceIntegrityGapCount > 0 && (
         <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-          From {completedTripCount} completed {completedTripCount === 1 ? "trip" : "trips"} yesterday.
+          {evidenceIntegrityGapCount} {evidenceIntegrityGapCount === 1 ? "has" : "have"} incomplete service evidence.
         </p>
-        {evidenceIntegrityGapCount > 0 && (
-          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-            {evidenceIntegrityGapCount} {evidenceIntegrityGapCount === 1 ? "has" : "have"} incomplete service evidence.
-          </p>
-        )}
-      </div>
-      <LinkButton href="/operations/proof-of-service" variant="outline" size="sm">
-        Review proof of service
-      </LinkButton>
-    </Panel>
+      )}
+    </CompactBlock>
   );
 }

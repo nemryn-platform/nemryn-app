@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, CheckCircle, ClockCounterClockwise, Lightning, Path, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import {
@@ -26,13 +26,13 @@ import {
 import { formatOperationsTime } from "@/lib/operations/presentation";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
 import { OperationsBrief } from "@/components/operations/OperationsBrief";
+import { OverviewPageHeader } from "@/components/operations/OperationsPageHeaders";
 import { composeOperationsBrief, type ProgressiveOperationsSignals } from "@/lib/operations/progressive-operations-core";
 import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
 import { getOperationsPreferences } from "@/lib/operations/organization-preferences";
 import { formatSchedule } from "@/lib/operations/operating-schedule-core";
-import { SummaryStrip } from "@/components/ui/SummaryStrip";
-import { Panel } from "@/components/ui/Panel";
-import { SectionHeader } from "@/components/ui/SectionHeader";
+import { StatTile, StatTileGroup } from "@/components/ui/StatTile";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TripStatus } from "@/components/ui/TripStatus";
@@ -214,157 +214,179 @@ export default async function OperationsOverviewPage() {
     .then((preferences) => preferences?.schedule ?? null)
     .catch(() => null);
 
+  // NP-UI-P1b: today's four real summary counts (formerly the inline SummaryStrip below the Brief) as Concept B fact
+  // tiles directly under the Brief heading. Same values and labels; only shown when today's data loaded and the
+  // organization is past the fresh state (a fresh organization still sees no zero counters, P1-OPS-PROG3B). A tile
+  // links only where an existing destination shows that fact.
+  const summaryTiles =
+    composition.kind !== "fresh" && data !== null ? (
+      <StatTileGroup label="Today at a glance" testId="brief-summary-tiles">
+        {[
+          <StatTile key="today" label="trips today" value={data.summary.todayCount} icon={<Path className="size-5" />} tone="info" href="#today-trips" testId="tile-trips-today" />,
+          <StatTile key="active" label="active" value={data.summary.activeCount} icon={<Lightning className="size-5" />} tone="info" href="#active-trips" testId="tile-active" />,
+          <StatTile
+            key="attention"
+            label="need attention"
+            value={data.summary.attentionCount}
+            icon={<WarningCircle className="size-5" />}
+            tone={data.summary.attentionCount > 0 ? "attention" : "neutral"}
+            href="/operations/dispatch"
+            testId="tile-attention"
+          />,
+          <StatTile
+            key="ontrack"
+            label="no current issues"
+            value={data.summary.onTrackCount}
+            icon={<CheckCircle className="size-5" />}
+            tone={data.summary.onTrackCount > 0 ? "positive" : "neutral"}
+            testId="tile-on-track"
+          />,
+        ]}
+      </StatTileGroup>
+    ) : null;
+
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <OnboardingChecklistBanner checklist={checklist} />
+    <>
+      <OverviewPageHeader timezone={timezone} operatingHours={operatingSchedule ? formatSchedule(operatingSchedule) : null} />
+      {/* NP-UI-P1b rhythm: 32px between the page's major sections (setup, Brief, today's detail). */}
+      <div className="flex flex-col gap-zw-xl">
+        <OnboardingChecklistBanner checklist={checklist} />
 
-      {operatingSchedule && (
-        <p className={cn(typography.metadata, "text-text-secondary")}>
-          <span className="font-medium text-text-primary">Operating hours</span> · {formatSchedule(operatingSchedule)}
-        </p>
-      )}
+        <OperationsBrief
+          summaryTiles={summaryTiles}
+          brief={brief}
+          composition={composition}
+          timezone={timezone}
+          nextTodayPickupAt={nextTodayPickupAt}
+          isAdmin={organization.role === "organization_admin"}
+          hasLinkedDriver={hasLinkedDriver}
+        />
 
-      <OperationsBrief
-        brief={brief}
-        composition={composition}
-        timezone={timezone}
-        nextTodayPickupAt={nextTodayPickupAt}
-        isAdmin={organization.role === "organization_admin"}
-        hasLinkedDriver={hasLinkedDriver}
-      />
+        {/* P1-OPS-PROG3B: a fresh organization (no trip yet, setup incomplete)
+            sees no lower "today" detail -- it would only be zero counters and
+            empty tables. It returns with the first trip. */}
+        {composition.kind === "fresh" ? null : data === null ? (
+          // Contained, page-level unavailable treatment (P1-PILOT-S3 §7/§10)
+          // for the ENTIRE tightly-coupled today's-operations-derived group
+          // (SummaryStrip + Needs Attention/Upcoming Trips/Active Trips/
+          // Activity Log) — ONE notice for the whole group, not five
+          // repeated errors. The Operations Brief above already rendered
+          // its own compact "unavailable" treatment for the same
+          // underlying failure (dayState === "UNAVAILABLE"); this is the
+          // separate, larger detail region below it. No raw Supabase/SQL/
+          // PostgREST/ZW error text is ever surfaced here.
+          <Panel>
+            <EmptyState
+              title="Today's operations unavailable"
+              description="We couldn't load today's trip activity. Refresh the page to try again."
+            />
+          </Panel>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="flex flex-col gap-zw-lg">
+                {/* P1-OPS-PROG3B (owner decision Q1): the full Needs Attention
+                    table that used to be here duplicated the Brief's own
+                    attention list -- removed. The Brief shows the first 5 with
+                    their actions; Dispatch is the complete surface. */}
+                <Panel elevated className="scroll-mt-24 p-0" id="today-trips">
+                  <div className="p-zw-lg pb-0">
+                    <PanelHeader as="h2" icon={<Path className="size-5" />} title="Upcoming Trips" description="Every trip scheduled for today." />
+                  </div>
+                  <div className="p-zw-lg">
+                    {data.todayTrips.length === 0 ? (
+                      <EmptyState size="compact" title="No trips scheduled today" description="Trips scheduled for today will appear here." />
+                    ) : (
+                      <DataTable columns={upcomingColumns} rows={data.todayTrips} getRowId={(row) => row.id} />
+                    )}
+                  </div>
+                  <div className="border-t border-border-subtle p-zw-md text-center">
+                    <Link
+                      href="/operations/trips"
+                      className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}
+                    >
+                      View all trips <ArrowRight className="size-4" aria-hidden />
+                    </Link>
+                  </div>
+                </Panel>
+              </div>
 
-      {/* P1-OPS-PROG3B: a fresh organization (no trip yet, setup incomplete)
-          sees no lower "today" detail -- it would only be zero counters and
-          empty tables. It returns with the first trip. */}
-      {composition.kind === "fresh" ? null : data === null ? (
-        // Contained, page-level unavailable treatment (P1-PILOT-S3 §7/§10)
-        // for the ENTIRE tightly-coupled today's-operations-derived group
-        // (SummaryStrip + Needs Attention/Upcoming Trips/Active Trips/
-        // Activity Log) — ONE notice for the whole group, not five
-        // repeated errors. The Operations Brief above already rendered
-        // its own compact "unavailable" treatment for the same
-        // underlying failure (dayState === "UNAVAILABLE"); this is the
-        // separate, larger detail region below it. No raw Supabase/SQL/
-        // PostgREST/ZW error text is ever surfaced here.
-        <Panel>
-          <EmptyState
-            title="Today's operations unavailable"
-            description="We couldn't load today's trip activity. Refresh the page to try again."
-          />
-        </Panel>
-      ) : (
-        <>
-          <SummaryStrip
-            inline
-            items={[
-              { label: "trips today", value: data.summary.todayCount },
-              { label: "active", value: data.summary.activeCount, dot: true },
-              { label: "need attention", value: data.summary.attentionCount, tone: "warning", dot: true },
-              { label: "no current issues", value: data.summary.onTrackCount, dot: true },
-            ]}
-          />
+              <div className="flex flex-col gap-zw-lg">
+                <Panel elevated id="active-trips" className="scroll-mt-24">
+                  <PanelHeader
+                    as="h2"
+                    icon={<Lightning className="size-5" />}
+                    title="Active Trips"
+                    actions={
+                      data.activeTrips.length > 0 ? (
+                        <span className={cn(typography.metadata, "text-text-muted")}>{data.activeTrips.length} in progress</span>
+                      ) : undefined
+                    }
+                  />
+                  <div className="mt-zw-md">
+                    {data.activeTrips.length === 0 ? (
+                      <EmptyState size="compact" title="Nothing in progress" description="Trips currently underway will appear here." />
+                    ) : (
+                      <ul className="divide-y divide-border-subtle">
+                        {data.activeTrips.map((trip) => (
+                          <li key={trip.id} className="py-zw-sm first:pt-0 last:pb-0">
+                            <Link
+                              href={`/operations/trips/${trip.id}`}
+                              className="flex items-center justify-between gap-3 rounded-sm hover:bg-surface-hover"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="size-2 shrink-0 rounded-full bg-info-strong" aria-hidden />
+                                <div>
+                                  <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{trip.passengerName}</p>
+                                  <p className={cn(typography.metadata, "text-text-muted")}>
+                                    {trip.driverName ?? "Unassigned"}
+                                    {trip.vehicleLabel ? ` • ${trip.vehicleLabel}` : ""}
+                                  </p>
+                                </div>
+                              </div>
+                              <span className={cn(typography.bodySmall, "shrink-0 font-medium text-info-text")}>
+                                {trip.statusLabel}
+                              </span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </Panel>
 
-          <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="flex flex-col gap-zw-lg">
-              {/* P1-OPS-PROG3B (owner decision Q1): the full Needs Attention
-                  table that used to be here duplicated the Brief's own
-                  attention list -- removed. The Brief shows the first 5 with
-                  their actions; Dispatch is the complete surface. */}
-              <Panel className="scroll-mt-24 p-0" id="today-trips">
-                <div className="p-zw-lg pb-0">
-                  <SectionHeader title="Upcoming Trips" />
-                </div>
-                <div className="p-zw-lg">
-                  {data.todayTrips.length === 0 ? (
-                    <EmptyState title="No trips scheduled today" description="Trips scheduled for today will appear here." />
-                  ) : (
-                    <DataTable columns={upcomingColumns} rows={data.todayTrips} getRowId={(row) => row.id} />
-                  )}
-                </div>
-                <div className="border-t border-border-subtle p-zw-md text-center">
-                  <Link
-                    href="/operations/trips"
-                    className={cn(typography.bodySmall, "inline-flex items-center gap-1 font-medium text-text-link hover:underline")}
-                  >
-                    View all trips <ArrowRight className="size-4" aria-hidden />
-                  </Link>
-                </div>
-              </Panel>
-            </div>
-
-            <div className="flex flex-col gap-zw-lg">
-              <Panel>
-                <SectionHeader
-                  title="Active Trips"
-                  actions={
-                    data.activeTrips.length > 0 ? (
-                      <span className={cn(typography.metadata, "text-text-muted")}>{data.activeTrips.length} in progress</span>
-                    ) : undefined
-                  }
-                />
-                <div className="mt-zw-md">
-                  {data.activeTrips.length === 0 ? (
-                    <EmptyState title="Nothing in progress" description="Trips currently underway will appear here." />
-                  ) : (
-                    <ul className="divide-y divide-border-subtle">
-                      {data.activeTrips.map((trip) => (
-                        <li key={trip.id} className="py-zw-sm first:pt-0 last:pb-0">
-                          <Link
-                            href={`/operations/trips/${trip.id}`}
-                            className="flex items-center justify-between gap-3 rounded-sm hover:bg-surface-hover"
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="size-2 shrink-0 rounded-full bg-info-strong" aria-hidden />
+                <Panel elevated>
+                  <PanelHeader as="h2" icon={<ClockCounterClockwise className="size-5" />} title="Activity Log" />
+                  <div className="mt-zw-md">
+                    {data.activityLog.length === 0 ? (
+                      <EmptyState size="compact" title="No activity yet today" description="Trip updates will appear here as they happen." />
+                    ) : (
+                      <ul className="divide-y divide-border-subtle">
+                        {data.activityLog.map((event) => (
+                          <li key={event.id} className="flex items-start justify-between gap-3 py-zw-sm first:pt-0 last:pb-0">
+                            <div className="flex items-start gap-2">
+                              <span className="mt-1.5 size-2 shrink-0 rounded-full bg-text-muted" aria-hidden />
                               <div>
-                                <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{trip.passengerName}</p>
-                                <p className={cn(typography.metadata, "text-text-muted")}>
-                                  {trip.driverName ?? "Unassigned"}
-                                  {trip.vehicleLabel ? ` • ${trip.vehicleLabel}` : ""}
-                                </p>
+                                <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{event.label}</p>
+                                {event.passengerName && (
+                                  <p className={cn(typography.metadata, "text-text-muted")}>{event.passengerName}</p>
+                                )}
                               </div>
                             </div>
-                            <span className={cn(typography.bodySmall, "shrink-0 font-medium text-info-text")}>
-                              {trip.statusLabel}
+                            <span className={cn(typography.metadata, "shrink-0 text-text-muted")}>
+                              {formatOperationsTime(event.occurredAt, timezone)}
                             </span>
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </Panel>
-
-              <Panel>
-                <SectionHeader title="Activity Log" />
-                <div className="mt-zw-md">
-                  {data.activityLog.length === 0 ? (
-                    <EmptyState title="No activity yet today" description="Trip updates will appear here as they happen." />
-                  ) : (
-                    <ul className="divide-y divide-border-subtle">
-                      {data.activityLog.map((event) => (
-                        <li key={event.id} className="flex items-start justify-between gap-3 py-zw-sm first:pt-0 last:pb-0">
-                          <div className="flex items-start gap-2">
-                            <span className="mt-1.5 size-2 shrink-0 rounded-full bg-text-muted" aria-hidden />
-                            <div>
-                              <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{event.label}</p>
-                              {event.passengerName && (
-                                <p className={cn(typography.metadata, "text-text-muted")}>{event.passengerName}</p>
-                              )}
-                            </div>
-                          </div>
-                          <span className={cn(typography.metadata, "shrink-0 text-text-muted")}>
-                            {formatOperationsTime(event.occurredAt, timezone)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </Panel>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </Panel>
+              </div>
             </div>
-          </div>
-        </>
-      )}
-    </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }

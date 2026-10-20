@@ -45,6 +45,7 @@ export function NotificationsBell() {
         aria-controls="header-notifications"
         icon={<Bell className="size-5" aria-hidden />}
         onClick={() => setOpen((v) => !v)}
+        size="sm"
         data-testid="header-notifications-button"
       />
       {open && (

@@ -2,7 +2,7 @@
 
 **Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, P1-E3-S4 — Operations Application Shell & Today's Operations, P1-E3-S5 — Dispatch Board, and P1-E3-S6 — Operations Trip Detail (components below actually built/refined)
 **Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell; P1-E3-S5 implemented the real Dispatch Board; P1-E3-S6 implemented the real Operations Trip Detail screen — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", "Operations components — P1-E3-S4", "Dispatch components — P1-E3-S5", and "Trip Detail components — P1-E3-S6" below.
-**Last updated:** 2026-10-20 (NP-UI-P1a section added)
+**Last updated:** 2026-10-20 (NP-UI-P1a and NP-UI-P1b sections added)
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
 
@@ -207,6 +207,38 @@ library). Report: `docs/reports/NP-UI-P1a-foundations-implementation.txt`. Brows
 | `src/lib/ui/ui-core.ts` | New | Pure keyboard-index / pagination / typeahead helpers (unit-tested). |
 | `PrimitivesShowcase` (on `/foundation`) | New | Internal QA harness section + Dialog focus test bench (fictional content). |
 | Route states | New | `app/not-found.tsx`, `app/error.tsx`, `app/global-error.tsx`, `operations/{loading,error,not-found}.tsx`, `operations/[...missing]` (in-shell 404), `driver/{loading,error}.tsx`. |
+
+## Canonical shell & visual system — NP-UI-P1b (2026-10-20)
+
+Concept B visual direction reconciled with Brand Lock v1. The full shell spec, responsive rules and brand
+reconciliation are in [canonical-shell-specification.md](./canonical-shell-specification.md). The implementation
+report is `docs/reports/NP-UI-P1b-canonical-shell-implementation.txt`. The browser suite is
+`tests/e2e/ui-foundations/p1b.e2e.mjs`. Local primitives only; no component library.
+
+| Component / file | Status | Change |
+|---|---|---|
+| `src/lib/operations/nav-core.ts` | New | The navigation model: sections (Today / Planning / Records / Growth / Administration), Brand Lock §15 labels, gating, active matching, and the header context line. Unit-tested (`nav-core.test.mjs`). |
+| `OperationsSidebar` | Refined | Grouped, named sections; a steel active wash plus a left marker; a hairline between groups in the rail; a fixed-position rail label on hover and focus (aria-hidden; names stay `aria-label`); a chrome-variant collapse toggle; a "Switch workspace" link for multi-workspace people. 256 / 64px and the localStorage collapse are unchanged. |
+| `GrowthNavGroup` | Refined | Shares `nav-styles.ts`; the rail button feeds the rail label; the flyout behaviour and every `growth-nav-*` testid are unchanged. |
+| `AppHeader` | Refined | Now a slim 56px context bar (workspace / section › area plus utilities); it renders **no heading** and no page actions. All controls are 40px. |
+| `OperationsShell` / `OperationsLayoutClient` | Refined | The layout renders no h1 at all (header context only). Gutters are 16 / 24 / 32px. |
+| `OperationsPageHeaders` | New | The Overview, Dispatch, Trip Detail and Request Detail page headers (one h1 + Export Day Sheet / New Trip), rendered BY those pages in every branch, so an in-shell error boundary never leaves two h1s. |
+| `typography.metricValue` | New role | 24px semibold, tabular: the value of one compact fact (StatTile, a Brief block count). Documented in `13-typography-specification.md`. |
+| `PanelSection`, `iconToneClasses` (Panel.tsx) | New | Card rhythm (header · hairline body · quiet footer) and the shared icon-tile tones (status wash + faint inset ring). Raised Overview cards use the existing `shadow-sm` (owner-approved). |
+| `PageHeader` | Refined | ReactNode description, a `size="compact"` h1 for detail screens, actions that wrap under the title, and a `testId`. Still exactly one h1. |
+| `Panel` + `PanelHeader` | Refined / New | `padding` (standard / dense / none; a caller's own `p-*` class still wins). `PanelHeader` is the card anatomy: a 40px tinted icon tile, title (h2 / h3), description and actions. |
+| `SectionHeader` | Refined | `as` (h2 / h3), `size` (card / section), `titleId`; the default is unchanged. |
+| `StatTile` / `StatTileGroup` | New | One real fact per tile (value + label, optional detail, optional link only to an existing destination). `null` renders "Unavailable", never 0. |
+| `FilterBar` | New | A layout frame (search · filters · actions · polite result count). It owns no state, and no list is migrated yet. |
+| `Dialog placement="side"` / `SidePanel` | New | A right-docked full-height variant of the same native modal: the same focus trap, Escape and backdrop, and the same U2 focus return. Nothing is migrated yet. |
+| `EmptyState` | Refined | `size="compact"`, a one-line in-panel form, so an empty panel is never a large blank. |
+| `IconButton` | Refined | `size` (md 44 / sm 40) and a `chrome` variant (chrome tokens on the dark sidebar). |
+| `Button` | Refined | One radius (8px) for every size; heights 32 / 40 / 48; transitions respect reduced motion. |
+| Input / Select / Textarea / SearchInput / PasswordInput | Refined | A quiet hover border on enabled, valid fields; the error border never changes. Validation behaviour is unchanged. |
+| Radius tokens (globals.css) | Refined | 4 / 8 / 12 via the spec mapping (`xs` 4, `sm` 8, `md` 8, `lg` 12); class names are unchanged. |
+| `OnboardingChecklistBanner` | Refined | Concept B "Finish setting up": a real-count `role="progressbar"`, real segments, per-step icon + "Complete" / "Not complete" text, and a Hide / Show steps disclosure. No artwork or tagline. |
+| `OperationsBrief` | Refined | Named section; real fact tiles under the heading (standard Brief); work sections in a 2-column grid at lg (Needs Attention and Today span both). A `CompactBlock` card anatomy for Requests / Tomorrow / Recurring / Proof / Drivers. Get started becomes quick-action rows (same destinations and gating). Copy, links, order and every `data-testid` are unchanged. |
+| Operations Overview page | Refined | The inline SummaryStrip moved into the Brief as StatTiles (the same four values). Upcoming / Active / Activity panels use `PanelHeader` and compact empty states; `#active-trips` is an anchor. |
 
 ## Explicitly not building generically
 

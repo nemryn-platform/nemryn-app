@@ -8,9 +8,7 @@ import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import { GROWTH_CHILDREN, GROWTH_ROOT, isGrowthChildActive, isGrowthRoute } from "@/lib/plus/growth-nav-core";
 
-const itemBase = "flex items-center gap-3 rounded-sm px-3 py-2 font-medium transition-colors duration-base";
-const itemActive = "bg-chrome-item-active-background text-chrome-item-active-text";
-const itemIdle = "text-chrome-text-secondary hover:bg-chrome-item-hover hover:text-white";
+import { navItemActive as itemActive, navItemBase as itemBase, navItemIdle as itemIdle } from "@/components/operations/nav-styles";
 
 /**
  * NP-P2-S2: the Growth group of the EXISTING Operations sidebar (no second sidebar or shell). Rendered only when the
@@ -89,7 +87,7 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
           <Link
             href={GROWTH_ROOT}
             onClick={() => setOpen(true)}
-            className={cn(typography.bodySmall, itemBase, "min-w-0 flex-1", onGrowth ? "text-white" : itemIdle)}
+            className={cn(typography.bodySmall, itemBase, "min-w-0 flex-1", onGrowth ? "text-chrome-text-primary hover:bg-chrome-item-hover" : itemIdle)}
             data-testid="growth-nav-label"
           >
             <GrowthIcon className="size-5 shrink-0" weight={onGrowth ? "fill" : "regular"} aria-hidden />
@@ -102,13 +100,13 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
             aria-controls={listId}
             aria-label={open ? "Collapse Growth" : "Expand Growth"}
             title={open ? "Collapse Growth" : "Expand Growth"}
-            className="flex size-8 shrink-0 items-center justify-center rounded-sm text-chrome-text-secondary transition-colors duration-base hover:bg-chrome-item-hover hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+            className="flex size-8 shrink-0 items-center justify-center rounded-sm text-chrome-text-secondary transition-colors duration-base hover:bg-chrome-item-hover hover:text-chrome-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-chrome-text-primary"
             data-testid="growth-nav-toggle"
           >
             {open ? <CaretDown className="size-4" aria-hidden /> : <CaretRight className="size-4" aria-hidden />}
           </button>
         </div>
-        <ul id={listId} hidden={!open} className="mt-1 flex flex-col gap-1 border-l border-chrome-border pl-3 ml-5" data-testid="growth-nav-children">
+        <ul id={listId} hidden={!open} className="ml-5 mt-0.5 flex flex-col gap-0.5 border-l border-chrome-border pl-2" data-testid="growth-nav-children">
           {GROWTH_CHILDREN.map((c) => {
             const active = isGrowthChildActive(c.href, pathname);
             return (
@@ -136,8 +134,8 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
           aria-expanded={flyout}
           aria-controls={flyoutId}
           aria-label="Growth"
-          title="Growth"
-          className={cn(typography.bodySmall, itemBase, "w-full", onGrowth ? itemActive : itemIdle)}
+          data-nav-label="Growth"
+          className={cn(typography.bodySmall, itemBase, "w-full justify-center", onGrowth ? itemActive : itemIdle)}
           data-testid="growth-nav-rail-button"
         >
           <GrowthIcon className="size-5 shrink-0" weight={onGrowth ? "fill" : "regular"} aria-hidden />
@@ -149,13 +147,13 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
             role="group"
             aria-label="Growth"
             style={{ position: "fixed", top: flyoutPos.top, left: flyoutPos.left }}
-            className="z-50 min-w-48 rounded-md border border-chrome-border bg-chrome-background p-2 shadow-lg"
+            className="z-50 min-w-52 rounded-md border border-chrome-border bg-chrome-background p-2 shadow-md"
             onBlur={(e) => {
               if (!e.currentTarget.contains(e.relatedTarget as Node | null) && e.relatedTarget !== railButton.current) closeFlyout(false);
             }}
             data-testid="growth-nav-flyout"
           >
-            <p className={cn(typography.metadata, "px-3 pb-1 uppercase tracking-wide text-chrome-text-secondary")}>Growth</p>
+            <p className={cn(typography.metadata, "px-3 pb-1 font-medium text-chrome-text-secondary")}>Growth</p>
             <ul className="flex flex-col gap-1">
               {GROWTH_CHILDREN.map((c) => {
                 const active = isGrowthChildActive(c.href, pathname);

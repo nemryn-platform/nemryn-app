@@ -24,6 +24,7 @@ export function HelpMenu({ role }: { role: HelpRole }) {
         aria-controls="header-help"
         icon={<Question className="size-5" aria-hidden />}
         onClick={() => setOpen((v) => !v)}
+        size="sm"
         data-testid="header-help-button"
       />
       {open && (

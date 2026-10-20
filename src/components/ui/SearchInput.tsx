@@ -51,7 +51,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
             placeholder={placeholder}
             className={cn(
               typography.body,
-              "h-10 w-full rounded-sm border border-border-strong bg-surface-elevated pl-9 text-text-primary placeholder:text-text-disabled",
+              "h-10 w-full rounded-sm border border-border-strong bg-surface-elevated pl-9 text-text-primary transition-colors duration-base placeholder:text-text-disabled enabled:hover:border-text-secondary",
               onClear && hasValue ? "pr-9" : "pr-3",
               className,
             )}

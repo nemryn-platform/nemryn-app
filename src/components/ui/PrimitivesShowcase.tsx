@@ -4,7 +4,12 @@ import { useRef, useState } from "react";
 import { DotsThree, Funnel, Info } from "@phosphor-icons/react/dist/ssr";
 import { Button } from "./Button";
 import { Checkbox } from "./Checkbox";
-import { Dialog } from "./Dialog";
+import { Dialog, SidePanel } from "./Dialog";
+import { FilterBar } from "./FilterBar";
+import { Panel, PanelHeader } from "./Panel";
+import { SearchInput } from "./SearchInput";
+import { Select } from "./Select";
+import { StatTile, StatTileGroup } from "./StatTile";
 import { Menu } from "./Menu";
 import { Popover } from "./Menu";
 import { Pagination } from "./Pagination";
@@ -22,7 +27,7 @@ import { typography } from "@/design/typography";
  */
 export function PrimitivesShowcase() {
   const [segment, setSegment] = useState("today");
-  const [dialog, setDialog] = useState<null | "basic" | "vanishing">(null);
+  const [dialog, setDialog] = useState<null | "basic" | "vanishing" | "side">(null);
   const [vanished, setVanished] = useState(false);
   const fallback = useRef<HTMLButtonElement>(null);
   const [lastAction, setLastAction] = useState("none");
@@ -88,6 +93,30 @@ export function PrimitivesShowcase() {
         <Button ref={fallback} type="button" variant="text" onClick={() => setVanished(false)} data-testid="p1a-fallback-target">
           Reset sample
         </Button>
+        <Button type="button" variant="outline" onClick={() => setDialog("side")} data-testid="p1b-sidepanel-open">
+          Open sample side panel
+        </Button>
+      </div>
+      {/* NP-UI-P1b visual foundations (fictional sample values, internal QA page only). */}
+      <div className="flex flex-col gap-zw-md" data-testid="p1b-foundations">
+        <StatTileGroup label="Sample facts">
+          {[
+            <StatTile key="a" label="sample trips" value={12} icon={<Info className="size-5" />} tone="info" href="#p1b-foundations" />,
+            <StatTile key="b" label="sample items need attention" value={2} icon={<Info className="size-5" />} tone="attention" />,
+            <StatTile key="c" label="sample summary" value={null} icon={<Info className="size-5" />} />,
+            <StatTile key="d" label="sample complete" value={5} icon={<Info className="size-5" />} tone="positive" detail="Fictional detail line" />,
+          ]}
+        </StatTileGroup>
+        <Panel>
+          <PanelHeader icon={<Info className="size-5" />} tone="info" title="Sample panel" description="Card anatomy: icon tile, title, description, actions." actions={<Button size="sm" variant="outline">Action</Button>} />
+        </Panel>
+        <FilterBar
+          testId="p1b-filterbar"
+          search={<SearchInput label="Search samples" placeholder="Search samples" />}
+          filters={<Select label="Sample status" options={[{ value: "all", label: "All" }, { value: "open", label: "Open" }]} defaultValue="all" />}
+          actions={<Button size="sm" variant="text">Clear</Button>}
+          resultCount="3 sample results"
+        />
       </div>
       {dialog === "basic" && (
         <Dialog open title="Sample dialog" description="Fictional content for focus testing." onClose={() => setDialog(null)}>
@@ -100,6 +129,15 @@ export function PrimitivesShowcase() {
             </Button>
           </div>
         </Dialog>
+      )}
+      {dialog === "side" && (
+        <SidePanel open title="Sample side panel" description="Fictional content for focus testing." onClose={() => setDialog(null)}>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setDialog(null)} data-testid="p1b-sidepanel-cancel">
+              Cancel
+            </Button>
+          </div>
+        </SidePanel>
       )}
       {dialog === "vanishing" && (
         <Dialog open title="Complete sample action" onClose={() => setDialog(null)} returnFocusRef={fallback}>

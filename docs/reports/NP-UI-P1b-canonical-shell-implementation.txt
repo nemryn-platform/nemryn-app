@@ -1,0 +1,411 @@
+NP-UI-P1b — CANONICAL VISUAL SYSTEM AND APPLICATION SHELL: IMPLEMENTATION REPORT
+================================================================================
+Date: 2026-10-20.
+Mode: controlled implementation.
+Design: the approved richer Concept B.
+Brand authority: Nemryn Brand Lock v1.
+
+Status: implemented and verified locally on an isolated stack.
+- NOT committed, NOT pushed, NOT merged, NOT deployed. No production access of any kind.
+- The visual result is NOT approved: owner review is required. Resemblance to Concept B is not approval.
+
+======================================================================
+1. STARTING BRANCH AND HEAD
+======================================================================
+Preflight:
+- On np-ui-p1a-foundations @ e9d1ee5, with a clean tracked tree; untracked QA scripts and reports were preserved.
+- `git fetch`: origin/main = b3fd7de, "Merge pull request #22 from nemryn-platform/np-ui-p1a-foundations".
+  PR #22 merged 2026-10-20T04:08:09Z. e9d1ee5 is an ancestor of origin/main, so P1a is on main.
+- P1a fixes and primitives are present on main: U1 token #5f656b, Dialog focus return, the DataTable row
+  semantics, Checkbox / RadioGroup / Switch / Tabs / Menu / Tooltip / Pagination / Skeleton / RouteState, and the
+  route states.
+- The Concept B files are present under docs/design/concept-b/ (PNG, nemryn-design.md, HTML), unchanged. SHA-256:
+  - fdf30acd… (PNG)
+  - ff82795a… (md)
+  - 4df49d03… (html)
+- Required docs read:
+  - 11-brand-lock-v1;
+  - 12-design-token-specification;
+  - 13-typography-specification;
+  - component-inventory;
+  - the NP-UI-P0 audit and roadmap;
+  - concept-b/nemryn-design.md.
+- Canonical logos inspected in public/brand/ (the inverse logo and symbol are used; no asset was changed).
+
+Branch:
+- Created np-ui-p1b-canonical-shell from origin/main b3fd7de (`git switch -c`; no reset / stash / clean).
+- Untracked .tmp-qa / docs/reports files were preserved.
+
+======================================================================
+2. CHANGED-FILE INVENTORY (uncommitted)
+======================================================================
+41 files: 34 modified + 7 new. Tracked diff +1087 / −652; new files 744 lines.
+Nothing under supabase/ or public/, no package / lockfile / env change, and no Concept B or brand-asset change.
+
+New (7):
+- src/lib/operations/nav-core.ts: the navigation model (sections, labels, gating, active matching, the header
+  context line).
+- src/lib/operations/nav-core.test.mjs: 5 unit tests.
+- src/components/operations/nav-styles.ts: the shared nav item classes.
+- src/components/ui/StatTile.tsx: StatTile + StatTileGroup.
+- src/components/ui/FilterBar.tsx: the FilterBar layout foundation.
+- tests/e2e/ui-foundations/p1b.e2e.mjs: the P1b browser suite (49 checks).
+- docs/design/canonical-shell-specification.md: the shell spec, responsive rules and brand reconciliation.
+
+Modified, shell (9):
+- OperationsShell.tsx, OperationsSidebar.tsx, GrowthNavGroup.tsx, AppHeader.tsx, OperationsLayoutClient.tsx;
+- AccountMenu.tsx (40px trigger);
+- header/HelpMenu.tsx and header/NotificationsBell.tsx (40px controls);
+- OnboardingChecklistBanner.tsx.
+
+Modified, Overview (2): OperationsBrief.tsx; src/app/operations/page.tsx.
+
+Modified, primitives (15):
+- Avatar.tsx ("chrome" tone); Dialog.tsx (placement="side" + SidePanel); EmptyState.tsx (compact);
+- IconButton.tsx (size + chrome variant); PageHeader.tsx; Panel.tsx (padding + PanelHeader);
+- SectionHeader.tsx (as / size); buttonStyles.ts (one radius);
+- Input.tsx, Select.tsx, Textarea.tsx, PasswordInput.tsx, SearchInput.tsx (hover affordance);
+- PrimitivesShowcase.tsx (P1b samples on /foundation); index.ts (exports).
+
+Modified, other src (6):
+- globals.css: the radius scale and the chrome focus colour;
+- operations/error.tsx and operations/not-found.tsx: "Back to Operations Brief";
+- growth/quotes/page.tsx: an underlined in-text link (see §12);
+- trips/[tripId]/page.tsx and requests/[requestId]/page.tsx: comments only.
+
+Modified, docs (2): docs/design/component-inventory.md (an NP-UI-P1b section);
+docs/brand/nemryn/12-design-token-specification.md (an applied-radius note).
+
+======================================================================
+3. BRAND PRESERVATION EVIDENCE
+======================================================================
+Preserved (Brand Lock §§7–13):
+
+| Item | Evidence |
+|---|---|
+| Logos | The shell uses the approved /brand/nemryn-logo-inverse.svg (expanded) and /brand/nemryn-symbol-inverse.svg (rail) unmodified, at their own aspect ratio. No tenant logo. Browser check S6. |
+| Chrome / canvas | --color-chrome-background #171a1d (Deep Graphite) and --color-surface-app #f7f7f4 (Mineral White) are unchanged. B1. |
+| Primary action | New Trip renders rgb(23,26,29), graphite. No teal anywhere. B2. |
+| Typography | Geist Sans; no serif (B2); the app scale 24 / 18 / 15 / 13 / 12; sentence-case section labels and eyebrow (no ALL CAPS). |
+| Icons | Phosphor only. Path (Trips) and NavigationArrow (Dispatch) are kept: no vehicle / map-pin icon for Trips. |
+| Status colours | Existing semantic tokens, used only for their meaning (attention tint only when something needs attention). Statuses keep their text labels. |
+| Spacing | The existing zw scale only. |
+| Radius | The approved 4 / 8 / 12 (see §6 and the open point in §12). |
+| Server authorization | Untouched. Gating is navigation-only and re-checked on the server (G3). |
+
+Concept B items intentionally NOT copied:
+- the mockup N logo and the operator logo;
+- teal CTA and indicators;
+- serif headings;
+- the slate / teal / mint / sand palette;
+- the landscape art and the tagline;
+- fictional statistics and the "Service day — Operations active" tile;
+- the greeting;
+- the vehicle / map-pin icons;
+- the 12–14px card radius;
+- uppercase eyebrows.
+
+Full table: docs/design/canonical-shell-specification.md §8.
+
+======================================================================
+4. SIDEBAR AND ROUTE VERIFICATION
+======================================================================
+Structure:
+
+| Section | Items (route) |
+|---|---|
+| Today | Operations Brief (/operations) · Requests · Trips · Dispatch · Tomorrow Readiness (/operations/tomorrow) |
+| Planning | Standing Orders (/operations/recurring-care) |
+| Records | Passengers · Facilities · Drivers · Vehicles (/operations/fleet) |
+| Growth | Dashboard · Pipeline · Contacts · Estimates & Quotes · Tasks (the existing GrowthNavGroup) |
+| Administration | Drive (linked driver only) · Settings (Organization Admin only) |
+
+Rules:
+- Labels follow Brand Lock §15. Route and code identifiers are unchanged.
+- Billing / Reports stay unlinked.
+- Proof of Service stays reachable from the Brief; the Growth Agent from the Growth Dashboard.
+
+Verified in the browser (p1b.e2e.mjs):
+- S1–S5: section order, items, hrefs, Growth children, no Billing / Reports.
+- S7 / S14: expanded 256px; S9: collapsed 64px (keyboard toggle).
+  - Labels are visually hidden but announced.
+  - The symbol is shown.
+  - Every item keeps its aria-label.
+- S8: ALL 16 sidebar destinations load inside the shell, each with:
+  - aria-current on exactly its own item;
+  - one <main>;
+  - exactly one visible h1 (none in the header);
+  - no error boundary.
+- S10 / S10b / S11: the rail label shows on keyboard focus (aria-hidden; the name is the aria-label). The focus ring
+  on the chrome uses #a8bcc8 (≥7:1). Escape hides the label.
+- S12: the collapsed state persists across navigation and reload (localStorage only).
+- S13: the Growth rail flyout is unchanged: Enter opens and focuses its first link, and Escape returns focus.
+- R768: the tablet 64px rail shows the label on focus.
+- G1: a Dispatcher without a Growth grant sees Today / Planning / Records only (no Growth, Settings or empty
+  Administration).
+- G2 / G3: an Organization Admin without Nemryn Plus sees no Growth section, and the /operations/growth route itself
+  still refuses (server guard).
+- W1–W3: a multi-workspace person gets a "Switch workspace" link to /select-organization?switch=1, which opens the
+  existing picker listing both workspaces. A single-workspace admin has no link. The account-menu switch is
+  unchanged.
+- W4: signed out, /operations/dispatch → /sign-in.
+- W5: a Driver opening /operations → /driver, with no Operations chrome.
+- Unit: nav-core.test.mjs, 5 / 5 (order, gating, no Billing / Reports, active matching, context line).
+
+======================================================================
+5. HEADER ACTION VERIFICATION
+======================================================================
+Header (H1):
+- AppHeader is now a slim 56px context bar ("Fictional Org A / Today › Operations Brief" plus utilities), with no
+  heading element.
+- Notifications, Help and the account menu are all 40px.
+
+Page titles and actions:
+- One h1 per page, rendered by PageHeader inside <main>.
+- The four routes that previously took their title from the header now get a shell-owned PageHeader:
+
+| Check | Route | h1 | Actions |
+|---|---|---|---|
+| H2 / H3 | Overview | "Today's Operations" + the date | Export Day Sheet (secondary) → New Trip (primary, /operations/trips/new) |
+| H4 | Overview | — | The Export Day Sheet menu opens by keyboard with today's print + CSV links; Escape closes. |
+| H5 | Dispatch | "Dispatch" (description follows the selected day: "Tomorrow") | Export (tomorrow links) + New Trip; the day switch is intact |
+| H6 / H7 | Trip Detail / Request Detail | exactly one each: "Trip Detail" / "Request Detail" (compact); the record heading stays the h2 (P1a A2 kept) | — |
+
+Further checks:
+- H8: trips/new, requests/new, proof-of-service, growth/agent, settings/team and a 404 each have exactly one
+  visible h1, none in the header.
+- H9: Proof of Service is reachable and named in the context line.
+- No action was removed. The existing data-testids are preserved (export-day-sheet-button, header-*-button,
+  growth-nav-*, brief*, get-started*, …). The strict quotes gate, which selects by testid, role and wording, passes
+  unchanged.
+
+======================================================================
+6. COMPONENT CHANGES
+======================================================================
+The detail is in docs/design/component-inventory.md, section NP-UI-P1b. In summary:
+
+Page structure:
+- PageHeader: still one h1; ReactNode description; a compact size; actions wrap under the title.
+- Panel: padding variants (a caller's own p-* still wins) + PanelHeader (icon tile, title h2/h3, description,
+  actions).
+- SectionHeader: as / size.
+- EmptyState: a compact in-panel form.
+
+New:
+- StatTile / StatTileGroup: one real fact, "Unavailable" for null (never 0), a link only to an existing
+  destination.
+- FilterBar: layout only; no list migrated.
+- Dialog placement="side" / SidePanel: the same native modal and U2 focus return; nothing migrated.
+
+Controls:
+- IconButton: sizes and a chrome variant (the old ghost toggle on graphite had very low contrast).
+- Button: one 8px radius at every size; heights 32 / 40 / 48.
+- Inputs: a quiet hover border on valid, enabled fields; validation is unchanged.
+- Avatar: a "chrome" tone (the sidebar avatar was graphite on graphite).
+
+Tokens:
+- Radius tokens 4 / 8 / 8 / 12 (xs / sm / md / lg) by the spec's A.5 mapping.
+- Chrome-scoped focus-ring colour (.chrome-surface).
+
+Not changed:
+- business logic, queries, server actions, RPCs, authorization;
+- StatusBadge;
+- the Dialog API for existing callers.
+
+======================================================================
+7. OPERATIONS OVERVIEW VISUAL ASSESSMENT (vs approved Concept B)
+======================================================================
+Matches Concept B (composition and hierarchy):
+- Title, date, Export Day Sheet + New Trip at the top right.
+- The "Finish setting up" card:
+  - progress count and segments;
+  - six step chips with done / not-done badges;
+  - collapsible.
+- An "Operations Brief" section heading + description + a row of four compact fact tiles with icon tiles and
+  chevrons.
+- The Get started card with icon rows + chevrons, beside "Requests awaiting review" (fresh state, when requests
+  wait).
+- Requests awaiting review: count headline, oldest-request row, accepted-not-scheduled row, Review requests action.
+- Premium card anatomy: tinted icon tile, title, one-line description, right-aligned meta / actions.
+- Denser 2-column composition at ≥1024. The grouped dark sidebar with an active marker and a nested Growth group.
+- The workspace + user footer.
+
+Intentionally differs (Brand Lock):
+- graphite (not teal) primary and markers;
+- Geist Sans (not serif);
+- neutral / semantic tints (not mint / sand);
+- no landscape art or tagline;
+- no greeting;
+- no "Service day" tile;
+- the approved logo (not the mockup N);
+- 8px cards (not 12–14px);
+- sentence-case eyebrow;
+- Path / NavigationArrow icons.
+
+Data truthfulness:
+- Every count is real.
+  - O1 / O2: the tiles show the page's own summary values; "trips today" = the DB count of today's trips in the
+    org timezone (6 = 6).
+  - O6: the setup card derives count / segments / per-step state from getOnboardingChecklist (empty workspace:
+    1 of 6, business profile only), never from the mockup.
+- Unknown is never 0 (StatTile null → "Unavailable"; the existing "… unavailable" lines are kept).
+- A fresh workspace still gets no zero tiles (O7).
+- No information removed (O3):
+  - The inline SummaryStrip MOVED into the Brief as tiles (same four values, not duplicated).
+  - Upcoming Trips / Active Trips / Activity Log remain.
+  - All Brief blocks keep their copy, links, order (composeOperationsBrief) and testids.
+
+Seeded vs empty:
+- Seeded (Fictional Org A): tiles, Needs Attention (2), Requests (1), Active Now / Next Departures, lower panels.
+- Empty (a fictional empty workspace created in the isolated DB only): Finish setting up (1 of 6) + Get started
+  (4 rows, admin).
+
+Unresolved design details (owner):
+- (a) The Concept B mockup shows the date / greeting above the title and a larger display title; we use the 24px
+  app title (spec) without a greeting.
+- (b) The fresh state shows the Requests card only when requests are waiting (existing composition rule); Concept B
+  shows it always.
+- (c) The Brief block copy still says "Recurring care" while the nav says "Standing Orders" (copy alignment belongs
+  to UI-P2).
+- (d) Control radius: 8px vs the spec table's 4px (see §12).
+- (e) There are no Concept B "Service day" / operating-state tiles; the operating hours appear as one quiet line
+  when configured.
+
+======================================================================
+8. RESPONSIVE VERIFICATION
+======================================================================
+1440 / 1024 / 768:
+- 15 routes each:
+  - Overview, Requests (list + detail), Trips (list + detail), Dispatch, Tomorrow, Standing Orders;
+  - Passengers, Facilities, Drivers, Vehicles;
+  - Growth dashboard, the quotes directory, Settings.
+- No page-level horizontal overflow and 0 serious / critical axe violations at each width.
+- Sidebar 256 / 256 / 64px.
+
+390:
+- The existing Operations notice is kept: one visible main, the "designed for tablet and desktop use" text
+  (R390, plus the quotes suites' s2 / s4 390 checks).
+- Mobile Operations is NOT implemented and NOT claimed.
+
+Print:
+- /day-sheet renders outside the shell (no sidebar, no header) (P1).
+- /quote-print is unchanged: the s3c / o1 print, PDF and notice-parity checks pass.
+
+Note: at 1024×800 the sidebar nav scrolls inside the sidebar; Administration / Settings are below the fold until
+scrolled. That's acceptable, but an owner design point.
+
+======================================================================
+9. ACCESSIBILITY RESULTS
+======================================================================
+axe 4.10.2, serious / critical: 0 on every swept route at 1440 / 1024 / 768. Also:
+- the Overview, seeded and empty (O5 / O9);
+- all P1a sweeps;
+- the s4-a11y quote dialogs and directory (26 / 26).
+
+Structure:
+- One <main>.
+- Exactly one visible h1 per page (S8, H2–H8).
+- The heading outline never skips (O4: 1, 2, 3, 3, 3, 3, 3, 2, 2, 2).
+- The nav sections are named lists.
+
+Keyboard / focus:
+- The collapse toggle, the rail labels on focus, the Growth flyout, the Export menu and the setup disclosure all
+  work by keyboard.
+- The chrome focus ring is now ≥7:1 (fixes a pre-existing ~2:1 ring on the dark sidebar).
+
+Other:
+- The setup progress is a real role="progressbar" with aria-valuetext.
+- Each step says "Complete" / "Not complete" in text.
+- U1 / U2 show no regression: P1a 48 / 48 and s4-a11y "U1 / U2 RESOLVED".
+
+======================================================================
+10. REGRESSION RESULTS (final build, isolated stack, fresh resets)
+======================================================================
+
+| Check | Result |
+|---|---|
+| TypeScript (tsc --noEmit) | clean |
+| ESLint (src + tests) | 0 problems. The whole repo: 0 errors; 111 warnings, all in untracked .tmp-qa scripts. |
+| Production build (next build) | OK |
+| npm test | 894 / 894 (889 + 5 new nav-core) |
+| UI-P1a suite | 48 / 48 ALL PASS |
+| UI-P1b suite | 49 / 49 ALL PASS |
+| npm run test:e2e:quotes:strict | s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26 (U1 / U2 RESOLVED). "no unexpected failures", exit 0. |
+| SQL / privilege / tenant suites | not re-run: no database, migration, RLS, RPC or server-action change in this phase |
+
+Run notes (disclosed):
+- A first final attempt of the P1b and quotes suites failed with harness timeouts (`docker exec` spawnSync
+  ETIMEDOUT and a 60s nav timeout) during a host load spike (load average ~20, from processes outside the tests).
+- Re-run unchanged on the same build: all pass.
+- The P1b suite bounds every CDP call (60–90s) so a stalled browser fails by name instead of hanging. The shared
+  harness is unchanged.
+
+Test data: isolated NemrynS1Iso only. Fictional seed plus a fictional "Fictional Empty Workspace" (created and
+removed by the suite). No production reads or writes, and no outbound email (no provider key).
+
+======================================================================
+11. SCREENSHOTS AND LOCATIONS
+======================================================================
+Written by tests/e2e/ui-foundations/p1b.e2e.mjs to $TMPDIR/nemryn-plus-quotes-e2e/ui-p1b/, outside the repository.
+Copies are in the session scratchpad: p1b/screenshots/.
+
+1. 01-operations-brief-1440.png — Operations Brief, 1440
+2. 02-operations-brief-1024.png — Operations Brief, 1024
+3. 03-operations-brief-768.png — Operations Brief, 768 (tablet rail)
+4. 04-sidebar-expanded.png — sidebar expanded
+5. 05-sidebar-collapsed.png — sidebar collapsed (rail, focus ring visible)
+6. 06-growth-navigation-expanded.png — Growth navigation expanded (on Pipeline)
+7. 07-overview-empty-1440.png — Operations Overview, empty workspace
+8. 08-overview-seeded-1440.png — Operations Overview, seeded test data
+9. 09-operations-390-notice.png — 390 notice (kept)
+
+The comparison with Concept B is in §7. These are evidence for review, not an approval.
+
+======================================================================
+12. DEVIATIONS / BLOCKERS
+======================================================================
+No blockers.
+
+Deviations and decisions for the owner:
+- D-a Radius usage:
+  - The scale is 4 / 8 / 12 as approved.
+  - Buttons, inputs and nav items use 8px (the existing `rounded-sm`), not the spec table's 4px for controls.
+    This is closer to Concept B and avoids a sweeping change.
+  - Cards are 8px (not Concept B's 12–14px).
+  - Owner decision: keep 8px controls, or tighten them to 4px.
+- D-b Page titles for Overview / Dispatch / Trip Detail / Request Detail are rendered by the shell (layout), not the
+  page files. Pre-existing edge (unchanged): if one of those four pages throws, the in-shell error boundary adds its
+  own h1 below the shell's PageHeader (2 h1s in that error state only).
+- D-c Nav terminology (Brand Lock §15) is applied in the sidebar and context header only. Page bodies still say
+  "Recurring care", "Fleet", etc. (UI-P2 copy work). The P1a error / not-found "Back to Overview" now says "Back to
+  Operations Brief".
+- D-d Fixes to pre-existing defects found by the new checks:
+  - the quotes directory's empty-state "open the Pipeline" link was colour-only (axe link-in-text-block; only
+    visible with zero quotes), and is now underlined;
+  - the dark-chrome focus ring was ~2:1;
+  - the sidebar avatar was graphite on graphite;
+  - the collapse toggle used body-grey on graphite.
+- D-e Header simplification: the context line replaces the per-route header titles. The "Overview" contextLabel
+  wording is gone (now "Operations Brief").
+- D-f Not done in P1b (by the brief): mobile Operations layout, Settings sub-nav, FilterBar / SidePanel / Pagination
+  adoption by existing screens, migration of other forms / tables / dialogs.
+
+Still open (unchanged by P1b): OD-Q13, OD-Q14, PD-10, PD-11; Concept B / Brand Lock items needing owner decisions
+(listed in §7 "Unresolved design details" and above).
+
+Environment: the isolated stack was left as follows after the run. Nothing else was touched (no other Docker
+projects, no Zenward data, no DNC flags).
+- The local app on :3100 and the NemrynS1Iso containers are stopped.
+- .iso-env.tmp is removed.
+
+======================================================================
+13. VERDICT
+======================================================================
+CONDITIONAL PASS.
+- All functional, accessibility and regression gates pass (tsc, eslint, build, 894 unit, P1a 48 / 48, P1b 49 / 49,
+  strict quotes 272 / 272 incl. s4-a11y 26 / 26).
+- Brand Lock is preserved.
+- Conditional on owner visual review and sign-off against Concept B, including the decisions in §7 and §12 (control
+  radius, title-greeting treatment, fresh-state Requests card, copy alignment).
+
+DO NOT COMMIT. DO NOT PUSH. DO NOT MERGE. DO NOT DEPLOY. STOPPED — awaiting ChatGPT / owner review.

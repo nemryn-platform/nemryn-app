@@ -1,19 +1,19 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import type { FocusEvent, MouseEvent } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Buildings, CaretLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
+import { ArrowsLeftRight, Buildings, CaretLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
 import { navIcons } from "@/design/icons";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 import { Avatar } from "@/components/ui/Avatar";
 import { IconButton } from "@/components/ui/IconButton";
 import { GrowthNavGroup } from "@/components/operations/GrowthNavGroup";
-
-/** Placeholder marking where the Growth group sits in the item order. */
-const GROWTH_SLOT = { key: "growth" as const, label: "Growth", href: "/operations/growth" };
+import { isNavItemActive, operationsNavSections } from "@/lib/operations/nav-core";
+import { navItemActive, navItemBase, navItemIdle } from "@/components/operations/nav-styles";
 
 // P1-UX-R2: local-only UI preference — never a database column, never a
 // per-user profile field, never synced across devices (see this file's
@@ -30,38 +30,6 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "nemryn.sidebar.collapsed";
 // "isomorphic layout effect" pattern — not a new library, not new
 // infrastructure.
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
-
-// P1-E3-S8B1 (work item §26/§32): Billing and Reports are removed from
-// visible navigation — both routes remain real Next.js pages on disk
-// (still reachable directly if ever needed for internal testing), but
-// neither has real product behavior yet, and a visible sidebar entry
-// leading to it would be exactly the "convincing-looking dead
-// navigation" this phase exists to close. Restore once each has a real
-// screen, not merely to fill this list back out.
-//
-// P1-E1-S2D: "Requests" is placed immediately after Overview, before
-// Trips — locked position, matching the S2A audit's own workflow-order
-// justification (demand arrives → request reviewed → trip created →
-// dispatch → execution): Requests is the first real operational stage,
-// so it reads left-to-right before the Trips/Dispatch pair it feeds,
-// rather than being buried after reference-data sections
-// (Passengers/Facilities/Drivers/Fleet).
-const NAV_ITEMS: { key: keyof typeof navIcons; label: string; href: string }[] = [
-  { key: "overview", label: "Overview", href: "/operations" },
-  { key: "requests", label: "Requests", href: "/operations/requests" },
-  { key: "trips", label: "Trips", href: "/operations/trips" },
-  { key: "dispatch", label: "Dispatch", href: "/operations/dispatch" },
-  // P1-OPS-PROG3B: permanent items -- always visible, never keyed to trip,
-  // driver, vehicle or recurring counts, or to business_stage. Placed after
-  // Dispatch as a time gradient: today's board -> tomorrow's preparation ->
-  // standing future work. Existing items keep their relative order.
-  { key: "tomorrow", label: "Tomorrow", href: "/operations/tomorrow" },
-  { key: "recurring", label: "Recurring Care", href: "/operations/recurring-care" },
-  { key: "passengers", label: "Passengers", href: "/operations/passengers" },
-  { key: "facilities", label: "Facilities", href: "/operations/facilities" },
-  { key: "drivers", label: "Drivers", href: "/operations/drivers" },
-  { key: "fleet", label: "Fleet", href: "/operations/fleet" },
-];
 
 export interface OperationsSidebarProps {
   /**
@@ -81,12 +49,14 @@ export interface OperationsSidebarProps {
   canManageSettings?: boolean;
   /** NP-P1-S2: true only when the server resolved Nemryn Plus entry (Organization Admin + write / read_only entitlement) -- gates the "Growth" nav item. Navigation convenience only; every /operations/growth route re-checks requirePlusAccess and the database re-checks plus_access_state. Never shown while Plus is locked or absent. */
   canAccessGrowth?: boolean;
+  /** NP-UI-P1b: real fact from `getActiveMemberships()` (> 1) — adds a "Switch workspace" link to the workspace row (the same `/select-organization?switch=1` destination as the account menu). */
+  hasMultipleOrganizations?: boolean;
 }
 
 /**
  * The one OperationsSidebar. Do not fork per-route copies (TripsSidebar,
  * DispatchSidebar, etc.) — the active route changes state, the shell doesn't.
- * Full labels at lg+, icon-only rail at md–lg (tablet). Hidden below md — see
+ * Full labels at lg+ (256px), icon-only 64px rail at md–lg (tablet). Hidden below md — see
  * OperationsShell for the narrow-width guard state that replaces it there.
  *
  * P1-UX-R2: desktop (lg+) can ALSO be manually collapsed to the same
@@ -94,14 +64,13 @@ export interface OperationsSidebarProps {
  * pure client-side UI preference (localStorage only, see
  * SIDEBAR_COLLAPSED_STORAGE_KEY's own doc comment), never a database
  * column or per-user profile field, and never synced across devices or
- * organizations. Tablet's own icon-only presentation is completely
- * unaffected by this — every `lg:`-scoped class below only ever changes
- * behavior at lg+ (1024px+); nothing here alters what renders at md–lg,
- * so resizing between tablet and desktop still behaves exactly as it did
- * before this phase, and the desktop preference simply reapplies
- * whenever the viewport crosses back into lg+ (no extra logic needed —
- * this falls out for free from CSS media queries alone, since `collapsed`
- * never reads or depends on viewport width itself).
+ * organizations. Every `lg:`-scoped class below only ever changes
+ * behavior at lg+ (1024px+); nothing here alters what renders at md–lg.
+ *
+ * NP-UI-P1b: items are grouped under quiet section labels (nav-core.ts). Each section is a `<ul>` named by its label,
+ * so the grouping is announced; in the rail the labels become visually hidden and a hairline separates the groups.
+ * Rail items keep their `aria-label` (the accessible name never depends on a tooltip) and show a visual label beside
+ * the rail on hover AND keyboard focus (aria-hidden: it repeats the name, it adds nothing to it).
  */
 export function OperationsSidebar({
   location,
@@ -110,23 +79,11 @@ export function OperationsSidebar({
   hasLinkedDriverProfile,
   canManageSettings,
   canAccessGrowth,
+  hasMultipleOrganizations,
 }: OperationsSidebarProps) {
   const pathname = usePathname();
-  // P1-E3-S9 (work item §4/§12, "progressive complexity" — "a 1-2 vehicle
-  // operator should quickly reach... Drive"): appended, never replacing
-  // any existing item — Operations nav stays the same 7 items for
-  // everyone, plus this one additional, conditional item for a genuine
-  // dual-hat owner-operator. Same platform, no forked nav structure.
-  // NP-P2-S2: Nemryn Plus (Growth) is ONE collapsible group (Dashboard, Pipeline, Contacts, Tasks) rendered between
-  // the Core operational modules and Drive / Settings -- only for callers the server already authorised
-  // (canAccessGrowth). See GrowthNavGroup. The Core items and their order are unchanged.
-  const navItems = [...NAV_ITEMS];
-  const tailItems = [
-    ...(hasLinkedDriverProfile ? [{ key: "drive" as const, label: "Drive", href: "/driver" }] : []),
-    // P1-PILOT-S4B-R4A: tenant administration, Organization Admin only,
-    // always last -- below the operational modules it configures.
-    ...(canManageSettings ? [{ key: "settings" as const, label: "Settings", href: "/operations/settings" }] : []),
-  ];
+  const sections = operationsNavSections({ hasLinkedDriverProfile, canManageSettings, canAccessGrowth });
+  const sectionIdPrefix = useId();
 
   // P1-UX-R2: defaults to expanded (`false`) so the very first render —
   // both the server-rendered HTML and React's first client commit during
@@ -159,38 +116,29 @@ export function OperationsSidebar({
     });
   }
 
+  const { tip, onShow, onHide, asideRef } = useRailTooltip(collapsed);
+
+  // Hidden while the labels are visible (lg+ expanded); visually hidden (still announced) in the rail.
+  const labelVisibility = collapsed ? "sr-only" : "sr-only lg:not-sr-only";
+  const textVisibility = collapsed ? "hidden" : "hidden lg:inline";
+
   return (
     <aside
+      ref={asideRef}
+      data-testid="operations-sidebar"
+      data-collapsed={collapsed ? "true" : "false"}
       className={cn(
-        "hidden shrink-0 flex-col bg-chrome-background md:flex md:w-16",
+        "chrome-surface hidden shrink-0 flex-col bg-chrome-background md:flex md:w-16",
         "transition-[width] duration-base ease-standard motion-reduce:transition-none",
         !collapsed && "lg:w-64",
       )}
     >
-      <div className="flex h-16 items-center border-b border-chrome-border px-4 lg:px-6">
+      <div className={cn("flex h-16 shrink-0 items-center justify-center border-b border-chrome-border px-4", !collapsed && "lg:justify-start lg:px-5")}>
         {/*
-          N0-M2-A3: the authenticated shell is PLATFORM chrome — it
-          carries the Nemryn mark, not the Zenward Mobility tenant
-          asset (that PNG is still used elsewhere as tenant identity,
-          see public/images/zenward-mobility-logo.png). The approved
-          nemryn-logo-inverse.svg (Mineral White, same geometry as the
-          Deep Graphite primary lockup) is purpose-built for a dark
-          background and is rendered directly against the sidebar's own
-          Deep Graphite chrome — no badge/wrapper needed, unlike the
-          prior PNG asset this replaced (which required a white badge
-          chip because it had an opaque white background baked in; see
-          docs/reports/n0-m2-a3-authenticated-shell-and-favicon.txt for
-          that decision).
-
-          P1-UX-R2: the full wordmark only ever renders at lg+ while
-          expanded — every other width (tablet, or desktop collapsed)
-          now uses the approved nemryn-symbol-inverse.svg mark instead
-          of squeezing the wordmark down to a sliver, per the locked
-          brand-asset rule (docs: public/brand/README.txt — "do not
-          stretch... do not alter proportions"). Both are the approved
-          master files consumed directly, never redrawn or re-derived;
-          width/height on each reflect that file's own real viewBox so
-          h-auto/w-auto never distorts it.
+          N0-M2-A3: the authenticated shell is PLATFORM chrome — it carries the approved Nemryn mark, never the tenant
+          asset. The approved masters are consumed directly, never redrawn or re-derived; width/height reflect each
+          file's own viewBox so h-auto/w-auto never distorts it. P1-UX-R2: the full inverse logo only at lg+ while
+          expanded; every rail state uses the approved inverse symbol (public/brand/README.txt — no stretching).
         */}
         <Image
           src="/brand/nemryn-symbol-inverse.svg"
@@ -206,131 +154,118 @@ export function OperationsSidebar({
           width={434}
           height={127}
           priority
-          className={cn("hidden h-auto w-24", !collapsed && "lg:block")}
+          className={cn("hidden h-auto w-28", !collapsed && "lg:block")}
         />
       </div>
 
-      {/*
-        P1-UX-R2: the manual collapse/expand control — its own thin row,
-        separate from the brand row above, so it never has to compete
-        with the logo for space at the 64px collapsed/tablet rail width
-        (there isn't room for both a legible mark and a button side by
-        side at that width). `hidden lg:flex` means this row — and the
-        ability to manually collapse/expand at all — only ever exists at
-        lg+; tablet keeps its existing single-purpose brand-only header
-        exactly as before, unchanged, with no toggle exposed (§18/§20 of
-        the phase spec: tablet always uses the automatic compact rail,
-        never a manually-chosen state).
-      */}
-      <div className="hidden border-b border-chrome-border lg:flex lg:items-center lg:justify-center lg:py-1">
+      {/* P1-UX-R2: the manual collapse / expand control (lg+ only); tablet always uses the automatic rail. */}
+      <div className={cn("hidden border-b border-chrome-border lg:flex lg:items-center lg:py-1", collapsed ? "lg:justify-center" : "lg:justify-end lg:px-2")}>
         <IconButton
           label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           icon={collapsed ? <CaretRight className="size-4" aria-hidden /> : <CaretLeft className="size-4" aria-hidden />}
           onClick={toggleCollapsed}
+          variant="chrome"
+          size="sm"
+          data-testid="sidebar-collapse-toggle"
         />
       </div>
 
-      <nav aria-label="Primary" className="flex-1 overflow-y-auto px-2 py-3 lg:px-3">
-        <ul className="flex flex-col gap-1">
-          {[...navItems, ...(canAccessGrowth ? [GROWTH_SLOT] : []), ...tailItems].map((item) => {
-            if (item === GROWTH_SLOT) return <GrowthNavGroup key="growth-group" pathname={pathname} collapsed={collapsed} />;
-            const Icon = navIcons[item.key];
-            // "/operations" matches exactly (its sub-routes have their own items).
-            const isActive = item.href === "/operations" ? pathname === item.href : pathname.startsWith(item.href);
-            return (
-              <li key={item.key}>
-                <Link
-                  href={item.href}
-                  aria-current={isActive ? "page" : undefined}
-                  aria-label={item.label}
-                  title={item.label}
-                  className={cn(
-                    typography.bodySmall,
-                    "flex items-center gap-3 rounded-sm px-3 py-2 font-medium transition-colors duration-base",
-                    isActive
-                      ? "bg-chrome-item-active-background text-chrome-item-active-text"
-                      : "text-chrome-text-secondary hover:bg-chrome-item-hover hover:text-white",
-                  )}
-                >
-                  <Icon className="size-5 shrink-0" weight={isActive ? "fill" : "regular"} aria-hidden />
-                  {/*
-                    P1-UX-R2: explicit `aria-label` above (not just this
-                    visible span + `title`) guarantees every nav item
-                    still has a well-defined accessible name once this
-                    span is hidden in collapsed/tablet rails — `title`
-                    alone remains a real, working hover tooltip (no new
-                    tooltip component needed, per the phase's own
-                    "smallest accessible solution" instruction — no
-                    Tooltip primitive exists anywhere in this codebase),
-                    but the accessible NAME itself no longer depends on
-                    it.
-                  */}
-                  <span className={cn("hidden", !collapsed && "lg:inline")}>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+      <nav
+        aria-label="Primary"
+        className={cn("flex-1 overflow-y-auto px-2 py-3", !collapsed && "lg:px-3")}
+        onMouseOver={onShow}
+        onMouseLeave={onHide}
+        onFocus={onShow}
+        onBlur={onHide}
+      >
+        {sections.map((section, index) => {
+          const labelId = `${sectionIdPrefix}-${section.key}`;
+          return (
+            <div key={section.key} data-nav-section={section.key} className={cn(index > 0 && "mt-3", index > 0 && !collapsed && "lg:mt-5")}>
+              {/* Rail: a hairline between groups stands in for the hidden label. */}
+              {index > 0 && <div className={cn("mx-2 mb-3 border-t border-chrome-border", !collapsed && "lg:hidden")} aria-hidden />}
+              <p
+                id={labelId}
+                className={cn(typography.metadata, "px-3 pb-1.5 font-medium text-chrome-text-secondary", section.key === "growth" ? "sr-only" : labelVisibility)}
+              >
+                {section.label}
+              </p>
+              <ul aria-labelledby={labelId} className="flex flex-col gap-0.5">
+                {section.key === "growth" ? (
+                  <GrowthNavGroup key="growth-group" pathname={pathname} collapsed={collapsed} />
+                ) : (
+                  section.items.map((item) => {
+                    const Icon = navIcons[item.key];
+                    const isActive = isNavItemActive(item.href, pathname);
+                    return (
+                      <li key={item.key}>
+                        <Link
+                          href={item.href}
+                          aria-current={isActive ? "page" : undefined}
+                          aria-label={item.label}
+                          data-nav-label={item.label}
+                          data-testid={`nav-item-${item.key}`}
+                          className={cn(typography.bodySmall, navItemBase, "justify-center", !collapsed && "lg:justify-start", isActive ? navItemActive : navItemIdle)}
+                        >
+                          <Icon className="size-5 shrink-0" weight={isActive ? "fill" : "regular"} aria-hidden />
+                          {/* The accessible name is the aria-label above; this span is visual only and hides in the rail. */}
+                          <span className={cn("truncate", textVisibility)}>{item.label}</span>
+                        </Link>
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </div>
+          );
+        })}
       </nav>
 
-      <div className="border-t border-chrome-border px-3 py-3 lg:px-4">
+      <div className={cn("flex flex-col gap-1 border-t border-chrome-border px-2 py-3", !collapsed && "lg:px-3")}>
         {/*
-          P1-UX-R1: the WORKSPACE row — the active tenant's own name,
-          labeled with the plain, static word "Workspace," never a
-          membership role. Previously showed the signed-in user's role
-          here (e.g. "Organization Admin"), which visually read as a
-          second organization/account rather than "this platform account
-          belongs to this tenant." The role belongs to the person, not
-          the organization — it now appears exactly once, in the user
-          row directly below. Buildings (not a location pin) is the
-          same icon OrganizationSelector.tsx already uses for this exact
-          workspace/organization concept — reused, not newly introduced.
-
-          P1-UX-R2: this row already only ever appeared at lg+ (it was
-          `hidden` at tablet width, before this phase even existed) —
-          collapsing at lg+ now reuses that exact same pre-existing
-          `hidden` treatment: no `lg:flex` is added when `collapsed`,
-          so the row simply behaves exactly as it always has at tablet
-          widths, just also applied at lg+ while collapsed.
+          P1-UX-R1: the WORKSPACE row — the active tenant's own name, labeled with the plain word "Workspace", never a
+          membership role (the role belongs to the person: the user row below). Buildings is the icon
+          OrganizationSelector.tsx already uses for this concept. Hidden in every rail state (as before P1b).
+          NP-UI-P1b: a quiet card (icon tile · name over "Workspace" · Switch workspace when the person really holds
+          more than one workspace — the account menu's existing destination), then the person below it.
         */}
-        <div className={cn("items-center gap-2 px-1 pb-3 text-chrome-text-secondary", collapsed ? "hidden" : "hidden lg:flex")}>
-          <Buildings className="size-4 shrink-0" aria-hidden />
-          {/* min-w-0: without it this flex child never shrinks below its content, so `truncate` had nothing to clip against and a long organization name (now editable in Settings -> Organization, P1-PILOT-S4B-R4A) overflowed the fixed-width sidebar. */}
-          <div className={cn(typography.metadata, "min-w-0")}>
-            <p className="truncate font-medium" title={location}>
+        <div
+          className={cn("items-center gap-2.5 rounded-md bg-chrome-item-hover px-2.5 py-2 ring-1 ring-inset ring-chrome-border", collapsed ? "hidden" : "hidden lg:flex")}
+          data-testid="sidebar-workspace"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-sm bg-chrome-item-active-background text-chrome-text-primary" aria-hidden>
+            <Buildings className="size-4" />
+          </span>
+          {/* min-w-0: lets `truncate` clip a long organization name (editable in Settings -> Organization) instead of overflowing the fixed-width sidebar. */}
+          <div className="min-w-0 flex-1">
+            <p className={cn(typography.bodySmall, "truncate font-medium text-chrome-text-primary")} title={location}>
               {location}
             </p>
-            <p>Workspace</p>
+            <p className={cn(typography.metadata, "text-chrome-text-secondary")}>Workspace</p>
           </div>
+          {hasMultipleOrganizations && (
+            <Link
+              href="/select-organization?switch=1"
+              aria-label="Switch workspace"
+              title="Switch workspace"
+              className="flex size-8 shrink-0 items-center justify-center rounded-sm text-chrome-text-secondary hover:bg-chrome-item-hover hover:text-chrome-text-primary"
+              data-testid="sidebar-switch-workspace"
+            >
+              <ArrowsLeftRight className="size-4" aria-hidden />
+            </Link>
+          )}
         </div>
 
-        <div className="flex items-center gap-3 px-1">
-          <Avatar name={dispatcherName} size="sm" />
+        <div className={cn("flex items-center justify-center gap-2.5 py-1.5", !collapsed && "lg:justify-start lg:px-2.5")} data-testid="sidebar-user">
+          <Avatar name={dispatcherName} size="sm" tone="chrome" />
           {/*
-            P1-E3-S8C1 (work item §2): `min-w-0` is required here — without
-            it, a flex child with no explicit width never actually shrinks
-            below its content's natural size, so `truncate` on the <p>s
-            below had nothing to truncate AGAINST and a long identity value
-            (a full email address, in Harmony's own case before real
-            `user_profiles.display_name` rows existed — see supabase/
-            seed.sql) simply overflowed the fixed-width sidebar instead of
-            ellipsizing cleanly. `title` restores the full value on hover
-            for anyone who needs it, since the visible text itself is now
-            deliberately allowed to clip.
-
-            P1-UX-R2: the Avatar itself (this compact circular
-            initials badge) was ALREADY unconditionally visible at every
-            supported width, including tablet — only this text block
-            beside it was breakpoint-gated. Collapsing at lg+ reuses that
-            same pre-existing compact affordance with zero new code; the
-            REAL account menu this avatar visually echoes lives entirely
-            in AppHeader/AccountMenu (untouched by this phase, still
-            reachable via the header's own avatar trigger regardless of
-            sidebar state).
+            P1-E3-S8C1: `min-w-0` lets the name / role truncate inside the fixed-width sidebar (title restores the full
+            value). P1-UX-R2: the Avatar stays visible in every rail state; the real account menu is the header's
+            AccountMenu, reachable regardless of sidebar state.
           */}
           <div className={cn("min-w-0 flex-1", collapsed ? "hidden" : "hidden lg:block")}>
-            <p className={cn(typography.bodySmall, "truncate font-medium text-white")} title={dispatcherName}>
+            <p className={cn(typography.bodySmall, "truncate font-medium text-chrome-text-primary")} title={dispatcherName}>
               {dispatcherName}
             </p>
             {dispatcherRole && (
@@ -341,6 +276,65 @@ export function OperationsSidebar({
           </div>
         </div>
       </div>
+
+      {tip && (
+        <div
+          aria-hidden
+          data-testid="sidebar-rail-tooltip"
+          style={{ position: "fixed", top: tip.top, left: tip.left }}
+          className={cn(typography.metadata, "pointer-events-none z-50 -translate-y-1/2 rounded-sm bg-chrome-background px-2 py-1 font-medium text-chrome-text-primary shadow-md ring-1 ring-chrome-border")}
+        >
+          {tip.label}
+        </div>
+      )}
     </aside>
   );
+}
+
+/**
+ * Visual label for rail items (the 64px tablet rail, or the collapsed desktop rail). One fixed-position element —
+ * the nav scrolls, so an absolutely-positioned child would be clipped. Shown on hover and keyboard focus of any
+ * `[data-nav-label]` control, hidden on leave / blur / Escape / scroll / resize, never while the labels are visible.
+ */
+function useRailTooltip(collapsed: boolean) {
+  const asideRef = useRef<HTMLElement>(null);
+  const [tip, setTip] = useState<{ label: string; top: number; left: number } | null>(null);
+
+  const isRail = useCallback(() => collapsed || !window.matchMedia("(min-width: 1024px)").matches, [collapsed]);
+
+  const onShow = useCallback(
+    (event: MouseEvent<HTMLElement> | FocusEvent<HTMLElement>) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>("[data-nav-label]");
+      if (!target || !isRail()) {
+        if (event.type === "focus" || !target) setTip(null);
+        return;
+      }
+      const rect = target.getBoundingClientRect();
+      const asideRight = asideRef.current?.getBoundingClientRect().right ?? rect.right;
+      setTip({ label: target.dataset.navLabel ?? "", top: rect.top + rect.height / 2, left: asideRight + 8 });
+    },
+    [isRail],
+  );
+
+  const onHide = useCallback(() => setTip(null), []);
+
+  useEffect(() => {
+    if (!tip) return;
+    const close = () => setTip(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    document.addEventListener("pointerdown", close);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      document.removeEventListener("pointerdown", close);
+    };
+  }, [tip]);
+
+  return { tip, onShow, onHide, asideRef };
 }

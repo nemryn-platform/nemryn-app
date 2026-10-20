@@ -9,6 +9,7 @@ import { requestStatusLabel, requestStatusCategory, requestReadinessLabel, reque
 import { deriveRequestActions, deriveRequestReadiness } from "@/lib/operations/request-readiness-core";
 import { hasActiveTrip } from "@/lib/operations/request-fulfilment-core";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { DetailPageHeader } from "@/components/operations/OperationsPageHeaders";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -59,16 +60,19 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   // exactly matching Trip Detail's own "unavailable" precedent.
   if (result.status === "unavailable") {
     return (
-      <EmptyState
-        icon={<WarningCircle className="size-8" aria-hidden />}
-        title="Request unavailable"
-        description="This request doesn't exist, or you don't have access to it."
-        action={
-          <Link href="/operations/requests" className={cn(typography.button, "text-text-link")}>
-            Back to Requests
-          </Link>
-        }
-      />
+      <>
+        <DetailPageHeader title="Request Detail" />
+        <EmptyState
+          icon={<WarningCircle className="size-8" aria-hidden />}
+          title="Request unavailable"
+          description="This request doesn't exist, or you don't have access to it."
+          action={
+            <Link href="/operations/requests" className={cn(typography.button, "text-text-link")}>
+              Back to Requests
+            </Link>
+          }
+        />
+      </>
     );
   }
 
@@ -81,16 +85,19 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   // learned).
   if (result.status === "error") {
     return (
-      <AttentionState
-        level="critical"
-        title="Unable to load request"
-        description="Request information could not be loaded. Try again."
-        action={
-          <LinkButton href={`/operations/requests/${requestId}`} variant="outline">
-            Retry
-          </LinkButton>
-        }
-      />
+      <>
+        <DetailPageHeader title="Request Detail" />
+        <AttentionState
+          level="critical"
+          title="Unable to load request"
+          description="Request information could not be loaded. Try again."
+          action={
+            <LinkButton href={`/operations/requests/${requestId}`} variant="outline">
+              Retry
+            </LinkButton>
+          }
+        />
+      </>
     );
   }
 
@@ -166,106 +173,109 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   const createRecurringHref = `/operations/recurring-care/new?${new URLSearchParams({ requestId: request.id }).toString()}`;
 
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
-        <Link href="/operations/requests" className="hover:text-text-secondary hover:underline">
-          Requests
-        </Link>
-        <span className="mx-2" aria-hidden>
-          ›
-        </span>
-        <span className="text-text-secondary">{identity}</span>
-      </nav>
+    <>
+      <DetailPageHeader title="Request Detail" />
+      <div className="flex flex-col gap-zw-lg">
+        <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
+          <Link href="/operations/requests" className="hover:text-text-secondary hover:underline">
+            Requests
+          </Link>
+          <span className="mx-2" aria-hidden>
+            ›
+          </span>
+          <span className="text-text-secondary">{identity}</span>
+        </nav>
 
-      <div className="flex flex-wrap items-start justify-between gap-zw-md">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            {/* AppHeader's persistent "Request Detail" chrome title is this page's real <h1> — matches Trip Detail's own established convention exactly (src/app/operations/trips/[tripId]/page.tsx). */}
-            <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>Request</h2>
-            <StatusBadge label={requestStatusLabel(request.state)} category={requestStatusCategory(request.state)} />
+        <div className="flex flex-wrap items-start justify-between gap-zw-md">
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* The shell's "Request Detail" PageHeader is this page's real <h1> (OperationsLayoutClient, NP-UI-P1b) — matches Trip Detail's own established convention exactly (src/app/operations/trips/[tripId]/page.tsx). */}
+              <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>Request</h2>
+              <StatusBadge label={requestStatusLabel(request.state)} category={requestStatusCategory(request.state)} />
+            </div>
+            <p className={cn(typography.body, "mt-1 text-text-secondary")}>
+              {identity} · Logged {formatOperationsLongDate(new Date(request.createdAt), timezone)}
+            </p>
           </div>
-          <p className={cn(typography.body, "mt-1 text-text-secondary")}>
-            {identity} · Logged {formatOperationsLongDate(new Date(request.createdAt), timezone)}
-          </p>
-        </div>
-        <RequestActionBar
-          requestId={request.id}
-          actions={actions}
-          createTripHref={createTripHref}
-          createRecurringHref={createRecurringHref}
-          hasLinkedArrangement={request.linkedArrangements.length > 0}
-        />
-      </div>
-
-      {actions.cancelBlockedByArrangement && (
-        <p className={cn(typography.bodySmall, "text-text-muted")}>
-          This request already has recurring care. Manage the standing order from the recurring arrangement.
-        </p>
-      )}
-      {actions.cancelBlockedByTrips && (
-        <p className={cn(typography.bodySmall, "text-text-muted")}>
-          This request already has transportation scheduled. Manage cancellation from the linked trip.
-        </p>
-      )}
-
-      {/* READINESS (P1-E1-S2E §10/§11, P1-OPS-R1) — separate from the
-          decision. The one operational blocker is Passenger resolution;
-          only "needs_passenger" gets a warning banner, and its copy never
-          implies that linking a Passenger accepts the Request. */}
-      {readiness === "needs_passenger" ? (
-        <AttentionState
-          level="warning"
-          title="Passenger needed"
-          description="Link or create the passenger before this request can be scheduled."
-        />
-      ) : (
-        <p className={cn(typography.bodySmall, "font-medium", requestReadinessTextClass(readiness))}>
-          {requestReadinessLabel(readiness)}
-        </p>
-      )}
-
-      <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="flex flex-col gap-zw-lg">
-          <RequestPassengerPanel
+          <RequestActionBar
             requestId={request.id}
-            canLinkPassenger={actions.canLinkPassenger}
-            passenger={request.passenger}
-            candidatePassengers={candidatePassengers}
-            candidatesUnavailable={candidatesUnavailable}
-            requestedPassengerName={request.requestedPassengerName}
+            actions={actions}
+            createTripHref={createTripHref}
+            createRecurringHref={createRecurringHref}
+            hasLinkedArrangement={request.linkedArrangements.length > 0}
           />
-          <RequestTransportationPanel
-            pickupDescription={request.pickupDescription}
-            destinationDescription={request.destinationDescription}
-            preferredDate={request.preferredDate}
-            preferredTime={request.preferredTime}
-            returnTripNeeded={request.returnTripNeeded}
-          />
-          <RequestLinkedArrangementsPanel arrangements={request.linkedArrangements} />
-          <RequestLinkedTripsPanel linkedTrips={request.linkedTrips} timezone={timezone} />
         </div>
 
-        <div className="flex flex-col gap-zw-lg">
-          <RequestRequesterPanel
-            requesterName={request.requesterName}
-            requesterRelationship={request.requesterRelationship}
-            requesterPhone={request.requesterPhone}
-            requesterEmail={request.requesterEmail}
+        {actions.cancelBlockedByArrangement && (
+          <p className={cn(typography.bodySmall, "text-text-muted")}>
+            This request already has recurring care. Manage the standing order from the recurring arrangement.
+          </p>
+        )}
+        {actions.cancelBlockedByTrips && (
+          <p className={cn(typography.bodySmall, "text-text-muted")}>
+            This request already has transportation scheduled. Manage cancellation from the linked trip.
+          </p>
+        )}
+
+        {/* READINESS (P1-E1-S2E §10/§11, P1-OPS-R1) — separate from the
+            decision. The one operational blocker is Passenger resolution;
+            only "needs_passenger" gets a warning banner, and its copy never
+            implies that linking a Passenger accepts the Request. */}
+        {readiness === "needs_passenger" ? (
+          <AttentionState
+            level="warning"
+            title="Passenger needed"
+            description="Link or create the passenger before this request can be scheduled."
           />
-          <RequestDetailsPanel
-            source={request.source}
-            intakeIntegrationId={request.intakeIntegrationId}
-            assistanceNotes={request.assistanceNotes}
-            additionalNotes={request.additionalNotes}
-            serviceType={request.serviceType}
-            recurringSchedule={request.recurringSchedule}
-          />
-          <RequestAcquisitionPanel acquisition={acquisition} />
-          {/* NP-P2-S3: Growth link -- rendered only for people Growth admits; null (absent) for everyone else. */}
-          <RequestGrowthPanel organizationId={organization.organizationId} requestId={request.id} timezone={timezone} />
-          <RequestActivityPanel events={activityEvents} timezone={timezone} />
+        ) : (
+          <p className={cn(typography.bodySmall, "font-medium", requestReadinessTextClass(readiness))}>
+            {requestReadinessLabel(readiness)}
+          </p>
+        )}
+
+        <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="flex flex-col gap-zw-lg">
+            <RequestPassengerPanel
+              requestId={request.id}
+              canLinkPassenger={actions.canLinkPassenger}
+              passenger={request.passenger}
+              candidatePassengers={candidatePassengers}
+              candidatesUnavailable={candidatesUnavailable}
+              requestedPassengerName={request.requestedPassengerName}
+            />
+            <RequestTransportationPanel
+              pickupDescription={request.pickupDescription}
+              destinationDescription={request.destinationDescription}
+              preferredDate={request.preferredDate}
+              preferredTime={request.preferredTime}
+              returnTripNeeded={request.returnTripNeeded}
+            />
+            <RequestLinkedArrangementsPanel arrangements={request.linkedArrangements} />
+            <RequestLinkedTripsPanel linkedTrips={request.linkedTrips} timezone={timezone} />
+          </div>
+
+          <div className="flex flex-col gap-zw-lg">
+            <RequestRequesterPanel
+              requesterName={request.requesterName}
+              requesterRelationship={request.requesterRelationship}
+              requesterPhone={request.requesterPhone}
+              requesterEmail={request.requesterEmail}
+            />
+            <RequestDetailsPanel
+              source={request.source}
+              intakeIntegrationId={request.intakeIntegrationId}
+              assistanceNotes={request.assistanceNotes}
+              additionalNotes={request.additionalNotes}
+              serviceType={request.serviceType}
+              recurringSchedule={request.recurringSchedule}
+            />
+            <RequestAcquisitionPanel acquisition={acquisition} />
+            {/* NP-P2-S3: Growth link -- rendered only for people Growth admits; null (absent) for everyone else. */}
+            <RequestGrowthPanel organizationId={organization.organizationId} requestId={request.id} timezone={timezone} />
+            <RequestActivityPanel events={activityEvents} timezone={timezone} />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

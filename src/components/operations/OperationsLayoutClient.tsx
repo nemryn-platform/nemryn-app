@@ -1,33 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
-import { Plus } from "@phosphor-icons/react/dist/ssr";
+import { usePathname } from "next/navigation";
 import { OperationsShell } from "@/components/operations/OperationsShell";
-import { LinkButton } from "@/components/ui/LinkButton";
-import { ExportDaySheetMenu } from "@/components/operations/header/ExportDaySheetMenu";
-import { formatOperationsLongDate } from "@/lib/operations/presentation";
+import { operationsContext } from "@/lib/operations/nav-core";
 import type { AppHeaderProps } from "@/components/operations/AppHeader";
 import type { OrganizationContext } from "@/lib/auth/types";
-
-const SECTION_LABELS: { prefix: string; label: string }[] = [
-  { prefix: "/operations/tomorrow", label: "Tomorrow" },
-  { prefix: "/operations/trips", label: "Trips" },
-  { prefix: "/operations/dispatch", label: "Dispatch" },
-  { prefix: "/operations/passengers", label: "Passengers" },
-  { prefix: "/operations/facilities", label: "Facilities" },
-  { prefix: "/operations/drivers", label: "Drivers" },
-  { prefix: "/operations/fleet", label: "Fleet" },
-  { prefix: "/operations/growth", label: "Growth" },
-  { prefix: "/operations/settings", label: "Settings" },
-  { prefix: "/operations/billing", label: "Billing" },
-  { prefix: "/operations/reports", label: "Reports" },
-];
-
-function getContextLabel(pathname: string) {
-  if (pathname === "/operations") return "Overview";
-  return SECTION_LABELS.find((section) => pathname.startsWith(section.prefix))?.label ?? "Operations";
-}
 
 const ROLE_LABEL: Record<OrganizationContext["role"], string> = {
   organization_admin: "Organization Admin",
@@ -61,33 +39,28 @@ export interface OperationsLayoutClientProps {
  * `organization.role` reflects the CURRENT organization context only,
  * never a global role.
  */
-/**
- * The Overview route's header is the one place (so far) that needs more
- * than a bare `contextLabel` — its title/date/search/Export/New-Trip row
- * lives in the PERSISTENT header per the reference (01-todays-operations.png),
- * not the scrollable PageHeader below it (P1-E3-S4). Built here, from data
- * this component already has (`organization.organizationTimezone`) plus
- * static content, rather than a new cross-tree state channel for the page
- * to reach back into its own layout chrome — the actions below need nothing
- * from the page itself (Export Day Sheet reads the day from the URL, New Trip
- * is a plain link). A future route that DOES need page-driven header content
- * is a real reason to revisit this.
- */
 /*
  * P1-PILOT-UX1: the header's permanently disabled placeholders (Search -- "not wired up yet"; Dispatch Settings -- "no
- * defined behavior yet") were REMOVED rather than left as dead controls; Export Day Sheet is now real (Overview =
- * today, Dispatch = the selected day).
+ * defined behavior yet") were REMOVED rather than left as dead controls; Export Day Sheet is real (Overview = today,
+ * Dispatch = the selected day).
+ *
+ * NP-UI-P1b canonical title system: the persistent AppHeader is a slim CONTEXT bar (workspace / section › area,
+ * notifications, help, account) and never renders a heading. Every page has exactly one <h1>, in a PageHeader that the
+ * PAGE renders inside <main> (Overview / Dispatch / Trip Detail / Request Detail use
+ * components/operations/OperationsPageHeaders.tsx). The layout renders no h1, so an in-shell error boundary that
+ * replaces a failing page never leaves two h1s.
  */
-
 function buildHeaderProps(
   pathname: string,
   organization: OrganizationContext,
   avatarName: string,
   dispatcherEmail: string | null,
   hasMultipleOrganizations: boolean,
-  dispatchDay: "today" | "tomorrow" = "today",
 ): AppHeaderProps {
-  const identity = {
+  const context = pathname === "/operations/trips/new" ? { section: "Today", label: "New Trip" } : operationsContext(pathname);
+  return {
+    contextLabel: context.label,
+    contextSection: context.section,
     avatarName,
     dispatcherEmail,
     organizationName: organization.organizationName,
@@ -95,70 +68,6 @@ function buildHeaderProps(
     hasMultipleOrganizations,
     role: organization.role,
   };
-
-  if (pathname === "/operations") {
-    return {
-      title: "Today's Operations",
-      description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
-      ...identity,
-      actions: (
-        <>
-          <ExportDaySheetMenu day="today" />
-          <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
-            New Trip
-          </LinkButton>
-        </>
-      ),
-    };
-  }
-
-  if (pathname === "/operations/dispatch") {
-    return {
-      title: "Dispatch",
-      // P1-OPS-PROG4: the board has a real Today / Tomorrow switch in the page; the old disabled day navigator
-      // placeholder was removed so the header never contradicts the selected day.
-      description: dispatchDay === "tomorrow" ? "Tomorrow" : formatOperationsLongDate(new Date(), organization.organizationTimezone),
-      ...identity,
-      actions: (
-        <>
-          <ExportDaySheetMenu day={dispatchDay} />
-          <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
-            New Trip
-          </LinkButton>
-        </>
-      ),
-    };
-  }
-
-  // Trip Detail (P1-E3-S6) — a bare "Trip Detail" title in the persistent
-  // header, matching the reference exactly (docs/design/stitch/references/
-  // 02-trip-detail.png): no search/settings/New-Trip cluster here, unlike
-  // Overview/Dispatch — the page's own breadcrumb, title, and action bar
-  // live in the scrollable content below. Excludes `/operations/trips/new`
-  // (its own future screen) and the bare `/operations/trips` list.
-  if (/^\/operations\/trips\/[^/]+$/.test(pathname) && !pathname.endsWith("/new")) {
-    return { title: "Trip Detail", ...identity };
-  }
-
-  // Request Detail (NP-UI-P1a, A2) — the same convention as Trip Detail: the persistent header's "Request Detail" title
-  // is this page's one <h1> (the page's own "Request" heading is an <h2> below it, see
-  // src/app/operations/requests/[requestId]/page.tsx). Without this mapping the page had no <h1> at all. Excludes
-  // `/operations/requests/new`, whose form renders its own <h1>.
-  if (/^\/operations\/requests\/[^/]+$/.test(pathname) && !pathname.endsWith("/new")) {
-    return { title: "Request Detail", ...identity };
-  }
-
-  // New Trip (P1-E3-S7) — the reference's own fixed top bar (05-internal-
-  // new-trip.png) shows no bold chrome title, only the breadcrumb + icons;
-  // the real "New Trip" heading lives in the page's own scrollable content
-  // as its `<h1>` (no `title` here, so AppHeader renders none — avoids the
-  // same two-`<h1>` mistake S6 found and fixed for Trip Detail, this time
-  // by not introducing a second h1 in the first place).
-  if (pathname === "/operations/trips/new") {
-    return { contextLabel: "New Trip", ...identity };
-  }
-
-  return { contextLabel: getContextLabel(pathname), ...identity };
 }
 
 export function OperationsLayoutClient({
@@ -171,8 +80,6 @@ export function OperationsLayoutClient({
   children,
 }: OperationsLayoutClientProps) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const dispatchDay = searchParams.get("day") === "tomorrow" ? "tomorrow" : "today";
 
   return (
     <OperationsShell
@@ -183,8 +90,9 @@ export function OperationsLayoutClient({
         hasLinkedDriverProfile,
         canManageSettings: organization.role === "organization_admin",
         canAccessGrowth,
+        hasMultipleOrganizations,
       }}
-      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations, dispatchDay)}
+      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations)}
     >
       {children}
     </OperationsShell>

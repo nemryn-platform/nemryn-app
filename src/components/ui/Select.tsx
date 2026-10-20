@@ -64,7 +64,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             className={cn(
               typography.body,
               "h-10 w-full appearance-none rounded-sm border bg-surface-elevated pl-3 pr-9 text-text-primary disabled:cursor-not-allowed disabled:bg-surface-secondary disabled:text-text-disabled",
-              error ? "border-critical-strong" : "border-border-strong",
+              // NP-UI-P1b: a quiet hover affordance on enabled, valid fields; the error border never changes on hover.
+            error ? "border-critical-strong" : "border-border-strong transition-colors duration-base enabled:hover:border-text-secondary",
               className,
             )}
             {...props}

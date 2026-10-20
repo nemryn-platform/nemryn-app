@@ -46,6 +46,8 @@ export const typography = {
   tableHeader: "font-sans text-[0.8125rem] font-medium leading-[1.3]",
   /** Geist Sans. Table body cells — same size/weight as `bodySmall` for row-text; a numeric-column cell should additionally add `tabular-nums` at the call site (type.app.data direction). */
   tableCell: "font-sans text-[0.8125rem] font-normal leading-[1.45]",
+  /** Geist Sans. NP-UI-P1b: the value of a compact fact (StatTile, a Brief block's count) — the page-title size, tabular, so a row of facts aligns. Deliberately below `numericDisplay`, which stays reserved for a view's single headline number. */
+  metricValue: "font-sans text-2xl font-semibold leading-[1.15] tracking-[-0.01em] tabular-nums",
   /** Geist Sans. The single headline number of a view — rare, at most one per screen. `tabular-nums` included (type.app.numeric). */
   numericDisplay: "font-sans text-[1.75rem] font-semibold leading-[1.1] tracking-[-0.01em] tabular-nums",
 } as const;

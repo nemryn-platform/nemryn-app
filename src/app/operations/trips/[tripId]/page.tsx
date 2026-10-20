@@ -9,6 +9,7 @@ import { getTripReadiness, type TripReadinessResult } from "@/lib/operations/tri
 import { formatOperationsTime, formatOperationsLongDate } from "@/lib/operations/presentation";
 import { TripStatus } from "@/components/ui/TripStatus";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { DetailPageHeader } from "@/components/operations/OperationsPageHeaders";
 import { TripDetailActionBar } from "@/components/operations/trip-detail/TripDetailActionBar";
 import { canEditTrip, tripEditFieldLabels } from "@/lib/operations/trip-edit-core";
 import { canRecordCompletion } from "@/lib/operations/trip-completion-core";
@@ -80,26 +81,32 @@ export default async function TripDetailPage({
 
   if (result.status === "unavailable") {
     return (
-      <EmptyState
-        icon={<WarningCircle className="size-8" aria-hidden />}
-        title="Trip unavailable"
-        description="This trip doesn't exist, or you don't have access to it."
-        action={
-          <Link href="/operations/trips" className={cn(typography.button, "text-text-link")}>
-            Back to Trips
-          </Link>
-        }
-      />
+      <>
+        <DetailPageHeader title="Trip Detail" />
+        <EmptyState
+          icon={<WarningCircle className="size-8" aria-hidden />}
+          title="Trip unavailable"
+          description="This trip doesn't exist, or you don't have access to it."
+          action={
+            <Link href="/operations/trips" className={cn(typography.button, "text-text-link")}>
+              Back to Trips
+            </Link>
+          }
+        />
+      </>
     );
   }
 
   if (result.status === "error") {
     return (
-      <EmptyState
-        icon={<WarningCircle className="size-8" aria-hidden />}
-        title="Couldn't load this trip"
-        description="Something went wrong. Try refreshing the page in a moment."
-      />
+      <>
+        <DetailPageHeader title="Trip Detail" />
+        <EmptyState
+          icon={<WarningCircle className="size-8" aria-hidden />}
+          title="Couldn't load this trip"
+          description="Something went wrong. Try refreshing the page in a moment."
+        />
+      </>
     );
   }
 
@@ -175,196 +182,199 @@ export default async function TripDetailPage({
   }
 
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
-        <Link href="/operations/trips" className="hover:text-text-secondary hover:underline">
-          Trips
-        </Link>
-        <span className="mx-2" aria-hidden>
-          ›
-        </span>
-        <span className="text-text-secondary">{trip.passengerName}</span>
-      </nav>
+    <>
+      <DetailPageHeader title="Trip Detail" />
+      <div className="flex flex-col gap-zw-lg">
+        <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
+          <Link href="/operations/trips" className="hover:text-text-secondary hover:underline">
+            Trips
+          </Link>
+          <span className="mx-2" aria-hidden>
+            ›
+          </span>
+          <span className="text-text-secondary">{trip.passengerName}</span>
+        </nav>
 
-      {createdNotice === "assigned" && (
-        <p role="status" data-testid="created-notice" className={cn(typography.bodySmall, "rounded-md border border-success-border bg-success-bg px-zw-lg py-zw-md text-text-primary")}>
-          Trip created and assigned.
-        </p>
-      )}
-      {createdNotice === "assignment_failed" && (
-        <div role="alert" data-testid="created-notice" className="rounded-md border border-warning-border bg-warning-bg px-zw-lg py-zw-md">
-          <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Trip created, but the assignment could not be completed.</p>
-          <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-            {dispatchErrorMessage(createdErrorCode)} The trip is saved{trip.activeAssignmentId ? "." : " without a driver"} — you can assign it from Current Status on this page.
+        {createdNotice === "assigned" && (
+          <p role="status" data-testid="created-notice" className={cn(typography.bodySmall, "rounded-md border border-success-border bg-success-bg px-zw-lg py-zw-md text-text-primary")}>
+            Trip created and assigned.
           </p>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-start justify-between gap-zw-md">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            {/* AppHeader's persistent "Trip Detail" chrome title is this page's real <h1> (src/components/operations/AppHeader.tsx) — the Passenger name is this page's own main heading, one level down, not a second <h1> (found via real accessibility testing, not assumed). */}
-            <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>{trip.passengerName}</h2>
-            <TripStatus status={trip.statusLabel} />
+        )}
+        {createdNotice === "assignment_failed" && (
+          <div role="alert" data-testid="created-notice" className="rounded-md border border-warning-border bg-warning-bg px-zw-lg py-zw-md">
+            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Trip created, but the assignment could not be completed.</p>
+            <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
+              {dispatchErrorMessage(createdErrorCode)} The trip is saved{trip.activeAssignmentId ? "." : " without a driver"} — you can assign it from Current Status on this page.
+            </p>
           </div>
-          {trip.scheduledPickupAt && (
-            <p className={cn(typography.body, "mt-1 text-text-secondary")}>
-              {formatOperationsLongDate(new Date(trip.scheduledPickupAt), timezone)}
-            </p>
-          )}
-          {correction && (
-            <p className={cn(typography.metadata, "mt-1 text-text-muted")} data-testid="trip-last-correction">
-              Details corrected by {correction.actorUserId && correction.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
-              {formatOperationsLongDate(new Date(correction.occurredAt), timezone)}, {formatOperationsTime(correction.occurredAt, timezone)}
-              {correction.fields.length > 0 && <> · {tripEditFieldLabels(correction.fields).join(", ")}</>}
-            </p>
-          )}
-        </div>
-        <TripDetailActionBar
-          tripId={trip.id}
-          passengerName={trip.passengerName}
-          driverPhone={trip.driverPhone}
-          eligibleForCancel={trip.eligibleForCancel}
-          eligibleForNoShow={trip.eligibleForNoShow}
-          edit={
-            editFacilities && canEditTrip(trip.state)
-              ? {
-                  trip: {
-                    id: trip.id,
-                    state: trip.state,
-                    updatedAt: trip.updatedAt,
-                    scheduledPickupAt: trip.scheduledPickupAt,
-                    appointmentAt: trip.appointmentAt,
-                    pickupDescription: trip.pickupDescription,
-                    pickupFacilityId: trip.pickupFacilityId,
-                    destinationDescription: trip.destinationDescription,
-                    destinationFacilityId: trip.destinationFacilityId,
-                    instructions: trip.instructions,
-                    assistanceNotes: trip.assistanceNotes,
-                    recurringArrangementId: trip.recurringArrangementId,
-                    driverId: trip.driverId,
-                    vehicleId: trip.vehicleId,
-                    expectedDurationMinutes: trip.expectedDurationMinutes,
-                    requiresWheelchairAccess: trip.requiresWheelchairAccess,
-                  },
-                  facilities: editFacilities,
-                  organizationTimezone: timezone,
-                }
-              : null
-          }
-          recordCompletion={canRecordCompletion(trip.state) ? { tripState: trip.state, organizationTimezone: timezone } : null}
-        />
-      </div>
+        )}
 
-      {trip.isTerminal && (
-        <div
-          className={cn(
-            "flex items-start gap-3 rounded-md border px-zw-lg py-zw-md",
-            trip.state === "completed" ? "border-success-border bg-success-bg" : "border-critical-border bg-critical-bg",
-          )}
-        >
-          {trip.state === "completed" ? (
-            <CheckCircle className="mt-0.5 size-5 shrink-0 text-success-strong" weight="fill" aria-hidden />
-          ) : (
-            <XCircle className="mt-0.5 size-5 shrink-0 text-critical-strong" weight="fill" aria-hidden />
-          )}
+        <div className="flex flex-wrap items-start justify-between gap-zw-md">
           <div>
-            <p className={cn(typography.subsectionHeading, "text-text-primary")}>
-              {trip.state === "completed" && `Completed ${formatOperationsTime(trip.completedAt, timezone)}`}
-              {trip.state === "cancelled" && `Cancelled ${formatOperationsTime(trip.cancelledAt, timezone)}`}
-              {trip.state === "no_show" && `No-show recorded ${formatOperationsTime(trip.noShowAt, timezone)}`}
-            </p>
-            {trip.state === "completed" && trip.completionRecord && (
-              <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")} data-testid="trip-completion-record">
-                Completion recorded by operations · by {trip.completionRecord.actorUserId && trip.completionRecord.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
-                {formatOperationsLongDate(new Date(trip.completionRecord.recordedAt), timezone)}, {formatOperationsTime(trip.completionRecord.recordedAt, timezone)}
-                {trip.completionRecord.completedAt && <> · Completion time recorded: {formatOperationsTime(trip.completionRecord.completedAt, timezone)}</>}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* The shell's "Trip Detail" PageHeader is this page's real <h1> (OperationsLayoutClient, NP-UI-P1b) — the Passenger name is this page's own main heading, one level down, not a second <h1> (found via real accessibility testing, not assumed). */}
+              <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>{trip.passengerName}</h2>
+              <TripStatus status={trip.statusLabel} />
+            </div>
+            {trip.scheduledPickupAt && (
+              <p className={cn(typography.body, "mt-1 text-text-secondary")}>
+                {formatOperationsLongDate(new Date(trip.scheduledPickupAt), timezone)}
               </p>
             )}
-            {trip.state === "cancelled" && trip.cancellationReason && (
-              <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Reason: {trip.cancellationReason}</p>
+            {correction && (
+              <p className={cn(typography.metadata, "mt-1 text-text-muted")} data-testid="trip-last-correction">
+                Details corrected by {correction.actorUserId && correction.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
+                {formatOperationsLongDate(new Date(correction.occurredAt), timezone)}, {formatOperationsTime(correction.occurredAt, timezone)}
+                {correction.fields.length > 0 && <> · {tripEditFieldLabels(correction.fields).join(", ")}</>}
+              </p>
             )}
           </div>
-        </div>
-      )}
-
-      <TripInfoStrip
-        scheduledPickupAt={trip.scheduledPickupAt}
-        appointmentAt={trip.appointmentAt}
-        driverName={trip.driverName}
-        vehicleLabel={trip.vehicleLabel}
-        statusLabel={trip.statusLabel}
-        timezone={timezone}
-      />
-
-      <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="flex flex-col gap-zw-lg">
-          <TripRoutePanel
-            scheduledPickupAt={trip.scheduledPickupAt}
-            appointmentAt={trip.appointmentAt}
-            pickupDescription={trip.pickupDescription}
-            destinationDescription={trip.destinationDescription}
-            pickupFacilityName={trip.pickupFacilityName}
-            destinationFacilityName={trip.destinationFacilityName}
-            instructions={trip.instructions}
-            timezone={timezone}
-          />
-          <PassengerInfoPanel
-            passengerName={trip.passengerName}
-            passengerPhone={trip.passengerPhone}
-            requesterName={trip.requesterName}
-            requesterRelationship={trip.requesterRelationship}
-            assistanceNotes={trip.assistanceNotes}
-          />
-        </div>
-
-        <div className="flex flex-col gap-zw-lg">
-          <CurrentStatusPanel
-            statusLabel={trip.statusLabel}
-            driverName={trip.driverName}
-            lastUpdateAt={lastUpdateAt}
-            driverNextActionLabel={trip.isTerminal ? null : trip.driverNextActionLabel}
-            timezone={timezone}
-            eligibleForAssignmentAction={!trip.isTerminal}
-            hasActiveAssignment={trip.activeAssignmentId !== null}
-            attribution={attribution}
-            overlap={currentOverlap}
-            assignmentControl={
-              assignmentOptions ? (
-                <TripAssignmentButton
-                  trip={{
-                    id: trip.id,
-                    passengerName: trip.passengerName,
-                    pickupDescription: trip.pickupDescription,
-                    destinationDescription: trip.destinationDescription,
-                    activeAssignmentId: trip.activeAssignmentId,
-                    driverId: trip.driverId,
-                    driverName: trip.driverName,
-                    vehicleId: trip.vehicleId,
-                    vehicleLabel: trip.vehicleLabel,
-                  }}
-                  driverOptions={assignmentOptions.driverOptions}
-                  vehicleOptions={assignmentOptions.vehicleOptions}
-                  operatorDriverId={operatorDriverId}
-                  canManageDriverSetup={organization.role === "organization_admin"}
-                  recurringHint={recurringHint}
-                />
-              ) : undefined
-            }
-          />
-          <TripDurationPanel
+          <TripDetailActionBar
             tripId={trip.id}
-            expectedDurationMinutes={trip.expectedDurationMinutes}
-            expectedDurationSource={trip.expectedDurationSource}
-            plannedExtentLabel={plannedExtentLabel}
-            canEdit={!trip.isTerminal}
+            passengerName={trip.passengerName}
+            driverPhone={trip.driverPhone}
+            eligibleForCancel={trip.eligibleForCancel}
+            eligibleForNoShow={trip.eligibleForNoShow}
+            edit={
+              editFacilities && canEditTrip(trip.state)
+                ? {
+                    trip: {
+                      id: trip.id,
+                      state: trip.state,
+                      updatedAt: trip.updatedAt,
+                      scheduledPickupAt: trip.scheduledPickupAt,
+                      appointmentAt: trip.appointmentAt,
+                      pickupDescription: trip.pickupDescription,
+                      pickupFacilityId: trip.pickupFacilityId,
+                      destinationDescription: trip.destinationDescription,
+                      destinationFacilityId: trip.destinationFacilityId,
+                      instructions: trip.instructions,
+                      assistanceNotes: trip.assistanceNotes,
+                      recurringArrangementId: trip.recurringArrangementId,
+                      driverId: trip.driverId,
+                      vehicleId: trip.vehicleId,
+                      expectedDurationMinutes: trip.expectedDurationMinutes,
+                      requiresWheelchairAccess: trip.requiresWheelchairAccess,
+                    },
+                    facilities: editFacilities,
+                    organizationTimezone: timezone,
+                  }
+                : null
+            }
+            recordCompletion={canRecordCompletion(trip.state) ? { tripState: trip.state, organizationTimezone: timezone } : null}
           />
-          <TripWheelchairPanel tripId={trip.id} requiresWheelchairAccess={trip.requiresWheelchairAccess} canEdit={!trip.isTerminal} />
-          <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
-          <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />
-          <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />
+        </div>
+
+        {trip.isTerminal && (
+          <div
+            className={cn(
+              "flex items-start gap-3 rounded-md border px-zw-lg py-zw-md",
+              trip.state === "completed" ? "border-success-border bg-success-bg" : "border-critical-border bg-critical-bg",
+            )}
+          >
+            {trip.state === "completed" ? (
+              <CheckCircle className="mt-0.5 size-5 shrink-0 text-success-strong" weight="fill" aria-hidden />
+            ) : (
+              <XCircle className="mt-0.5 size-5 shrink-0 text-critical-strong" weight="fill" aria-hidden />
+            )}
+            <div>
+              <p className={cn(typography.subsectionHeading, "text-text-primary")}>
+                {trip.state === "completed" && `Completed ${formatOperationsTime(trip.completedAt, timezone)}`}
+                {trip.state === "cancelled" && `Cancelled ${formatOperationsTime(trip.cancelledAt, timezone)}`}
+                {trip.state === "no_show" && `No-show recorded ${formatOperationsTime(trip.noShowAt, timezone)}`}
+              </p>
+              {trip.state === "completed" && trip.completionRecord && (
+                <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")} data-testid="trip-completion-record">
+                  Completion recorded by operations · by {trip.completionRecord.actorUserId && trip.completionRecord.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
+                  {formatOperationsLongDate(new Date(trip.completionRecord.recordedAt), timezone)}, {formatOperationsTime(trip.completionRecord.recordedAt, timezone)}
+                  {trip.completionRecord.completedAt && <> · Completion time recorded: {formatOperationsTime(trip.completionRecord.completedAt, timezone)}</>}
+                </p>
+              )}
+              {trip.state === "cancelled" && trip.cancellationReason && (
+                <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Reason: {trip.cancellationReason}</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        <TripInfoStrip
+          scheduledPickupAt={trip.scheduledPickupAt}
+          appointmentAt={trip.appointmentAt}
+          driverName={trip.driverName}
+          vehicleLabel={trip.vehicleLabel}
+          statusLabel={trip.statusLabel}
+          timezone={timezone}
+        />
+
+        <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="flex flex-col gap-zw-lg">
+            <TripRoutePanel
+              scheduledPickupAt={trip.scheduledPickupAt}
+              appointmentAt={trip.appointmentAt}
+              pickupDescription={trip.pickupDescription}
+              destinationDescription={trip.destinationDescription}
+              pickupFacilityName={trip.pickupFacilityName}
+              destinationFacilityName={trip.destinationFacilityName}
+              instructions={trip.instructions}
+              timezone={timezone}
+            />
+            <PassengerInfoPanel
+              passengerName={trip.passengerName}
+              passengerPhone={trip.passengerPhone}
+              requesterName={trip.requesterName}
+              requesterRelationship={trip.requesterRelationship}
+              assistanceNotes={trip.assistanceNotes}
+            />
+          </div>
+
+          <div className="flex flex-col gap-zw-lg">
+            <CurrentStatusPanel
+              statusLabel={trip.statusLabel}
+              driverName={trip.driverName}
+              lastUpdateAt={lastUpdateAt}
+              driverNextActionLabel={trip.isTerminal ? null : trip.driverNextActionLabel}
+              timezone={timezone}
+              eligibleForAssignmentAction={!trip.isTerminal}
+              hasActiveAssignment={trip.activeAssignmentId !== null}
+              attribution={attribution}
+              overlap={currentOverlap}
+              assignmentControl={
+                assignmentOptions ? (
+                  <TripAssignmentButton
+                    trip={{
+                      id: trip.id,
+                      passengerName: trip.passengerName,
+                      pickupDescription: trip.pickupDescription,
+                      destinationDescription: trip.destinationDescription,
+                      activeAssignmentId: trip.activeAssignmentId,
+                      driverId: trip.driverId,
+                      driverName: trip.driverName,
+                      vehicleId: trip.vehicleId,
+                      vehicleLabel: trip.vehicleLabel,
+                    }}
+                    driverOptions={assignmentOptions.driverOptions}
+                    vehicleOptions={assignmentOptions.vehicleOptions}
+                    operatorDriverId={operatorDriverId}
+                    canManageDriverSetup={organization.role === "organization_admin"}
+                    recurringHint={recurringHint}
+                  />
+                ) : undefined
+              }
+            />
+            <TripDurationPanel
+              tripId={trip.id}
+              expectedDurationMinutes={trip.expectedDurationMinutes}
+              expectedDurationSource={trip.expectedDurationSource}
+              plannedExtentLabel={plannedExtentLabel}
+              canEdit={!trip.isTerminal}
+            />
+            <TripWheelchairPanel tripId={trip.id} requiresWheelchairAccess={trip.requiresWheelchairAccess} canEdit={!trip.isTerminal} />
+            <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
+            <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />
+            <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

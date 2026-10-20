@@ -142,20 +142,15 @@
   --spacing-zw-3xl: 4rem; /* 64px */
   --spacing-zw-4xl: 5rem; /* 80px */
 
-  /* Radius — deliberately UNCHANGED in this phase. The Nemryn spec calls
-     for a tighter 3-step scale (4/8/12, collapsing the app's current
-     4-step 6/8/10/14) via a "per-usage rounding review"
-     (design-token-spec Appendix A.5) — not a mechanical value swap, since
-     collapsing 4 steps into 3 has no safe 1:1 mapping and risks a real
-     layout/proportion regression across every rounded element in the
-     app. Deferred to the module-migration phase that can review each
-     usage; not one of this phase's own "must distinguish" roles (design
-     tokens §3 of the work item lists color/action/text/status roles
-     only, not radius). See the phase report. */
-  --radius-xs: 6px;
+  /* Radius — NP-UI-P1b: the approved 3-step scale 4 / 8 / 12 (design-token-spec §5; Brand Lock D7), applied through
+     the spec's own mapping (Appendix A.5) so no class name changes: `rounded-xs` 6 → 4 (radius.sm — small controls,
+     the focus ring), `rounded-sm` stays 8 and `rounded-md` 10 → 8 (radius.md — buttons, inputs, cards, panels,
+     popovers, dialogs), `rounded-lg` 14 → 12 (radius.lg — the largest allowed: modals / feature cards only). Concept
+     B's 12–14 px card radius is deliberately NOT adopted (recorded discrepancy D9). */
+  --radius-xs: 4px;
   --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   /* radius-full is Tailwind's built-in `rounded-full`, reserved for pills per design system */
 
   /* Shadows — two levels only. Tint re-anchored from the old blue-slate
@@ -186,6 +181,13 @@ body {
   outline: 2px solid var(--color-border-focus);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
+}
+
+/* NP-UI-P1b: on the dark shell chrome the steel focus colour is only ~2:1 against Deep Graphite, so focus rings
+   inside `.chrome-surface` use the chrome marker token instead (#A8BCC8, >= 7:1; WCAG 2.4.7 / 1.4.11). Same width
+   and offset as the global rule. */
+.chrome-surface :focus-visible {
+  outline-color: var(--color-chrome-item-active-marker);
 }
 
 /* Dialog backdrop (src/components/ui/Dialog.tsx, P1-E3-S5) — the native
