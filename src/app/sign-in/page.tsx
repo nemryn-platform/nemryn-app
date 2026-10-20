@@ -30,7 +30,7 @@ export default async function SignInPage({
   const next = isSafeRedirectPath(nextParam) ? nextParam : undefined;
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       {/*
         P1-E3-S2A temporarily used max-w-[24rem] here because max-w-sm was
         silently hijacked by a project-defined --spacing-sm token (0.5rem)
@@ -84,6 +84,6 @@ export default async function SignInPage({
           </Link>
         </p>
       </div>
-    </div>
+    </main>
   );
 }

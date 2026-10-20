@@ -19,7 +19,7 @@ export default async function AccessUnavailablePage() {
   const suspended = await getSuspendedOrganizationNames();
 
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center px-4 py-12 text-center">
+    <main className="flex min-h-dvh flex-col items-center justify-center px-4 py-12 text-center">
       <span className="mb-4 flex size-12 items-center justify-center rounded-full bg-warning-bg text-warning-strong">
         <WarningCircle className="size-6" aria-hidden />
       </span>
@@ -36,6 +36,6 @@ export default async function AccessUnavailablePage() {
           Sign out
         </Button>
       </form>
-    </div>
+    </main>
   );
 }

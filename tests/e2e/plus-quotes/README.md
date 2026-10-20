@@ -24,7 +24,7 @@ here, before the canonical Nemryn UI overhaul, so the overhaul cannot silently c
 | `s3c` | `s3c-print-followup.e2e.mjs` | staff print view (ZD-224), optional follow-up task (ZD-225), access, 404s | 54 PASS |
 | `o1` | `o1-closed-notice.e2e.mjs` | "Opportunity closed" print notice (ZD-226) on screen / print media / PDF text | 27 PASS |
 | `s4-integrated` | `s4-integrated.e2e.mjs` | end-to-end journey incl. Growth→Core conversion, ZD-227, role matrix, audit, zero outbound | 69 PASS |
-| `s4-a11y` | `s4-a11y.e2e.mjs` | axe-core + keyboard on the panel, every quote dialog, the directory and the print page | 18 PASS / **8 FAIL (known U1 / U2)** |
+| `s4-a11y` | `s4-a11y.e2e.mjs` | axe-core + keyboard on the panel, every quote dialog, the directory and the print page | S4: 18 PASS / 8 FAIL (U1 / U2) → **26 / 26 PASS since NP-UI-P1a** |
 
 ## Prerequisites
 
@@ -90,7 +90,7 @@ tenant-isolation suites live in `supabase/tests/`. Run each from a fresh reset w
 ## Expected results
 
 - `s2` 33, `s3a` 31, `s3b` 32, `s3c` 54, `o1` 27, `s4-integrated` 69: **all PASS**.
-- `s4-a11y`: 18 PASS and exactly these **8 known FAILs**:
+- `s4-a11y`: **26 / 26 PASS since NP-UI-P1a** (U1 and U2 fixed; `npm run test:e2e:quotes:strict` passes). Before that it had 18 PASS and these **8 known FAILs**, kept here as the regression reference:
   - U1, colour contrast. WCAG 2.2 SC **1.4.3** (AA), axe `color-contrast` serious. `--color-text-muted` `#646a70` on
     `--color-surface-secondary` `#e8e9e6` = **4.48:1** for 12 px text (needs ≥ 4.5:1). Failing checks: AXE create
     dialog, edit dialog, Mark sent dialog, Mark sent dialog with the do-not-contact warning, and the Estimates & Quotes
@@ -99,8 +99,9 @@ tenant-isolation suites live in `supabase/tests/`. Run each from a fresh reset w
     focus on `<body>`; Escape restores it. Failing checks: KEY Edit draft → Cancel, Edit draft → Close (X), Record
     accepted → Cancel. Cause: the shared `src/components/ui/Dialog.tsx` unmounts without a native `close()` or focus
     restore.
-- The default runner reports these as **"KNOWN DEFECTS ONLY (U1 / U2)"**, exit 0, and **any other** failure as
-  unexpected (exit 1). `--strict` fails on them. The suite's assertions are intentionally **not** relaxed.
+- The default runner still labels a return of exactly these failures as **"KNOWN DEFECTS ONLY (U1 / U2)"** (exit 0) and
+  **any other** failure as unexpected (exit 1). Since they are now fixed, treat any reappearance as a regression and use
+  `--strict`, which fails on them. The suite's assertions are intentionally **not** relaxed.
 - SQL (each from a fresh reset): 68 of 69 suites with 0 failures, privilege contract 0 / 29.
 
 ### Known existing harness exceptions (not product defects)

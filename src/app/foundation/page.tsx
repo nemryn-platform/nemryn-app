@@ -23,6 +23,7 @@ import { Breadcrumb } from "@/components/ui/Breadcrumb";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Avatar } from "@/components/ui/Avatar";
 import { DriverTripCard } from "@/components/driver/DriverTripCard";
+import { PrimitivesShowcase } from "@/components/ui/PrimitivesShowcase";
 import { DriverTripRow } from "@/components/driver/DriverTripRow";
 import { DriverPrimaryAction } from "@/components/driver/DriverPrimaryAction";
 import { DriverInstruction } from "@/components/driver/DriverInstruction";
@@ -261,6 +262,10 @@ export default function FoundationPage() {
           <DriverTripRow passengerName="D. Chen" time="Yesterday, 2:15 PM" status="Completed" />
           <DriverPrimaryAction>Mark Arrived</DriverPrimaryAction>
         </div>
+      </Panel>
+
+      <Panel>
+        <PrimitivesShowcase />
       </Panel>
     </div>
   );

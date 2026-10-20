@@ -93,6 +93,7 @@ export function FleetPageClient({ rows, availability, isAdmin, timezone }: Fleet
         rows={rows}
         getRowId={(row) => row.id}
         onRowClick={isAdmin ? (row) => setDialog({ mode: "edit", vehicle: { id: row.id, label: row.label, status: row.status } }) : undefined}
+        rowActionLabel={() => "Edit"}
         emptyState={
           <EmptyState icon={<Car className="size-8" aria-hidden />} title="No vehicles yet" description="Vehicles in your fleet will appear here." />
         }

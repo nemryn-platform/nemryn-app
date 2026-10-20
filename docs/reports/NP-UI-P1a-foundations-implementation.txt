@@ -1,0 +1,318 @@
+NP-UI-P1a — CANONICAL UI FOUNDATIONS & ACCESSIBILITY — COMPLETION REPORT
+========================================================================
+Date: 2026-10-20. Mode: controlled implementation, UI-P1a only.
+- No visual redesign.
+- No Git staging, commit, push, merge or deployment.
+- No production access.
+
+VERDICT: PASS.
+- U1 and U2 are fixed and retested.
+- `npm run test:e2e:quotes:strict` passes: all 7 quote suites, with s4-a11y 26 / 26 "U1 / U2 RESOLVED".
+- The new tracked UI-P1a suite passes 48 / 48.
+- Static checks are clean, and the SQL privilege / tenant-isolation suites pass.
+- Deviations, environment findings and two harness fixes are disclosed in section 10.
+
+======================================================================
+1. STARTING BRANCH AND HEAD
+======================================================================
+- Branch: np-ui-p0-architecture-audit at 94533f23388b9b0056655fc37a03b8a4946e595e, which equals origin/main. No
+  tracked changes at the start.
+- The brief names no UI-P1a branch and forbids branch changes, so the work stays on this branch, uncommitted. The
+  owner may move it to a dedicated branch before committing.
+- Untracked at the start (preserved): the two UI-P0 reports.
+- Task 0, first attempt: docs/design/concept-b/ was missing, so I stopped and reported, without inventing anything.
+  After the owner added the files ("redo task"), Task 0 passed.
+- Concept B reference files, verified readable and UNMODIFIED (SHA-256 identical before and after this phase):
+  - nemryn-approved-concept-b.png  fdf30acd…7bc8d
+  - nemryn-design.md               ff82795a…d4752
+  - nemryn-operations-overview.html 4df49d03…4fd26
+- Canonical logo assets verified in public/brand/ (10 files) and unchanged. The new not-found / error states reuse
+  /brand/nemryn-logo-primary.svg at its approved ratio, exactly like sign-in.
+
+Concept B versus Brand Lock v1, recorded discrepancies. These are for UI-P1b and later; NOTHING was adopted here.
+Brand Lock v1 remains authoritative.
+
+| #  | Concept B                                              | Brand Lock v1 |
+|----|--------------------------------------------------------|---------------|
+| D1 | Teal primary CTA (#006E69) and teal accents            | Primary CTA is Graphite / Ink; Signal colours semantic-only; teal is not a palette primitive (§8–9) |
+| D2 | Serif display headings (Georgia)                       | Geist Sans single family (§10). Concept B's own notes mark serif "proposed, verify" |
+| D3 | Slate / teal sidebar (#112632 / #193744), cool canvas #F3F8FA, muted #66798A | Deep Graphite chrome, Mineral White canvas, derived text tokens (§8, spec 12) |
+| D4 | The mockup's stylized green "N" logo                   | The approved logo files only. Concept B itself forbids using the mockup mark |
+| D5 | Operator logo (green leaf) in the workspace footer     | No operator logos in-app in v1 (§13) |
+| D6 | Decorative landscape artwork + "A stronger community through better rides" tagline | No tagline locked (§1); the product is an "operational instrument", not decorative (§6). Concept B notes the artwork is optional |
+| D7 | Vehicle / bus icon for Trips, map-pin for Dispatch     | Restrained "Path" Trips icon; no car / ambulance / map-pin as the Trips default (§11) |
+| D8 | Nav labels Overview / Recurring Care / Fleet (unchanged) | Locked terminology: Operations Brief / standing orders – Recurring Service Assurance / Vehicles (§15). Pending owner decision D3 |
+| D9 | Card radius ≈ 12–14 px                                 | Spec radius 4 / 8 / 12 (cards 8) |
+| D10 | Greeting "Good morning, <name>"                       | Optional presentation per Concept B; no lock conflict (voice: no drama) |
+
+======================================================================
+2. FILES CHANGED (uncommitted)
+======================================================================
+Modified (30 files, +204 / −55):
+- src/app/globals.css: U1 token.
+- src/components/ui/Dialog.tsx (U2); DataTable.tsx (row semantics); index.ts (exports).
+- src/components/operations/OperationsLayoutClient.tsx (A2); OperationsShell.tsx (A3 narrow-screen landmark).
+- src/components/growth/TaskList.tsx (A1); ContactsTable.tsx and QuotesDirectoryTable.tsx (navigation rows);
+  operations/passengers/PassengersTable.tsx, fleet/FleetPageClient.tsx, facilities/FacilitiesPageClient.tsx (action
+  row labels).
+- src/components/operations/settings/NemrynFormEditor.tsx: <a> to <Link>, same href (section 10, deviation 1).
+- src/app/operations/settings/notifications/page.tsx (A4).
+- src/app/{sign-in, sign-up, forgot-password, select-organization, auth/reset-password, auth/auth-code-error,
+  complete-signup/form, team-invite/[token], join/[token], access-unavailable}/page.tsx: the outer wrapper <div> to
+  <main> (A3), same classes.
+- src/app/foundation/page.tsx: the internal QA harness gains the primitives showcase.
+- tests/shared/cdp.mjs: foreground-tab emulation (section 10, deviation 2).
+- tests/e2e/plus-quotes/run.mjs: isolated-gateway health after reset (section 10, deviation 3).
+- tests/e2e/plus-quotes/README.md: U1 / U2 now resolved.
+- docs/design/component-inventory.md: NP-UI-P1a section.
+- docs/brand/nemryn/12-design-token-specification.md: an applied-value note under §10.5.1.
+New (22 source and test files):
+- src/components/ui/: Skeleton, RouteState, Checkbox, RadioGroup, Switch, Tabs, Menu, Tooltip, Pagination,
+  PrimitivesShowcase.
+- src/lib/ui/ui-core.ts + ui-core.test.mjs.
+- src/app/not-found.tsx, error.tsx, global-error.tsx.
+- src/app/operations/{loading, error, not-found}.tsx and operations/[...missing]/page.tsx.
+- src/app/driver/{loading, error}.tsx.
+- tests/e2e/ui-foundations/p1a.e2e.mjs.
+New report: docs/reports/NP-UI-P1a-foundations-implementation.txt (this file).
+Untouched (verified): supabase/ (schema, migrations, RLS, RPCs), public/ (all brand assets), the Concept B
+references, quote lifecycle / conversion / pricing / entitlement / authorization logic, production.
+
+======================================================================
+3. COMPONENTS ADDED OR MODIFIED
+======================================================================
+Modified:
+- Dialog: records the invoking element on open and restores focus on EVERY close path. The paths are Escape /
+  close(), `open` turning false, the native close event, and unmount by the parent (Cancel, Close X, backdrop,
+  successful action).
+  - New optional `returnFocusRef` for triggers that disappear after the action.
+  - Never focuses a disconnected element.
+  - Doesn't steal focus that something else deliberately took.
+  - Native <dialog>, markup and data-testids unchanged.
+- DataTable:
+  - `navigableRows`: the row's own a[data-row-link] is the single tab stop, and a click elsewhere follows it.
+  - `onRowClick` rows: the primary cell becomes a <button> (optional `rowActionLabel`, for example "Edit").
+  - No more focusable <tr>. Destinations, pagination, sorting and selectors unchanged.
+- StatusBadge: unchanged code. Its "cancelled" tone now passes via the token.
+- OperationsShell: the narrow-screen notice is role="main".
+- OperationsLayoutClient: the "Request Detail" header title (h1).
+Added:
+- Skeleton / SkeletonText / SkeletonTable / PageSkeleton;
+- PublicStateFrame / ShellStatePanel;
+- Checkbox, RadioGroup (list / card), Switch;
+- Tabs, SegmentedControl, Menu, Popover, Tooltip, Pagination;
+- the ui-core helpers.
+All are local; no component library was installed. Existing forms, menus and paging are NOT migrated yet
+(scope: tested foundations only).
+
+======================================================================
+4. U1 CONTRAST RESULTS
+======================================================================
+- Change: the derived token `--color-text-muted` (`text.subtle`) goes from #646a70 to #5f656b (spec §10.5.1). The
+  Muted Slate primitive is unchanged, and there are no raw hex overrides anywhere.
+- Measured with the WCAG formula, #5f656b on:
+
+  | Surface               | Ratio  |
+  |-----------------------|--------|
+  | surface.secondary     | 4.84:1 |
+  | surface.app           | 5.50:1 |
+  | white                 | 5.90:1 |
+  | hover                 | 5.21:1 |
+  | selection             | 4.96:1 |
+  | info wash             | 5.10:1 |
+  | success wash          | 5.21:1 |
+  | warning wash          | 5.18:1 |
+  | critical wash         | 5.00:1 |
+
+  All are ≥ 4.5:1 (AA). The spec's "5.0:1" for surface.secondary was optimistic; AA still holds, and the spec now
+  records the measured value.
+- The only sub-4.5 pairing (on border-subtle, 4.32:1) isn't used for text: border-subtle backgrounds are 1px
+  dividers only.
+- StatusBadge "cancelled" (text-muted on surface-secondary) is now 4.84:1.
+- axe (color-contrast, serious): 0 on Dispatch, Request detail, Pipeline, the Estimates & Quotes directory, and the
+  quote create / edit / Mark sent / Mark sent + DNC dialogs. Previously 4.48:1 failures on all of them.
+
+======================================================================
+5. U2 FOCUS-RESTORATION RESULTS
+======================================================================
+Test bench (/foundation), opened by keyboard. Focus returns to the invoking control on:
+- Cancel, Close X, Escape, backdrop click;
+- successful completion (unmount).
+When the invoking button is removed by the action, focus goes to returnFocusRef — never <body> or a removed element.
+Real app:
+- quote Edit draft → Cancel and → Close X return focus to the trigger;
+- Passengers edit (via the new row button) → Cancel returns focus to that row button.
+S4 accessibility suite (strict): KEY Edit draft → Cancel, Edit draft → Close (X) and Record accepted → Cancel all
+PASS (previously the 3 U2 failures). The Escape-path checks for 5 dialogs still pass.
+
+======================================================================
+6. ACCESSIBILITY RESULTS
+======================================================================
+- A1: the TaskList subject link is underlined at rest; there's no link-in-text-block violation on Tasks / contact
+  detail.
+- A2: Request detail has exactly one h1 ("Request Detail"), the same convention as Trip detail; the page's
+  "Request" heading stays an h2. No duplicate title.
+- A3: one main landmark on sign-in, sign-up, forgot-password, select-organization, reset-password, auth-code-error,
+  complete-signup, team-invite, join, access-unavailable and the 404. At 390 px exactly ONE visible main landmark
+  (the role="main" notice), with the shell's <main> still the only <main> element.
+- A4: settings / notifications headings go h1 → h2 (visually hidden "Notification settings") → h3. No skips.
+- A5: errors inside Operations render the in-shell boundary (shell kept, <html lang>, title, "Try again", optional
+  opaque reference), with NO internal error text. Root error.tsx / global-error.tsx render a branded document with
+  lang + title.
+- axe sweep, 14 routes at 1440 / 1024 / 768 (Brief, Requests list + detail, Trips, Dispatch, Passengers, Growth
+  dashboard, Pipeline, Contacts, Quotes, Tasks, Settings, Notifications, 404): 0 serious / critical violations, and
+  no horizontal overflow.
+- New primitives (axe on the showcase): 0 serious / critical.
+- Keyboard:
+  - Tabs: arrows / Home / End, disabled skipped, one tab stop;
+  - SegmentedControl: radio semantics;
+  - Menu: Enter / Arrow open, typeahead, Escape returns focus, item activation;
+  - Tooltip: on focus + aria-describedby;
+  - Switch: Space toggles aria-checked;
+  - Pagination: nav landmark + aria-current.
+
+======================================================================
+7. LOADING / ERROR / NOT-FOUND VERIFICATION
+======================================================================
+- Loading: with a 2.5 s network delay, a sidebar navigation shows the route skeleton INSIDE the shell (role=status,
+  announced "Loading…"), then the page. No fake data. Under prefers-reduced-motion the skeleton doesn't animate.
+- Error: the in-shell boundary was exercised by a real server error. On the isolated stack,
+  /operations/settings/website-requests intentionally refuses loopback app URLs; that's an environment-only
+  production safeguard (audit A5).
+  - The boundary keeps the shell and offers Try again plus Back to Overview.
+  - No internal message leaked; the page carries lang + title.
+  - Next's redirect() / notFound() keep working: sign-in redirects, quote 404s and access redirects all passed in
+    the suites.
+- Not-found:
+  - unknown /operations/* goes through the catch-all to a branded 404 INSIDE the shell (sidebar present);
+  - unknown public URLs show the branded root 404 with the canonical logo;
+  - notFound() from /quote-print shows the branded root 404 with the same safe wording.
+  The existing tests' 404 detection ("could not be found" / "404") is preserved by the copy.
+- Not exercised in a browser: global-error.tsx (it needs a root-layout failure). Verified by build, lint and review.
+
+======================================================================
+8. RESPONSIVE VERIFICATION
+======================================================================
+- 1440, 1024 and 768 px: 14 routes with no page overflow (above).
+- 390 px: the existing "designed for tablet and desktop use" notice is unchanged (no mobile redesign), now with a
+  proper main landmark.
+- Driver app: loading / error boundaries added; no visual change.
+
+======================================================================
+9. REGRESSION RESULTS
+======================================================================
+
+| Check | Result |
+|-------|--------|
+| TypeScript (tsc --noEmit) | clean |
+| ESLint | 0 errors; 111 warnings, all in untracked .tmp-qa scripts (0 in src / tests) |
+| npm test | 889 / 889 (883 + 6 new ui-core tests) |
+| next build | success; new routes /operations/[...missing], _not-found |
+
+npm run test:e2e:quotes:strict (fresh reset per suite):
+
+| Suite         | Result |
+|---------------|--------|
+| s2            | 33 / 33 |
+| s3a           | 31 / 31 |
+| s3b           | 32 / 32 |
+| s3c           | 54 / 54 |
+| o1            | 27 / 27 |
+| s4-integrated | 69 / 69 |
+| s4-a11y       | 26 / 26 (U1 / U2 RESOLVED) |
+
+Exit 0, "no unexpected failures".
+
+tests/e2e/ui-foundations/p1a.e2e.mjs (new, fresh reset): 48 / 48.
+
+SQL (each from a verified fresh reset):
+
+| Suite                        | Result |
+|------------------------------|--------|
+| privilege_contract           | 0 violations of 29 |
+| client_privilege_surface     | 21 |
+| function_privilege           | 7 |
+| mutation_privilege           | 7 |
+| privilege_baseline_behavior  | 30 |
+| request_mutation_privilege   | 23 |
+| rls_adversarial              | 33 |
+| tenant_settings_foundation   | 51 |
+| plus_access_helpers          | 0 / 170 failures |
+| plus_quotes                  | 0 / 83 failures |
+| plus_quotes_directory        | 0 / 34 failures |
+| plus_contacts_activities     | 0 / 82 failures |
+| plus_quotes_concurrency      | 18 / 18 |
+
+No assertion in any pre-existing suite was weakened, skipped, deleted or rewritten. The only test-code changes are in
+section 10.
+
+======================================================================
+10. DEVIATIONS, FINDINGS AND UNRESOLVED ISSUES
+======================================================================
+Deviations (disclosed; all minimal):
+1. NemrynFormEditor.tsx: `<a href="/operations/settings/services">` became `<Link href="…">`, with the same
+   destination, text and style.
+   - Cause: the new /operations/[...missing] catch-all makes next/no-html-link-for-pages treat every /operations/*
+     href as an app page, which turned this pre-existing anchor into a lint ERROR.
+   - The only behavioural difference is client-side navigation instead of a full reload.
+2. tests/shared/cdp.mjs: focus emulation + Page.bringToFront before each navigation.
+   - Cause (measured): after keyboard focus left the page for browser UI, headless Chrome reported the tab as
+     visibilityState=hidden with no requestAnimationFrame. React 19 reveals streamed Suspense content (the new route
+     loading.tsx boundaries) on a frame, so the page stayed on its skeleton and s4-a11y's "Edit draft" keyboard check
+     crashed.
+   - Real users' foreground tabs are unaffected; a background tab reveals when viewed. The harness now emulates the
+     foreground tab. No assertion changed.
+3. tests/e2e/plus-quotes/run.mjs: after each reset the runner restarts the isolated stack's own Kong container and
+   waits until auth answers through it.
+   - Cause (measured): the reset restarted the auth container while Kong kept the old upstream, so every sign-in got
+     502 ("doesn't match our records").
+   - It touches only supabase_kong_<isolated project>. No assertion changed.
+4. My own new UI-P1a test initially miscounted visible main landmarks (an element inside a hidden parent). I
+   corrected it to checkVisibility() before acceptance. Not a product issue.
+5. Work stays on branch np-ui-p0-architecture-audit (no UI-P1a branch was named; branch changes are prohibited).
+Findings fixed during the phase:
+- My first A3 approach (a second <main> element for the 390 px notice) broke `main` selectors at desktop widths:
+  s3a A6 failed in the strict run. Replaced with role="main" on the notice; s3a is back to 31 / 31.
+Environment notes:
+- The isolated stack's supabase/seed.sql had gone missing (the first reset gave an empty DB, and the suite's
+  seed-guard correctly refused). Restored from the repository copy.
+Unresolved / out of scope (carried forward):
+- New primitives aren't adopted yet by existing screens: 3 hand-built tab bars, 3 header menus, per-page paging, 23
+  raw checkbox / radio / time inputs. Planned for UI-P1b / P2.
+- The quote runner still labels a return of the 8 former U1 / U2 failures as "known". Now that they're fixed, the
+  owner may want to retire that allowance so the default run also fails on them (strict already does).
+- Audit observations O-a … O-e (border.strong on surface.secondary, menu / combobox APG behaviour, target sizes) are
+  not addressed in P1a.
+- global-error.tsx is verified statically only.
+- The Concept B discrepancies D1–D10 need owner decisions before UI-P1b.
+- OD-Q13, OD-Q14 OPEN; PD-10, PD-11 unresolved.
+
+======================================================================
+11. RECOMMENDED NEXT PHASE
+======================================================================
+1. Owner review of this phase. Commit it on a dedicated branch (for example np-ui-p1a-foundations) via the usual PR
+   flow (push needs the nemryn account).
+2. Decide the Concept B / Brand Lock conflicts D1–D10. The main ones are teal versus graphite CTA, serif headings,
+   sidebar palette and radius. Any change to a LOCKED item requires a Brand Lock v2.
+3. Also decide the pending UI-P0 items: D3 (terminology), D4 (navigation grouping), D5 (mobile Operations), D7
+   (radius), D8 (Settings IA), D9 (QA2: preserve the Core / auth / Growth regression scripts before restyling them).
+4. Then UI-P1b: the canonical shell and visual system per Concept B as reconciled, adopting the new primitives.
+   Acceptance: tests/e2e/ui-foundations/p1a.e2e.mjs + npm run test:e2e:quotes:strict + an axe route sweep.
+
+======================================================================
+12. VERDICT
+======================================================================
+PASS. All Task 1–9 requirements are met:
+- U1 / U2 fixed and retested, and the strict gate passes;
+- A1–A5 corrected;
+- loading / error / not-found foundations in place;
+- primitives added and tested;
+- DataTable semantics improved;
+- documentation updated.
+No scope violations: no schema / RLS / RPC / API / lifecycle / conversion / pricing / entitlement / brand-asset /
+Concept B / production changes. The deviations above are disclosed for owner review.
+
+Isolated environment cleanup: the app was stopped, `supabase stop` run (no NemrynS1Iso containers), .iso-env.tmp
+deleted, port 3100 free. No other project's containers were touched.
+
+STOPPED — awaiting ChatGPT / owner review. No commit, push, merge or deploy.

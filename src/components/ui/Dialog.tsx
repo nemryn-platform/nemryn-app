@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef } from "react";
+import type { ReactNode, RefObject } from "react";
 import { X } from "@phosphor-icons/react/dist/ssr";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
@@ -14,6 +14,12 @@ export interface DialogProps {
   description?: string;
   children: ReactNode;
   className?: string;
+  /**
+   * NP-UI-P1a (U2): where focus goes when the dialog closes. Defaults to the element that had focus when the dialog
+   * opened (the invoking control). Pass this when that control may no longer exist after the dialog's action (for
+   * example a button that disappears once the action succeeds).
+   */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -28,29 +34,66 @@ export interface DialogProps {
  * itself, not its content) also closes — the same convention most modal
  * libraries use. Backdrop styling lives in globals.css (`dialog::backdrop`)
  * since Tailwind v4's own `backdrop:` variant support isn't relied on.
+ *
+ * Focus return (NP-UI-P1a, U2 / WCAG 2.4.3): the invoking element is recorded when the dialog opens and focus is
+ * restored to it on EVERY close path -- Escape / `close()`, `open` turning false, and the dialog being unmounted by
+ * its parent (Cancel, Close X, backdrop, a successful action). The browser only restores focus itself on a native
+ * `close()`; most callers unmount the dialog instead, which used to leave focus on <body>. Focus is never sent to an
+ * element that has left the document: it falls back to `returnFocusRef`, then does nothing.
  */
-export function Dialog({ open, onClose, title, description, children, className }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, className, returnFocusRef }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
+  // the control that opened the dialog (recorded before showModal moves focus inside it)
+  const invoker = useRef<HTMLElement | null>(null);
+  const fallbackRef = useRef(returnFocusRef);
+  useEffect(() => {
+    fallbackRef.current = returnFocusRef;
+  }, [returnFocusRef]);
+
+  const restoreFocus = useCallback(() => {
+    const recorded = invoker.current;
+    invoker.current = null;
+    const fallback = fallbackRef.current?.current ?? null;
+    const target = recorded?.isConnected ? recorded : fallback?.isConnected ? fallback : null;
+    if (!target || target === document.activeElement) return;
+    // after the current task, so a parent re-render (or the native close) has settled; skip if something else
+    // deliberately took focus in the meantime (anything other than <body> or the closing dialog's content)
+    window.setTimeout(() => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected || active.closest("dialog:not([open])") !== null;
+      if (lost && target.isConnected) target.focus({ preventScroll: true });
+    }, 0);
+  }, []);
 
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
     if (open && !dialog.open) {
+      const active = document.activeElement;
+      invoker.current = active instanceof HTMLElement && active !== document.body ? active : null;
       dialog.showModal();
     } else if (!open && dialog.open) {
       dialog.close();
+      restoreFocus();
     }
-  }, [open]);
+  }, [open, restoreFocus]);
+
+  // unmounted by the parent while open (Cancel, Close X, backdrop, a successful action): the native dialog never
+  // runs close(), so restore focus here
+  useEffect(() => () => restoreFocus(), [restoreFocus]);
 
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    const handleClose = () => onClose();
+    const handleClose = () => {
+      restoreFocus();
+      onClose();
+    };
     dialog.addEventListener("close", handleClose);
     return () => dialog.removeEventListener("close", handleClose);
-  }, [onClose]);
+  }, [onClose, restoreFocus]);
 
   return (
     <dialog

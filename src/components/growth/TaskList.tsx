@@ -111,7 +111,7 @@ function Row({
             {task.opportunityId ? (
               <>
                 Opportunity:{" "}
-                <Link href={`/operations/growth/pipeline/${task.opportunityId}`} className="text-text-link hover:underline" data-testid="task-subject-link">
+                <Link href={`/operations/growth/pipeline/${task.opportunityId}`} className="text-text-link underline underline-offset-2 hover:decoration-2" data-testid="task-subject-link">
                   {task.opportunityTitle}
                 </Link>
                 {task.contactName ? ` · ${task.contactName}` : ""}
@@ -119,7 +119,7 @@ function Row({
             ) : task.contactId ? (
               <>
                 Contact:{" "}
-                <Link href={`/operations/growth/contacts/${task.contactId}`} className="text-text-link hover:underline" data-testid="task-subject-link">
+                <Link href={`/operations/growth/contacts/${task.contactId}`} className="text-text-link underline underline-offset-2 hover:decoration-2" data-testid="task-subject-link">
                   {task.contactName}
                 </Link>
               </>

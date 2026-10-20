@@ -45,6 +45,7 @@ export function FacilitiesPageClient({ rows }: FacilitiesPageClientProps) {
         rows={rows}
         getRowId={(row) => row.id}
         onRowClick={(row) => setDialog({ mode: "edit", facility: row })}
+        rowActionLabel={() => "Edit"}
         emptyState={
           <EmptyState
             icon={<Buildings className="size-8" aria-hidden />}

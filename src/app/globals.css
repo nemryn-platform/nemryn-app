@@ -35,7 +35,7 @@
      unchanged for every existing consumer; only the hex moved. */
   --color-text-primary: #171a1d;
   --color-text-secondary: #525a61;
-  --color-text-muted: #646a70; /* Nemryn `text.subtle` role — captions/timestamps/muted metadata, which is what this token has always been used for here */
+  --color-text-muted: #5f656b; /* Nemryn `text.subtle` role — captions/timestamps/muted metadata. NP-UI-P1a (U1, WCAG 1.4.3): darkened from #646a70 per design-token-spec §10.5.1 so small text on `surface.secondary` clears AA (4.84:1; 5.5:1 on surface.app, 5.9:1 on white). Derived token only — the Muted Slate primitive is unchanged. */
   --color-text-disabled: #8a9096;
   --color-border-subtle: #dcddd9;
   --color-border-strong: #868b85;

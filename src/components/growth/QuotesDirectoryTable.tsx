@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { quotePrintHref } from "@/lib/plus/quotes-core";
@@ -34,7 +33,6 @@ export const opportunityQuotesHref = (opportunityId: string) => `/operations/gro
  * created, edited or withdrawn from this table. NP-P2-S5-S3C: "Print" opens the staff-only print view in a new tab.
  */
 export function QuotesDirectoryTable({ rows }: { rows: QuotesDirectoryRow[] }) {
-  const router = useRouter();
   const columns: DataTableColumn<QuotesDirectoryRow>[] = [
     {
       key: "reference",
@@ -47,6 +45,7 @@ export function QuotesDirectoryTable({ rows }: { rows: QuotesDirectoryRow[] }) {
             onClick={(e) => e.stopPropagation()}
             className={cn(typography.bodySmall, "font-medium text-text-primary hover:underline")}
             data-testid="quote-directory-link"
+            data-row-link
           >
             {row.reference}
           </Link>
@@ -101,7 +100,7 @@ export function QuotesDirectoryTable({ rows }: { rows: QuotesDirectoryRow[] }) {
   ];
   return (
     <div data-testid="quotes-directory-table">
-      <DataTable columns={columns} rows={rows} getRowId={(r) => r.id} onRowClick={(r) => router.push(opportunityQuotesHref(r.opportunityId))} />
+      <DataTable columns={columns} rows={rows} getRowId={(r) => r.id} navigableRows />
     </div>
   );
 }

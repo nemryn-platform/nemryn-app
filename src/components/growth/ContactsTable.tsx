@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { typography } from "@/design/typography";
@@ -22,7 +21,6 @@ export interface ContactsTableRow {
 
 /** Contacts list rows (NP-P1-S4). A row opens the contact; the name is also a real link (keyboard / new tab). */
 export function ContactsTable({ rows }: { rows: ContactsTableRow[] }) {
-  const router = useRouter();
   const columns: DataTableColumn<ContactsTableRow>[] = [
     {
       key: "name",
@@ -35,6 +33,7 @@ export function ContactsTable({ rows }: { rows: ContactsTableRow[] }) {
             onClick={(e) => e.stopPropagation()}
             className={cn(typography.bodySmall, "font-medium text-text-primary hover:underline")}
             data-testid="contact-row-link"
+            data-row-link
           >
             {row.name}
           </Link>
@@ -71,7 +70,7 @@ export function ContactsTable({ rows }: { rows: ContactsTableRow[] }) {
   ];
   return (
     <div data-testid="contacts-table">
-      <DataTable columns={columns} rows={rows} getRowId={(r) => r.id} onRowClick={(r) => router.push(`/operations/growth/contacts/${r.id}`)} />
+      <DataTable columns={columns} rows={rows} getRowId={(r) => r.id} navigableRows />
     </div>
   );
 }

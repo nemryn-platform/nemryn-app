@@ -34,6 +34,7 @@ export function PassengersTable({ rows, search }: PassengersTableProps) {
         rows={rows}
         getRowId={(row) => row.id}
         onRowClick={(row) => setEditing(row)}
+        rowActionLabel={() => "Edit"}
         emptyState={
           <EmptyState
             icon={<UsersThree className="size-8" aria-hidden />}
