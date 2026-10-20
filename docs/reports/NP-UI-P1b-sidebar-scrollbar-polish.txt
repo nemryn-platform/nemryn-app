@@ -1,0 +1,127 @@
+NP-UI-P1b POST-RELEASE — SIDEBAR SCROLLBAR VISUAL REFINEMENT
+===========================================================
+Date: 2026-10-20.
+Status: owner-approved. Committed on the dedicated branch np-ui-p1b-sidebar-scrollbar-polish, created from origin/main
+9f42669 (PR #23 merge; also the current Production deployment). No production access.
+
+1. ISSUE AND CAUSE
+------------------
+- The dark sidebar's nav list is the only scrolling element in the sidebar: `<nav aria-label="Primary">` with
+  `overflow-y-auto` in src/components/operations/OperationsSidebar.tsx.
+- On a short viewport, or with Growth expanded, the list overflows. Browsers that always show scrollbars (and
+  headless Chrome) drew a 15px light-grey track and thumb on the graphite frame.
+- In the 64px rail (tablet, or collapsed desktop) it took 15px of the width and pushed the icons off-centre.
+- Not involved:
+  - the Growth rail flyout (fixed-position, no overflow);
+  - the workspace / account footer (outside the scroll area);
+  - main content (its own container).
+
+2. CHANGE (2 files, +12 / −1)
+-----------------------------
+- src/app/globals.css: a new opt-in class `.sidebar-scroll` with `scrollbar-width: none` (Firefox, Chromium 121+)
+  and `.sidebar-scroll::-webkit-scrollbar { display: none }` (Safari, older Chromium).
+  - It hides only the scrollbar track and thumb of an element that opts in.
+  - It is NOT global; no other element uses it.
+- src/components/operations/OperationsSidebar.tsx: the Primary nav's class list gains `sidebar-scroll`.
+  `overflow-y-auto`, the padding and everything else are unchanged.
+
+Not changed:
+- sidebar widths (256 / 64), the logo, nav grouping, destinations, labels, the GrowthNavGroup, the footer;
+- the AppHeader, main content scrolling;
+- permissions, authorization, business logic, backend.
+
+3. BEHAVIOUR VERIFICATION (before vs after)
+--------------------------------------------
+Probe:
+- Isolated stack, fictional data, Organization Admin with Nemryn Plus, on /operations/growth/pipeline (Growth
+  expanded).
+- Viewport height 640px so the nav overflows.
+
+| Width | Scrollbar | Overflows | Wheel scroll (scrollTop after 400px wheel) | Focus Settings (last item) | Focus last Growth child (Tasks) | Footer visible | Collapsed rail: scrollbar / focus Settings |
+|---|---|---|---|---|---|---|---|
+| 1440 | 15 → 0px | yes | 400 → 400 | in view | in view | yes | 15 → 0px / in view |
+| 1024 | 15 → 0px | yes | 400 → 400 | in view | in view | yes | 15 → 0px / in view |
+| 768 (tablet rail) | 15 → 0px | yes | 63 → 63 (max) | in view | n/a (rail uses the flyout) | yes | n/a (always the rail) |
+
+Coverage of the requirements:
+- Mouse wheel / trackpad: the same container still scrolls by the same amount (CDP mouseWheel).
+- Keyboard: Tab / focus moves to off-screen nav items and the browser scrolls them into view (verified for the last
+  item and the last Growth child). The container has focusable children, so arrow / Page keys work as before.
+- Collapsed sidebar: same results; the rail icons are centred again (15px no longer taken).
+- Growth submenu: the expanded children scroll within the nav. The rail flyout is unaffected (P1b S13 passes).
+- Workspace / account footer: outside the scroll area, always visible and reachable.
+
+Main content: the page's own scroll container (<main>) keeps its normal scrollbar (15px, `scrollbar-width: auto`).
+Re-verified on the dedicated branch.
+
+Rail centring: at 768 all 12 rail icons are centred at x = 32 of the 64px rail (direct measurement). One automated
+probe check reported "not centred" at 768 because it ran after earlier focus / scroll steps in the same session; the
+direct measurement is authoritative.
+
+Trade-off (disclosed): with no scrollbar, the overflow cue is the clipped item at the bottom edge of the list (as in
+the after screenshots). Standard behaviour on macOS with overlay scrollbars. If a stronger cue is wanted, a subtle
+bottom fade could be added later; not done here, to stay within scope.
+
+4. SCREENSHOTS
+--------------
+Committed: docs/design/concept-b/reviews/p1b/sidebar-scrollbar/sidebar-scrollbar-before-after.png (one comparison
+image: 1440 expanded, 1440 collapsed and 768 rail, before | after).
+
+The 10 individual captures stay untracked in the same folder. Sidebar region only, viewport height 640.
+
+| File | Before | After |
+|---|---|---|
+| sidebar-1440-growth-expanded.png | grey scrollbar on the right edge | none |
+| sidebar-1440-collapsed.png | scrollbar narrows the rail | icons centred |
+| sidebar-1024-growth-expanded.png | grey scrollbar on the right edge | none |
+| sidebar-1024-collapsed.png | scrollbar narrows the rail | icons centred |
+| sidebar-768-growth-expanded.png | scrollbar narrows the rail | icons centred |
+
+Each file exists in both before/ and after/. sidebar-768-growth-expanded.png is the tablet rail (Growth shows as the
+rail button there; the probe reused one naming pattern for every width).
+
+5. QA
+-----
+
+| Check | Result |
+|---|---|
+| TypeScript | clean |
+| ESLint (src + tests) | exit 0 |
+| npm test | 894 / 894 |
+| Production build (Turbopack, default `next build`) | FAILS LOCALLY — identically on this branch AND on unchanged main 9f42669 (see §6) |
+| Production build (`next build --webpack`) | OK ("Compiled successfully"); used for the browser verification |
+| UI-P1b E2E | 52 / 52 ALL PASS (both sidebar states, rail labels + focus ring, Growth flyout, every destination, header, gating, axe 0 serious / critical and no overflow at 1440 / 1024 / 768, 390 notice) |
+| UI-P1a E2E | 48 / 48 ALL PASS (U1 / U2, structure, states, primitives, sweep) |
+
+Strict quotes regression was not re-run: this change touches only the sidebar nav's scrollbar styling, which the
+quotes suites don't exercise beyond the shell checks covered above. It can be run on request.
+
+6. ENVIRONMENT ISSUE FOUND (not caused by this change)
+------------------------------------------------------
+- `next build` (Turbopack) now fails locally with "Module not found: Can't resolve
+  '@vercel/turbopack-next/internal/font/google/font' … next/font/google queries have exactly one entry", in the
+  generated Geist Mono font CSS.
+- Control test, repeated on the dedicated branch: building unchanged origin/main 9f42669 (my two edits temporarily
+  set aside, then restored) fails identically (12 errors, same message). The branch build fails the same way.
+- Earlier today Turbopack builds of the same code passed, as did PR #23's Vercel build.
+- The Google Fonts CSS and woff2 files download normally from this machine; the same Next.js 16.3.3 and lockfile;
+  the webpack build fetches the fonts and succeeds.
+- Likely a change in the Google Fonts response that Turbopack's native font loader can't parse, or a local network
+  difference.
+- Recommendation: confirm the next Vercel build (preview / main) before the next merge. If Vercel also fails, it
+  needs a separate fix (for example a Next.js patch update, or self-hosting the Geist fonts) under its own approval.
+  No change was made for it here.
+
+6b. SECURITY NOTE CARRIED FORWARD
+---------------------------------
+During the P1b push preflight, the macOS Keychain's GitHub credential (another account) was printed into the local
+session output. Not written anywhere. Rotation recommended (see NP-UI-P1b-pr-handoff.txt).
+
+7. COMMIT SCOPE
+---------------
+- src/app/globals.css
+- src/components/operations/OperationsSidebar.tsx
+- this report
+- the one before / after comparison image
+
+No other files: no font, dependency or build-tooling change, and no test changes.

@@ -190,6 +190,17 @@ body {
   outline-color: var(--color-chrome-item-active-marker);
 }
 
+/* NP-UI-P1b sidebar polish: the dark sidebar's nav list scrolls on short viewports, but its scrollbar track / thumb
+   rendered as a light-grey bar on the graphite frame (and took 15px of the 64px rail). This hides ONLY the visual
+   scrollbar of an element that opts in with `.sidebar-scroll`; it is not global. Scrolling is unchanged: wheel,
+   trackpad, keyboard and focus-into-view all still scroll the same overflow container. */
+.sidebar-scroll {
+  scrollbar-width: none; /* Firefox, Chromium 121+ */
+}
+.sidebar-scroll::-webkit-scrollbar {
+  display: none; /* Safari, older Chromium */
+}
+
 /* Dialog backdrop (src/components/ui/Dialog.tsx, P1-E3-S5) — the native
    `<dialog>` element's own `::backdrop` is fully transparent by default in
    every browser; this is the one explicit rule needed to actually dim the
