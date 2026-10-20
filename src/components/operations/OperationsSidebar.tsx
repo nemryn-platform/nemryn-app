@@ -173,7 +173,7 @@ export function OperationsSidebar({
 
       <nav
         aria-label="Primary"
-        className={cn("flex-1 overflow-y-auto px-2 py-3", !collapsed && "lg:px-3")}
+        className={cn("sidebar-scroll flex-1 overflow-y-auto px-2 py-3", !collapsed && "lg:px-3")}
         onMouseOver={onShow}
         onMouseLeave={onHide}
         onFocus={onShow}
