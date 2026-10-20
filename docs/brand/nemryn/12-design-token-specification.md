@@ -226,6 +226,12 @@ Restrained. Nemryn is precise, not soft.
 Three working values (`sm`/`md`/`lg`) + `none` + `full`. This is tighter than the
 app's current `6/8/10/14`. No "friendly" large radii.
 
+**Applied in NP-UI-P1b (2026-10-20):** the app's radius tokens are now `--radius-xs` 4 · `--radius-sm` 8 ·
+`--radius-md` 8 · `--radius-lg` 12, following the Appendix A.5 mapping, so no class names changed. **Owner-approved
+usage (2026-10-20):** buttons, inputs and nav items use 8px (`rounded-sm`), not the 4px this table lists for
+controls. Cards and panels are also 8px. 4px stays the small-control / focus-ring value. See
+`docs/design/canonical-shell-specification.md`.
+
 ---
 
 ## 6. Shadow tokens

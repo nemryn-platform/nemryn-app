@@ -1,0 +1,183 @@
+NP-UI-P1b — FINAL VISUAL POLISH PASS (BEFORE COMMIT)
+====================================================
+Date: 2026-10-20. Branch: np-ui-p1b-canonical-shell (from main b3fd7de). NOT committed, pushed, merged or deployed.
+
+Owner decision: the P1b direction is APPROVED. This was one short refinement pass:
+- no shell redesign;
+- no change to the locked branding;
+- no teal, serif, artwork, greeting or fictional metrics.
+
+======================================================================
+1. WHAT CHANGED IN THIS PASS
+======================================================================
+Goal 1 — richer seeded Operations Overview, same structure and live data:
+- The Brief cards are now raised (shadow-sm, the existing token) and follow one card rhythm (PanelSection in
+  src/components/ui/Panel.tsx):
+  - a header (icon tile, title, description, meta);
+  - a hairline-separated body;
+  - a quiet footer row for the card's action.
+- Icon tiles across the Overview gained a faint inset ring in their own semantic family (iconToneClasses; existing
+  tokens only).
+- The lower panels (Upcoming Trips, Active Trips, Activity Log), Get started and the calm group are also raised for
+  consistency.
+
+Goal 2 — sidebar footer:
+- The workspace is now a quiet card: icon tile · name (13px medium) over "Workspace" · Switch workspace when the
+  person holds more than one workspace.
+- The user row sits below it with its own padding: avatar · name over role.
+- The grouping, items, widths, collapse and rail are unchanged.
+
+Goal 3 — top vertical rhythm:
+
+| Gap | Before → after |
+|---|---|
+| Page title / date → first section | 24 → 32px |
+| Between the page's major sections (setup card, Brief, today's detail) | 24 → 32px |
+| Brief heading → its stat row | 16px (unchanged, now explicit) |
+| Between the Brief's cards | 24px |
+
+Operating hours (when configured) moved from a loose line into the page header as a quiet second line under the
+date, keeping the `operating-hours` testid.
+
+Goal 4 — summary stat tiles (src/components/ui/StatTile.tsx):
+- A vertical hierarchy:
+  - top row: a 36px icon tile with the inset ring, plus a chevron only when a destination exists;
+  - the value in a new `typography.metricValue` role (24px semibold, tabular);
+  - the label (13px medium); an optional detail line.
+- Tiles are raised. The values, labels, links and "Unavailable" handling are unchanged.
+- `metricValue` is deliberately below `numericDisplay` (28px), which stays reserved for a view's single headline
+  number (typography spec §4).
+
+Goal 5 — the larger panels (spacing / hierarchy only; same rows, limits, copy, destinations and testids):
+- Needs Attention:
+  - The header carries the count badge.
+  - The body opens with the "N trips need a driver" line.
+  - Each row gets a fixed time column, then passenger + reason badge, route, explanation, and the row's action
+    (Assign / Open Trip).
+  - "+N more in Dispatch" moves to the footer.
+- Requests awaiting review:
+  - The count uses metricValue; the text is still "1 request" (a real space kept).
+  - The oldest-request and accepted-not-scheduled facts sit in an inset list.
+  - Review requests moves to the footer.
+- Active Now / Next Departures:
+  - Header plus a hairline body. Rows have a time column, then passenger over route, then the status (Active Now
+    keeps its info dot + label).
+  - "View today's trips" moves to the footer. Empty states are unchanged (compact).
+- The same anatomy applies to the Tomorrow / Standing-orders (Recurring care) / Proof of service / Drivers blocks
+  (shared CompactBlock).
+
+Goal 6 — empty-workspace page: the same direction; only the setup card and Get started are raised. No other change.
+
+Goal 7 — preserved:
+- the deep graphite shell;
+- graphite primary buttons;
+- Geist Sans;
+- 8px controls and 8px card radius;
+- the sidebar grouping;
+- the responsive behaviour (256 / 64 / rail);
+- the 390px notice.
+
+Goal 8 — duplicate-h1 error state: RESOLVED.
+- Cause: the Overview / Dispatch / Trip Detail / Request Detail page headers (h1 + actions) were rendered by the
+  layout (OperationsLayoutClient → OperationsShell `pageHeader` slot). The in-shell error boundary replaces only the
+  page segment, so a failing page would have shown the layout's h1 and the error panel's h1.
+- Fix:
+  - The four headers now live in src/components/operations/OperationsPageHeaders.tsx and are rendered BY THE PAGES,
+    in every branch, including their "unavailable" / "couldn't load" states.
+  - The layout and shell render no h1 at all (the `pageHeader` slot was removed).
+  - An error boundary therefore replaces the page's h1 together with the page.
+  - The h1 text, the actions (Export Day Sheet / New Trip), the testids (`page-header`, `export-day-sheet-button`)
+    and the Dispatch day-following description are unchanged.
+
+======================================================================
+2. FILES (cumulative P1b working tree, still uncommitted)
+======================================================================
+Totals:
+- P1b now spans 43 files in total (src, tests and docs): 36 modified + 7 new + 1 new in this pass.
+- Plus the untracked review folder docs/design/concept-b/reviews/p1b/ (screenshots).
+- Tracked diff: +1641 / −1221.
+- Nothing under supabase/ or public/; no dependency or env change; the Concept B reference files are unchanged.
+
+This pass touched:
+
+| Status | File | Change |
+|---|---|---|
+| New | src/components/operations/OperationsPageHeaders.tsx | the four page headers |
+| Modified | src/design/typography.ts | + metricValue |
+| Modified | src/components/ui/Panel.tsx | iconToneClasses, PanelSection |
+| Modified | src/components/ui/StatTile.tsx | the tile hierarchy |
+| Modified | src/components/operations/OperationsBrief.tsx | card rhythm, rows, Brief rhythm |
+| Modified | src/components/operations/OperationsSidebar.tsx | footer |
+| Modified | src/components/operations/OnboardingChecklistBanner.tsx | raised |
+| Modified | src/components/operations/OperationsLayoutClient.tsx, OperationsShell.tsx | page headers removed from the layout |
+| Modified | src/app/operations/page.tsx | header in the page, 32px rhythm, raised panels |
+| Modified | src/app/operations/dispatch/page.tsx, trips/[tripId]/page.tsx, requests/[requestId]/page.tsx | page header in every branch |
+| Modified | tests/e2e/ui-foundations/p1b.e2e.mjs | + E1, E2, W3b |
+
+Not changed: routes, business logic, queries, server actions, authorization, quotes and print flows, logo assets.
+
+======================================================================
+3. QA AFTER POLISH (final build, isolated NemrynS1Iso, fictional data, fresh resets)
+======================================================================
+
+| Check | Result |
+|---|---|
+| TypeScript | clean |
+| ESLint (src + tests) | 0 problems |
+| Production build | OK |
+| npm test | 894 / 894 |
+| UI-P1a suite | 48 / 48 ALL PASS |
+| UI-P1b suite | 52 / 52 ALL PASS (49 earlier + 3 new) |
+| Strict quotes regression | s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26 "U1 / U2 RESOLVED"; "no unexpected failures", exit 0 |
+
+The UI-P1b suite still covers:
+- every sidebar destination;
+- both sidebar states;
+- gating, header actions, workspace switching and auth redirects;
+- the Overview, empty and seeded;
+- axe + no overflow at 1440 / 1024 / 768;
+- the 390 notice;
+- the print view outside the shell;
+- brand tokens.
+
+Targeted heading / error-state verification (the new P1b checks):
+- E1: in the real in-shell error state (/operations/settings/website-requests fails in the isolated environment), the
+  shell is kept and there is exactly ONE visible h1 ("This page couldn't be loaded"), with zero h1s from the
+  sidebar or header.
+- E2: Overview, Dispatch, Trip Detail and Request Detail, including the Trip / Request "unavailable" states, each
+  have exactly one visible h1, supplied by the page's own `page-header` inside <main>.
+- Limit (disclosed): the four pages catch their own data failures, so no honest way exists to make one of them
+  throw into the boundary without changing app code. The fix is verified structurally (the layout renders no h1,
+  and the boundary replaces the page segment that holds the h1) plus E1 on a real boundary.
+
+Accessibility: axe 0 serious / critical on the swept routes and both Overview states. The heading outline never
+skips. Keyboard and focus checks are unchanged and pass.
+
+======================================================================
+4. UPDATED SCREENSHOTS
+======================================================================
+Folder: docs/design/concept-b/reviews/p1b/final-polish/. Originals from the first package are left untouched in
+docs/design/concept-b/reviews/p1b/.
+- 08-overview-seeded-1440.png — seeded Operations Overview, 1440
+- 07-overview-empty-1440.png — empty workspace Overview, 1440
+- 04-sidebar-expanded.png — sidebar expanded (new footer)
+- 05-sidebar-collapsed.png — sidebar collapsed (rail)
+- 03-operations-brief-768.png — tablet 768 layout
+
+All five open and decode as PNG. They come from the final P1b run on the polished build (isolated stack, fictional
+data).
+
+======================================================================
+5. OPEN POINTS FOR THE OWNER
+======================================================================
+- Raised cards use the existing shadow-sm. The token spec's default is shadow.none for content panels; this pass
+  applies the light elevation on the Overview only, for the richness the owner asked for. Keep it, or limit it to
+  the stat tiles.
+- `metricValue` is a new typography role (24px). It's documented in typography.ts; the typography spec doc is not
+  yet amended.
+- Page-body terminology alignment ("Recurring care", "Fleet") remains UI-P2 work, as before.
+
+Verdict: PASS for the polish scope. All gates are green and the duplicate-h1 error state is resolved. Visual sign-off
+remains with the owner.
+
+DO NOT COMMIT. DO NOT PUSH. DO NOT MERGE. DO NOT DEPLOY. STOPPED for owner review.

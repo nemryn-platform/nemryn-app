@@ -38,7 +38,10 @@ export function OperationsShell({ sidebar, header, children }: OperationsShellPr
         <OperationsSidebar {...sidebar} />
         <div className="flex min-w-0 flex-1 flex-col">
           <AppHeader {...header} />
-          <main className="flex-1 overflow-y-auto px-4 py-zw-lg lg:px-6 lg:py-zw-xl">{children}</main>
+          {/* NP-UI-P1b: page gutter 16px at tablet, 24px at desktop (lg), 32px on wide screens (xl); every page renders its own PageHeader (one h1). */}
+          <main className="flex-1 overflow-y-auto px-zw-md py-zw-lg lg:px-zw-lg xl:px-zw-xl xl:py-zw-xl">
+            {children}
+          </main>
         </div>
       </div>
     </>

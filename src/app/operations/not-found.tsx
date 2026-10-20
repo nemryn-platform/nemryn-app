@@ -14,7 +14,7 @@ export default function OperationsNotFound() {
       title="Page not found"
       actions={
         <LinkButton href="/operations" variant="outline">
-          Back to Overview
+          Back to Operations Brief
         </LinkButton>
       }
     >

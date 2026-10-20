@@ -86,6 +86,18 @@ functional, dense-but-legible.
 
 Application weight range: **400–600**. `700` is not used in the application.
 
+### Approved addition — `type.app.metricValue` (NP-UI-P1b, owner-approved 2026-10-20)
+
+An addition to the application scale above. Every definition in the table is unchanged.
+
+| Token | Size (rem / px) | Line height | Weight | Tracking | Max measure | Use | Do NOT use for |
+|---|---|---|---|---|---|---|---|
+| `type.app.metricValue` | 1.5 / 24 | 1.15 | 600 | -0.01em | — | The value of one compact, real operational fact — a StatTile on the Operations Brief ("6" over "trips today"), a Brief block's count ("1 request"). `tabular-nums`, so a row of facts aligns. Always paired with a text label that says what the number means. | The view's single headline number (that stays `type.app.numeric`, 28px). Page titles or headings. Decorative or fictional figures. A wall of KPI cards: a handful of facts that already exist, never ornamental counters (§2.1, [`04`](./04-visual-direction.md) §12). |
+
+- Implemented as `typography.metricValue` in `src/design/typography.ts`: `font-sans text-2xl font-semibold leading-[1.15] tracking-[-0.01em] tabular-nums`.
+- Placement: deliberately one step below `type.app.numeric`, at the same size as `type.app.pageTitle` but semantically a value, not a heading. It never renders as a heading element.
+- Unknown is never shown as `0`. A fact that couldn't be loaded reads "Unavailable", in body text, not in this role.
+
 ### Relationship to the current app
 
 The app's `src/design/typography.ts` already encodes this shape

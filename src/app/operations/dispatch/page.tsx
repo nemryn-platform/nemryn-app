@@ -10,6 +10,7 @@ import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DispatchBoardClient } from "@/components/operations/dispatch/DispatchBoardClient";
 import { DispatchLiveRefresh } from "@/components/operations/dispatch/DispatchLiveRefresh";
+import { DispatchPageHeader } from "@/components/operations/OperationsPageHeaders";
 
 /**
  * Dispatch Board (P1-E3-S5) —
@@ -41,11 +42,14 @@ export default async function DispatchBoardPage({
     ]);
   } catch {
     return (
-      <EmptyState
-        icon={<WarningCircle className="size-8" aria-hidden />}
-        title="Couldn't load the Dispatch Board"
-        description={`Something went wrong loading ${day === "tomorrow" ? "tomorrow" : "today"}'s trips and drivers. Try refreshing the page in a moment.`}
-      />
+      <>
+        <DispatchPageHeader day={day} timezone={organization.organizationTimezone} />
+        <EmptyState
+          icon={<WarningCircle className="size-8" aria-hidden />}
+          title="Couldn't load the Dispatch Board"
+          description={`Something went wrong loading ${day === "tomorrow" ? "tomorrow" : "today"}'s trips and drivers. Try refreshing the page in a moment.`}
+        />
+      </>
     );
   }
 
@@ -62,50 +66,53 @@ export default async function DispatchBoardPage({
   ).catch(() => ({}));
 
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <DispatchLiveRefresh />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Dispatch day" className="inline-flex rounded-md border border-border-subtle bg-surface-elevated p-0.5" data-testid="dispatch-day-switch">
-          {(["today", "tomorrow"] as const).map((option) => (
-            <Link
-              key={option}
-              href={option === "today" ? "/operations/dispatch" : "/operations/dispatch?day=tomorrow"}
-              aria-current={day === option ? "page" : undefined}
-              className={cn(
-                typography.bodySmall,
-                "rounded-sm px-3 py-1.5 font-medium",
-                day === option ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:text-text-primary",
-              )}
-            >
-              {option === "today" ? "Today" : "Tomorrow"}
+    <>
+      <DispatchPageHeader day={day} timezone={organization.organizationTimezone} />
+      <div className="flex flex-col gap-zw-lg">
+        <DispatchLiveRefresh />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <nav aria-label="Dispatch day" className="inline-flex rounded-md border border-border-subtle bg-surface-elevated p-0.5" data-testid="dispatch-day-switch">
+            {(["today", "tomorrow"] as const).map((option) => (
+              <Link
+                key={option}
+                href={option === "today" ? "/operations/dispatch" : "/operations/dispatch?day=tomorrow"}
+                aria-current={day === option ? "page" : undefined}
+                className={cn(
+                  typography.bodySmall,
+                  "rounded-sm px-3 py-1.5 font-medium",
+                  day === option ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:text-text-primary",
+                )}
+              >
+                {option === "today" ? "Today" : "Tomorrow"}
+              </Link>
+            ))}
+          </nav>
+          {day === "tomorrow" && (
+            <Link href="/operations/tomorrow" className={cn(typography.bodySmall, "font-medium text-text-link hover:underline")} data-testid="dispatch-tomorrow-readiness-link">
+              Tomorrow readiness
             </Link>
-          ))}
-        </nav>
-        {day === "tomorrow" && (
-          <Link href="/operations/tomorrow" className={cn(typography.bodySmall, "font-medium text-text-link hover:underline")} data-testid="dispatch-tomorrow-readiness-link">
-            Tomorrow readiness
-          </Link>
-        )}
-      </div>
-      <SummaryStrip
-        inline
-        items={[
-          { label: day === "tomorrow" ? "open trips tomorrow" : "open trips today", value: data.summary.todayCount },
-          { label: "unassigned", value: data.summary.unassignedCount, tone: "warning", dot: true },
-          { label: "active", value: data.summary.activeCount, dot: true },
-          ...(data.summary.attentionCount > 0
-            ? [{ label: "need attention", value: data.summary.attentionCount, tone: "warning" as const, dot: true }]
-            : []),
-        ]}
-      />
+          )}
+        </div>
+        <SummaryStrip
+          inline
+          items={[
+            { label: day === "tomorrow" ? "open trips tomorrow" : "open trips today", value: data.summary.todayCount },
+            { label: "unassigned", value: data.summary.unassignedCount, tone: "warning", dot: true },
+            { label: "active", value: data.summary.activeCount, dot: true },
+            ...(data.summary.attentionCount > 0
+              ? [{ label: "need attention", value: data.summary.attentionCount, tone: "warning" as const, dot: true }]
+              : []),
+          ]}
+        />
 
-      <DispatchBoardClient
-        data={data}
-        timezone={organization.organizationTimezone}
-        operatorDriverId={operatorDriverId}
-        recurringHints={recurringHints}
-        canManageDriverSetup={organization.role === "organization_admin"}
-      />
-    </div>
+        <DispatchBoardClient
+          data={data}
+          timezone={organization.organizationTimezone}
+          operatorDriverId={operatorDriverId}
+          recurringHints={recurringHints}
+          canManageDriverSetup={organization.role === "organization_admin"}
+        />
+      </div>
+    </>
   );
 }

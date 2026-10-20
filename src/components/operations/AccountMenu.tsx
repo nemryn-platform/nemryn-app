@@ -85,7 +85,7 @@ export function AccountMenu({ avatarName, dispatcherEmail, organizationName, rol
         aria-controls={menuId}
         aria-label={`Account menu — ${avatarName}, ${roleLabel} at ${organizationName}`}
         onClick={() => setOpen((v) => !v)}
-        className="rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
+        className="flex size-10 items-center justify-center rounded-full hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
       >
         <Avatar name={avatarName} size="sm" />
       </button>

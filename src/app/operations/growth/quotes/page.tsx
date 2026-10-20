@@ -174,7 +174,8 @@ export default async function QuotesDirectoryPage({ searchParams }: { searchPara
           </p>
           <p className={cn(typography.bodySmall, "text-text-secondary")}>
             {filtered ? "Change the search or status, or " : "Estimates and quotes start from an opportunity. "}
-            <Link className="text-text-link hover:underline" href={PIPELINE}>
+            {/* NP-UI-P1b (WCAG 1.4.1, as P1a A1): a link inside running text is underlined, never colour-only. */}
+            <Link className="text-text-link underline underline-offset-2" href={PIPELINE}>
               open the Pipeline
             </Link>
             .

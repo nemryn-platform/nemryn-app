@@ -21,3 +21,5 @@ export * from "./Avatar";
 export * from "./Skeleton";
 export * from "./Pagination";
 export * from "./RouteState";
+export * from "./StatTile";
+export * from "./FilterBar";

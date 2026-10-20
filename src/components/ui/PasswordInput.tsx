@@ -69,7 +69,8 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
               "w-full rounded-sm border bg-surface-elevated text-text-primary placeholder:text-text-disabled disabled:cursor-not-allowed disabled:bg-surface-secondary disabled:text-text-disabled",
               size === "lg" ? "h-12 pl-4" : "h-10 pl-3",
               rightPadding,
-              error ? "border-critical-strong" : "border-border-strong",
+              // NP-UI-P1b: a quiet hover affordance on enabled, valid fields; the error border never changes on hover.
+            error ? "border-critical-strong" : "border-border-strong transition-colors duration-base enabled:hover:border-text-secondary",
               className,
             )}
             {...props}

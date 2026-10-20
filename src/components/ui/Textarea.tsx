@@ -41,7 +41,8 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           className={cn(
             typography.body,
             "resize-y rounded-sm border bg-surface-elevated px-3 py-2 text-text-primary placeholder:text-text-disabled disabled:cursor-not-allowed disabled:bg-surface-secondary disabled:text-text-disabled",
-            error ? "border-critical-strong" : "border-border-strong",
+            // NP-UI-P1b: a quiet hover affordance on enabled, valid fields; the error border never changes on hover.
+            error ? "border-critical-strong" : "border-border-strong transition-colors duration-base enabled:hover:border-text-secondary",
             className,
           )}
           {...props}

@@ -20,6 +20,12 @@ export interface DialogProps {
    * example a button that disappears once the action succeeds).
    */
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /**
+   * NP-UI-P1b SidePanel foundation: "side" docks the same native modal to the right edge, full height, with a
+   * scrolling body -- for long or contextual editing. Focus trap, Escape, backdrop close and the U2 focus return are
+   * identical (one implementation). No existing dialog is migrated in P1b; adoption is decided per screen.
+   */
+  placement?: "center" | "side";
 }
 
 /**
@@ -41,7 +47,7 @@ export interface DialogProps {
  * `close()`; most callers unmount the dialog instead, which used to leave focus on <body>. Focus is never sent to an
  * element that has left the document: it falls back to `returnFocusRef`, then does nothing.
  */
-export function Dialog({ open, onClose, title, description, children, className, returnFocusRef }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, className, returnFocusRef, placement = "center" }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
@@ -109,12 +115,15 @@ export function Dialog({ open, onClose, title, description, children, className,
         event.preventDefault();
         ref.current?.close();
       }}
+      data-placement={placement}
       className={cn(
-        "m-auto w-full max-w-md rounded-md border border-border-subtle bg-surface-elevated p-0 shadow-lg",
+        placement === "side"
+          ? "my-0 ml-auto mr-0 h-dvh max-h-dvh w-full max-w-lg flex-col rounded-l-md border-y-0 border-l border-r-0 border-border-subtle bg-surface-elevated p-0 shadow-lg open:flex"
+          : "m-auto w-full max-w-md rounded-md border border-border-subtle bg-surface-elevated p-0 shadow-lg",
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-4 border-b border-border-subtle p-zw-lg">
+      <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-subtle p-zw-lg">
         <div>
           <h2 id={titleId} className={cn(typography.subsectionHeading, "text-text-primary")}>
             {title}
@@ -127,7 +136,12 @@ export function Dialog({ open, onClose, title, description, children, className,
         </div>
         <IconButton label="Close" icon={<X className="size-4" aria-hidden />} onClick={onClose} />
       </div>
-      <div className="p-zw-lg">{children}</div>
+      <div className={cn("p-zw-lg", placement === "side" && "min-h-0 flex-1 overflow-y-auto")}>{children}</div>
     </dialog>
   );
+}
+
+/** NP-UI-P1b: the right-docked variant of Dialog (same focus / Escape / backdrop / focus-return behaviour). */
+export function SidePanel(props: Omit<DialogProps, "placement">) {
+  return <Dialog {...props} placement="side" />;
 }

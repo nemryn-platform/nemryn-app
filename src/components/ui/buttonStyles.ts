@@ -25,10 +25,12 @@ export const buttonVariantClasses: Record<ButtonVariant, string> = {
   destructive: "bg-action-destructive-background text-action-destructive-foreground hover:bg-action-destructive-hover",
 };
 
+// NP-UI-P1b: one control radius for every size (rounded-sm = 8px, the same as inputs and nav items) and one height
+// scale: sm 32 · md 40 (the unified header / page-action height) · lg 48.
 export const buttonSizeClasses: Record<ButtonSize, string> = {
-  sm: "h-8 px-3 rounded-xs gap-1.5",
+  sm: "h-8 px-3 rounded-sm gap-1.5",
   md: "h-10 px-4 rounded-sm gap-2",
-  lg: "h-12 px-6 rounded-md gap-2",
+  lg: "h-12 px-6 rounded-sm gap-2",
 };
 
 export function buttonClassNames(
@@ -38,7 +40,7 @@ export function buttonClassNames(
   className?: string,
 ) {
   return cn(
-    "inline-flex items-center justify-center whitespace-nowrap transition-colors duration-base ease-standard",
+    "inline-flex items-center justify-center whitespace-nowrap transition-colors duration-base ease-standard motion-reduce:transition-none",
     disabled && "cursor-not-allowed opacity-50",
     typography.button,
     buttonVariantClasses[variant],

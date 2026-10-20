@@ -23,7 +23,7 @@ export default function OperationsError({ error, reset }: { error: Error & { dig
             Try again
           </Button>
           <LinkButton href="/operations" variant="outline">
-            Back to Overview
+            Back to Operations Brief
           </LinkButton>
         </>
       }
