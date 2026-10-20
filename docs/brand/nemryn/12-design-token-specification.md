@@ -389,6 +389,9 @@ chrome — not the brand's "look" ([`04`](./04-visual-direction.md) §19).
    spec rule (use `text.secondary` there) resolves it; if a real design needs
    subtle text on that surface, darken `text.subtle` to `#5F656B` (5.0:1) and
    re-verify everything that consumes it.
+   **Applied in NP-UI-P1a (2026-10-20, U1):** `--color-text-muted` (`text.subtle`) is now `#5F656B`. Re-measured with
+   the WCAG formula: 4.84:1 on `surface.secondary` (the 5.0:1 above was optimistic but AA still holds), 5.5:1 on
+   `surface.app`, 5.9:1 on white, and ≥ 4.96:1 on every status / selection wash. The Muted Slate primitive is unchanged.
 2. `border.strong` on `surface.secondary` is 2.85:1. Avoid strong borders on the
    secondary surface, or introduce `border.strong.onSecondary` = `#7C817B`
    (3.1:1) at that time.

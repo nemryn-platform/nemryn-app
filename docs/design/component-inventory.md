@@ -2,7 +2,7 @@
 
 **Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, P1-E3-S4 — Operations Application Shell & Today's Operations, P1-E3-S5 — Dispatch Board, and P1-E3-S6 — Operations Trip Detail (components below actually built/refined)
 **Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell; P1-E3-S5 implemented the real Dispatch Board; P1-E3-S6 implemented the real Operations Trip Detail screen — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", "Operations components — P1-E3-S4", "Dispatch components — P1-E3-S5", and "Trip Detail components — P1-E3-S6" below.
-**Last updated:** 2026-09-01
+**Last updated:** 2026-10-20 (NP-UI-P1a section added)
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
 
@@ -186,6 +186,27 @@ Full rationale: [operations-surface-map.md](../product/operations-surface-map.md
 | `OperationsSidebar` | **Extended again** | `NAV_ITEMS` reduced from 9 to 7 (Billing/Reports removed — real routes remain on disk, unlinked); the broken `/operations/settings` link (a genuine 404, no route file exists) removed from the bottom rail entirely. |
 | `AccountMenu` | **New** | Replaces the previously non-interactive top-right `<Avatar>`. A real WAI-ARIA menu-button pattern (keyboard open/close, `Escape`, click-outside, `aria-haspopup`/`aria-expanded`/`role="menu"`/`role="menuitem"`) showing the real organization name, real role, a conditional **Switch Organization** (only when `getActiveMemberships()` genuinely returns >1), and **Sign Out** — reusing the pre-existing, already-correct `signOutAction` (previously wired into the Driver header only). |
 | `AppHeader` | **Extended** | Swapped the bare `<Avatar>` for `<AccountMenu>`; gained `organizationName`/`roleLabel`/`hasMultipleOrganizations` props threaded from `OperationsLayoutClient` → the Server Component `layout.tsx` (a real `getActiveMemberships()` call, not assumed). |
+
+## UI foundations & accessibility — NP-UI-P1a (2026-10-20)
+
+Canonical foundations ahead of the Concept B visual overhaul. No visual redesign; local primitives only (no component
+library). Report: `docs/reports/NP-UI-P1a-foundations-implementation.txt`. Browser suite: `tests/e2e/ui-foundations/p1a.e2e.mjs`.
+
+| Component / file | Status | What it provides |
+|---|---|---|
+| `--color-text-muted` (globals.css) | Refined | `text.subtle` #646a70 → #5f656b (U1, WCAG 1.4.3): ≥ 4.84:1 on every surface it is used on. Primitive palette unchanged. |
+| `Dialog` | Refined | Focus returns to the invoking control on every close path (Escape, Cancel, Close X, backdrop, unmount after success) — U2, WCAG 2.4.3. New optional `returnFocusRef` for triggers that disappear after the action. Native `<dialog>` kept. |
+| `DataTable` | Refined | Interactive rows expose a real control instead of a focusable `<tr>`: `navigableRows` (the row's own `a[data-row-link]` is the tab stop; a row click follows it) and `onRowClick` (primary cell becomes a `<button>`, optional `rowActionLabel`). Destinations unchanged. |
+| `Skeleton`, `SkeletonText`, `SkeletonTable`, `PageSkeleton` | New | Loading placeholders; `PageSkeleton` announces "Loading…" once (role=status); no animation under reduced motion. |
+| `PublicStateFrame`, `ShellStatePanel` (`RouteState.tsx`) | New | Branded not-found / error presentation (canonical `nemryn-logo-primary.svg`; in-shell variant). Never shows internal error text — only the opaque digest. |
+| `Checkbox`, `RadioGroup` (list / card), `Switch` | New | Native inputs / `role=switch`; label, description, error wiring. Not yet adopted by existing forms (later phases). |
+| `Tabs`, `SegmentedControl` | New | WAI-ARIA tabs (roving tab stop, arrows / Home / End, disabled skipped) and a radio-semantics segmented control. URL filters should stay links. |
+| `Menu`, `Popover` | New | Menu button pattern (arrows, typeahead, Escape returns focus, outside click closes) and a non-modal disclosure popover. The existing header menus are not migrated yet. |
+| `Tooltip` | New | Hover + focus, Escape, aria-describedby; supplementary text only. |
+| `Pagination` | New | URL-driven `<nav aria-label="Pagination">` with aria-current; not yet adopted by list pages. |
+| `src/lib/ui/ui-core.ts` | New | Pure keyboard-index / pagination / typeahead helpers (unit-tested). |
+| `PrimitivesShowcase` (on `/foundation`) | New | Internal QA harness section + Dialog focus test bench (fictional content). |
+| Route states | New | `app/not-found.tsx`, `app/error.tsx`, `app/global-error.tsx`, `operations/{loading,error,not-found}.tsx`, `operations/[...missing]` (in-shell 404), `driver/{loading,error}.tsx`. |
 
 ## Explicitly not building generically
 

@@ -53,9 +53,24 @@ if (!noReset && (!WORKDIR || !existsSync(path.join(WORKDIR, "supabase", "config.
 }
 const latestMigration = readdirSync(path.join(REPO_ROOT, "supabase/migrations")).filter((f) => f.endsWith(".sql")).sort().at(-1).split("_")[0];
 
-function freshReset() {
+async function freshReset() {
   // the CLI sometimes keeps running after the reset completes; the database state is what is verified
   spawnSync("supabase", ["db", "reset", "--local"], { cwd: WORKDIR, stdio: "ignore", timeout: 240_000, killSignal: "SIGKILL" });
+  // the reset restarts the auth container; when the CLI is cut short the API gateway (Kong) can keep routing to the
+  // old auth address (sign-in then fails with 502 / "doesn't match our records"). Restart THIS stack's Kong and wait
+  // until auth answers through it. Only the isolated stack's own container is touched.
+  const kong = DB.replace(/^supabase_db_/, "supabase_kong_");
+  spawnSync("docker", ["restart", kong], { stdio: "ignore", timeout: 60_000 });
+  const port = (spawnSync("docker", ["port", kong, "8000"], { encoding: "utf8" }).stdout ?? "").match(/:(\d+)\s*$/m)?.[1];
+  let authOk = false;
+  for (let i = 0; port && !authOk && i < 60; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/auth/v1/health`);
+      authOk = res.status < 500; // 200 / 401 = auth reachable through the gateway; 502 = stale upstream
+    } catch {}
+    if (!authOk) await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (!authOk) throw new Error(`auth is not reachable through ${kong} after the reset`);
   const state = sql(`select (select max(version) from supabase_migrations.schema_migrations) || '/' || (select count(*) from plus_quotes) || '/' || (select count(*) from plus_contacts)`);
   if (state !== `${latestMigration}/0/0`) throw new Error(`reset not verified fresh: ${state} (expected ${latestMigration}/0/0)`);
   return state;
@@ -65,7 +80,7 @@ console.log(`Estimates & Quotes isolated regression -- app ${APP}, database ${DB
 const results = [];
 for (const [key, file, expected] of selected) {
   let fresh = "not reset";
-  if (!noReset) fresh = freshReset();
+  if (!noReset) fresh = await freshReset();
   assertFictionalSeed();
   const run = spawnSync(process.execPath, [path.join(HERE, file)], { env: process.env, encoding: "utf8", timeout: 30 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   const out = `${run.stdout ?? ""}${run.stderr ?? ""}`;

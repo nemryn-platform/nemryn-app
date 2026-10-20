@@ -24,7 +24,10 @@ export interface OperationsShellProps {
 export function OperationsShell({ sidebar, header, children }: OperationsShellProps) {
   return (
     <>
-      <div className="flex h-dvh flex-col items-center justify-center bg-surface-app px-zw-lg text-center md:hidden">
+      {/* NP-UI-P1a (A3): below md the narrow-screen notice is the page's main LANDMARK (role="main"; the shell's own
+          <main> is display:none there), so exactly one main landmark is exposed at every width. It is deliberately NOT a
+          second <main> element: the shell's <main> stays the only one, so `main` selectors keep finding the content. */}
+      <div role="main" className="flex h-dvh flex-col items-center justify-center bg-surface-app px-zw-lg text-center md:hidden">
         <EmptyState
           icon={<DesktopTower className="size-10" aria-hidden />}
           title="Operations"

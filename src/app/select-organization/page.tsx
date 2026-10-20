@@ -62,12 +62,12 @@ export default async function SelectOrganizationPage({
   const currentOrganizationId = switchRequested ? await getRequestedOrganizationId() : null;
 
   return (
-    <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-12">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-12">
       <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Select a workspace</h1>
       <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
         Your account has access to more than one Nemryn workspace. Choose which one to continue with.
       </p>
       <OrganizationSelector memberships={resolution.memberships} next={next} currentOrganizationId={currentOrganizationId} />
-    </div>
+    </main>
   );
 }

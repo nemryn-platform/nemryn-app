@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useMemo, useState, useTransition, type FormEvent } from "react";
 import { saveWebsiteRequestFormAction, type WebsiteRequestFormActionState } from "@/app/operations/settings/website-requests/actions";
 import { FormPreview } from "./FormPreview";
@@ -128,7 +129,7 @@ export function NemrynFormEditor({ organizationName, saved, initial, orgServices
               <legend className={cn(typography.subsectionHeading, "text-text-primary")}>Services shown on the form</legend>
               <p className={cn(typography.bodySmall, "text-text-secondary")}>
                 Only services your organization offers can appear. Manage what you offer in{" "}
-                <a href="/operations/settings/services" className="text-text-link underline">Services &amp; Intake</a>.
+                <Link href="/operations/settings/services" className="text-text-link underline">Services &amp; Intake</Link>.
               </p>
               <label className={cn(typography.bodySmall, "flex items-center gap-2 text-text-primary")}>
                 <input type="radio" name="serviceMode" value="all" checked={allServices} onChange={() => setAllServices(true)} /> Every service we offer

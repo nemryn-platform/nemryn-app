@@ -89,11 +89,17 @@ export async function newChromeSession({ chromePath, profileRoot, suffix = "" })
   await send("Network.enable", {}, sessionId);
   await send("Page.enable", {}, sessionId);
   await send("Runtime.enable", {}, sessionId);
+  // Behave like the person's foreground tab (NP-UI-P1a): headless Chrome can report the page as hidden / unfocused
+  // (e.g. after keyboard focus leaves the page for the browser UI). Hidden pages get no requestAnimationFrame, which
+  // React 19 uses to reveal streamed Suspense content (route loading.tsx boundaries) -- the page would stay on its
+  // skeleton. Focus emulation + bringToFront keep the page visible and focused, as it is for a real user.
+  await send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId);
 
   return {
     port,
     pid: chrome.pid,
     async nav(url, waitMs = 2000) {
+      await send("Page.bringToFront", {}, sessionId);
       await send("Page.navigate", { url }, sessionId);
       await sleep(waitMs);
     },

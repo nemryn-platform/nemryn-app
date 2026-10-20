@@ -140,6 +140,14 @@ function buildHeaderProps(
     return { title: "Trip Detail", ...identity };
   }
 
+  // Request Detail (NP-UI-P1a, A2) — the same convention as Trip Detail: the persistent header's "Request Detail" title
+  // is this page's one <h1> (the page's own "Request" heading is an <h2> below it, see
+  // src/app/operations/requests/[requestId]/page.tsx). Without this mapping the page had no <h1> at all. Excludes
+  // `/operations/requests/new`, whose form renders its own <h1>.
+  if (/^\/operations\/requests\/[^/]+$/.test(pathname) && !pathname.endsWith("/new")) {
+    return { title: "Request Detail", ...identity };
+  }
+
   // New Trip (P1-E3-S7) — the reference's own fixed top bar (05-internal-
   // new-trip.png) shows no bold chrome title, only the breadcrumb + icons;
   // the real "New Trip" heading lives in the page's own scrollable content

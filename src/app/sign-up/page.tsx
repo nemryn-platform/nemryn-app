@@ -21,7 +21,7 @@ export default async function SignUpPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
         {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
@@ -49,6 +49,6 @@ export default async function SignUpPage() {
           </Link>
         </p>
       </div>
-    </div>
+    </main>
   );
 }

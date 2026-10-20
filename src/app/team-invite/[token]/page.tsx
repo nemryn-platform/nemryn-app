@@ -28,14 +28,14 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
   const { data: preview, error } = await supabase.rpc("get_staff_invite_preview", { p_token: token });
 
   const shell = (children: React.ReactNode) => (
-    <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
         <div className="mb-8 flex justify-center">
           <Image src="/brand/nemryn-logo-primary.svg" alt="Nemryn" width={434} height={127} priority className="h-auto w-60" />
         </div>
         {children}
       </div>
-    </div>
+    </main>
   );
 
   if (error || !preview || !preview.email || !preview.organization_name || !preview.role) {

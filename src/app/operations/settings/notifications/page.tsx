@@ -50,7 +50,11 @@ export default async function NotificationsSettingsPage() {
         </p>
       )}
 
-      <section aria-label="Notification settings" className="flex max-w-3xl flex-col gap-zw-md">
+      <section aria-labelledby="notification-settings-heading" className="flex max-w-3xl flex-col gap-zw-md">
+        {/* NP-UI-P1a (A4): the per-event cards use <h3>; this visually hidden <h2> keeps the outline h1 -> h2 -> h3 */}
+        <h2 id="notification-settings-heading" className="sr-only">
+          Notification settings
+        </h2>
         {NOTIFICATION_EVENT_OPTIONS.map((option) => {
           const setting = settings.find((s) => s.event === option.value);
           return (

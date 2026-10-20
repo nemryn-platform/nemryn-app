@@ -38,7 +38,7 @@ export default async function CompleteSignupFormPage() {
     typeof metadata.pending_business_name === "string" ? metadata.pending_business_name : "";
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
         <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Welcome to Nemryn</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
@@ -46,6 +46,6 @@ export default async function CompleteSignupFormPage() {
         </p>
         <CompleteSignupForm defaultFullName={prefillFullName} defaultBusinessName={prefillBusinessName} />
       </div>
-    </div>
+    </main>
   );
 }

@@ -25,7 +25,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   const { data: preview, error } = await supabase.rpc("get_driver_invite_preview", { p_token: token });
 
   const shell = (children: React.ReactNode) => (
-    <div className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
       <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
         {/*
           N0-M2-A2-R1: this is the PLATFORM frame — it must stay Nemryn-
@@ -38,7 +38,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
         </div>
         {children}
       </div>
-    </div>
+    </main>
   );
 
   // Composite-type fields are nullable at the TypeScript level even though
