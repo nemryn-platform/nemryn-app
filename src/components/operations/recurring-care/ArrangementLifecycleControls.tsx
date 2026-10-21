@@ -86,8 +86,8 @@ export function ArrangementLifecycleControls({
 
       {activeDialog === "pause" && (
         <ConfirmActionDialog
-          title="Pause recurring arrangement"
-          description="Nemryn will stop expecting new occurrences while this arrangement is paused. Existing trips are not cancelled."
+          title="Pause standing order"
+          description="Nemryn will stop expecting new occurrences while this standing order is paused. Existing trips are not cancelled."
           confirmLabel="Pause"
           confirmingLabel="Pausing…"
           hiddenFields={{ arrangementId }}
@@ -98,7 +98,7 @@ export function ArrangementLifecycleControls({
 
       {activeDialog === "resume" && (
         <ConfirmActionDialog
-          title="Resume recurring arrangement"
+          title="Resume standing order"
           description="Nemryn will resume expecting occurrences from the current active pattern. Existing trips remain unchanged."
           confirmLabel="Resume"
           confirmingLabel="Resuming…"

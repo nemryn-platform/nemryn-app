@@ -1,13 +1,13 @@
 import Link from "next/link";
-import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { CalendarCheck, CheckCircle, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTomorrowReadiness, type TomorrowReadinessData } from "@/lib/operations/tomorrow-readiness";
 import { formatOperationsTime, formatOperationsLongDate, tripReadinessReasonLabel } from "@/lib/operations/presentation";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Panel } from "@/components/ui/Panel";
+import { Panel, PanelHeader, PanelSection } from "@/components/ui/Panel";
+import { StatTile, StatTileGroup } from "@/components/ui/StatTile";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { SummaryStrip, type SummaryItem } from "@/components/ui/SummaryStrip";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { TripAssignmentButton } from "@/components/operations/trip-detail/TripAssignmentButton";
@@ -59,8 +59,8 @@ export default async function TomorrowReadinessPage() {
     // pattern (src/app/operations/trips/[tripId]/page.tsx).
     return (
       <div className="flex flex-col gap-zw-lg">
-        <PageHeader title="Tomorrow" />
-        <Panel>
+        <PageHeader title="Tomorrow Readiness" />
+        <Panel elevated>
           <EmptyState
             icon={<WarningCircle className="size-8" aria-hidden />}
             title="Couldn't load tomorrow's trips"
@@ -146,31 +146,45 @@ export default async function TomorrowReadinessPage() {
   const wheelchairNotRecorded = new Set(data.wheelchairEquipmentNotRecorded);
   const extentText = (tripId: string) => extentLabels.get(tripId) ?? "Duration not set";
 
-  const summaryItems: SummaryItem[] = [
-    { label: totalScheduledTrips === 1 ? "scheduled trip" : "scheduled trips", value: totalScheduledTrips },
-    { label: "ready", value: readyCount, dot: true },
-  ];
-  if (needsPreparationCount > 0) {
-    summaryItems.push({ label: "need preparation", value: needsPreparationCount, tone: "warning", dot: true });
-  }
 
+  // NP-UI-P2 (Brand Lock §15 "Tomorrow Readiness"): one page header with the date and "Open in Dispatch" as its action;
+  // the real counts as fact tiles; the two lists in the Brief card rhythm with a time column. Same data, same actions.
   return (
     <div className="flex flex-col gap-zw-lg">
-      <PageHeader title="Tomorrow" description={dateLabel} />
-      <Link href="/operations/dispatch?day=tomorrow" className={cn(typography.bodySmall, "self-start font-medium text-text-link hover:underline")} data-testid="tomorrow-dispatch-link">
-        Open in Dispatch
-      </Link>
+      <PageHeader
+        title="Tomorrow Readiness"
+        description={dateLabel}
+        actions={
+          <LinkButton href="/operations/dispatch?day=tomorrow" variant="outline" data-testid="tomorrow-dispatch-link">
+            Open in Dispatch
+          </LinkButton>
+        }
+      />
 
       {totalScheduledTrips === 0 ? (
-        <Panel>
+        <Panel elevated>
           <EmptyState
+            icon={<CalendarCheck className="size-8" aria-hidden />}
             title="No trips scheduled for tomorrow."
             description="Trips scheduled for tomorrow will appear here."
           />
         </Panel>
       ) : (
         <>
-          <SummaryStrip inline items={summaryItems} />
+          <StatTileGroup label="Tomorrow at a glance" testId="tomorrow-summary">
+            {[
+              <StatTile key="scheduled" label={totalScheduledTrips === 1 ? "scheduled trip" : "scheduled trips"} value={totalScheduledTrips} icon={<CalendarCheck className="size-5" />} tone="info" href="/operations/dispatch?day=tomorrow" />,
+              <StatTile key="ready" label="ready" value={readyCount} icon={<CheckCircle className="size-5" />} tone={readyCount > 0 ? "positive" : "neutral"} />,
+              <StatTile
+                key="prep"
+                label="need preparation"
+                value={needsPreparationCount}
+                icon={<WarningCircle className="size-5" />}
+                tone={needsPreparationCount > 0 ? "attention" : "neutral"}
+                href={needsPreparationCount > 0 ? "#needs-preparation" : undefined}
+              />,
+            ]}
+          </StatTileGroup>
           {overlapCoverage !== "complete" && (
             <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="tomorrow-overlap-incomplete">
               Some trip commitments could not be fully checked for other trips at the same time.
@@ -178,32 +192,34 @@ export default async function TomorrowReadinessPage() {
           )}
 
           {needsPreparationCount === 0 ? (
-            <Panel>
+            <Panel elevated>
               <EmptyState
                 title="Tomorrow is ready"
                 description={`All ${totalScheduledTrips} scheduled ${totalScheduledTrips === 1 ? "trip is" : "trips are"} prepared based on the information currently available.`}
               />
             </Panel>
           ) : (
-            <Panel className="p-0">
-              <div className="flex items-center justify-between gap-4 p-zw-lg pb-0">
-                <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Needs preparation</h2>
-                <StatusBadge
-                  label={`${needsPreparationCount} ${needsPreparationCount === 1 ? "Trip" : "Trips"}`}
-                  category="warning"
+            <Panel padding="none" elevated id="needs-preparation" className="scroll-mt-24">
+              <PanelSection part="header">
+                <PanelHeader
+                  as="h2"
+                  icon={<WarningCircle className="size-5" weight="fill" />}
+                  tone="attention"
+                  title="Needs preparation"
+                  description="Trips that still need a driver, a vehicle or other details before tomorrow."
+                  actions={<StatusBadge label={`${needsPreparationCount} ${needsPreparationCount === 1 ? "Trip" : "Trips"}`} category="warning" />}
                 />
-              </div>
-              <div className="p-zw-lg">
+              </PanelSection>
+              <PanelSection part="body">
                 <ul className="divide-y divide-border-subtle">
                   {needsPreparation.map((item) => (
                     <li
                       key={item.tripId}
-                      className="flex flex-col gap-2 py-zw-sm first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                      className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2 py-zw-md first:pt-zw-xs last:pb-zw-xs sm:grid-cols-[4.5rem_minmax(0,1fr)_auto]"
                     >
-                      <div className="min-w-0 flex-1">
-                        <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>
-                          {formatOperationsTime(item.scheduledPickupAt, timezone)} · {item.passengerDisplayName}
-                        </p>
+                      <p className={cn(typography.label, "pt-0.5 tabular-nums text-text-primary")}>{formatOperationsTime(item.scheduledPickupAt, timezone)}</p>
+                      <div className="min-w-0">
+                        <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{item.passengerDisplayName}</p>
                         <p className={cn(typography.metadata, "text-text-muted")} data-testid="tomorrow-extent">
                           {extentText(item.tripId)}
                         </p>
@@ -215,7 +231,7 @@ export default async function TomorrowReadinessPage() {
                           {wheelchairNotRecorded.has(item.tripId) && <StatusBadge label="Wheelchair equipment not recorded" category="neutral" />}
                         </div>
                       </div>
-                      <div className="flex shrink-0 gap-2">
+                      <div className="col-start-2 flex shrink-0 flex-wrap gap-2 sm:col-start-auto sm:self-center">
                         {assignmentOptions && assignActions.has(item.tripId) && (
                           <TripAssignmentButton
                             trip={data.assignmentTargets[item.tripId]}
@@ -235,24 +251,25 @@ export default async function TomorrowReadinessPage() {
                     </li>
                   ))}
                 </ul>
-              </div>
+              </PanelSection>
             </Panel>
           )}
 
           {ready.length > 0 && (
-            <Panel className="p-0">
-              <div className="p-zw-lg pb-0">
-                <h2 className={cn(typography.subsectionHeading, "text-text-secondary")}>Ready</h2>
-              </div>
-              <div className="p-zw-lg">
+            <Panel padding="none" elevated>
+              <PanelSection part="header">
+                <PanelHeader as="h2" icon={<CheckCircle className="size-5" />} tone="positive" title="Ready" description="Prepared based on the information currently available." />
+              </PanelSection>
+              <PanelSection part="body">
                 <ul className="divide-y divide-border-subtle">
                   {ready.map((item) => (
-                    <li key={item.tripId} className="flex items-center justify-between gap-3 py-zw-xs first:pt-0 last:pb-0">
+                    <li key={item.tripId} className="flex items-center justify-between gap-3 py-zw-sm first:pt-zw-xs last:pb-zw-xs">
                       <Link
                         href={`/operations/trips/${item.tripId}`}
-                        className={cn(typography.bodySmall, "min-w-0 flex-1 truncate text-text-secondary hover:text-text-link hover:underline")}
+                        className={cn(typography.bodySmall, "min-w-0 flex-1 truncate text-text-primary underline-offset-2 hover:text-text-link hover:underline")}
                       >
-                        {formatOperationsTime(item.scheduledPickupAt, timezone)} · {item.passengerDisplayName}
+                        <span className="mr-3 inline-block w-16 font-medium tabular-nums">{formatOperationsTime(item.scheduledPickupAt, timezone)}</span>
+                        {item.passengerDisplayName}
                         <span className={cn(typography.metadata, "ml-2 text-text-muted")} data-testid="tomorrow-extent">
                           {extentText(item.tripId)}
                         </span>
@@ -263,7 +280,7 @@ export default async function TomorrowReadinessPage() {
                     </li>
                   ))}
                 </ul>
-              </div>
+              </PanelSection>
             </Panel>
           )}
         </>

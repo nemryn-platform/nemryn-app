@@ -33,8 +33,8 @@ test("only ACCEPTED Requests can be stranded", () => {
 // P1-PILOT-R3 -- deliberate expectation change (owner section 16): the line now names both ways to fulfil a Request.
 test("Overview line: plain fact, singular / plural, nothing at zero", () => {
   assert.equal(strandedRequestsLine(0), null);
-  assert.equal(strandedRequestsLine(1), "1 accepted request still needs a trip or recurring arrangement");
-  assert.equal(strandedRequestsLine(4), "4 accepted requests still need a trip or recurring arrangement");
+  assert.equal(strandedRequestsLine(1), "1 accepted request still needs a trip or standing order");
+  assert.equal(strandedRequestsLine(4), "4 accepted requests still need a trip or standing order");
   assert.equal(STRANDED_REQUESTS_HREF, "/operations/requests?state=accepted&needs=trip");
 });
 

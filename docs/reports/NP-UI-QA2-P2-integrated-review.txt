@@ -1,0 +1,163 @@
+NP-UI-QA2-P2 — INTEGRATED REVIEW SUMMARY
+========================================
+Date: 2026-10-21.
+- Branch np-ui-qa2-p2-core-refinement (from origin/main 8131f0f).
+- Isolated environment only. NOT committed, pushed, merged or deployed. No production access or writes; no
+  messages sent.
+
+1. STARTING BRANCH AND HEAD
+---------------------------
+- origin/main 8131f0f contains P1a, P1b, PR #24 and merge 8131f0f.
+- Branched with all untracked work preserved.
+
+2. QA2 BASELINE COVERAGE
+------------------------
+Five tracked suites (tests/e2e/qa2) with 187 checks:
+- core-requests 25
+- core-trips-dispatch 34
+- core-records 26
+- growth 23
+- auth-access 79
+
+They cover:
+- Requests (with the Request → Trip handoff);
+- Trips (list, New Trip, detail editing, notes, assignment, reassignment, cancel);
+- Dispatch, Tomorrow Readiness, Day Sheet;
+- Standing Orders (create, single, bulk);
+- Passengers, Facilities, Drivers (invite), Vehicles, Proof of Service;
+- Growth: Dashboard, Contacts, Pipeline, Tasks, Growth → Core handoff, entitlement / grants;
+- auth: sign-in / out, workspaces, roles, driver invitation, sign-up + onboarding, error / not-found;
+- a 29-route one-h1 + axe sweep;
+- tenant isolation.
+
+Outcomes are verified in the isolated DB. Quotes stay in tests/e2e/plus-quotes. Details:
+NP-UI-QA2-regression-preservation.txt.
+
+3. QA2 BEFORE / AFTER
+---------------------
+| Run | Result |
+|---|---|
+| Before (Gate QA2-A, unchanged P1b app) | 185 / 187 PASS. 2 failing checks = 1 real pre-existing defect (Standing Order detail has no h1), recorded as a known baseline defect. No unexpected failures. |
+| After (final build, `npm run test:e2e:qa2:strict`, fresh reset per suite) | 187 / 187 PASS. The baseline defect is fixed. |
+
+One P2-introduced regression appeared during integration and was fixed before completion (see §8).
+
+4. UI-P2 CHANGED FILES
+----------------------
+48 source files (incl. the new ViewSwitch), the QA2 test package, package.json (2 scripts) and docs. Full list:
+NP-UI-P2-core-refinement.txt §2. No src/lib, server action, route, supabase/, auth, quotes / print, shell, logo,
+dependency, font or build-config change.
+
+5. SCREENS REFINED
+------------------
+Requests (list, detail, Log Request), Trips (list, New Trip, detail), Dispatch, Tomorrow Readiness, Standing Orders
+(list, detail, new, create-missing), Passengers, Facilities, Drivers, Vehicles, Proof of Service.
+NP-UI-P2-core-refinement.txt §3.
+
+6. SHARED COMPONENTS ADOPTED
+----------------------------
+- PageHeader, PanelHeader / PanelSection / Panel, StatTile, StatusBadge, DataTable, FilterBar, Pagination,
+  EmptyState, DetailPageHeader.
+- New: ViewSwitch, replacing 4 duplicated link-tab controls.
+
+7. NAVIGATION INTEGRATION
+-------------------------
+- Destinations, active states and role / entitlement visibility are unchanged.
+- One h1 per page on 29 routes. Header actions all work; no dead buttons; Billing / Reports are still hidden.
+- Authorization remains server-side.
+
+8. ACCESSIBILITY
+----------------
+- axe 0 serious / critical on all swept routes.
+- U1 / U2 preserved: strict quotes s4-a11y 26 / 26; QA2 keyboard dialog checks.
+- The missing h1 on the Standing Order detail is fixed.
+- The P2 regression: ViewSwitch's count made the accessible name "Pending12". QA2 strict caught it (L2); a
+  visually hidden separator now gives "Pending, 12"; QA2 strict 187 / 187 on the fixed build.
+
+9. RESPONSIVE
+-------------
+- 1440 / 1024 / 768: no page-level overflow; Dispatch scroll is contained; the Dispatch grid is wider below 2xl.
+- 390: the approved Operations notice is unchanged. The Driver app is unchanged.
+
+10. SCREENSHOT LOCATIONS
+------------------------
+docs/design/concept-b/reviews/p2/:
+- before/ (29)
+- after/ (29)
+- p2-visual-comparison.png (before | after, 8 key screens)
+- index.md (file list with dimensions; all 58 decode)
+
+11. BUILD AND REGRESSION RESULTS
+--------------------------------
+Final code:
+
+| Check | Result |
+|---|---|
+| TypeScript | clean |
+| ESLint (src + tests) | exit 0 |
+| npm test | 894 / 894 |
+| `next build --webpack` | OK (used for every isolated browser run) |
+| Default `next build` (Turbopack) | FAILS. See below. |
+| QA2 strict | 187 / 187 |
+
+Default build failure (exact):
+
+  Error: Turbopack build failed with 12 errors:
+  Error: Module not found: Can't resolve '@vercel/turbopack-next/internal/font/google/font'
+  next/font/google queries have exactly one entry
+  (in [next]/internal/font/google/geist_mono_*.module.css)
+
+The identical failure reproduces on unchanged main (shown in the sidebar-scrollbar phase: the branch and a control
+build of main 9f42669 / 8131f0f). Vercel's hosted builds of main succeed (PR #23 / #24 previews and production).
+The default build is NOT reported as passing. No font, dependency or tooling change was made.
+
+The following ran on the P2 build immediately BEFORE the final ViewSwitch sr-only fix (a one-span, visually
+identical change confined to ViewSwitch):
+
+| Suite | Result |
+|---|---|
+| UI-P1a E2E | 48 / 48 |
+| UI-P1b E2E | 52 / 52 |
+| Strict quotes | s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26 "U1 / U2 RESOLVED"; no unexpected failures |
+| SQL (13 suites, fresh reset each) | all 0 failures; privilege contract 0 / 29 violations; entitlement 150; member grants 76; request attributions 73; RLS adversarial 33; tenant settings 51; mutation / function / read / create-trip privilege all PASS |
+
+QA2 strict was then re-run on the final build: 187 / 187. The P1a / P1b / quotes / SQL suites were not re-run after
+the one-span fix. It touches only the ViewSwitch count label, which none of them exercise (Dispatch's ViewSwitch
+has no count). This is disclosed rather than assumed away.
+
+Workflow confirmations, all via QA2 + quotes:
+- Request → Trip; Trip → Dispatch; Standing Order creation (single + bulk); driver assignment / reassignment;
+  Growth → Core handoff (exactly one request);
+- workspace and access restrictions (roles, grants, entitlement, tenant isolation);
+- no quote lifecycle or print / PDF regressions (strict quotes).
+
+12. KNOWN FAILURES AND LIMITATIONS
+----------------------------------
+- The local default Turbopack build fails (environmental; reproduces on main).
+- QA2 does not automate staff (team) invitations (dev mail log only), the platform admin console, or driver-app
+  internals.
+- The P1a / P1b / quotes / SQL suites were last run on the build before the one-span ViewSwitch accessibility fix
+  (§11).
+
+13. UNRESOLVED PRODUCT DECISIONS (owner)
+----------------------------------------
+- D1: Standing Orders action copy still says "recurring arrangement" ("New recurring arrangement", "Create
+  arrangement"). Rename the actions too? (The qa2 suites would be updated in the same PR.)
+- D2: The Settings / website-requests copy says "Request Hub" (UI-P5).
+- D3: Trip / Request detail: a deeper record-header recomposition, as a separate phase?
+- D4: The Dispatch layout breakpoint (capacity rail below the board under 2xl): keep, or prefer a collapsible rail?
+- D5: The local Turbopack font failure: approve an investigation (Next.js patch or self-hosted Geist)?
+
+14. VERDICT
+-----------
+CONDITIONAL PASS.
+- QA2: PASS.
+- UI-P2: all gates are green on the final code except the pre-existing local default-build failure.
+- Conditional on owner visual review and the decisions above.
+
+15. READINESS FOR OWNER VISUAL REVIEW
+-------------------------------------
+READY. Review docs/design/concept-b/reviews/p2/p2-visual-comparison.png and index.md. The local app on
+http://localhost:3100 runs the final build (isolated, fictional data; sign in as org-a-admin@example.test).
+
+DO NOT COMMIT. DO NOT PUSH. DO NOT MERGE. DO NOT DEPLOY. STOPPED for ChatGPT / owner review.

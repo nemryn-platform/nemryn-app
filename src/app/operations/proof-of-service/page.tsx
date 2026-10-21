@@ -5,6 +5,8 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getProofOfServiceReview, PROOF_OF_SERVICE_PAGE_SIZE, type ProofOfServiceReviewResult, type ProofOfServiceReviewRow } from "@/lib/operations/trip-proof-of-service";
 import { formatOperationsTime, proofOfServiceStateLabel, proofOfServiceStateCategory, proofOfServiceReasonLabel, proofOfServiceWindowLabel, driverRecordedMilestonesLine } from "@/lib/operations/presentation";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterBar } from "@/components/ui/FilterBar";
+import { Pagination } from "@/components/ui/Pagination";
 import { Panel } from "@/components/ui/Panel";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -82,7 +84,7 @@ export default async function ProofOfServicePage({
     return (
       <div className="flex flex-col gap-zw-lg">
         <PageHeader title="Proof of Service" description="Review completed transportation before billing." />
-        <Panel>
+        <Panel elevated>
           <EmptyState
             icon={<WarningCircle className="size-8" aria-hidden />}
             title="Proof-of-service review unavailable"
@@ -175,7 +177,7 @@ export default async function ProofOfServicePage({
     <div className="flex flex-col gap-zw-lg">
       <PageHeader title="Proof of Service" description="Review completed transportation before billing." />
 
-      <ProofOfServiceWindowTabs active={window} />
+      <FilterBar filters={<ProofOfServiceWindowTabs active={window} />} resultCount={`${proofOfServiceWindowLabel(window)} · ${data.totalCount} completed ${data.totalCount === 1 ? "trip" : "trips"}`} />
 
       <DataTable
         columns={columns}
@@ -191,24 +193,7 @@ export default async function ProofOfServicePage({
       />
 
       {data.rows.length > 0 && (
-        <div className={cn(typography.bodySmall, "flex items-center justify-between text-text-muted")}>
-          <p>
-            {proofOfServiceWindowLabel(window)} · Showing {(data.page - 1) * data.pageSize + 1}–
-            {Math.min(data.page * data.pageSize, data.totalCount)} of {data.totalCount}
-          </p>
-          <div className="flex gap-2">
-            {data.page > 1 && (
-              <Link href={buildPageHref(data.page - 1)} className={cn(typography.button, "text-text-link hover:underline")}>
-                Previous
-              </Link>
-            )}
-            {data.page < totalPages && (
-              <Link href={buildPageHref(data.page + 1)} className={cn(typography.button, "text-text-link hover:underline")}>
-                Next
-              </Link>
-            )}
-          </div>
-        </div>
+        <Pagination page={data.page} totalPages={totalPages} hrefForPage={buildPageHref} totalItems={data.totalCount} pageSize={data.pageSize} label="Proof of Service pages" />
       )}
     </div>
   );

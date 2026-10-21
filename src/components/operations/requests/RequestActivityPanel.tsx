@@ -39,7 +39,7 @@ export interface RequestActivityPanelProps {
  */
 export function RequestActivityPanel({ events, timezone }: RequestActivityPanelProps) {
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Request Activity</h3>
       <div className="mt-zw-md">
         {events === null ? (

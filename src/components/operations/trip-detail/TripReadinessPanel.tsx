@@ -40,7 +40,7 @@ export interface TripReadinessPanelProps {
 export function TripReadinessPanel({ readiness, unavailable = false }: TripReadinessPanelProps) {
   if (unavailable) {
     return (
-      <Panel>
+      <Panel elevated>
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Preparation</h3>
         <p className={cn(typography.bodySmall, "mt-2 text-text-muted")}>
           Preparation status isn&apos;t available right now.
@@ -56,7 +56,7 @@ export function TripReadinessPanel({ readiness, unavailable = false }: TripReadi
   const isReady = readiness.state === "READY";
 
   return (
-    <Panel>
+    <Panel elevated>
       <div className="flex items-center justify-between gap-2">
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Preparation</h3>
         <StatusBadge label={isReady ? "Prepared" : "Needs preparation"} category={isReady ? "positive" : "warning"} />

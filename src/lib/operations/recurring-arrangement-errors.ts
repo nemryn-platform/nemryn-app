@@ -26,10 +26,10 @@ export type RecurringArrangementErrorCode =
 
 const RECURRING_ARRANGEMENT_ERROR_MESSAGE: Record<RecurringArrangementErrorCode, string> = {
   UNAUTHORIZED: "Your session is no longer valid. Sign in again.",
-  NOT_FOUND: "This recurring arrangement is no longer available.",
-  ILLEGAL_STATE: "This arrangement has changed and can no longer be updated this way.",
+  NOT_FOUND: "This standing order is no longer available.",
+  ILLEGAL_STATE: "This standing order has changed and can no longer be updated this way.",
   INVALID_INPUT: "Please check the information provided and try again.",
-  REQUEST_NOT_READY: "This request is no longer ready for recurring care.",
+  REQUEST_NOT_READY: "This request is no longer ready for a standing order.",
   UNKNOWN: "Something went wrong. Try again.",
 };
 

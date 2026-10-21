@@ -20,7 +20,7 @@ export function OccurrenceList({ arrangementId, occurrences }: OccurrenceListPro
   if (occurrences.length === 0) {
     return (
       <div className="rounded-md border border-border-subtle bg-surface-elevated">
-        <EmptyState title="No occurrences in the next 14 days." description="This arrangement's pattern doesn't fall within the current window." />
+        <EmptyState title="No occurrences in the next 14 days." description="This standing order's pattern doesn't fall within the current window." />
       </div>
     );
   }

@@ -13,6 +13,7 @@ import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { DetailPageHeader } from "@/components/operations/OperationsPageHeaders";
 import { ArrangementLifecycleControls } from "@/components/operations/recurring-care/ArrangementLifecycleControls";
 import { OccurrenceList } from "@/components/operations/recurring-care/OccurrenceList";
 import { typography } from "@/design/typography";
@@ -35,133 +36,144 @@ export default async function RecurringArrangementDetailPage({ params }: { param
 
   if (result.status === "unavailable") {
     return (
-      <EmptyState
-        icon={<WarningCircle className="size-8" aria-hidden />}
-        title="Arrangement unavailable"
-        description="This recurring arrangement doesn't exist, or you don't have access to it."
-        action={
-          <Link href="/operations/recurring-care" className={cn(typography.button, "text-text-link")}>
-            Back to Recurring Care
-          </Link>
-        }
-      />
+      <>
+        <DetailPageHeader title="Standing Order" />
+        <EmptyState
+          icon={<WarningCircle className="size-8" aria-hidden />}
+          title="Standing order unavailable"
+          description="This standing order doesn't exist, or you don't have access to it."
+          action={
+            <Link href="/operations/recurring-care" className={cn(typography.button, "text-text-link")}>
+              Back to Standing Orders
+            </Link>
+          }
+        />
+      </>
     );
   }
 
   if (result.status === "error") {
     return (
-      <EmptyState
-        icon={<WarningCircle className="size-8" aria-hidden />}
-        title="Couldn't load this arrangement"
-        description="Something went wrong. Try refreshing the page in a moment."
-      />
+      <>
+        <DetailPageHeader title="Standing Order" />
+        <EmptyState
+          icon={<WarningCircle className="size-8" aria-hidden />}
+          title="Couldn't load this standing order"
+          description="Something went wrong. Try refreshing the page in a moment."
+        />
+      </>
     );
   }
 
   const { arrangement, assurance } = result;
 
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
-        <Link href="/operations/recurring-care" className="hover:text-text-secondary hover:underline">
-          Recurring Care
-        </Link>
-        <span className="mx-2" aria-hidden>
-          ›
-        </span>
-        <span className="text-text-secondary">{arrangement.passengerDisplayName}</span>
-      </nav>
+    <>
+      <DetailPageHeader title="Standing Order" />
+      <div className="flex flex-col gap-zw-lg">
+        <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
+          <Link href="/operations/recurring-care" className="hover:text-text-secondary hover:underline">
+            Standing Orders
+          </Link>
+          <span className="mx-2" aria-hidden>
+            ›
+          </span>
+          <span className="text-text-secondary">{arrangement.passengerDisplayName}</span>
+        </nav>
 
-      <div className="flex flex-wrap items-start justify-between gap-zw-md">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>{arrangement.passengerDisplayName}</h2>
-            <StatusBadge label={recurringArrangementStatusLabel(arrangement.status)} category={recurringArrangementStatusCategory(arrangement.status)} />
-          </div>
-          <p className={cn(typography.body, "mt-1 text-text-secondary")}>
-            {formatRecurringPattern(arrangement.daysOfWeek)} · {formatWallClockTime(arrangement.pickupTime)}
-          </p>
-          {/* P1-PILOT-R3 (PR-04): a quiet relationship back to the originating Request (normal tenant authorization). */}
-          {arrangement.originatingRequest && (
-            <p className={cn(typography.bodySmall, "mt-1 text-text-muted")} data-testid="arrangement-originating-request">
-              Created from a request ·{" "}
-              <Link href={`/operations/requests/${arrangement.originatingRequest.id}`} className="text-text-link hover:underline">
-                View originating Request
-              </Link>
-              {arrangement.originatingRequest.returnTripExpected && arrangement.originatingRequest.state === "accepted" && (
-                <>
-                  {" · "}Return trip expected ·{" "}
-                  <Link
-                    href={`/operations/recurring-care/new?requestId=${arrangement.originatingRequest.id}`}
-                    className="text-text-link hover:underline"
-                    data-testid="arrangement-create-another"
-                  >
-                    Create another recurring arrangement
-                  </Link>
-                </>
-              )}
-            </p>
-          )}
-        </div>
-        <ArrangementLifecycleControls
-          arrangementId={arrangement.id}
-          passengerName={arrangement.passengerDisplayName}
-          status={arrangement.status}
-          pickupDescription={arrangement.pickupDescription}
-          destinationDescription={arrangement.destinationDescription}
-          pickupTime={arrangement.pickupTime}
-          daysOfWeek={arrangement.daysOfWeek}
-          startDate={arrangement.startDate}
-          endDate={arrangement.endDate}
-          requiresWheelchairAccess={arrangement.requiresWheelchairAccess}
-        />
-      </div>
-      <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="arrangement-wheelchair">
-        Wheelchair transport equipment:{" "}
-        {arrangement.requiresWheelchairAccess === true ? "Needed" : arrangement.requiresWheelchairAccess === false ? "Not needed" : "Not specified"}
-        <span className="text-text-muted"> · applied to trips created from now on</span>
-      </p>
-
-      {arrangement.status === "ended" && arrangement.endedReason && (
-        <div className="flex items-start gap-3 rounded-md border border-border-subtle bg-surface-secondary px-zw-lg py-zw-md">
+        <div className="flex flex-wrap items-start justify-between gap-zw-md">
           <div>
-            <p className={cn(typography.subsectionHeading, "text-text-primary")}>Ended</p>
-            <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Reason: {arrangement.endedReason}</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* NP-UI-P2: the "Standing Order" PageHeader above is this page's one h1 (fixes the QA2 baseline defect: the page had
+                no h1); the passenger name stays the record heading, as on Trip / Request Detail. */}
+            <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>{arrangement.passengerDisplayName}</h2>
+              <StatusBadge label={recurringArrangementStatusLabel(arrangement.status)} category={recurringArrangementStatusCategory(arrangement.status)} />
+            </div>
+            <p className={cn(typography.body, "mt-1 text-text-secondary")}>
+              {formatRecurringPattern(arrangement.daysOfWeek)} · {formatWallClockTime(arrangement.pickupTime)}
+            </p>
+            {/* P1-PILOT-R3 (PR-04): a quiet relationship back to the originating Request (normal tenant authorization). */}
+            {arrangement.originatingRequest && (
+              <p className={cn(typography.bodySmall, "mt-1 text-text-muted")} data-testid="arrangement-originating-request">
+                Created from a request ·{" "}
+                <Link href={`/operations/requests/${arrangement.originatingRequest.id}`} className="text-text-link hover:underline">
+                  View originating Request
+                </Link>
+                {arrangement.originatingRequest.returnTripExpected && arrangement.originatingRequest.state === "accepted" && (
+                  <>
+                    {" · "}Return trip expected ·{" "}
+                    <Link
+                      href={`/operations/recurring-care/new?requestId=${arrangement.originatingRequest.id}`}
+                      className="text-text-link hover:underline"
+                      data-testid="arrangement-create-another"
+                    >
+                      Create another standing order
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+          <ArrangementLifecycleControls
+            arrangementId={arrangement.id}
+            passengerName={arrangement.passengerDisplayName}
+            status={arrangement.status}
+            pickupDescription={arrangement.pickupDescription}
+            destinationDescription={arrangement.destinationDescription}
+            pickupTime={arrangement.pickupTime}
+            daysOfWeek={arrangement.daysOfWeek}
+            startDate={arrangement.startDate}
+            endDate={arrangement.endDate}
+            requiresWheelchairAccess={arrangement.requiresWheelchairAccess}
+          />
+        </div>
+        <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="arrangement-wheelchair">
+          Wheelchair transport equipment:{" "}
+          {arrangement.requiresWheelchairAccess === true ? "Needed" : arrangement.requiresWheelchairAccess === false ? "Not needed" : "Not specified"}
+          <span className="text-text-muted"> · applied to trips created from now on</span>
+        </p>
+
+        {arrangement.status === "ended" && arrangement.endedReason && (
+          <div className="flex items-start gap-3 rounded-md border border-border-subtle bg-surface-secondary px-zw-lg py-zw-md">
+            <div>
+              <p className={cn(typography.subsectionHeading, "text-text-primary")}>Ended</p>
+              <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Reason: {arrangement.endedReason}</p>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="flex flex-col gap-zw-lg">
+            <Panel elevated>
+              <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Upcoming transportation</h3>
+              <p className={cn(typography.bodySmall, "mt-1 mb-zw-md text-text-secondary")}>
+                {assurance.missingCount > 0
+                  ? `${assurance.missingCount} occurrence${assurance.missingCount === 1 ? "" : "s"} not yet scheduled in the next 14 days.`
+                  : "Upcoming transportation is scheduled."}
+              </p>
+              <OccurrenceList arrangementId={arrangement.id} occurrences={assurance.occurrences} />
+            </Panel>
+          </div>
+
+          <div className="flex flex-col gap-zw-lg">
+            <Panel elevated>
+              <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Arrangement details</h3>
+              <DefinitionList
+                className="mt-zw-md"
+                columns={1}
+                items={[
+                  { label: "Pickup", value: arrangement.pickupDescription },
+                  { label: "Destination", value: arrangement.destinationDescription },
+                  { label: "Pickup time", value: `${formatWallClockTime(arrangement.pickupTime)} (${arrangement.timezone})` },
+                  { label: "Pattern", value: formatRecurringPattern(arrangement.daysOfWeek) },
+                  { label: "Start date", value: arrangement.startDate },
+                  { label: "End date", value: arrangement.endDate ?? "Open-ended" },
+                ]}
+              />
+            </Panel>
           </div>
         </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="flex flex-col gap-zw-lg">
-          <Panel>
-            <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Upcoming transportation</h3>
-            <p className={cn(typography.bodySmall, "mt-1 mb-zw-md text-text-secondary")}>
-              {assurance.missingCount > 0
-                ? `${assurance.missingCount} occurrence${assurance.missingCount === 1 ? "" : "s"} not yet scheduled in the next 14 days.`
-                : "Upcoming transportation is scheduled."}
-            </p>
-            <OccurrenceList arrangementId={arrangement.id} occurrences={assurance.occurrences} />
-          </Panel>
-        </div>
-
-        <div className="flex flex-col gap-zw-lg">
-          <Panel>
-            <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Arrangement details</h3>
-            <DefinitionList
-              className="mt-zw-md"
-              columns={1}
-              items={[
-                { label: "Pickup", value: arrangement.pickupDescription },
-                { label: "Destination", value: arrangement.destinationDescription },
-                { label: "Pickup time", value: `${formatWallClockTime(arrangement.pickupTime)} (${arrangement.timezone})` },
-                { label: "Pattern", value: formatRecurringPattern(arrangement.daysOfWeek) },
-                { label: "Start date", value: arrangement.startDate },
-                { label: "End date", value: arrangement.endDate ?? "Open-ended" },
-              ]}
-            />
-          </Panel>
-        </div>
       </div>
-    </div>
+    </>
   );
 }

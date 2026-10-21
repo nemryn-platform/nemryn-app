@@ -1,0 +1,209 @@
+NP-UI-P2 — CORE OPERATIONS VISUAL REFINEMENT
+============================================
+Date: 2026-10-21.
+Design: the approved P1b canonical shell (Brand Lock v1).
+Isolated environment only. NOT committed, pushed, merged or deployed. No production access.
+
+1. STARTING BRANCH AND HEAD
+---------------------------
+- np-ui-qa2-p2-core-refinement, created from origin/main 8131f0f.
+- QA2 suites were written and the Gate QA2-A baseline recorded first (see NP-UI-QA2-regression-preservation.txt).
+
+2. CHANGED FILES (uncommitted; tracked +484 / −492)
+---------------------------------------------------
+UI-P2 source (48 files):
+
+New:
+- src/components/ui/ViewSwitch.tsx
+
+Shared primitives:
+- src/components/ui/DataTable.tsx
+- src/components/ui/SummaryStrip.tsx
+- src/components/operations/OperationsPageHeaders.tsx (DetailPageHeader: "Standing Order")
+- src/components/operations/new-trip/FormSection.tsx
+
+Requests:
+- src/app/operations/requests/page.tsx
+- requests/RequestStatusTabs.tsx
+- requests/LogRequestForm.tsx ("Back to Operations Brief")
+- 9 request detail panels (raised; RequestLinkedArrangementsPanel heading "Standing orders"):
+  - RequestAcquisitionPanel
+  - RequestActivityPanel
+  - RequestDetailsPanel
+  - RequestLinkedArrangementsPanel
+  - RequestLinkedTripsPanel
+  - RequestPassengerPanel
+  - RequestRequesterPanel
+  - RequestTransportationPanel
+
+Trips:
+- src/app/operations/trips/page.tsx
+- 10 trip-detail panels (raised):
+  - CurrentStatusPanel
+  - PassengerInfoPanel
+  - TripDurationPanel
+  - TripExceptionsPanel
+  - TripInfoStrip
+  - TripNotesPanel
+  - TripReadinessPanel
+  - TripRoutePanel
+  - TripWheelchairPanel
+
+Dispatch:
+- src/app/operations/dispatch/page.tsx
+- dispatch/DispatchBoardClient.tsx
+- dispatch/NeedsAssignmentQueue.tsx
+- dispatch/AssignmentGrid.tsx
+- dispatch/DriverCapacityPanel.tsx
+
+Tomorrow Readiness:
+- src/app/operations/tomorrow/page.tsx
+
+Standing Orders:
+- src/app/operations/recurring-care/page.tsx
+- [arrangementId]/page.tsx
+- new/page.tsx
+- create-missing/page.tsx
+- recurring-care/RecurringCareStatusTabs.tsx
+- NewRecurringArrangementForm.tsx
+
+Records:
+- src/app/operations/passengers/page.tsx
+- facilities/page.tsx + FacilitiesPageClient.tsx
+- fleet/page.tsx + FleetPageClient.tsx
+- drivers/page.tsx + DriversPageClient.tsx
+
+Proof of Service:
+- src/app/operations/proof-of-service/page.tsx
+- proof-of-service/ProofOfServiceWindowTabs.tsx
+
+Brief copy:
+- src/components/operations/OperationsBrief.tsx ("Recurring care" → "Standing orders" headings / lines / actions)
+
+QA2 tests (new, untracked until commit):
+- tests/e2e/qa2/{_qa2.mjs, run.mjs, README.md, core-requests, core-trips-dispatch, core-records, growth,
+  auth-access}.e2e.mjs
+- package.json (2 npm scripts)
+
+Docs:
+- docs/design/component-inventory.md (NP-UI-P2 section)
+- this report, NP-UI-QA2-regression-preservation.txt, NP-UI-QA2-P2-integrated-review.txt
+- docs/design/concept-b/reviews/p2/:
+  - before/ (29 images)
+  - after/ (29 images)
+  - p2-visual-comparison.png
+  - index.md
+
+Not changed:
+- src/lib (no query / business-logic change), server actions, route URLs, supabase/ (schema, migrations, RLS, RPC);
+- authentication / authorization, quotes / print, the shell, sidebar, logo assets, dependencies, fonts, build
+  configuration.
+
+3. SCREENS REFINED
+------------------
+A. Requests:
+- The title is "Requests" (Brand Lock §15: "Request Hub" is docs / marketing only).
+- One FilterBar holds the status views (ViewSwitch with the org's real pending total on Pending, replacing the
+  one-item summary strip) and the search, with a live result count.
+- Refined table; shared Pagination.
+- Detail panels are raised. Log Request field groups use the shared card anatomy.
+- Status rules, decisions and the handoff are unchanged.
+
+B. Trips:
+- FilterBar around the same GET filter form (+ Clear when filtered) with a result count; shared Pagination.
+- New Trip field groups (FormSection) get the card anatomy: icon tile, hairline, fields.
+- Trip Detail panels are raised.
+- Lifecycle, scheduling and assignment are unchanged.
+
+C. Dispatch:
+- The Today / Tomorrow ViewSwitch.
+- A raised summary with prominent tabular values; the amber tone only when something is unassigned.
+- Column headers in PanelHeader anatomy; denser queue cards with the pickup time first; compact empty states.
+- Grid legibility: below 2xl the capacity rail moves under the board, so the time grid gets the full width (at
+  1440: about 6 AM–4 PM visible, was 6 AM–11 AM). The grid still scrolls inside its own container.
+- Assignment logic and the data-trip-id hooks are unchanged.
+
+D. Tomorrow Readiness:
+- The title is "Tomorrow Readiness"; "Open in Dispatch" is the header action (data-testid kept).
+- Real StatTiles: scheduled (→ the Dispatch tomorrow board), ready, need preparation (→ the list anchor).
+- Needs preparation / Ready in the card rhythm with a time column, reason badges, Assign / Add vehicle / View trip
+  actions unchanged.
+
+E. Related surfaces:
+- Standing Orders:
+  - the "Standing Orders" title and breadcrumbs, a FilterBar, a raised table;
+  - the detail page gains the compact "Standing Order" h1 (fixes the QA2 baseline defect);
+  - the Brief and request-panel copy read "Standing orders".
+- Passengers: FilterBar + result count.
+- Facilities / Vehicles / Drivers: one PageHeader with the primary action in it (Add Facility / Add Vehicle /
+  Invite Driver; the same role gating). The title is "Vehicles", not "Fleet".
+- Proof of Service: the ViewSwitch window in a FilterBar with a count; shared Pagination.
+- No feature redesign. Nothing needed new interaction architecture.
+
+4. SHARED COMPONENTS ADOPTED
+----------------------------
+- PageHeader, PanelHeader, PanelSection, Panel (padding / elevated), StatTile / StatTileGroup, StatusBadge,
+  DataTable, FilterBar, Pagination, EmptyState (compact), DetailPageHeader.
+- New: ViewSwitch. It replaces 4 duplicated link-tab implementations; behaviour is preserved, with the same URLs,
+  aria-current and landmark names.
+- No raw brand hex, no new fonts / icons / dependencies, no decorative elements, no fictional metrics.
+
+5. NAVIGATION INTEGRATION
+-------------------------
+- Unchanged sidebar destinations and active states. The context header names each area ("Standing Orders",
+  "Vehicles", "Tomorrow Readiness").
+- Every changed page keeps one h1. The auth-access sweep covers 29 routes: one h1 + 0 serious / critical axe each.
+- Header actions work (QA2 + P1b H-checks): Log Request, New Trip, Open in Dispatch, Export Day Sheet, Add /
+  Invite.
+- Empty-state actions are real; no dead buttons; Billing / Reports are still hidden.
+- Authorization is untouched: QA2 role / tenant / entitlement checks pass.
+
+6. ACCESSIBILITY
+----------------
+- The P1a fixes are retained: U1 / U2 (strict quotes s4-a11y 26 / 26), keyboard dialogs with focus return (QA2 K1 /
+  K2, A1, B4 / B5), visible focus, table row semantics (P1a T6), loading announcements (P1a C1).
+- The axe sweep has 0 serious / critical violations on every affected route at 1440, and on the P1b sweep at
+  1440 / 1024 / 768.
+- One P2 regression was found by QA2 and fixed before completion: the ViewSwitch count made the link's accessible
+  name "Pending12". A visually hidden separator now gives "Pending, 12". Found by QA2 L2 under strict; fixed; QA2
+  strict re-run → 187 / 187.
+- Statuses stay text-labelled; amber is not used for zero counts.
+
+7. RESPONSIVE
+-------------
+- 1440 / 1024 / 768: no page-level horizontal overflow on Core routes (QA2 B8 / B9, W1, R1; P1b R sweeps).
+- Dispatch scroll is contained; the 2xl / xl layout is described above.
+- 390: the approved Operations notice is unchanged (QA2 M1, P1b R390). The Driver mobile app is unchanged.
+
+8. SCREENSHOTS
+--------------
+docs/design/concept-b/reviews/p2/:
+- before/ and after/: 29 real browser captures each, at the same file names (see index.md).
+  - 13 screens at 1440 (+ the Standing Order detail);
+  - tablet / 1024 variants;
+  - dialog states (assignment, add passenger);
+  - the validation state (decline reason required);
+  - 6 empty-workspace states.
+- p2-visual-comparison.png: before | after of 8 key screens.
+- All 58 images decode.
+- Captured with identical fictional fixtures after fresh resets. Before = the unchanged main build; after = the
+  final branch build (the ViewSwitch sr-only fix is visually identical).
+
+9. KNOWN LIMITATIONS / UNRESOLVED PRODUCT DECISIONS
+---------------------------------------------------
+- Terminology inside Standing Orders actions and pages still says "recurring arrangement" ("New recurring
+  arrangement", "Create arrangement"). The page titles, nav and Brief now say Standing Orders. Full copy alignment
+  is an owner decision (the qa2 suites pin the current action wording).
+- Settings still says "Request Hub" in the website-requests copy (UI-P5 scope).
+- Trip / Request detail: refined (raised, consistent) but not recomposed. A deeper record-header redesign would be a
+  separate approval.
+- Dispatch grid blocks still truncate passenger names at narrow block widths (existing grid geometry; no logic
+  change made).
+- The default Turbopack build is still failing locally (see the integrated review).
+
+10. VERDICT (UI-P2)
+-------------------
+CONDITIONAL PASS.
+- Every gate is green on the final code, apart from the pre-existing local Turbopack failure, which reproduces on
+  unchanged main.
+- Owner visual review is required.

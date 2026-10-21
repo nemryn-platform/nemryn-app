@@ -57,10 +57,10 @@ export function NewRecurringArrangementForm({ passengers, fromRequest }: NewRecu
   return (
     <div className="flex flex-col gap-zw-lg">
       <PageHeader
-        title="New recurring arrangement"
+        title="New standing order"
         description="Set up a standing transportation commitment — Nemryn will track upcoming rides against this pattern."
         breadcrumb={[
-          { label: "Recurring Care", href: "/operations/recurring-care" },
+          { label: "Standing Orders", href: "/operations/recurring-care" },
           { label: "New arrangement" },
         ]}
       />
@@ -79,7 +79,7 @@ export function NewRecurringArrangementForm({ passengers, fromRequest }: NewRecu
         </div>
       )}
 
-      <Panel className="max-w-2xl">
+      <Panel elevated className="max-w-2xl">
         <form action={formAction} className="flex flex-col gap-zw-md">
           {prefill ? (
             <div>
@@ -93,7 +93,7 @@ export function NewRecurringArrangementForm({ passengers, fromRequest }: NewRecu
             </div>
           ) : passengers.length === 0 ? (
             <p className={cn(typography.bodySmall, "text-text-secondary")}>
-              No active passengers are available yet. Add a passenger before creating a recurring arrangement.
+              No active passengers are available yet. Add a passenger before creating a standing order.
             </p>
           ) : (
             <Select
@@ -144,7 +144,7 @@ export function NewRecurringArrangementForm({ passengers, fromRequest }: NewRecu
             value={wheelchair}
             onChange={setWheelchair}
             disabled={pending}
-            helpText="Applied to each trip created from this arrangement. Used to check the assigned vehicle's recorded equipment."
+            helpText="Applied to each trip created from this standing order. Used to check the assigned vehicle's recorded equipment."
           />
 
           {state.status === "error" && (
@@ -155,7 +155,7 @@ export function NewRecurringArrangementForm({ passengers, fromRequest }: NewRecu
 
           <div className="flex justify-end gap-2 pt-zw-sm">
             <Button type="submit" variant="primary" loading={pending} disabled={pending || (!prefill && passengers.length === 0)}>
-              {pending ? "Creating…" : "Create arrangement"}
+              {pending ? "Creating…" : "Create standing order"}
             </Button>
           </div>
         </form>

@@ -76,7 +76,7 @@ export function DispatchPageHeader({ day, timezone }: { day: "today" | "tomorrow
 }
 
 /** The h1 names the screen; the page's own record heading (passenger name / "Request") stays the h2 below it. */
-export function DetailPageHeader({ title }: { title: "Trip Detail" | "Request Detail" }) {
+export function DetailPageHeader({ title }: { title: "Trip Detail" | "Request Detail" | "Standing Order" }) {
   return (
     <div className="mb-zw-md">
       <PageHeader testId="page-header" size="compact" title={title} />

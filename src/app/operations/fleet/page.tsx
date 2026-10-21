@@ -2,7 +2,6 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getVehiclesList } from "@/lib/operations/vehicles-list";
 import { getVehicleAvailabilityOverviews } from "@/lib/operations/availability";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { FleetPageClient } from "@/components/operations/fleet/FleetPageClient";
 
 /**
@@ -20,9 +19,6 @@ export default async function FleetListPage() {
   const isAdmin = organization.role === "organization_admin";
 
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <PageHeader title="Fleet" description="Your organization's vehicles and their current assignment." />
-      <FleetPageClient rows={rows} availability={availability} isAdmin={isAdmin} timezone={organization.organizationTimezone} />
-    </div>
+    <FleetPageClient rows={rows} availability={availability} isAdmin={isAdmin} timezone={organization.organizationTimezone} />
   );
 }

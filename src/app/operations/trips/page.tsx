@@ -5,6 +5,8 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTripsList, TRIPS_LIST_PAGE_SIZE, type TripsListDateFilter, type TripsListAssignmentFilter } from "@/lib/operations/trips-list";
 import { operationsTripStatusLabel, formatOperationsTime } from "@/lib/operations/presentation";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterBar } from "@/components/ui/FilterBar";
+import { Pagination } from "@/components/ui/Pagination";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Select } from "@/components/ui/Select";
@@ -12,8 +14,6 @@ import { Button } from "@/components/ui/Button";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TripStatus } from "@/components/ui/TripStatus";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
 import type { TripsListRow } from "@/lib/operations/trips-list";
 
 /**
@@ -111,34 +111,49 @@ export default async function TripsListPage({
         }
       />
 
-      <form method="get" className="flex flex-wrap items-end gap-zw-md">
-        <div className="min-w-64 flex-1">
-          <SearchInput name="q" label="Search trips" placeholder="Search by passenger, pickup, or destination" defaultValue={search} />
-        </div>
-        <Select
-          label="Date"
-          name="date"
-          defaultValue={date}
-          options={[
-            { value: "all", label: "All dates" },
-            { value: "today", label: "Today" },
-            { value: "upcoming", label: "Upcoming" },
-            { value: "past", label: "Past" },
-          ]}
+      {/* NP-UI-P2: the shared FilterBar frame around the same plain GET filter form (same fields, same Apply). */}
+      <form method="get">
+        <FilterBar
+          search={<SearchInput name="q" label="Search trips" placeholder="Search by passenger, pickup, or destination" defaultValue={search} />}
+          filters={
+            <>
+              <Select
+                label="Date"
+                name="date"
+                defaultValue={date}
+                options={[
+                  { value: "all", label: "All dates" },
+                  { value: "today", label: "Today" },
+                  { value: "upcoming", label: "Upcoming" },
+                  { value: "past", label: "Past" },
+                ]}
+              />
+              <Select
+                label="Assignment"
+                name="assignment"
+                defaultValue={assignment}
+                options={[
+                  { value: "all", label: "All trips" },
+                  { value: "assigned", label: "Assigned" },
+                  { value: "unassigned", label: "Unassigned" },
+                ]}
+              />
+            </>
+          }
+          actions={
+            <>
+              {(search || date !== "all" || assignment !== "all") && (
+                <LinkButton href="/operations/trips" variant="text">
+                  Clear
+                </LinkButton>
+              )}
+              <Button type="submit" variant="outline">
+                Apply
+              </Button>
+            </>
+          }
+          resultCount={`${result.totalCount} ${result.totalCount === 1 ? "trip" : "trips"}`}
         />
-        <Select
-          label="Assignment"
-          name="assignment"
-          defaultValue={assignment}
-          options={[
-            { value: "all", label: "All trips" },
-            { value: "assigned", label: "Assigned" },
-            { value: "unassigned", label: "Unassigned" },
-          ]}
-        />
-        <Button type="submit" variant="outline">
-          Apply
-        </Button>
       </form>
 
       <DataTable
@@ -159,23 +174,7 @@ export default async function TripsListPage({
       />
 
       {result.rows.length > 0 && (
-        <div className={cn(typography.bodySmall, "flex items-center justify-between text-text-muted")}>
-          <p>
-            Showing {(result.page - 1) * result.pageSize + 1}–{Math.min(result.page * result.pageSize, result.totalCount)} of {result.totalCount}
-          </p>
-          <div className="flex gap-2">
-            {result.page > 1 && (
-              <Link href={buildPageHref(result.page - 1)} className={cn(typography.button, "text-text-link hover:underline")}>
-                Previous
-              </Link>
-            )}
-            {result.page < totalPages && (
-              <Link href={buildPageHref(result.page + 1)} className={cn(typography.button, "text-text-link hover:underline")}>
-                Next
-              </Link>
-            )}
-          </div>
-        </div>
+        <Pagination page={result.page} totalPages={totalPages} hrefForPage={buildPageHref} totalItems={result.totalCount} pageSize={result.pageSize} label="Trips pages" />
       )}
     </div>
   );

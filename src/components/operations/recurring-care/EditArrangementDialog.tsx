@@ -57,7 +57,7 @@ export function EditArrangementDialog({
   }, [state, router, onClose]);
 
   return (
-    <Dialog open onClose={onClose} title="Edit recurring arrangement">
+    <Dialog open onClose={onClose} title="Edit standing order">
       <form action={formAction} className="flex flex-col gap-zw-md">
         <input type="hidden" name="arrangementId" value={arrangementId} />
 
@@ -76,7 +76,7 @@ export function EditArrangementDialog({
           value={wheelchair}
           onChange={setWheelchair}
           disabled={pending}
-          helpText="Applied to trips created from this arrangement from now on; existing trips keep their own value."
+          helpText="Applied to trips created from this standing order from now on; existing trips keep their own value."
         />
 
         {state.status === "error" && (

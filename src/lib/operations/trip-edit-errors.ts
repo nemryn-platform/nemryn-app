@@ -19,7 +19,7 @@ const MESSAGE: Record<TripEditErrorCode, string> = {
   STALE: "This trip changed since you opened it. Refresh and review the latest details.",
   LOCKED: "This detail can't be changed at the trip's current stage.",
   EN_ROUTE_DATE: "The driver is already on the way, so the pickup date can't change. Only the time can.",
-  RECURRING_DATE: "A recurring trip keeps its date. To move it, skip the date in Recurring Care and create a one-time trip.",
+  RECURRING_DATE: "A recurring trip keeps its date. To move it, skip the date in Standing Orders and create a one-time trip.",
   INVALID_INPUT: "Check the details: addresses are required, and an appointment can't be before pickup.",
   SCHEDULE_UNRESOLVABLE: "That time doesn't exist or is ambiguous because of a daylight-saving change. Pick a different time.",
   UNKNOWN: "Something went wrong. Try again.",

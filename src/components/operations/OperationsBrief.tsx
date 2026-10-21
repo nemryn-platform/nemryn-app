@@ -353,7 +353,7 @@ function calmRow(line: BriefCalmLine, brief: OperationsBriefData): { title: stri
     case "requests":
       return { title: "Requests", text: "No requests awaiting review", href: "/operations/requests", action: "Open" };
     case "recurring":
-      return { title: "Recurring care", text: "Recurring care is covered", href: "/operations/recurring-care", action: "Open" };
+      return { title: "Standing orders", text: "Standing orders are covered", href: "/operations/recurring-care", action: "Open" };
     case "proof":
       return {
         title: "Proof of service",
@@ -374,7 +374,7 @@ function calmRow(line: BriefCalmLine, brief: OperationsBriefData): { title: stri
       const map = {
         tomorrow: { title: "Tomorrow", text: "Tomorrow unavailable", href: "/operations/tomorrow" },
         requests: { title: "Requests", text: "Request summary unavailable", href: "/operations/requests?state=pending" },
-        recurring: { title: "Recurring care", text: "Recurring care unavailable", href: "/operations/recurring-care" },
+        recurring: { title: "Standing orders", text: "Standing orders unavailable", href: "/operations/recurring-care" },
         proof: { title: "Proof of service", text: "Proof-of-service review unavailable", href: "/operations/proof-of-service" },
         drivers: { title: "Drivers", text: "Driver snapshot unavailable", href: "/operations/dispatch" },
       } as const;
@@ -754,14 +754,14 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
       <CompactBlock
         icon={<Repeat className="size-5" />}
         tone="neutral"
-        title="Recurring care"
+        title="Standing orders"
         action={
           <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-            View recurring care
+            View standing orders
           </LinkButton>
         }
       >
-        <p className={cn(typography.bodySmall, "text-text-muted")}>Recurring care unavailable</p>
+        <p className={cn(typography.bodySmall, "text-text-muted")}>Standing orders unavailable</p>
       </CompactBlock>
     );
   }
@@ -773,10 +773,10 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
       <CompactBlock
         icon={<Repeat className="size-5" />}
         tone="neutral"
-        title="Recurring care"
+        title="Standing orders"
         action={
           <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-            Set up recurring care
+            Set up a standing order
           </LinkButton>
         }
       >
@@ -790,14 +790,14 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
       <CompactBlock
         icon={<Repeat className="size-5" />}
         tone="neutral"
-        title="Recurring care"
+        title="Standing orders"
         action={
           <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-            View recurring care
+            View standing orders
           </LinkButton>
         }
       >
-        <p className={cn(typography.bodySmall, "text-text-secondary")}>Recurring care is covered</p>
+        <p className={cn(typography.bodySmall, "text-text-secondary")}>Standing orders are covered</p>
         <p className={cn(typography.metadata, "mt-1 text-text-muted")}>All expected rides in the next 14 days have trips scheduled.</p>
       </CompactBlock>
     );
@@ -807,10 +807,10 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
     <CompactBlock
       icon={<Repeat className="size-5" />}
       tone="attention"
-      title="Recurring care"
+      title="Standing orders"
       action={
         <LinkButton href="/operations/recurring-care" variant="outline" size="sm">
-          Review recurring care
+          Review standing orders
         </LinkButton>
       }
     >
@@ -818,7 +818,7 @@ function RecurringCareBlock({ summary }: { summary: OperationsBriefData["recurri
         {missingOccurrenceCount} recurring {missingOccurrenceCount === 1 ? "ride" : "rides"} need{missingOccurrenceCount === 1 ? "s" : ""} scheduling
       </p>
       <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
-        Across {arrangementsWithMissingCount} {arrangementsWithMissingCount === 1 ? "arrangement" : "arrangements"}
+        Across {arrangementsWithMissingCount} {arrangementsWithMissingCount === 1 ? "standing order" : "standing orders"}
         {nextMissingDate && ` · Next gap: ${formatServiceDateLabel(nextMissingDate)}`}
       </p>
     </CompactBlock>

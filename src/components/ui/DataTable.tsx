@@ -59,21 +59,23 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const primaryKey = (columns.find((c) => c.primary) ?? columns[0])?.key;
   if (rows.length === 0 && emptyState) {
-    return <div className="rounded-md border border-border-subtle bg-surface-elevated">{emptyState}</div>;
+    return <div className="rounded-md border border-border-subtle bg-surface-elevated shadow-sm">{emptyState}</div>;
   }
 
   return (
-    <div className="overflow-x-auto rounded-md border border-border-subtle bg-surface-elevated">
+    // NP-UI-P2 table readability: the approved subtle raise, a quiet header row on the app canvas tone, 10px row
+    // padding, the primary column in medium weight; numbers align (tabular) when a column is right-aligned.
+    <div className="overflow-x-auto rounded-md border border-border-subtle bg-surface-elevated shadow-sm">
       <table className="w-full border-collapse">
         <thead>
-          <tr className="border-b border-border-subtle bg-surface-secondary">
+          <tr className="border-b border-border-subtle bg-surface-app">
             {columns.map((column) => (
               <th
                 key={column.key}
                 scope="col"
                 className={cn(
                   typography.tableHeader,
-                  "px-zw-md py-zw-sm text-text-secondary",
+                  "whitespace-nowrap px-zw-md py-2.5 text-text-secondary",
                   alignClasses[column.align ?? "left"],
                 )}
               >
@@ -113,8 +115,9 @@ export function DataTable<T>({
                     key={column.key}
                     className={cn(
                       typography.tableCell,
-                      "px-zw-md py-zw-sm",
-                      column.primary ? "text-text-primary" : "text-text-secondary",
+                      "px-zw-md py-2.5 align-middle",
+                      column.primary ? "font-medium text-text-primary" : "text-text-secondary",
+                      column.align === "right" && "tabular-nums",
                       alignClasses[column.align ?? "left"],
                     )}
                   >

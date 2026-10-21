@@ -19,7 +19,7 @@ export interface RequestRequesterPanelProps {
  */
 export function RequestRequesterPanel({ requesterName, requesterRelationship, requesterPhone, requesterEmail }: RequestRequesterPanelProps) {
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
         Requester
       </h3>

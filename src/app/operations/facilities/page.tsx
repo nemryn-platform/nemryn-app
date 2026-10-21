@@ -1,7 +1,6 @@
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getFacilitiesList } from "@/lib/operations/facilities-list";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { FacilitiesPageClient } from "@/components/operations/facilities/FacilitiesPageClient";
 
 /**
@@ -16,9 +15,6 @@ export default async function FacilitiesListPage() {
   const rows = await getFacilitiesList(organization.organizationId);
 
   return (
-    <div className="flex flex-col gap-zw-lg">
-      <PageHeader title="Facilities" description="Clinics and other referring locations your trips connect to." />
-      <FacilitiesPageClient rows={rows} />
-    </div>
+    <FacilitiesPageClient rows={rows} />
   );
 }

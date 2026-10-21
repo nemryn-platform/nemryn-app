@@ -1,6 +1,4 @@
-import Link from "next/link";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
+import { ViewSwitch } from "@/components/ui/ViewSwitch";
 import { proofOfServiceWindowLabel } from "@/lib/operations/presentation";
 import type { ProofOfServiceReviewWindow } from "@/lib/operations/trip-proof-of-service";
 
@@ -33,29 +31,13 @@ export function ProofOfServiceWindowTabs({ active }: ProofOfServiceWindowTabsPro
     return window === "YESTERDAY" ? "/operations/proof-of-service" : `/operations/proof-of-service?window=${WINDOW_QUERY_VALUE[window]}`;
   }
 
+  // NP-UI-P2: rendered by the shared ViewSwitch (same links, same aria-current, same landmark name).
   return (
-    <nav
-      aria-label="Proof-of-service review window"
-      className="inline-flex flex-wrap gap-1 rounded-md border border-border-subtle bg-surface-elevated p-1"
-    >
-      {TABS.map((window) => {
-        const isActive = window === active;
-        return (
-          <Link
-            key={window}
-            href={buildHref(window)}
-            aria-current={isActive ? "page" : undefined}
-            className={cn(
-              typography.bodySmall,
-              "rounded-sm px-3 py-1.5 font-medium transition-colors duration-base",
-              isActive ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
-            )}
-          >
-            {proofOfServiceWindowLabel(window)}
-          </Link>
-        );
-      })}
-    </nav>
+    <ViewSwitch
+      label="Proof-of-service review window"
+      activeKey={active}
+      items={TABS.map((window) => ({ key: window, label: proofOfServiceWindowLabel(window), href: buildHref(window) }))}
+    />
   );
 }
 

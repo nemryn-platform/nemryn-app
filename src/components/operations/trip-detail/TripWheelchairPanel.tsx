@@ -23,7 +23,7 @@ export function TripWheelchairPanel({ tripId, requiresWheelchairAccess, canEdit 
   const [open, setOpen] = useState(false);
   const current = booleanToTriState(requiresWheelchairAccess);
   return (
-    <Panel data-testid="trip-wheelchair">
+    <Panel elevated data-testid="trip-wheelchair">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>Wheelchair transport equipment</p>

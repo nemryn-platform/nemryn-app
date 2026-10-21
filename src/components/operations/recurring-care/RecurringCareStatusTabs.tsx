@@ -1,6 +1,4 @@
-import Link from "next/link";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
+import { ViewSwitch } from "@/components/ui/ViewSwitch";
 
 export type RecurringCareListStateFilter = "active" | "paused" | "ended" | "all";
 
@@ -29,27 +27,12 @@ export function RecurringCareStatusTabs({ active }: RecurringCareStatusTabsProps
     return state === "active" ? "/operations/recurring-care" : `/operations/recurring-care?state=${state}`;
   }
 
+  // NP-UI-P2: rendered by the shared ViewSwitch (same links, same aria-current, same landmark name).
   return (
-    <nav aria-label="Recurring arrangement status" className="inline-flex flex-wrap gap-1 rounded-md border border-border-subtle bg-surface-elevated p-1">
-      {TABS.map((tab) => {
-        const isActive = tab.value === active;
-        return (
-          <Link
-            key={tab.value}
-            href={buildHref(tab.value)}
-            aria-current={isActive ? "page" : undefined}
-            className={cn(
-              typography.bodySmall,
-              "rounded-sm px-3 py-1.5 font-medium transition-colors duration-base",
-              isActive
-                ? "bg-surface-secondary text-text-primary"
-                : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
-            )}
-          >
-            {tab.label}
-          </Link>
-        );
-      })}
-    </nav>
+    <ViewSwitch
+      label="Standing order status"
+      activeKey={active}
+      items={TABS.map((tab) => ({ key: tab.value, label: tab.label, href: buildHref(tab.value) }))}
+    />
   );
 }

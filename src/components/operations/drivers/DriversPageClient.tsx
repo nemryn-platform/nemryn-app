@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { IdentificationBadge, Plus, X, PaperPlaneTilt } from "@phosphor-icons/react/dist/ssr";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { IconButton } from "@/components/ui/IconButton";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -119,16 +120,21 @@ export function DriversPageClient({ rows, invites, canInvite, availability, time
 
   return (
     <div className="flex flex-col gap-zw-lg">
-      {canInvite && (
-        <div className="flex justify-end">
-          <Button type="button" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setInviting(true)}>
-            Invite Driver
-          </Button>
-        </div>
-      )}
+      {/* NP-UI-P2: one page header with the Admin-only primary action (moved from a separate row above the list). */}
+      <PageHeader
+        title="Drivers"
+        description="Your organization's drivers and their current trip status."
+        actions={
+          canInvite ? (
+            <Button type="button" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setInviting(true)}>
+              Invite Driver
+            </Button>
+          ) : undefined
+        }
+      />
 
       {canInvite && invites.length > 0 && (
-        <Panel className="flex flex-col gap-zw-sm">
+        <Panel elevated className="flex flex-col gap-zw-sm">
           <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Pending Invites</h2>
           <ul className="divide-y divide-border-subtle">
             {invites.map((invite) => (

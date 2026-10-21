@@ -45,7 +45,7 @@ export function TripInfoStrip({
   ];
 
   return (
-    <Panel className="grid grid-cols-2 gap-zw-md p-0 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-border-subtle">
+    <Panel elevated className="grid grid-cols-2 gap-zw-md p-0 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-border-subtle">
       {cells.map((cell) => (
         <div key={cell.label} className="px-zw-lg py-zw-md">
           <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>{cell.label}</p>

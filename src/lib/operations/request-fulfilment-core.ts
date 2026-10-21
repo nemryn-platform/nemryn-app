@@ -37,14 +37,14 @@ export function isRequestStranded(facts: RequestFulfilmentFacts): boolean {
 }
 
 /**
- * Overview copy (P1-PILOT-R3): "1 accepted request still needs a trip or recurring arrangement" /
- * "N accepted requests still need a trip or recurring arrangement".
+ * Overview copy (P1-PILOT-R3): "1 accepted request still needs a trip or standing order" /
+ * "N accepted requests still need a trip or standing order" (NP-UI-QA2-P2: Brand Lock §15 "standing order").
  */
 export function strandedRequestsLine(count: number): string | null {
   if (count <= 0) return null;
   return count === 1
-    ? "1 accepted request still needs a trip or recurring arrangement"
-    : `${count} accepted requests still need a trip or recurring arrangement`;
+    ? "1 accepted request still needs a trip or standing order"
+    : `${count} accepted requests still need a trip or standing order`;
 }
 
 export const STRANDED_REQUESTS_HREF = "/operations/requests?state=accepted&needs=trip";

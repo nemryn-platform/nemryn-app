@@ -19,7 +19,7 @@ export function RequestAcquisitionPanel({ acquisition }: RequestAcquisitionPanel
   const rows = describeAcquisition(acquisition);
   if (rows.length === 0) return null;
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>Acquisition</h3>
       <div className="mt-zw-md">
         <DefinitionList

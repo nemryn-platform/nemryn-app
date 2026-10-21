@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Car, Plus } from "@phosphor-icons/react/dist/ssr";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -80,13 +81,18 @@ export function FleetPageClient({ rows, availability, isAdmin, timezone }: Fleet
 
   return (
     <div className="flex flex-col gap-zw-lg">
-      {isAdmin && (
-        <div className="flex justify-end">
-          <Button type="button" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setDialog({ mode: "create" })}>
-            Add Vehicle
-          </Button>
-        </div>
-      )}
+      {/* NP-UI-P2: one page header (Brand Lock §15 "Vehicles") with the Admin-only primary action. */}
+      <PageHeader
+        title="Vehicles"
+        description="Your organization's vehicles and their current assignment."
+        actions={
+          isAdmin ? (
+            <Button type="button" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setDialog({ mode: "create" })}>
+              Add Vehicle
+            </Button>
+          ) : undefined
+        }
+      />
 
       <DataTable
         columns={columns}

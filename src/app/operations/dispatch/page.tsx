@@ -7,6 +7,7 @@ import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import { getOperatorLinkedDriverId, getRecurringAssignmentHints } from "@/lib/operations/assignment-context";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
+import { ViewSwitch } from "@/components/ui/ViewSwitch";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DispatchBoardClient } from "@/components/operations/dispatch/DispatchBoardClient";
 import { DispatchLiveRefresh } from "@/components/operations/dispatch/DispatchLiveRefresh";
@@ -71,25 +72,18 @@ export default async function DispatchBoardPage({
       <div className="flex flex-col gap-zw-lg">
         <DispatchLiveRefresh />
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <nav aria-label="Dispatch day" className="inline-flex rounded-md border border-border-subtle bg-surface-elevated p-0.5" data-testid="dispatch-day-switch">
-            {(["today", "tomorrow"] as const).map((option) => (
-              <Link
-                key={option}
-                href={option === "today" ? "/operations/dispatch" : "/operations/dispatch?day=tomorrow"}
-                aria-current={day === option ? "page" : undefined}
-                className={cn(
-                  typography.bodySmall,
-                  "rounded-sm px-3 py-1.5 font-medium",
-                  day === option ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:text-text-primary",
-                )}
-              >
-                {option === "today" ? "Today" : "Tomorrow"}
-              </Link>
-            ))}
-          </nav>
+          <ViewSwitch
+            label="Dispatch day"
+            testId="dispatch-day-switch"
+            activeKey={day}
+            items={[
+              { key: "today", label: "Today", href: "/operations/dispatch" },
+              { key: "tomorrow", label: "Tomorrow", href: "/operations/dispatch?day=tomorrow" },
+            ]}
+          />
           {day === "tomorrow" && (
             <Link href="/operations/tomorrow" className={cn(typography.bodySmall, "font-medium text-text-link hover:underline")} data-testid="dispatch-tomorrow-readiness-link">
-              Tomorrow readiness
+              Tomorrow Readiness
             </Link>
           )}
         </div>
@@ -97,7 +91,8 @@ export default async function DispatchBoardPage({
           inline
           items={[
             { label: day === "tomorrow" ? "open trips tomorrow" : "open trips today", value: data.summary.todayCount },
-            { label: "unassigned", value: data.summary.unassignedCount, tone: "warning", dot: true },
+            // NP-UI-P2: the attention tone only when something is actually unassigned (a zero is not a warning).
+            { label: "unassigned", value: data.summary.unassignedCount, tone: data.summary.unassignedCount > 0 ? "warning" : "default", dot: data.summary.unassignedCount > 0 },
             { label: "active", value: data.summary.activeCount, dot: true },
             ...(data.summary.attentionCount > 0
               ? [{ label: "need attention", value: data.summary.attentionCount, tone: "warning" as const, dot: true }]

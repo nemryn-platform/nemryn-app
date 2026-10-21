@@ -208,7 +208,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
 
         {actions.cancelBlockedByArrangement && (
           <p className={cn(typography.bodySmall, "text-text-muted")}>
-            This request already has recurring care. Manage the standing order from the recurring arrangement.
+            This request already has a standing order. Manage it from the standing order.
           </p>
         )}
         {actions.cancelBlockedByTrips && (

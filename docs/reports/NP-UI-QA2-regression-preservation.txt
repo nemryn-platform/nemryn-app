@@ -1,0 +1,209 @@
+NP-UI-QA2 — REGRESSION PRESERVATION (Core, Growth, Auth)
+=========================================================
+Date: 2026-10-21.
+Mode: controlled combined implementation (QA2, then UI-P2).
+Isolated environment only (NemrynS1Iso, fictional seed). No production access, no commit / push / merge / deploy.
+
+1. STARTING BRANCH AND HEAD
+---------------------------
+`git fetch origin`: origin/main = 8131f0f42139fbcf2fdaa8781b21d6c7bbda9775 ("Merge pull request #24 …").
+
+main contains:
+- P1a (e9d1ee5);
+- P1b (ff66e00, merge 9f42669);
+- the PR #24 sidebar scrollbar fix (6bb61fb);
+- merge 8131f0f.
+
+Main had not advanced beyond the verified baseline.
+
+The starting working tree was np-ui-p1b-sidebar-scrollbar-polish @ 6bb61fb, identical in content to main, with no
+tracked changes and 331 untracked files.
+
+Created: np-ui-qa2-p2-core-refinement from origin/main 8131f0f (`git switch -c`; nothing reset, stashed, cleaned or
+discarded; all untracked files preserved).
+
+2. AUDIT OF EXISTING TESTS
+--------------------------
+Tracked tests before QA2:
+
+| Tests | Notes |
+|---|---|
+| tests/e2e/plus-quotes (7 suites) | quotes only |
+| tests/e2e/ui-foundations (p1a 48, p1b 52) | the shell and primitives |
+| tests/shared/cdp.mjs | |
+| npm test (894 unit) | |
+| supabase/tests | 97 SQL / concurrency suites |
+
+Core, Growth (non-quote) and Auth had NO tracked browser regression coverage.
+
+.tmp-qa (242 untracked scripts): most are production smoke / read-only checks, one-off debugging probes, or feature
+e2e scripts written for earlier UI wording (for example "Overview", header h1s). They were used as the source of
+proven journeys and interaction contracts, not copied:
+
+| Script | Journeys taken |
+|---|---|
+| p1-ops-r1-decision-e2e | request decisions |
+| p1-ops-prog1-assignment-e2e | assignment dialog |
+| p1-pilot-r2b-trip-correction-e2e | edit trip |
+| s1e-recurring-care-e2e | standing orders |
+| s1d-proof-of-service-e2e | |
+| np-p2-s4-conversion-rebooking-e2e | Growth → Core |
+| np-p1-s3-named-staff-permissions-e2e | grants |
+| r4a-fresh-tenant-e2e | sign-up / onboarding |
+| join-*-e2e | invitations |
+
+3. NEW TRACKED QA2 SUITES (tests/e2e/qa2)
+-----------------------------------------
+| File | Purpose |
+|---|---|
+| _qa2.mjs | shared helpers on the existing guarded harness (assertFictionalSeed, localhost only, bounded CDP calls, DB outcome helpers, axe) |
+| run.mjs | runner: a verified fresh reset before each suite, KNOWN_BASELINE_DEFECTS labelling, `--strict` |
+| README.md | coverage, safety, running |
+| package.json | adds "test:e2e:qa2" and "test:e2e:qa2:strict" (scripts only; no dependency change) |
+
+Suites:
+
+| Suite | Checks | Coverage (outcomes verified in the isolated DB) |
+|---|---|---|
+| core-requests | 25 | See below |
+| core-trips-dispatch | 34 | See below |
+| core-records | 26 | See below |
+| growth | 23 | See below |
+| auth-access | 79 | See below |
+
+core-requests:
+- the list and status tabs;
+- Log Request validation (empty submit writes nothing) and the outcome (pending phone request with the values);
+- requests created through the REAL public intake route;
+- the request handoff: accept (exactly one event; no passenger or trip created) → add passenger (linked; decision
+  unchanged) → Create Trip (the New Trip form prefilled → exactly one scheduled trip at the entered local time,
+  linked to the request);
+- decline with a structured reason; cancel with a reason; terminal states;
+- list badges;
+- Driver refused; Org B sees 'Request unavailable' and none of Org A's list (tenant isolation);
+- keyboard: the decline dialog opens by keyboard, the confirm is disabled until a reason is chosen, Escape returns
+  focus (U2);
+- axe; 768 px.
+
+core-trips-dispatch:
+- Trips search / date / assignment filters and row links;
+- New Trip validation and creation via the passenger search (combobox) → exactly one trip;
+- Trip Detail edit / correction (DB + "corrected" record), note (required visibility), assign by keyboard (one
+  active assignment attributed to the dispatcher), reassign (history kept), cancel with a reason;
+- Dispatch Today / Tomorrow, the queue, keyboard assignment with Escape + focus return, the assignment written and
+  moved to the grid;
+- no page overflow at 1024 / 768;
+- Tomorrow Readiness listing, trip links and the dispatch link;
+- Day Sheet outside the shell;
+- Driver refused (Trip Detail, Dispatch);
+- Org B isolation (trip and board);
+- axe.
+
+core-records:
+- Standing Orders: create (validation; every day 07:30) → one occurrence via Create trip → bulk review creates
+  exactly two more, with no duplicate dates;
+- Passengers add + edit via the row action;
+- Facilities add; Vehicles add; Drivers invite (pending invitation, nothing sent);
+- Proof of Service lists yesterday's completed trip with its link;
+- a Dispatcher sees Drivers / Vehicles without the Admin-only actions;
+- 768 px no overflow; axe.
+
+growth:
+- the Dashboard;
+- contact validation and create;
+- an opportunity from the contact; Pipeline listing;
+- a task on the opportunity → list → Mark done;
+- Growth → Core handoff: review → confirm (double click) → exactly ONE pending Core request (passenger not linked),
+  the success link, Core shows Pending with decisions, no second conversion;
+- entitlement: a Dispatcher without a grant is refused server-side; a named READ grant allows read without "New
+  contact"; revoking removes access; Plus disabled refuses even the Admin;
+- Org B (with Plus) cannot open or see Org A's contact / opportunity;
+- axe.
+
+auth-access:
+- a bad password stays on sign-in with an alert; a good password signs in; Sign Out ends the session (/operations
+  and /driver require sign-in);
+- workspace picker → Org A (Admin) → switch to Org B (Driver) → the driver app;
+- a Dispatcher is refused Settings and can use Trips; a Driver is sent to the driver app;
+- driver invitation end to end (UI invite → /join/<token> names the workspace → account → an active linked Driver,
+  invite accepted, /driver; a used link can't be reused; an unknown token shows 'Invite not found');
+- new-business sign-up (account + workspace + Admin membership) → onboarding basics (timezone saved) → a fresh
+  Operations Brief, isolated from Org A;
+- the in-shell error panel, in-shell 404, 'Trip unavailable';
+- a 29-route sweep (every Core + Growth screen incl. detail and create pages): exactly one visible h1 AND 0 serious
+  / critical axe, one named check per route;
+- 390 px notice.
+
+Isolation evidence:
+- Every suite starts with assertFictionalSeed: the seed orgs and @example.test identities present, the production
+  Pilot Simulation org absent.
+- Localhost app only.
+- The runner verifies each fresh reset (latest migration 20261021100000, 0 contacts, 0 QA2 requests) before each
+  suite.
+- Fixtures are fictional ("QA2 …", example.test); email is never sent (no provider key in the isolated env).
+- Browser calls are time-bounded.
+
+4. GATE QA2-A — BASELINE ON THE UNCHANGED P1b APPLICATION
+---------------------------------------------------------
+`npm run test:e2e:qa2` (fresh reset per suite; webpack production build of main 8131f0f):
+
+| Suite | Result | Note |
+|---|---|---|
+| core-requests | 25 / 25 | PASS |
+| core-trips-dispatch | 34 / 34 | PASS |
+| core-records | 25 / 26 | KNOWN BASELINE DEFECT ONLY |
+| growth | 23 / 23 | PASS |
+| auth-access | 78 / 79 | KNOWN BASELINE DEFECT ONLY |
+
+RESULT: no unexpected failures. 185 of 187 checks pass.
+
+The 2 failing checks are ONE real pre-existing defect: the Standing Order (recurring arrangement) detail page
+renders no <h1>; its only heading is the passenger-name <h2> (WCAG 1.3.1 / 2.4.6).
+- Recorded in run.mjs KNOWN_BASELINE_DEFECTS; the assertions are not relaxed.
+- `--strict` fails until it is fixed.
+- It is NOT functional and does not prevent a trustworthy baseline, so UI-P2 proceeded.
+
+SQL baseline (isolated, fresh reset per suite; .sql files identical to the repository):
+
+| Suite | Result |
+|---|---|
+| client_privilege_surface | 21 PASS |
+| create_trip_privilege | 5 |
+| driver_read_privilege | 8 |
+| function_privilege | 7 |
+| mutation_privilege | 7 |
+| request_mutation_privilege | 23 |
+| privilege_baseline_behavior | 30 |
+| privilege_contract | SUMMARY violations = 0 of 29 |
+| rls_adversarial | 33 |
+| tenant_settings_foundation | 51 |
+| plus_entitlement | 150 |
+| plus_member_grants | 76 |
+| plus_request_attributions | 73 |
+
+All 0 failures.
+
+Test-authoring corrections during authoring (the product was right; the tests were made to follow the real
+workflow, with no assertion weakened):
+- a trip note requires choosing a visibility;
+- a sign-in retry starts from a fresh page;
+- a workspace switch waits for the final redirect;
+- Standing Orders' bulk review lives on the list, and per-occurrence "Create trip" on the detail page.
+
+5. KNOWN LIMITATIONS OF QA2 COVERAGE (recorded, not hidden)
+-----------------------------------------------------------
+- Staff (team) invitations: the link is only delivered through the server's development mail log, so it is not
+  automated here. Driver invitations ARE covered end to end.
+- The platform admin console (/platform), notification delivery, website-requests settings and the public website
+  form: covered by existing SQL / earlier phases, not by QA2 browser suites.
+- The driver mobile app's internal screens: QA2 checks the redirects into it, not its trip lifecycle UI.
+- Quotes: covered by tests/e2e/plus-quotes (strict), not duplicated.
+- Concurrency: covered by the existing supabase/tests *_concurrency_test.sh scripts, not re-run in QA2.
+- Loading skeletons: covered by the P1a suite (C1).
+
+6. VERDICT (QA2)
+----------------
+PASS (Gate QA2-A).
+- Trustworthy baseline; the only failure is a recorded real accessibility defect.
+- Coverage of Core, Growth and Auth now exists as tracked, maintainable suites.
+- UI-P2 proceeded automatically.

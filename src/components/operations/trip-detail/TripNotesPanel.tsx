@@ -35,7 +35,7 @@ export function TripNotesPanel({ tripId, notes, timezone }: TripNotesPanelProps)
   const [addNoteOpen, setAddNoteOpen] = useState(false);
 
   return (
-    <Panel>
+    <Panel elevated>
       <div className="flex items-center gap-2">
         <NotePencil className="size-5 text-text-muted" aria-hidden />
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Trip Notes</h3>

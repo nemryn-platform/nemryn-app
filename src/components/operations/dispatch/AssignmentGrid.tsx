@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { MapPin } from "@phosphor-icons/react/dist/ssr";
-import { Panel } from "@/components/ui/Panel";
+import { CalendarBlank, MapPin } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatOperationsTime } from "@/lib/operations/presentation";
 import {
@@ -84,14 +84,15 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
 
   return (
     <div className="flex flex-col gap-zw-md">
-      <div className="flex items-center justify-between">
-        <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>{day === "tomorrow" ? "Tomorrow's Assignments" : "Today\u2019s Assignments"}</h2>
+      {/* NP-UI-P2: the shared column-header anatomy; the grid itself is unchanged (its own scroll container). */}
+      <div className="flex items-start justify-between gap-3">
+        <PanelHeader as="h2" icon={<CalendarBlank className="size-5" />} tone="info" title={day === "tomorrow" ? "Tomorrow's Assignments" : "Today\u2019s Assignments"} />
         <span className={cn(typography.metadata, "rounded-full bg-surface-secondary px-2.5 py-1 text-text-muted")} data-testid="dispatch-axis">
           {hourMarks[0].label} – {hourMarks[hourMarks.length - 1].label}
         </span>
       </div>
 
-      <Panel className="overflow-x-auto p-0" data-testid="dispatch-grid">
+      <Panel elevated className="overflow-x-auto p-0" data-testid="dispatch-grid">
         {driverRows.length === 0 ? (
           <div className="p-zw-lg">
             <EmptyState title="No active drivers" description="Add an active driver to see assignments here." action={emptyAction} />

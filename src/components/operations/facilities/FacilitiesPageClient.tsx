@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Buildings, Plus } from "@phosphor-icons/react/dist/ssr";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -34,11 +35,16 @@ export function FacilitiesPageClient({ rows }: FacilitiesPageClientProps) {
 
   return (
     <div className="flex flex-col gap-zw-lg">
-      <div className="flex justify-end">
-        <Button type="button" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setDialog({ mode: "create" })}>
-          Add Facility
-        </Button>
-      </div>
+      {/* NP-UI-P2: one page header with the page's primary action (moved from a separate row above the table). */}
+      <PageHeader
+        title="Facilities"
+        description="Clinics and other referring locations your trips connect to."
+        actions={
+          <Button type="button" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setDialog({ mode: "create" })}>
+            Add Facility
+          </Button>
+        }
+      />
 
       <DataTable
         columns={columns}

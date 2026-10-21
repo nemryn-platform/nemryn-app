@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { Panel } from "@/components/ui/Panel";
-import { typography } from "@/design/typography";
+import { Panel, PanelHeader, PanelSection } from "@/components/ui/Panel";
 import { cn } from "@/lib/cn";
 
 export interface FormSectionProps {
@@ -24,18 +23,16 @@ export interface FormSectionProps {
  * section style for the parts the mockup happened not to depict.
  */
 export function FormSection({ icon, title, action, children, className }: FormSectionProps) {
+  // NP-UI-P2: the shared card anatomy (PanelSection header with the 40px icon tile, a hairline, then the fields) and the
+  // approved subtle raise, so New Trip / Log Request field groups read like the rest of Core. Same h2, same fields.
   return (
-    <Panel className={cn("flex flex-col gap-zw-lg", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-text-muted" aria-hidden>
-            {icon}
-          </span>
-          <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>{title}</h2>
-        </div>
-        {action}
-      </div>
-      {children}
+    <Panel padding="none" elevated className={cn("flex flex-col", className)}>
+      <PanelSection part="header">
+        <PanelHeader as="h2" icon={icon} tone="neutral" title={title} actions={action} />
+      </PanelSection>
+      <PanelSection part="body" className="flex flex-col gap-zw-lg py-zw-lg">
+        {children}
+      </PanelSection>
     </Panel>
   );
 }

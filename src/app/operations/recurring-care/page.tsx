@@ -12,6 +12,7 @@ import {
   formatServiceDateShortLabel,
 } from "@/lib/operations/presentation";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterBar } from "@/components/ui/FilterBar";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
@@ -62,7 +63,7 @@ export default async function RecurringCareListPage({
   const columns: DataTableColumn<RecurringArrangementListRow>[] = [
     {
       key: "arrangement",
-      header: "Arrangement",
+      header: "Standing order",
       primary: true,
       render: (row) => (
         <Link href={`/operations/recurring-care/${row.id}`} className="flex flex-col gap-0.5 hover:text-text-link">
@@ -127,8 +128,8 @@ export default async function RecurringCareListPage({
   return (
     <div className="flex flex-col gap-zw-lg">
       <PageHeader
-        title="Recurring Care"
-        description="Standing transportation commitments you repeatedly need to keep covered."
+        title="Standing Orders"
+        description="Recurring transportation arrangements that generate individual trips — keep every upcoming ride covered."
         actions={
           <>
             {missingCount > 0 && (
@@ -137,13 +138,14 @@ export default async function RecurringCareListPage({
               </LinkButton>
             )}
             <LinkButton href="/operations/recurring-care/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
-              New recurring arrangement
+              New standing order
             </LinkButton>
           </>
         }
       />
 
-      <RecurringCareStatusTabs active={state} />
+      {/* NP-UI-P2: the shared FilterBar frame (status views + the real count), as on Requests / Trips / Passengers. */}
+      <FilterBar filters={<RecurringCareStatusTabs active={state} />} resultCount={`${rows.length} ${rows.length === 1 ? "standing order" : "standing orders"}`} />
 
       <DataTable
         columns={columns}
@@ -153,16 +155,16 @@ export default async function RecurringCareListPage({
           allArrangements.length === 0 ? (
             <EmptyState
               icon={<Repeat className="size-8" aria-hidden />}
-              title="No recurring transportation yet."
-              description="Set up a standing arrangement for a passenger who needs regular rides."
+              title="No standing orders yet."
+              description="Set up a standing order for a passenger who needs regular rides."
               action={
                 <LinkButton href="/operations/recurring-care/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
-                  Create recurring arrangement
+                  Create standing order
                 </LinkButton>
               }
             />
           ) : (
-            <EmptyState title="No arrangements in this view." description="Try a different status tab above." />
+            <EmptyState title="No standing orders in this view." description="Try a different status view above." />
           )
         }
       />
