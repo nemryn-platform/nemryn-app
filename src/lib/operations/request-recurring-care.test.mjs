@@ -13,9 +13,9 @@ const { requestReadinessLabel } = await import("./presentation.ts");
 const base = { state: "accepted", passengerId: "p1", passengerActive: true, hasLinkedTrips: false };
 
 // ------------------------------------------------------------------------------------------------ readiness
-test("readiness: a linked arrangement -> arrangement_created ('Recurring care created')", () => {
+test("readiness: a linked arrangement -> arrangement_created ('Standing order created', Brand Lock §15)", () => {
   assert.equal(deriveRequestReadiness({ ...base, hasLinkedArrangement: true }), "arrangement_created");
-  assert.equal(requestReadinessLabel("arrangement_created"), "Recurring care created");
+  assert.equal(requestReadinessLabel("arrangement_created"), "Standing order created");
 });
 
 test("readiness: Trip + arrangement -> arrangement_created (precedence); cancelled-only Trips + arrangement too", () => {

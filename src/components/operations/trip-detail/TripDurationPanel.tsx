@@ -33,7 +33,7 @@ export interface TripDurationPanelProps {
 export function TripDurationPanel({ tripId, expectedDurationMinutes, expectedDurationSource, plannedExtentLabel, canEdit }: TripDurationPanelProps) {
   const [open, setOpen] = useState(false);
   return (
-    <Panel data-testid="trip-duration">
+    <Panel elevated data-testid="trip-duration">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>Expected duration</p>

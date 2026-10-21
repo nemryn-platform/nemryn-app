@@ -44,14 +44,15 @@ export function SummaryStrip({ items, className, inline = false }: SummaryStripP
     return (
       <div
         className={cn(
-          "flex flex-wrap items-center divide-x divide-border-subtle rounded-md border border-border-subtle bg-surface-elevated",
+          // NP-UI-P2: the approved subtle raise and a more prominent, tabular value (the same real figures).
+          "flex flex-wrap items-center divide-x divide-border-subtle rounded-md border border-border-subtle bg-surface-elevated shadow-sm",
           className,
         )}
       >
         {items.map((item) => (
-          <div key={item.label} className="flex items-center gap-2 px-zw-lg py-zw-sm">
+          <div key={item.label} className="flex items-center gap-2 px-zw-lg py-zw-md">
             {item.dot && <span className={cn("size-2 rounded-full", dotClasses[item.tone ?? "default"])} aria-hidden />}
-            <span className={cn(typography.subsectionHeading, toneClasses[item.tone ?? "default"])}>
+            <span className={cn(typography.sectionHeading, "tabular-nums", toneClasses[item.tone ?? "default"])}>
               {item.value}
             </span>
             <span className={cn(typography.bodySmall, "text-text-secondary")}>{item.label}</span>

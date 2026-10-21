@@ -2,7 +2,7 @@
 
 **Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, P1-E3-S4 — Operations Application Shell & Today's Operations, P1-E3-S5 — Dispatch Board, and P1-E3-S6 — Operations Trip Detail (components below actually built/refined)
 **Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell; P1-E3-S5 implemented the real Dispatch Board; P1-E3-S6 implemented the real Operations Trip Detail screen — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", "Operations components — P1-E3-S4", "Dispatch components — P1-E3-S5", and "Trip Detail components — P1-E3-S6" below.
-**Last updated:** 2026-10-20 (NP-UI-P1a and NP-UI-P1b sections added)
+**Last updated:** 2026-10-20 (NP-UI-P1a, NP-UI-P1b and NP-UI-P2 sections added)
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
 
@@ -239,6 +239,30 @@ report is `docs/reports/NP-UI-P1b-canonical-shell-implementation.txt`. The brows
 | `OnboardingChecklistBanner` | Refined | Concept B "Finish setting up": a real-count `role="progressbar"`, real segments, per-step icon + "Complete" / "Not complete" text, and a Hide / Show steps disclosure. No artwork or tagline. |
 | `OperationsBrief` | Refined | Named section; real fact tiles under the heading (standard Brief); work sections in a 2-column grid at lg (Needs Attention and Today span both). A `CompactBlock` card anatomy for Requests / Tomorrow / Recurring / Proof / Drivers. Get started becomes quick-action rows (same destinations and gating). Copy, links, order and every `data-testid` are unchanged. |
 | Operations Overview page | Refined | The inline SummaryStrip moved into the Brief as StatTiles (the same four values). Upcoming / Active / Activity panels use `PanelHeader` and compact empty states; `#active-trips` is an anchor. |
+
+## Core operations refinement — NP-UI-P2 (2026-10-21)
+
+The Core screens now follow the approved P1b language. There is no shell redesign, no new UI dependency, and no
+business-logic, query, action or schema change. Reports:
+- `docs/reports/NP-UI-P2-core-refinement.txt`
+- `docs/reports/NP-UI-QA2-regression-preservation.txt`
+
+Protected by `tests/e2e/qa2` (`npm run test:e2e:qa2:strict`). Evidence is in `docs/design/concept-b/reviews/p2/`.
+
+| Component / file | Status | Change |
+|---|---|---|
+| `ViewSwitch` (`ui/ViewSwitch.tsx`) | New | One URL-driven segmented view control: real links, `aria-current`, an optional real count (accessible name "Pending, 3"). It replaces four hand-built copies: Requests status, Dispatch day, Standing Orders status, Proof of Service window. |
+| `DataTable` | Refined | The approved subtle raise, a quiet header row, 10px rows, a medium-weight primary column, tabular right-aligned numbers. The P1a row semantics are unchanged. |
+| `SummaryStrip` (inline) | Refined | Raised; more prominent tabular values (the same real figures). |
+| `OperationsPageHeaders.DetailPageHeader` | Extended | The "Standing Order" compact h1 (fixes the QA2 baseline defect: the arrangement detail page had no h1). |
+| `FormSection` (New Trip, Log Request) | Refined | The shared card anatomy (PanelSection header with an icon tile, a hairline, the fields) and the subtle raise. |
+| Requests list | Refined | Title "Requests" (Brand Lock §15; "Request Hub" is docs / marketing only). The status views (with the real pending count) and the search sit in `FilterBar` with a result count; shared `Pagination`. |
+| Trips list | Refined | `FilterBar` around the same GET form (search, date, assignment, Apply, + Clear); result count; shared `Pagination`. |
+| Dispatch | Refined | `ViewSwitch` day control; the column headers use the `PanelHeader` anatomy; denser queue cards (time first); grid / capacity raised; compact empty states. Below 2xl the capacity rail moves under the board, so the grid gets the width (at 1440: about 6 AM–4 PM visible instead of 6 AM–11 AM). The amber tone shows only when something is unassigned. |
+| Tomorrow Readiness | Refined | Title "Tomorrow Readiness"; "Open in Dispatch" as the header action; `StatTile` facts; Needs preparation / Ready in the card rhythm with a time column. |
+| Standing Orders | Refined | Title "Standing Orders" and breadcrumbs; `FilterBar`; the detail page gains its h1. Brief / request-panel copy reads "Standing orders". |
+| Passengers / Facilities / Drivers / Vehicles / Proof of Service | Aligned | One `PageHeader` each with its primary action in the header (Add Facility, Add Vehicle, Invite Driver moved out of separate rows; role gating unchanged); "Vehicles" (not "Fleet"); `FilterBar` where a list has search / views; shared `Pagination` on Proof of Service. |
+| Request / Trip detail panels | Aligned | Every detail panel uses the approved subtle raise (structure, headings and hooks unchanged). |
 
 ## Explicitly not building generically
 

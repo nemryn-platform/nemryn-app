@@ -2,6 +2,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getPassengersList } from "@/lib/operations/passengers-list";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterBar } from "@/components/ui/FilterBar";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Button } from "@/components/ui/Button";
 import { AddPassengerButton } from "@/components/operations/passengers/AddPassengerButton";
@@ -37,12 +38,18 @@ export default async function PassengersListPage({
         actions={<AddPassengerButton />}
       />
 
-      <form method="get" className="max-w-md">
-        <SearchInput name="q" label="Search passengers" placeholder="Search by name or phone" defaultValue={search} />
-        <Button type="submit" className="sr-only">
-          Search
-        </Button>
-      </form>
+      {/* NP-UI-P2: the shared FilterBar frame around the same GET search. */}
+      <FilterBar
+        search={
+          <form method="get">
+            <SearchInput name="q" label="Search passengers" placeholder="Search by name or phone" defaultValue={search} />
+            <Button type="submit" className="sr-only">
+              Search
+            </Button>
+          </form>
+        }
+        resultCount={`${result.totalCount} ${result.totalCount === 1 ? "passenger" : "passengers"}${search ? ` matching “${search}”` : ""}`}
+      />
 
       <PassengersTable rows={result.rows} search={search} />
     </div>

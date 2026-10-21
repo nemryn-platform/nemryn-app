@@ -60,7 +60,7 @@ export function RequestDetailsPanel({
   const provenanceLabel = requestProvenanceLabel(intakeIntegrationId);
   const serviceLabel = serviceType ? SERVICE_TYPE_LABELS[serviceType as ServiceType] : null;
   return (
-    <Panel>
+    <Panel elevated>
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-zw-md">
         <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Request Details</h3>
         <span className={cn(typography.metadata, "flex items-center gap-1.5 text-text-muted")}>
@@ -87,7 +87,7 @@ export function RequestDetailsPanel({
               )}
             </p>
             <p className={cn(typography.metadata, "mt-0.5 text-text-muted")}>
-              Requested only — no Trip has been scheduled. Review and, if appropriate, arrange recurring care separately.
+              Requested only — no Trip has been scheduled. Review and, if appropriate, set up a standing order separately.
             </p>
           </div>
         )}

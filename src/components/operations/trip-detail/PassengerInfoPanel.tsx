@@ -48,7 +48,7 @@ export function PassengerInfoPanel({
   ];
 
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
         Passenger &amp; Trip Information
       </h3>

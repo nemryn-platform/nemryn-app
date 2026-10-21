@@ -137,7 +137,7 @@ export function RequestPassengerPanel({
   const canShowLinkUi = isUnlinkedPending || (isInactiveLinkedPending && recoveryFlowOpen);
 
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Passenger</h3>
 
       {/*

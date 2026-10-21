@@ -1,12 +1,12 @@
-import Link from "next/link";
 import type { RequestsListStateFilter } from "@/lib/operations/requests-list";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
+import { ViewSwitch } from "@/components/ui/ViewSwitch";
 
 export interface RequestStatusTabsProps {
   active: RequestsListStateFilter;
   /** Preserved across a tab switch — matches Trips/Passengers' own established filter-form conventions (a status change should not silently discard an in-progress search). */
   search: string;
+  /** NP-UI-P2: the organization's true total of pending requests (independent of the open view), shown on the Pending view. */
+  pendingCount?: number | null;
 }
 
 const TABS: { value: RequestsListStateFilter; label: string }[] = [
@@ -27,7 +27,7 @@ const TABS: { value: RequestsListStateFilter; label: string }[] = [
  * query param entirely for the cleanest possible default URL
  * (`/operations/requests`, not `/operations/requests?state=pending`).
  */
-export function RequestStatusTabs({ active, search }: RequestStatusTabsProps) {
+export function RequestStatusTabs({ active, search, pendingCount }: RequestStatusTabsProps) {
   function buildHref(state: RequestsListStateFilter) {
     const qp = new URLSearchParams();
     if (state !== "pending") qp.set("state", state);
@@ -36,27 +36,13 @@ export function RequestStatusTabs({ active, search }: RequestStatusTabsProps) {
     return qs ? `/operations/requests?${qs}` : "/operations/requests";
   }
 
+  // NP-UI-P2: rendered by the shared ViewSwitch (same links, same aria-current, same landmark name). The Pending view
+  // carries the organization's real pending total (previously a separate one-item summary strip).
   return (
-    <nav aria-label="Request status" className="inline-flex flex-wrap gap-1 rounded-md border border-border-subtle bg-surface-elevated p-1">
-      {TABS.map((tab) => {
-        const isActive = tab.value === active;
-        return (
-          <Link
-            key={tab.value}
-            href={buildHref(tab.value)}
-            aria-current={isActive ? "page" : undefined}
-            className={cn(
-              typography.bodySmall,
-              "rounded-sm px-3 py-1.5 font-medium transition-colors duration-base",
-              isActive
-                ? "bg-surface-secondary text-text-primary"
-                : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
-            )}
-          >
-            {tab.label}
-          </Link>
-        );
-      })}
-    </nav>
+    <ViewSwitch
+      label="Request status"
+      activeKey={active}
+      items={TABS.map((tab) => ({ key: tab.value, label: tab.label, href: buildHref(tab.value), count: tab.value === "pending" ? pendingCount : undefined }))}
+    />
   );
 }

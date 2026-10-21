@@ -35,7 +35,7 @@ export function TripExceptionsPanel({ tripId, openExceptions, timezone }: TripEx
   const resolvingException = openExceptions.find((exception) => exception.id === resolvingId) ?? null;
 
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Trip Exceptions</h3>
       <div className="mt-zw-md">
         {openExceptions.length === 0 ? (

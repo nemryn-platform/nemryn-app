@@ -45,7 +45,7 @@ export default async function CreateMissingTripsPage() {
         title="Review missing rides"
         description="Select which occurrences to create as Trips. Nothing is created until you submit."
         breadcrumb={[
-          { label: "Recurring Care", href: "/operations/recurring-care" },
+          { label: "Standing Orders", href: "/operations/recurring-care" },
           { label: "Review missing rides" },
         ]}
       />
@@ -54,7 +54,7 @@ export default async function CreateMissingTripsPage() {
         <EmptyState
           icon={<ClipboardText className="size-8" aria-hidden />}
           title="No missing rides."
-          description="Every active recurring arrangement is already covered by a scheduled Trip for its near-term dates."
+          description="Every active standing order is already covered by a scheduled Trip for its near-term dates."
         />
       ) : (
         <CreateMissingTripsReview rows={missingRows} />

@@ -32,7 +32,7 @@ export interface RequestLinkedTripsPanelProps {
  */
 export function RequestLinkedTripsPanel({ linkedTrips, timezone }: RequestLinkedTripsPanelProps) {
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Linked Trips</h3>
       <div className="mt-zw-md">
         {linkedTrips.length === 0 ? (

@@ -79,7 +79,7 @@ export function RequestActionBar({ requestId, actions, createTripHref, createRec
         {/* P1-PILOT-R3 (PR-04): explicit, never automatic; Create Trip stays available (a recurring Request may still need a one-time Trip). */}
         {actions.canCreateRecurringArrangement && (
           <LinkButton href={createRecurringHref} variant="outline" data-testid="create-recurring-arrangement">
-            {hasLinkedArrangement ? "Create another recurring arrangement" : "Create recurring arrangement"}
+            {hasLinkedArrangement ? "Create another standing order" : "Create standing order"}
           </LinkButton>
         )}
         {(actions.canCreateTrip || actions.canCreateAnotherTrip) && (

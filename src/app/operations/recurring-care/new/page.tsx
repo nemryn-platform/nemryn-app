@@ -39,13 +39,13 @@ export default async function NewRecurringArrangementPage({
       return (
         <div className="flex flex-col gap-zw-lg">
           <PageHeader
-            title="New recurring arrangement"
-            breadcrumb={[{ label: "Recurring Care", href: "/operations/recurring-care" }, { label: "New arrangement" }]}
+            title="New standing order"
+            breadcrumb={[{ label: "Standing Orders", href: "/operations/recurring-care" }, { label: "New standing order" }]}
           />
           <AttentionState
             level="warning"
             title={REQUEST_NOT_READY_MESSAGE}
-            description="Recurring care can be created from an accepted request with an active linked passenger."
+            description="A standing order can be created from an accepted request with an active linked passenger."
             action={
               result?.status === "ok" ? (
                 <Link href={`/operations/requests/${result.request.id}`} className="text-text-link hover:underline">

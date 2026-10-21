@@ -1,0 +1,257 @@
+NP-UI-QA2-P2 — FINAL REFINEMENT AND RELEASE READINESS
+=====================================================
+Date: 2026-10-21.
+- Branch np-ui-qa2-p2-core-refinement (from origin/main 8131f0f).
+- Isolated environment only. No commit, push, merge, deployment or production write.
+
+Owner review going in:
+- QA2 regression preservation approved.
+- P2 direction conditionally approved.
+- No page or shell redesign in this pass.
+
+1. FINAL TERMINOLOGY CHANGES (Task 1, Brand Lock v1 §15: the object is a "standing order")
+------------------------------------------------------------------------------------------
+39 user-facing strings plus the Brief's stranded-requests line. Copy only: routes (/operations/recurring-care), code
+identifiers, RPCs (create_recurring_arrangement …), data contracts, status values and behaviour are unchanged.
+
+Standing Orders list:
+- "New recurring arrangement" → "New standing order"
+- the "Arrangement" column → "Standing order"
+- "No recurring transportation yet." → "No standing orders yet."
+- "…standing arrangement…" → "…standing order…"
+- the empty-state action "Create recurring arrangement" → "Create standing order"
+- "No arrangements in this view." → "No standing orders in this view."
+
+New standing order:
+- the page and form title and the breadcrumb → "New standing order"
+- the submit "Create arrangement" → "Create standing order"
+- help and empty copy → "standing order"
+
+Standing Order detail:
+- "Arrangement unavailable" → "Standing order unavailable"
+- "Couldn't load this arrangement" → "…this standing order"
+- "Back to Recurring Care" → "Back to Standing Orders"
+- "Create another recurring arrangement" → "Create another standing order"
+
+Lifecycle dialogs:
+- Pause / Resume / Edit / End "recurring arrangement" → "standing order"
+- "Keep arrangement" → "Keep standing order"
+- "End arrangement" → "End standing order"
+- the help texts and the occurrence empty state
+
+Create-missing:
+- "Every active recurring arrangement…" → "Every active standing order…"
+
+Requests (Core):
+- the action bar "Create (another) recurring arrangement" → "Create (another) standing order"
+- the needs-trip note "…trip or recurring arrangement" → "…trip or standing order"
+- the detail note "…already has recurring care…" → "…already has a standing order…"
+- "View arrangement →" → "View standing order →"
+- "arrange recurring care separately" → "set up a standing order separately"
+- the readiness label "Recurring care created" → "Standing order created"
+
+Brief:
+- "1 accepted request still needs a trip or standing order" (was "…recurring arrangement")
+- "Across N standing orders" (was "arrangements")
+
+Error copy:
+- the recurring-arrangement errors (NOT_FOUND / ILLEGAL_STATE / REQUEST_NOT_READY)
+- the trip-edit RECURRING_DATE ("…skip the date in Standing Orders…")
+
+Tests updated to the approved wording, with coverage increased:
+
+| Test | Change |
+|---|---|
+| request-fulfilment-core.test.mjs (2 assertions) | new wording |
+| request-recurring-care.test.mjs (readiness label) | new wording |
+| QA2 core-records S1 | now asserts the h1 "Standing Orders", "New standing order" AND no remaining "recurring arrangement" on the page |
+| QA2 core-records S2c (new) | the "New standing order" h1 + breadcrumb |
+| QA2 core-records S5c (new) | the detail page has no "recurring arrangement" wording; Edit / End present |
+| QA2 core-records | the create actions now click "Create standing order" |
+
+Deliberately NOT renamed (unrelated or other scope):
+- the Growth attribution line "recurring care active" (Growth module, UI-P3);
+- the Settings help text (UI-P5);
+- code comments and identifiers.
+
+2. DISPATCH REVIEW (Task 2) — P2 layout kept; no collapsible rail introduced
+---------------------------------------------------------------------------
+New permanent QA2 checks (core-trips-dispatch L1440 / L1024 / L768 and K1440 / K1024 / K768). All PASS on webpack
+and on the default build. At each width:
+- No page-level overflow.
+- The scheduling grid scrolls inside its own container: overflow-x auto, and its right edge inside the viewport.
+- The "Driver Capacity" heading and every driver card are visible and fully within the viewport.
+- The queue's Assign button is visible and not clipped.
+- No control outside the grid is clipped.
+- Keyboard: Tab from the day switch reaches a queue Assign button, Enter opens the assignment dialog, Escape closes it
+  and returns focus to that button.
+
+3. UPDATED FILE INVENTORY (uncommitted; 61 tracked files +525 / −533, plus new files)
+-------------------------------------------------------------------------------------
+Tracked, modified (61):
+
+docs / config:
+- docs/design/component-inventory.md
+- package.json (2 npm scripts: test:e2e:qa2, test:e2e:qa2:strict)
+
+src/app/operations:
+- dispatch/page.tsx
+- drivers/page.tsx
+- facilities/page.tsx
+- fleet/page.tsx
+- passengers/page.tsx
+- proof-of-service/page.tsx
+- recurring-care/page.tsx, [arrangementId]/page.tsx, create-missing/page.tsx, new/page.tsx
+- requests/page.tsx, [requestId]/page.tsx
+- tomorrow/page.tsx
+- trips/page.tsx
+
+src/components/operations:
+- OperationsBrief.tsx
+- OperationsPageHeaders.tsx
+- dispatch/{AssignmentGrid, DispatchBoardClient, DriverCapacityPanel, NeedsAssignmentQueue}.tsx
+- drivers/DriversPageClient.tsx
+- facilities/FacilitiesPageClient.tsx
+- fleet/FleetPageClient.tsx
+- new-trip/FormSection.tsx
+- proof-of-service/ProofOfServiceWindowTabs.tsx
+- recurring-care/{ArrangementLifecycleControls, EditArrangementDialog, EndArrangementDialog,
+  NewRecurringArrangementForm, OccurrenceList, RecurringCareStatusTabs}.tsx
+- requests/{LogRequestForm, RequestAcquisitionPanel, RequestActionBar, RequestActivityPanel, RequestDetailsPanel,
+  RequestLinkedArrangementsPanel, RequestLinkedTripsPanel, RequestPassengerPanel, RequestRequesterPanel,
+  RequestStatusTabs, RequestTransportationPanel}.tsx
+- trip-detail/{CurrentStatusPanel, PassengerInfoPanel, TripDurationPanel, TripExceptionsPanel, TripInfoStrip,
+  TripNotesPanel, TripReadinessPanel, TripRoutePanel, TripWheelchairPanel}.tsx
+
+src/components/ui:
+- DataTable.tsx
+- SummaryStrip.tsx
+
+src/lib/operations (COPY STRINGS ONLY: labels and messages; no logic, query or contract change):
+- presentation.ts
+- recurring-arrangement-errors.ts
+- request-fulfilment-core.ts (+ its .test.mjs)
+- request-recurring-care.test.mjs
+- trip-edit-errors.ts
+
+New (untracked until commit):
+- src/components/ui/ViewSwitch.tsx
+- tests/e2e/qa2/{README.md, _qa2.mjs, run.mjs, core-requests, core-trips-dispatch, core-records, growth,
+  auth-access}.e2e.mjs
+- docs/design/concept-b/reviews/p2/:
+  - before/ (29)
+  - after/ (29)
+  - p2-visual-comparison.png
+  - index.md
+- docs/reports/:
+  - NP-UI-QA2-regression-preservation.txt
+  - NP-UI-P2-core-refinement.txt
+  - NP-UI-QA2-P2-integrated-review.txt
+  - this report
+
+Unchanged: supabase/ (schema, migrations, RLS, RPC), server actions, routes, auth / authorization, quotes / print,
+the shell, sidebar, logo assets, dependencies, fonts, build configuration.
+
+4. EXACT FINAL TEST RESULTS (Task 3, on this exact final working tree)
+----------------------------------------------------------------------
+| Check | Result |
+|---|---|
+| TypeScript (tsc --noEmit) | clean |
+| ESLint (src + tests) | exit 0, 0 problems |
+| npm test | 894 / 894 pass, 0 fail |
+| Webpack production build (`next build --webpack`) | OK ("Compiled successfully") |
+| QA2 strict (webpack build, fresh reset per suite) | 195 / 195, see below |
+| UI-P1a browser suite | 48 / 48 ALL PASS |
+| UI-P1b browser suite | 52 / 52 ALL PASS |
+| Strict quotes regression | s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26 "U1 / U2 RESOLVED"; "no unexpected failures", exit 0 |
+| Default production build (`next build`, Turbopack) | PASS ("Compiled successfully") after removing a stale local cache, see §5 |
+| QA2 strict AGAIN, served from the default Turbopack build | 195 / 195 (all 5 suites PASS) |
+
+QA2 strict detail: core-requests 25, core-trips-dispatch 40, core-records 28, growth 23, auth-access 79.
+
+SQL (13 suites, fresh reset each), all 0 failures:
+
+| Suite | Result |
+|---|---|
+| client_privilege_surface | 21 |
+| create_trip_privilege | 5 |
+| driver_read_privilege | 8 |
+| function_privilege | 7 |
+| mutation_privilege | 7 |
+| request_mutation_privilege | 23 |
+| privilege_baseline_behavior | 30 |
+| privilege_contract | violations = 0 of 29 |
+| rls_adversarial | 33 |
+| tenant_settings_foundation | 51 |
+| plus_entitlement | 150 |
+| plus_member_grants | 76 |
+| plus_request_attributions | 73 |
+
+No assertion was weakened or skipped.
+
+5. KNOWN LOCAL BUILD LIMITATION — ROOT CAUSE FOUND
+--------------------------------------------------
+- Symptom (since 2026-10-20): the local default `next build` failed with 12 errors, "Module not found: Can't resolve
+  '@vercel/turbopack-next/internal/font/google/font' … next/font/google queries have exactly one entry" (Geist Mono
+  font CSS).
+- This pass, on the final tree with the existing cache: still FAILED identically (TURBOPACK_TREE_EXIT=1).
+- Unchanged main: a `git archive` export of origin/main 8131f0f in a separate scratch directory.
+  - First attempt invalid: Turbopack refused a symlinked node_modules ("points out of the filesystem root"). Not
+    counted.
+  - Valid attempt (an APFS-cloned node_modules, no symlink): main BUILDS SUCCESSFULLY with Turbopack.
+- Root cause: a stale local Turbopack persistent cache in the repository directory, `.next/cache/turbopack` (737
+  MB). The earlier "fails on main too" result came from in-place control builds that shared that cache.
+- Fix applied: the cache was MOVED aside (not deleted) to the session scratchpad
+  (p1b/qa2/final/turbopack-cache-backup). The default build of this exact final tree then succeeded, and QA2 strict
+  passed 195 / 195 against it.
+- No font package, dependency, Next.js version or build tooling was changed.
+- Correction to earlier reports: the sidebar-scrollbar and integrated-review reports said the failure "also occurs on
+  unchanged main". That was true only for in-place builds sharing the stale cache. Unchanged main builds correctly
+  in a clean directory, and Vercel's builds were never affected.
+- Recommendation: if it reappears locally, move .next/cache/turbopack aside before investigating anything else.
+
+6. SCREENSHOT INVENTORY (Task 4)
+--------------------------------
+docs/design/concept-b/reviews/p2/:
+- before/: 29 PNG. The unchanged P1b app (main 8131f0f) before any UI-P2 change.
+- after/: 29 PNG, the same file names. Re-captured on the FINAL working tree (including the standing-order wording),
+  served from the default Turbopack build, after a fresh reset with identical fictional fixtures.
+- p2-visual-comparison.png: before | after of 8 key screens (regenerated from the final captures).
+- index.md: every file with its dimensions.
+
+All 59 images verified to decode (58 before / after + the contact sheet). All are real browser captures of the
+running isolated app; no mockups.
+
+Most useful full-size captures for owner review (after/, compare with the same name in before/):
+1. 06-dispatch-1440.png — the wider scheduling grid (about 6 AM–4 PM vs 6 AM–11 AM), capacity under the board.
+2. 07-tomorrow-readiness-1440.png — the "Tomorrow Readiness" tiles + time-column lists.
+3. 01-requests-list-1440.png — "Requests", one filter bar, the pending count on the view.
+4. 08-standing-orders-1440.png — "Standing Orders", "New standing order", "Standing order" column.
+5. 08b-standing-order-detail-1440.png — the new "Standing Order" h1 + standing-order wording.
+6. 03-new-trip-1440.png — the full-page New Trip with the card-anatomy sections.
+7. 04-trips-list-1440.png — the Trips filter bar + result count + pagination.
+8. 06t-dispatch-1024.png and 06t-dispatch-768.png — the Dispatch tablet / small-desktop layout.
+9. 12-vehicles-1440.png — the "Vehicles" title with Add Vehicle in the header.
+10. e06-dispatch-empty-1440.png / e01-requests-empty-1440.png — empty-workspace states.
+
+7. OUTSTANDING UI DECISIONS
+---------------------------
+- D2: The Settings / website-requests copy still says "Request Hub" (UI-P5).
+- D3: Trip / Request detail: a deeper record-header recomposition as a separate phase (P2 only aligned the panels).
+- D4: Growth attribution copy "recurring care active": align with "standing order" in UI-P3?
+- D5: The local stale-cache backup (737 MB in the scratchpad): delete when no longer needed.
+
+The Dispatch layout is approved as implemented. No collapsible rail.
+
+8. VERDICT
+----------
+PASS.
+- Every Task 3 gate is green on the exact final working tree, including the default Turbopack build. The build
+  limitation is resolved: a stale local cache, with no code or tooling change.
+- Terminology is aligned, with coverage increased.
+- The Dispatch review passes at 1440 / 1024 / 768.
+- 58 screenshots are verified and the "after" set reflects the final code.
+
+Release readiness: ready for owner review, then a controlled commit / PR on approval.
+
+No commit. No push. No merge. No deployment. No production writes. STOPPED for owner review.

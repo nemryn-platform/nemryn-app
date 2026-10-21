@@ -20,8 +20,8 @@ import { cn } from "@/lib/cn";
 export function RequestLinkedArrangementsPanel({ arrangements }: { arrangements: RequestDetailLinkedArrangement[] }) {
   if (arrangements.length === 0) return null;
   return (
-    <Panel data-testid="request-linked-arrangements">
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Recurring care</h3>
+    <Panel elevated data-testid="request-linked-arrangements">
+      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Standing orders</h3>
       <ul className="mt-zw-md flex flex-col gap-zw-sm">
         {arrangements.map((a) => (
           <li key={a.id} className="rounded-sm border border-border-subtle px-3 py-2.5" data-testid="request-linked-arrangement">
@@ -43,7 +43,7 @@ export function RequestLinkedArrangementsPanel({ arrangements }: { arrangements:
               <span className="truncate">{a.destinationDescription}</span>
             </p>
             <Link href={`/operations/recurring-care/${a.id}`} className={cn(typography.bodySmall, "mt-1 inline-block text-text-link hover:underline")}>
-              View arrangement →
+              View standing order →
             </Link>
           </li>
         ))}

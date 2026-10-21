@@ -40,8 +40,8 @@ export function EndArrangementDialog({ arrangementId, passengerName, onClose }: 
     <Dialog
       open
       onClose={onClose}
-      title="End recurring arrangement"
-      description={`Nemryn will stop expecting future recurring transportation from ${passengerName}'s arrangement. Existing trips are not changed. This cannot be undone.`}
+      title="End standing order"
+      description={`Nemryn will stop expecting future recurring transportation from ${passengerName}'s standing order. Existing trips are not changed. This cannot be undone.`}
     >
       <form action={formAction} className="flex flex-col gap-zw-md">
         <input type="hidden" name="arrangementId" value={arrangementId} />
@@ -53,10 +53,10 @@ export function EndArrangementDialog({ arrangementId, passengerName, onClose }: 
         )}
         <div className="flex justify-end gap-2 pt-zw-sm">
           <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
-            Keep arrangement
+            Keep standing order
           </Button>
           <Button type="submit" variant="destructive" loading={pending} disabled={pending}>
-            {pending ? "Ending…" : "End arrangement"}
+            {pending ? "Ending…" : "End standing order"}
           </Button>
         </div>
       </form>

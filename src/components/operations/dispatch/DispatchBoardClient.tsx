@@ -38,7 +38,9 @@ export function DispatchBoardClient({ data, timezone, operatorDriverId, canManag
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[280px_minmax(0,1fr)_280px]">
+      {/* NP-UI-P2 grid legibility: below 2xl (1536px) the capacity rail moves under the board so the time grid gets the
+          full remaining width (at 1440 the three-column layout left the grid ~510px wide); 2xl+ keeps three columns. */}
+      <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[272px_minmax(0,1fr)] 2xl:grid-cols-[272px_minmax(0,1fr)_280px]">
         <NeedsAssignmentQueue
           trips={data.unassignedTrips}
           timezone={timezone}
@@ -55,7 +57,9 @@ export function DispatchBoardClient({ data, timezone, operatorDriverId, canManag
             <NoActiveDriversActions canManageDriverSetup={canManageDriverSetup} hasLinkedDriver={operatorDriverId !== null} />
           }
         />
-        <DriverCapacityPanel driverRows={data.driverRows} day={data.day} />
+        <div className="xl:col-span-2 2xl:col-span-1">
+          <DriverCapacityPanel driverRows={data.driverRows} day={data.day} />
+        </div>
       </div>
 
       {activeDialog && (

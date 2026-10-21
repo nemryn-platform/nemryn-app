@@ -64,7 +64,7 @@ export function CurrentStatusPanel({
   ];
 
   return (
-    <Panel>
+    <Panel elevated>
       <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>Current Status</p>
       <p className={cn(typography.sectionHeading, "mt-1 text-text-primary")}>{statusLabel}</p>
       <div className="mt-zw-lg border-t border-border-subtle pt-zw-lg">

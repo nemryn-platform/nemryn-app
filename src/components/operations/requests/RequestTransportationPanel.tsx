@@ -30,7 +30,7 @@ export function RequestTransportationPanel({
   returnTripNeeded,
 }: RequestTransportationPanelProps) {
   return (
-    <Panel>
+    <Panel elevated>
       <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
         Transportation
       </h3>

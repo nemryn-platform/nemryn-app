@@ -1,4 +1,5 @@
-import { Panel } from "@/components/ui/Panel";
+import { SteeringWheel } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Avatar } from "@/components/ui/Avatar";
 import { StatusBadge, type StatusCategory } from "@/components/ui/StatusBadge";
@@ -45,27 +46,25 @@ export function DriverCapacityPanel({ driverRows, day = "today" }: DriverCapacit
         ];
   return (
     <div className="flex flex-col gap-zw-md">
-      <div className="flex flex-col gap-1">
-        <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Driver Capacity</h2>
-        {driverRows.length > 0 && (
-          <p className={cn(typography.metadata, "text-text-muted")} data-testid="capacity-summary">
-            {summary.join(" · ")}
-          </p>
-        )}
-      </div>
+      {/* NP-UI-P2: the shared column-header anatomy; the real summary line stays (data-testid unchanged). */}
+      <PanelHeader
+        as="h2"
+        icon={<SteeringWheel className="size-5" />}
+        tone="info"
+        title="Driver Capacity"
+        description={driverRows.length > 0 ? <span data-testid="capacity-summary">{summary.join(" · ")}</span> : undefined}
+      />
 
       {driverRows.length === 0 ? (
-        <Panel>
-          <EmptyState title="No active drivers" description="Active drivers in this organization will appear here." />
-        </Panel>
+        <EmptyState size="compact" title="No active drivers" description="Active drivers in this organization will appear here." />
       ) : (
-        <div className="flex flex-col gap-zw-sm">
+        <div className="grid grid-cols-1 gap-zw-sm sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-1">
           {driverRows.map(({ driver, trips, availability }) => {
             const onTrip = trips.find((trip) => trip.isActiveState);
             const status = availability.nowStatus;
             const dayFacts = availability.day;
             return (
-              <Panel key={driver.id} className="flex items-center gap-3" data-testid="capacity-driver" data-driver-id={driver.id} data-now-status={status ?? ""}>
+              <Panel key={driver.id} padding="dense" elevated className="flex items-center gap-3" data-testid="capacity-driver" data-driver-id={driver.id} data-now-status={status ?? ""}>
                 <Avatar name={driver.displayName} size="sm" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">

@@ -7,7 +7,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Button } from "@/components/ui/Button";
 import { LinkButton } from "@/components/ui/LinkButton";
-import { SummaryStrip } from "@/components/ui/SummaryStrip";
+import { FilterBar } from "@/components/ui/FilterBar";
+import { Pagination } from "@/components/ui/Pagination";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { RequestStatusTabs } from "@/components/operations/requests/RequestStatusTabs";
 import { RequestsTable } from "@/components/operations/requests/RequestsTable";
@@ -84,7 +85,7 @@ export default async function RequestHubPage({
     return (
       <div className="flex flex-col gap-zw-lg">
         <PageHeader
-          title="Request Hub"
+          title="Requests"
           description="Review transportation requests and move them into trip planning."
           actions={
             <LinkButton href="/operations/requests/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
@@ -117,7 +118,7 @@ export default async function RequestHubPage({
   return (
     <div className="flex flex-col gap-zw-lg">
       <PageHeader
-        title="Request Hub"
+        title="Requests"
         description="Review transportation requests and move them into trip planning."
         actions={
           <LinkButton href="/operations/requests/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
@@ -126,30 +127,31 @@ export default async function RequestHubPage({
         }
       />
 
-      {/* A single real figure, never a decorative KPI tile (P1-E1-S2D
-          §9) — always the organization's true total pending count,
-          independent of whichever status view is currently open. */}
-      <SummaryStrip items={[{ label: "pending", value: result.pendingCount, tone: result.pendingCount > 0 ? "warning" : "default" }]} inline />
-
-      <RequestStatusTabs active={state} search={search} />
+      {/* NP-UI-P2: one FilterBar frame for the status views and the search. The organization's true pending total
+          (P1-E1-S2D §9: a single real figure, never a decorative KPI tile) now sits on the Pending view itself. */}
+      <FilterBar
+        filters={<RequestStatusTabs active={state} search={search} pendingCount={result.pendingCount} />}
+        search={
+          <form method="get">
+            {state !== "pending" && <input type="hidden" name="state" value={state} />}
+            {needsTrip && <input type="hidden" name="needs" value="trip" />}
+            <SearchInput name="q" label="Search requests" placeholder="Search by name or phone" defaultValue={search} />
+            <Button type="submit" className="sr-only">
+              Search
+            </Button>
+          </form>
+        }
+        resultCount={`${result.totalCount} ${result.totalCount === 1 ? "request" : "requests"}${search ? ` matching “${search}”` : ""}`}
+      />
 
       {needsTrip && (
         <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="requests-needs-trip-filter">
-          Showing accepted requests that still need a trip or recurring arrangement.{" "}
-          <Link href={search ? `/operations/requests?state=accepted&q=${encodeURIComponent(search)}` : "/operations/requests?state=accepted"} className="text-text-link hover:underline">
+          Showing accepted requests that still need a trip or standing order.{" "}
+          <Link href={search ? `/operations/requests?state=accepted&q=${encodeURIComponent(search)}` : "/operations/requests?state=accepted"} className="text-text-link underline underline-offset-2">
             Show all accepted
           </Link>
         </p>
       )}
-
-      <form method="get" className="max-w-md">
-        {state !== "pending" && <input type="hidden" name="state" value={state} />}
-        {needsTrip && <input type="hidden" name="needs" value="trip" />}
-        <SearchInput name="q" label="Search requests" placeholder="Search by name or phone" defaultValue={search} />
-        <Button type="submit" className="sr-only">
-          Search
-        </Button>
-      </form>
 
       <RequestsTable
         rows={result.rows}
@@ -159,23 +161,7 @@ export default async function RequestHubPage({
       />
 
       {result.rows.length > 0 && (
-        <div className={cn(typography.bodySmall, "flex items-center justify-between text-text-muted")}>
-          <p>
-            Showing {(result.page - 1) * result.pageSize + 1}–{Math.min(result.page * result.pageSize, result.totalCount)} of {result.totalCount}
-          </p>
-          <div className="flex gap-2">
-            {result.page > 1 && (
-              <Link href={buildRequestHubHref(result.page - 1)} className={cn(typography.button, "text-text-link hover:underline")}>
-                Previous
-              </Link>
-            )}
-            {result.page < totalPages && (
-              <Link href={buildRequestHubHref(result.page + 1)} className={cn(typography.button, "text-text-link hover:underline")}>
-                Next
-              </Link>
-            )}
-          </div>
-        </div>
+        <Pagination page={result.page} totalPages={totalPages} hrefForPage={buildRequestHubHref} totalItems={result.totalCount} pageSize={result.pageSize} label="Requests pages" />
       )}
     </div>
   );
