@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { NotePencil, Plus } from "@phosphor-icons/react/dist/ssr";
-import { Panel } from "@/components/ui/Panel";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -36,14 +36,19 @@ export function TripNotesPanel({ tripId, notes, timezone }: TripNotesPanelProps)
 
   return (
     <Panel elevated>
-      <div className="flex items-center gap-2">
-        <NotePencil className="size-5 text-text-muted" aria-hidden />
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Trip Notes</h3>
-      </div>
+      <PanelHeader
+        title="Trip Notes"
+        icon={<NotePencil className="size-5" />}
+        actions={
+          <Button variant="outline" size="sm" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setAddNoteOpen(true)}>
+            Add Note
+          </Button>
+        }
+      />
 
       <div className="mt-zw-md">
         {notes.length === 0 ? (
-          <EmptyState title="No notes yet" description="Notes added here are visible to Operations, and to the Driver when marked visible." />
+          <EmptyState size="compact" title="No notes yet" description="Notes added here are visible to Operations, and to the Driver when marked visible." />
         ) : (
           <ul className="flex flex-col gap-zw-sm">
             {notes.map((note) => (
@@ -62,14 +67,6 @@ export function TripNotesPanel({ tripId, notes, timezone }: TripNotesPanelProps)
         )}
       </div>
 
-      <Button
-        variant="outline"
-        className="mt-zw-md w-full"
-        leadingIcon={<Plus className="size-4" aria-hidden />}
-        onClick={() => setAddNoteOpen(true)}
-      >
-        Add Note
-      </Button>
 
       {addNoteOpen && <AddNoteDialog tripId={tripId} onClose={() => setAddNoteOpen(false)} />}
     </Panel>

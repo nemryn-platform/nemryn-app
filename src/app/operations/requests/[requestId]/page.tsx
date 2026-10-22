@@ -1,15 +1,16 @@
 import Link from "next/link";
-import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { CalendarBlank, ListChecks, Tray, User, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getRequestDetail, getRequestActivity, getRequestAcquisition, type RequestActivityEvent } from "@/lib/operations/request-detail";
 import type { RequestAcquisition } from "@/lib/operations/request-acquisition-core";
 import { getLogRequestFormData } from "@/lib/operations/log-request";
-import { requestStatusLabel, requestStatusCategory, requestReadinessLabel, requestReadinessTextClass, formatOperationsLongDate } from "@/lib/operations/presentation";
+import { requestStatusLabel, requestStatusCategory, requestReadinessLabel, requestReadinessTextClass, formatOperationsLongDate, formatRequestServiceDate } from "@/lib/operations/presentation";
 import { deriveRequestActions, deriveRequestReadiness } from "@/lib/operations/request-readiness-core";
 import { hasActiveTrip } from "@/lib/operations/request-fulfilment-core";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DetailPageHeader } from "@/components/operations/OperationsPageHeaders";
+import { RecordSummary } from "@/components/ui/RecordSummary";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -174,29 +175,10 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
 
   return (
     <>
-      <DetailPageHeader title="Request Detail" />
-      <div className="flex flex-col gap-zw-lg">
-        <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
-          <Link href="/operations/requests" className="hover:text-text-secondary hover:underline">
-            Requests
-          </Link>
-          <span className="mx-2" aria-hidden>
-            ›
-          </span>
-          <span className="text-text-secondary">{identity}</span>
-        </nav>
-
-        <div className="flex flex-wrap items-start justify-between gap-zw-md">
-          <div>
-            <div className="flex flex-wrap items-center gap-3">
-              {/* The shell's "Request Detail" PageHeader is this page's real <h1> (OperationsLayoutClient, NP-UI-P1b) — matches Trip Detail's own established convention exactly (src/app/operations/trips/[tripId]/page.tsx). */}
-              <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>Request</h2>
-              <StatusBadge label={requestStatusLabel(request.state)} category={requestStatusCategory(request.state)} />
-            </div>
-            <p className={cn(typography.body, "mt-1 text-text-secondary")}>
-              {identity} · Logged {formatOperationsLongDate(new Date(request.createdAt), timezone)}
-            </p>
-          </div>
+      <DetailPageHeader
+        title="Request Detail"
+        breadcrumb={[{ label: "Requests", href: "/operations/requests" }, { label: identity }]}
+        actions={
           <RequestActionBar
             requestId={request.id}
             actions={actions}
@@ -204,36 +186,59 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             createRecurringHref={createRecurringHref}
             hasLinkedArrangement={request.linkedArrangements.length > 0}
           />
-        </div>
+        }
+      />
+      <div className="flex flex-col gap-zw-lg">
+        {/* The PageHeader's "Request Detail" is this page's one <h1>; "Request" is the record heading, an <h2> in the summary. */}
+        <RecordSummary
+          testId="request-record-summary"
+          title="Request"
+          status={<StatusBadge label={requestStatusLabel(request.state)} category={requestStatusCategory(request.state)} />}
+          icon={<Tray className="size-[1.375rem]" />}
+          meta={
+            <>
+              {identity} · Logged {formatOperationsLongDate(new Date(request.createdAt), timezone)}
+            </>
+          }
+          facts={[
+            {
+              label: "Passenger",
+              // The linked Passenger; otherwise the name the requester gave (not yet a Passenger record) -- never the requester.
+              value: request.passenger?.displayName ?? (request.requestedPassengerName ? `${request.requestedPassengerName} · not linked` : "Not linked"),
+              icon: <User />,
+            },
+            { label: "Preferred service", value: formatRequestServiceDate(request.preferredDate, request.preferredTime), icon: <CalendarBlank /> },
+            {
+              label: "Readiness",
+              icon: <ListChecks />,
+              // READINESS (P1-E1-S2E §10/§11, P1-OPS-R1) — separate from the decision; "needs_passenger" also gets the
+              // warning banner below, whose copy never implies that linking a Passenger accepts the Request.
+              value: <span className={requestReadinessTextClass(readiness)}>{requestReadinessLabel(readiness)}</span>,
+              testId: "request-readiness",
+            },
+          ]}
+        >
+          {actions.cancelBlockedByArrangement && (
+            <p className={cn(typography.bodySmall, "text-text-muted")}>
+              This request already has a standing order. Manage it from the standing order.
+            </p>
+          )}
+          {actions.cancelBlockedByTrips && (
+            <p className={cn(typography.bodySmall, "text-text-muted")}>
+              This request already has transportation scheduled. Manage cancellation from the linked trip.
+            </p>
+          )}
+        </RecordSummary>
 
-        {actions.cancelBlockedByArrangement && (
-          <p className={cn(typography.bodySmall, "text-text-muted")}>
-            This request already has a standing order. Manage it from the standing order.
-          </p>
-        )}
-        {actions.cancelBlockedByTrips && (
-          <p className={cn(typography.bodySmall, "text-text-muted")}>
-            This request already has transportation scheduled. Manage cancellation from the linked trip.
-          </p>
-        )}
-
-        {/* READINESS (P1-E1-S2E §10/§11, P1-OPS-R1) — separate from the
-            decision. The one operational blocker is Passenger resolution;
-            only "needs_passenger" gets a warning banner, and its copy never
-            implies that linking a Passenger accepts the Request. */}
-        {readiness === "needs_passenger" ? (
+        {readiness === "needs_passenger" && (
           <AttentionState
             level="warning"
             title="Passenger needed"
             description="Link or create the passenger before this request can be scheduled."
           />
-        ) : (
-          <p className={cn(typography.bodySmall, "font-medium", requestReadinessTextClass(readiness))}>
-            {requestReadinessLabel(readiness)}
-          </p>
         )}
 
-        <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid grid-cols-1 items-start gap-zw-lg xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="flex flex-col gap-zw-lg">
             <RequestPassengerPanel
               requestId={request.id}

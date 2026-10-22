@@ -22,4 +22,5 @@ export * from "./Skeleton";
 export * from "./Pagination";
 export * from "./RouteState";
 export * from "./StatTile";
+export * from "./RecordSummary";
 export * from "./FilterBar";

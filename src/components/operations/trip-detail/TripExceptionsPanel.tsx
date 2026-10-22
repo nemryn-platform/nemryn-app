@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Panel } from "@/components/ui/Panel";
+import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatOperationsTime, humanizeExceptionType } from "@/lib/operations/presentation";
@@ -36,10 +37,19 @@ export function TripExceptionsPanel({ tripId, openExceptions, timezone }: TripEx
 
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Trip Exceptions</h3>
+      <PanelHeader
+        title="Trip Exceptions"
+        icon={<WarningCircle className="size-5" />}
+        tone={openExceptions.length > 0 ? "attention" : "neutral"}
+        actions={
+          <Button type="button" variant="outline" size="sm" onClick={() => setReportOpen(true)}>
+            Report Issue
+          </Button>
+        }
+      />
       <div className="mt-zw-md">
         {openExceptions.length === 0 ? (
-          <EmptyState title="No open exceptions" description="Nothing reported on this trip needs review." />
+          <EmptyState size="compact" title="No open exceptions" description="Nothing reported on this trip needs review." />
         ) : (
           <ul className="flex flex-col gap-zw-sm">
             {openExceptions.map((exception) => (
@@ -65,9 +75,6 @@ export function TripExceptionsPanel({ tripId, openExceptions, timezone }: TripEx
           </ul>
         )}
       </div>
-      <Button type="button" variant="outline" className="mt-zw-md w-full" onClick={() => setReportOpen(true)}>
-        Report Issue
-      </Button>
 
       {reportOpen && <ReportIssueDialog tripId={tripId} onClose={() => setReportOpen(false)} />}
       {resolvingException && (

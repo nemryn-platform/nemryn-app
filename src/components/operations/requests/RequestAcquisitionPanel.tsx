@@ -1,4 +1,5 @@
-import { Panel } from "@/components/ui/Panel";
+import { Globe } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { describeAcquisition, type RequestAcquisition } from "@/lib/operations/request-acquisition-core";
 import { typography } from "@/design/typography";
@@ -20,8 +21,8 @@ export function RequestAcquisitionPanel({ acquisition }: RequestAcquisitionPanel
   if (rows.length === 0) return null;
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>Acquisition</h3>
-      <div className="mt-zw-md">
+      <PanelHeader title="Acquisition" icon={<Globe className="size-5" />} />
+      <div className="mt-zw-lg">
         <DefinitionList
           columns={1}
           items={rows.map((row) => ({ label: row.label, value: <span className="break-words">{row.value}</span> }))}

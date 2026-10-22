@@ -270,7 +270,7 @@ export function NewTripForm({
         />
       )}
 
-      <form id="new-trip-form" action={formAction} onSubmit={handleSubmit} className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
+      <form id="new-trip-form" action={formAction} onSubmit={handleSubmit} className="grid grid-cols-1 items-start gap-zw-lg xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex flex-col gap-zw-lg">
           <FormSection
             icon={<User className="size-5" aria-hidden />}

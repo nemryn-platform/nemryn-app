@@ -1,8 +1,8 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
-import { Plus, X } from "@phosphor-icons/react/dist/ssr";
-import { Panel } from "@/components/ui/Panel";
+import { Plus, User, X } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -138,7 +138,7 @@ export function RequestPassengerPanel({
 
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Passenger</h3>
+      <PanelHeader title="Passenger" icon={<User className="size-5" />} tone="accent" />
 
       {/*
        * P1-PILOT-S4B-R2A — a website-submitted Request may carry a

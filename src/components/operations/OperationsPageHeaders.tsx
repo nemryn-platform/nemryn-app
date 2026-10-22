@@ -3,6 +3,7 @@ import { Clock, Plus } from "@phosphor-icons/react/dist/ssr";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 import { PageHeader } from "@/components/ui/PageHeader";
+import type { BreadcrumbItem } from "@/components/ui/Breadcrumb";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { ExportDaySheetMenu } from "@/components/operations/header/ExportDaySheetMenu";
 import { formatOperationsLongDate } from "@/lib/operations/presentation";
@@ -76,11 +77,24 @@ export function DispatchPageHeader({ day, timezone }: { day: "today" | "tomorrow
   );
 }
 
-/** The h1 names the screen; the page's own record heading (passenger name / "Request") stays the h2 below it. */
-export function DetailPageHeader({ title }: { title: "Trip Detail" | "Request Detail" | "Standing Order" }) {
+/**
+ * The h1 names the screen; the page's own record heading (passenger name / "Request") stays the h2 below it, in the
+ * RecordSummary. NP-UI-V2-2: the h1 takes the same display role as every other Operations screen (Brand Lock v2 §2)
+ * with the breadcrumb above it and the record's own actions on the right -- the same anatomy as the list pages and the
+ * Overview, instead of a quiet label stacked over a second title.
+ */
+export function DetailPageHeader({
+  title,
+  breadcrumb,
+  actions,
+}: {
+  title: "Trip Detail" | "Request Detail" | "Standing Order";
+  breadcrumb?: BreadcrumbItem[];
+  actions?: ReactNode;
+}) {
   return (
-    <div className="mb-zw-md">
-      <PageHeader testId="page-header" size="compact" title={title} />
+    <div className="mb-zw-lg">
+      <PageHeader testId="page-header" title={title} breadcrumb={breadcrumb} actions={actions} />
     </div>
   );
 }

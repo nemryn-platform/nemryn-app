@@ -1,7 +1,6 @@
-import { Panel } from "@/components/ui/Panel";
+import { User } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { DefinitionList } from "@/components/ui/DefinitionList";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
 
 export interface PassengerInfoPanelProps {
   passengerName: string;
@@ -49,10 +48,8 @@ export function PassengerInfoPanel({
 
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
-        Passenger &amp; Trip Information
-      </h3>
-      <div className="pt-zw-lg">
+      <PanelHeader title="Passenger & Trip Information" icon={<User className="size-5" />} tone="accent" />
+      <div className="mt-zw-lg">
         <DefinitionList columns={2} items={items} />
       </div>
     </Panel>

@@ -1,4 +1,4 @@
-import { WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { Lightning, Path, UserCircleDashed, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import Link from "next/link";
@@ -6,7 +6,7 @@ import { getDispatchBoardData, type DispatchDay } from "@/lib/operations/dispatc
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import { getOperatorLinkedDriverId, getRecurringAssignmentHints } from "@/lib/operations/assignment-context";
-import { SummaryStrip } from "@/components/ui/SummaryStrip";
+import { StatTile, StatTileGroup } from "@/components/ui/StatTile";
 import { ViewSwitch } from "@/components/ui/ViewSwitch";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DispatchBoardClient } from "@/components/operations/dispatch/DispatchBoardClient";
@@ -87,18 +87,24 @@ export default async function DispatchBoardPage({
             </Link>
           )}
         </div>
-        <SummaryStrip
-          inline
-          items={[
-            { label: day === "tomorrow" ? "open trips tomorrow" : "open trips today", value: data.summary.todayCount },
-            // NP-UI-P2: the attention tone only when something is actually unassigned (a zero is not a warning).
-            { label: "unassigned", value: data.summary.unassignedCount, tone: data.summary.unassignedCount > 0 ? "warning" : "default", dot: data.summary.unassignedCount > 0 },
-            { label: "active", value: data.summary.activeCount, dot: true },
+        {/* NP-UI-V2-2: the same real counts as before, in the Brand Lock v2 fact tiles (D-6) used by the Overview. The
+            attention tone only when something is actually unassigned / needs attention (a zero is not a warning). */}
+        <StatTileGroup label={day === "tomorrow" ? "Tomorrow at a glance" : "Today at a glance"} columns={data.summary.attentionCount > 0 ? 4 : 3} testId="dispatch-summary">
+          {[
+            <StatTile key="open" label={day === "tomorrow" ? "open trips tomorrow" : "open trips today"} value={data.summary.todayCount} icon={<Path className="size-5" />} tone="accent" />,
+            <StatTile
+              key="unassigned"
+              label="unassigned"
+              value={data.summary.unassignedCount}
+              icon={<UserCircleDashed className="size-5" />}
+              tone={data.summary.unassignedCount > 0 ? "attention" : "neutral"}
+            />,
+            <StatTile key="active" label="active" value={data.summary.activeCount} icon={<Lightning className="size-5" />} tone="info" />,
             ...(data.summary.attentionCount > 0
-              ? [{ label: "need attention", value: data.summary.attentionCount, tone: "warning" as const, dot: true }]
+              ? [<StatTile key="attention" label="need attention" value={data.summary.attentionCount} icon={<WarningCircle className="size-5" />} tone="attention" />]
               : []),
           ]}
-        />
+        </StatTileGroup>
 
         <DispatchBoardClient
           data={data}

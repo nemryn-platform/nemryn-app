@@ -146,7 +146,9 @@ export function LogRequestForm({ passengers: initialPassengers, serviceOptions, 
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-zw-lg" key={formKey}>
+    // NP-UI-V2-2: the same page anatomy as New Trip -- the header spans the page (title left, actions right) and the
+    // form uses the main + side column layout at xl; below xl the sections stack in the same order as before.
+    <div className="flex flex-col gap-zw-lg" key={formKey}>
       <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
         <Link href="/operations" className="hover:text-text-secondary hover:underline">
           Overview
@@ -180,174 +182,178 @@ export function LogRequestForm({ passengers: initialPassengers, serviceOptions, 
         </p>
       )}
 
-      <form id="log-request-form" action={formAction} onSubmit={handleSubmit} className="flex flex-col gap-zw-lg">
-        <FormSection icon={<User className="size-5" aria-hidden />} title="Requester">
-          <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
-            <Input
-              label="Requester Name"
-              name="requesterName"
-              required
-              placeholder="e.g. Maria Alvarez"
-              value={requesterName}
-              onChange={(e) => setRequesterName(e.target.value)}
-            />
-            <Select
-              label="Relationship to Passenger"
-              name="requesterRelationship"
-              required
-              placeholder="Select relationship"
-              options={REQUESTER_RELATIONSHIP_OPTIONS}
-              value={requesterRelationship}
-              onChange={(e) => setRequesterRelationship(e.target.value)}
-            />
-            <Input
-              label="Requester Phone"
-              name="requesterPhone"
-              type="tel"
-              required
-              placeholder="e.g. (404) 555-0184"
-              value={requesterPhone}
-              onChange={(e) => setRequesterPhone(e.target.value)}
-            />
-            <Input
-              label="Requester Email"
-              name="requesterEmail"
-              type="email"
-              helpText="Optional"
-              placeholder="e.g. maria@example.com"
-              value={requesterEmail}
-              onChange={(e) => setRequesterEmail(e.target.value)}
-            />
-          </div>
-        </FormSection>
-
-        <FormSection icon={<MapPin className="size-5" aria-hidden />} title="Transportation">
-          <Textarea
-            label="Pickup"
-            name="pickupDescription"
-            required
-            rows={2}
-            placeholder="e.g. 123 Main St, Atlanta, GA"
-            value={pickupDescription}
-            onChange={(e) => setPickupDescription(e.target.value)}
-          />
-          <Textarea
-            label="Destination"
-            name="destinationDescription"
-            required
-            rows={2}
-            placeholder="e.g. Emory Dialysis, 456 Clifton Rd, Atlanta, GA"
-            value={destinationDescription}
-            onChange={(e) => setDestinationDescription(e.target.value)}
-          />
-          <Select
-            label="Service requested (optional)"
-            name="serviceType"
-            options={serviceOptions}
-            value={serviceType}
-            onChange={(e) => setServiceType(e.target.value)}
-            helpText={serviceOptionsUnavailable ? SERVICE_OPTIONS_UNAVAILABLE_NOTE : undefined}
-            data-testid="log-request-service"
-          />
-          <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
-            <Input
-              label="Preferred Date"
-              name="preferredDate"
-              type="date"
-              helpText="Optional"
-              value={preferredDate}
-              onChange={(e) => setPreferredDate(e.target.value)}
-            />
-            <Input
-              label="Preferred Time"
-              name="preferredTime"
-              type="time"
-              helpText="Optional"
-              value={preferredTime}
-              onChange={(e) => setPreferredTime(e.target.value)}
-            />
-          </div>
-          <Select
-            label="Return Transportation Needed"
-            name="returnTripNeeded"
-            required
-            placeholder="Select an answer"
-            options={RETURN_TRIP_OPTIONS}
-            value={returnTripNeeded}
-            onChange={(e) => setReturnTripNeeded(e.target.value)}
-          />
-        </FormSection>
-
-        <FormSection
-          icon={<User className="size-5" aria-hidden />}
-          title="Passenger"
-          action={
-            <Button type="button" variant="outline" size="sm" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setAddPassengerOpen(true)}>
-              Add New Passenger
-            </Button>
-          }
-        >
-          <p className={cn(typography.metadata, "text-text-muted")}>
-            Optional. Link a known passenger now, or leave this for later — the request can be saved either way.
-          </p>
-          <input type="hidden" name="passengerId" value={passengerId} />
-          {selectedPassenger ? (
-            <div className="flex items-center gap-3 rounded-sm border border-selection-border bg-brand-calm-mist/40 px-3 py-2.5">
-              <Avatar name={selectedPassenger.displayName} size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
-                  {selectedPassenger.displayName}
-                </p>
-                {selectedPassenger.phone && (
-                  <p className={cn(typography.metadata, "text-text-muted")}>{selectedPassenger.phone}</p>
-                )}
-              </div>
-              <IconButton
-                label="Remove selected passenger"
-                icon={<X className="size-4" aria-hidden />}
-                onClick={() => setPassengerId("")}
+      <form id="log-request-form" action={formAction} onSubmit={handleSubmit} className="grid grid-cols-1 items-start gap-zw-lg xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="flex min-w-0 flex-col gap-zw-lg">
+          <FormSection icon={<User className="size-5" aria-hidden />} title="Requester">
+            <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
+              <Input
+                label="Requester Name"
+                name="requesterName"
+                required
+                placeholder="e.g. Maria Alvarez"
+                value={requesterName}
+                onChange={(e) => setRequesterName(e.target.value)}
+              />
+              <Select
+                label="Relationship to Passenger"
+                name="requesterRelationship"
+                required
+                placeholder="Select relationship"
+                options={REQUESTER_RELATIONSHIP_OPTIONS}
+                value={requesterRelationship}
+                onChange={(e) => setRequesterRelationship(e.target.value)}
+              />
+              <Input
+                label="Requester Phone"
+                name="requesterPhone"
+                type="tel"
+                required
+                placeholder="e.g. (404) 555-0184"
+                value={requesterPhone}
+                onChange={(e) => setRequesterPhone(e.target.value)}
+              />
+              <Input
+                label="Requester Email"
+                name="requesterEmail"
+                type="email"
+                helpText="Optional"
+                placeholder="e.g. maria@example.com"
+                value={requesterEmail}
+                onChange={(e) => setRequesterEmail(e.target.value)}
               />
             </div>
-          ) : (
-            <Combobox
-              label="Passenger"
-              placeholder={passengerOptions.length > 0 ? "Search by name or phone number" : "No passengers yet — add one"}
-              noResultsText="No passenger matches that search."
-              disabled={passengerOptions.length === 0}
-              options={passengerComboboxOptions}
-              onSelect={(option) => setPassengerId(option.value)}
+          </FormSection>
+
+          <FormSection icon={<MapPin className="size-5" aria-hidden />} title="Transportation">
+            <Textarea
+              label="Pickup"
+              name="pickupDescription"
+              required
+              rows={2}
+              placeholder="e.g. 123 Main St, Atlanta, GA"
+              value={pickupDescription}
+              onChange={(e) => setPickupDescription(e.target.value)}
             />
-          )}
-        </FormSection>
+            <Textarea
+              label="Destination"
+              name="destinationDescription"
+              required
+              rows={2}
+              placeholder="e.g. Emory Dialysis, 456 Clifton Rd, Atlanta, GA"
+              value={destinationDescription}
+              onChange={(e) => setDestinationDescription(e.target.value)}
+            />
+            <Select
+              label="Service requested (optional)"
+              name="serviceType"
+              options={serviceOptions}
+              value={serviceType}
+              onChange={(e) => setServiceType(e.target.value)}
+              helpText={serviceOptionsUnavailable ? SERVICE_OPTIONS_UNAVAILABLE_NOTE : undefined}
+              data-testid="log-request-service"
+            />
+            <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
+              <Input
+                label="Preferred Date"
+                name="preferredDate"
+                type="date"
+                helpText="Optional"
+                value={preferredDate}
+                onChange={(e) => setPreferredDate(e.target.value)}
+              />
+              <Input
+                label="Preferred Time"
+                name="preferredTime"
+                type="time"
+                helpText="Optional"
+                value={preferredTime}
+                onChange={(e) => setPreferredTime(e.target.value)}
+              />
+            </div>
+            <Select
+              label="Return Transportation Needed"
+              name="returnTripNeeded"
+              required
+              placeholder="Select an answer"
+              options={RETURN_TRIP_OPTIONS}
+              value={returnTripNeeded}
+              onChange={(e) => setReturnTripNeeded(e.target.value)}
+            />
+          </FormSection>
 
-        <FormSection icon={<ClipboardText className="size-5" aria-hidden />} title="Details">
-          <Select
-            label="Source"
-            name="source"
-            required
-            options={SOURCE_OPTIONS}
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-          />
-        </FormSection>
+          <FormSection
+            icon={<User className="size-5" aria-hidden />}
+            title="Passenger"
+            action={
+              <Button type="button" variant="outline" size="sm" leadingIcon={<Plus className="size-4" aria-hidden />} onClick={() => setAddPassengerOpen(true)}>
+                Add New Passenger
+              </Button>
+            }
+          >
+            <p className={cn(typography.metadata, "text-text-muted")}>
+              Optional. Link a known passenger now, or leave this for later — the request can be saved either way.
+            </p>
+            <input type="hidden" name="passengerId" value={passengerId} />
+            {selectedPassenger ? (
+              <div className="flex items-center gap-3 rounded-sm border border-selection-border bg-brand-calm-mist/40 px-3 py-2.5">
+                <Avatar name={selectedPassenger.displayName} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
+                    {selectedPassenger.displayName}
+                  </p>
+                  {selectedPassenger.phone && (
+                    <p className={cn(typography.metadata, "text-text-muted")}>{selectedPassenger.phone}</p>
+                  )}
+                </div>
+                <IconButton
+                  label="Remove selected passenger"
+                  icon={<X className="size-4" aria-hidden />}
+                  onClick={() => setPassengerId("")}
+                />
+              </div>
+            ) : (
+              <Combobox
+                label="Passenger"
+                placeholder={passengerOptions.length > 0 ? "Search by name or phone number" : "No passengers yet — add one"}
+                noResultsText="No passenger matches that search."
+                disabled={passengerOptions.length === 0}
+                options={passengerComboboxOptions}
+                onSelect={(option) => setPassengerId(option.value)}
+              />
+            )}
+          </FormSection>
+        </div>
 
-        <FormSection icon={<NotePencil className="size-5" aria-hidden />} title="Notes">
-          <Textarea
-            label="Assistance Notes"
-            name="assistanceNotes"
-            helpText="Optional. Mobility/assistance needs mentioned by the requester."
-            placeholder="e.g. Uses a wheelchair; needs ramp access."
-            value={assistanceNotes}
-            onChange={(e) => setAssistanceNotes(e.target.value)}
-          />
-          <Textarea
-            label="Additional Notes"
-            name="additionalNotes"
-            helpText="Optional. Anything else worth recording about this request."
-            value={additionalNotes}
-            onChange={(e) => setAdditionalNotes(e.target.value)}
-          />
-        </FormSection>
+        <div className="flex min-w-0 flex-col gap-zw-lg">
+          <FormSection icon={<ClipboardText className="size-5" aria-hidden />} title="Details">
+            <Select
+              label="Source"
+              name="source"
+              required
+              options={SOURCE_OPTIONS}
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+            />
+          </FormSection>
+
+          <FormSection icon={<NotePencil className="size-5" aria-hidden />} title="Notes">
+            <Textarea
+              label="Assistance Notes"
+              name="assistanceNotes"
+              helpText="Optional. Mobility/assistance needs mentioned by the requester."
+              placeholder="e.g. Uses a wheelchair; needs ramp access."
+              value={assistanceNotes}
+              onChange={(e) => setAssistanceNotes(e.target.value)}
+            />
+            <Textarea
+              label="Additional Notes"
+              name="additionalNotes"
+              helpText="Optional. Anything else worth recording about this request."
+              value={additionalNotes}
+              onChange={(e) => setAdditionalNotes(e.target.value)}
+            />
+          </FormSection>
+        </div>
       </form>
 
       {addPassengerOpen && (

@@ -109,15 +109,17 @@ export interface PanelHeaderProps {
  */
 export function PanelHeader({ title, description, icon, tone = "neutral", actions, as: Heading = "h3", titleId, className, variant = "standard" }: PanelHeaderProps) {
   const display = variant === "display";
+  // NP-UI-V2-2: a title with no description sits on the icon circle's centre line (and so do the actions).
+  const single = !description;
   return (
-    <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-2", className)}>
-      <div className={cn("flex min-w-0 items-start", display ? "gap-[0.8125rem]" : "gap-3")}>
+    <div className={cn("flex flex-wrap justify-between gap-x-4 gap-y-2", single ? "items-center" : "items-start", className)}>
+      <div className={cn("flex min-w-0", single ? "items-center" : "items-start", display ? "gap-[0.8125rem]" : "gap-3")}>
         {icon && (
           <span className={cn(iconCircleClasses[display ? "lg" : "md"], iconToneClasses[tone])} aria-hidden>
             {icon}
           </span>
         )}
-        <div className={cn("min-w-0", icon && (display ? "pt-[3px]" : "pt-0.5"))}>
+        <div className={cn("min-w-0", icon && !single && (display ? "pt-[3px]" : "pt-0.5"))}>
           <Heading id={titleId} className={cn(display ? typography.displayCard : typography.subsectionHeading, "text-text-primary")}>
             {title}
           </Heading>

@@ -2,7 +2,8 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Panel } from "@/components/ui/Panel";
+import { Timer } from "@phosphor-icons/react/dist/ssr";
+import { Panel, iconCircleClasses, iconToneClasses } from "@/components/ui/Panel";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -34,10 +35,13 @@ export function TripDurationPanel({ tripId, expectedDurationMinutes, expectedDur
   const [open, setOpen] = useState(false);
   return (
     <Panel elevated data-testid="trip-duration">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>Expected duration</p>
-          <p className={cn(typography.subsectionHeading, "mt-1 text-text-primary")} data-testid="trip-duration-value">
+      <div className="flex items-start gap-3">
+        <span className={cn(iconCircleClasses.md, iconToneClasses.neutral)} aria-hidden>
+          <Timer className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className={cn(typography.label, "text-text-secondary")}>Expected duration</p>
+          <p className={cn(typography.subsectionHeading, "mt-0.5 text-text-primary")} data-testid="trip-duration-value">
             {expectedDurationMinutes === null ? "Not set" : formatDurationMinutes(expectedDurationMinutes)}
           </p>
           {expectedDurationSource === "organization_default" && (

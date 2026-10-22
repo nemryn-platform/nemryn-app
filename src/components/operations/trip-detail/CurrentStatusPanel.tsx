@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Panel } from "@/components/ui/Panel";
+import { Gauge } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { formatOperationsTime, formatOperationsShortDateTime } from "@/lib/operations/presentation";
@@ -65,9 +66,9 @@ export function CurrentStatusPanel({
 
   return (
     <Panel elevated>
-      <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>Current Status</p>
-      <p className={cn(typography.sectionHeading, "mt-1 text-text-primary")}>{statusLabel}</p>
-      <div className="mt-zw-lg border-t border-border-subtle pt-zw-lg">
+      <PanelHeader title="Current Status" icon={<Gauge className="size-5" />} tone="accent" />
+      <p className={cn(typography.sectionHeading, "mt-zw-md text-text-primary")} data-testid="current-status-label">{statusLabel}</p>
+      <div className="mt-zw-md border-t border-border-subtle pt-zw-md">
         <DefinitionList items={items} />
         {attribution && (
           <div className="mt-zw-md" data-testid="assignment-attribution">

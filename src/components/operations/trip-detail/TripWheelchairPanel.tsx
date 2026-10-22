@@ -2,7 +2,8 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Panel } from "@/components/ui/Panel";
+import { Wheelchair } from "@phosphor-icons/react/dist/ssr";
+import { Panel, iconCircleClasses, iconToneClasses } from "@/components/ui/Panel";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { setTripWheelchairRequirementAction, type TripDetailActionState } from "@/app/operations/trips/[tripId]/actions";
@@ -24,10 +25,13 @@ export function TripWheelchairPanel({ tripId, requiresWheelchairAccess, canEdit 
   const current = booleanToTriState(requiresWheelchairAccess);
   return (
     <Panel elevated data-testid="trip-wheelchair">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className={cn(typography.metadata, "font-medium uppercase tracking-wide text-text-muted")}>Wheelchair transport equipment</p>
-          <p className={cn(typography.subsectionHeading, "mt-1 text-text-primary")} data-testid="trip-wheelchair-value">
+      <div className="flex items-start gap-3">
+        <span className={cn(iconCircleClasses.md, iconToneClasses.neutral)} aria-hidden>
+          <Wheelchair className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className={cn(typography.label, "text-text-secondary")}>Wheelchair transport equipment</p>
+          <p className={cn(typography.subsectionHeading, "mt-0.5 text-text-primary")} data-testid="trip-wheelchair-value">
             {LABEL[current]}
           </p>
         </div>

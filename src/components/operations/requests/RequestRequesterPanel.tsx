@@ -1,8 +1,7 @@
-import { Panel } from "@/components/ui/Panel";
+import { IdentificationCard } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { REQUESTER_RELATIONSHIP_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
 
 export interface RequestRequesterPanelProps {
   requesterName: string;
@@ -20,17 +19,15 @@ export interface RequestRequesterPanelProps {
 export function RequestRequesterPanel({ requesterName, requesterRelationship, requesterPhone, requesterEmail }: RequestRequesterPanelProps) {
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
-        Requester
-      </h3>
-      <div className="mt-zw-md">
+      <PanelHeader title="Requester" icon={<IdentificationCard className="size-5" />} />
+      <div className="mt-zw-lg">
         <DefinitionList
           columns={2}
           items={[
             { label: "Name", value: requesterName },
             { label: "Relationship", value: selectOptionLabel(REQUESTER_RELATIONSHIP_OPTIONS, requesterRelationship) },
             { label: "Phone", value: requesterPhone },
-            { label: "Email", value: requesterEmail ?? <span className="text-text-muted">Not on file</span> },
+            { label: "Email", value: requesterEmail ?? <span className="text-text-muted">Not on file</span>, fullWidth: true },
           ]}
         />
       </div>

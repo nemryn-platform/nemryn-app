@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
+import { iconCircleClasses, iconToneClasses } from "./Panel";
 
 export interface EmptyStateProps {
   icon?: ReactNode;
@@ -24,7 +25,7 @@ export function EmptyState({ icon, title, description, action, className, size =
     return (
       <div className={cn("flex items-start gap-3 rounded-sm bg-surface-app px-zw-md py-zw-sm", className)}>
         {icon && (
-          <div className="mt-0.5 shrink-0 text-text-muted" aria-hidden>
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-surface-elevated text-text-muted [&>svg]:size-4" aria-hidden>
             {icon}
           </div>
         )}
@@ -36,20 +37,22 @@ export function EmptyState({ icon, title, description, action, className, size =
       </div>
     );
   }
+  // NP-UI-V2-2: the Concept B icon anatomy -- the icon sits in a 45px mint circle (decorative; the title carries the
+  // meaning), a calmer vertical rhythm and a readable line length for the explanation.
   return (
-    <div className={cn("flex flex-col items-center gap-3 px-zw-lg py-zw-3xl text-center", className)}>
+    <div className={cn("flex flex-col items-center gap-3 px-zw-lg py-zw-2xl text-center", className)}>
       {icon && (
-        <div className="text-text-disabled" aria-hidden>
+        <div className={cn(iconCircleClasses.lg, iconToneClasses.accent, "[&>svg]:size-[1.375rem]")} aria-hidden>
           {icon}
         </div>
       )}
-      <div>
-        <p className={cn(typography.subsectionHeading, "text-text-primary")}>{title}</p>
+      <div className="max-w-md">
+        <p className={cn(typography.subsectionHeading, "text-base text-text-primary")}>{title}</p>
         {description && (
           <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>{description}</p>
         )}
       </div>
-      {action}
+      {action && <div className="mt-1">{action}</div>}
     </div>
   );
 }

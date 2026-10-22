@@ -1,5 +1,5 @@
 import { WarningCircle, MapPin } from "@phosphor-icons/react/dist/ssr";
-import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { Panel, PanelHeader, PanelSection } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TripStatus } from "@/components/ui/TripStatus";
 import { Button } from "@/components/ui/Button";
@@ -29,15 +29,19 @@ export interface NeedsAssignmentQueueProps {
  */
 export function NeedsAssignmentQueue({ trips, timezone, day = "today", onAssign }: NeedsAssignmentQueueProps) {
   return (
-    <div className="flex flex-col gap-zw-md">
-      {/* NP-UI-P2: the shared column-header anatomy (icon tile, title, real count); the attention tone only when
-          something is actually unassigned. Cards: denser, pickup time first. Same data, same Assign handler + hook. */}
-      <PanelHeader
-        as="h2"
-        icon={<WarningCircle className="size-5" weight="fill" />}
-        tone={trips.length > 0 ? "attention" : "neutral"}
-        title={`Needs Assignment (${trips.length})`}
-      />
+    // NP-UI-V2-2: the queue is one Brand Lock v2 panel (radius 14) with its header inside, like the board and the
+    // capacity panel beside it; the attention tone only when something is actually unassigned. Same data, same Assign
+    // handler + hook.
+    <Panel surface="raised" padding="none" className="flex flex-col" data-testid="needs-assignment-queue">
+      <PanelSection part="header">
+        <PanelHeader
+          as="h2"
+          icon={<WarningCircle className="size-5" weight="fill" />}
+          tone={trips.length > 0 ? "attention" : "neutral"}
+          title={`Needs Assignment (${trips.length})`}
+        />
+      </PanelSection>
+      <div className="px-zw-md pb-zw-md">
 
       {trips.length === 0 ? (
         <EmptyState
@@ -48,7 +52,7 @@ export function NeedsAssignmentQueue({ trips, timezone, day = "today", onAssign 
       ) : (
         <div className="flex flex-col gap-zw-sm">
           {trips.map((trip) => (
-            <Panel key={trip.id} padding="dense" elevated className="flex flex-col gap-zw-xs">
+            <Panel key={trip.id} padding="dense" className="flex flex-col gap-zw-xs">
               <div className="flex items-start justify-between gap-2">
                 <p className={cn(typography.label, "tabular-nums text-text-primary")}>
                   {formatOperationsTime(trip.scheduledPickupAt, timezone)}
@@ -70,6 +74,7 @@ export function NeedsAssignmentQueue({ trips, timezone, day = "today", onAssign 
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </Panel>
   );
 }

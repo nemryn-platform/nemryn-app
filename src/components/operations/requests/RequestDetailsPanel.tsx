@@ -1,4 +1,5 @@
-import { Panel } from "@/components/ui/Panel";
+import { ClipboardText } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { SOURCE_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
 import {
@@ -61,14 +62,17 @@ export function RequestDetailsPanel({
   const serviceLabel = serviceType ? SERVICE_TYPE_LABELS[serviceType as ServiceType] : null;
   return (
     <Panel elevated>
-      <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-zw-md">
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Request Details</h3>
-        <span className={cn(typography.metadata, "flex items-center gap-1.5 text-text-muted")}>
-          Source: {selectOptionLabel(SOURCE_OPTIONS, source)}
-          {provenanceLabel && <StatusBadge label={provenanceLabel} category="neutral" />}
-        </span>
-      </div>
-      <div className="mt-zw-md flex flex-col gap-zw-md">
+      <PanelHeader
+        title="Request Details"
+        icon={<ClipboardText className="size-5" />}
+        description={
+          <span className="flex flex-wrap items-center gap-1.5">
+            Source: {selectOptionLabel(SOURCE_OPTIONS, source)}
+            {provenanceLabel && <StatusBadge label={provenanceLabel} category="neutral" />}
+          </span>
+        }
+      />
+      <div className="mt-zw-lg flex flex-col gap-zw-md">
         {serviceLabel && (
           <div>
             <p className={cn(typography.label, "text-text-muted")}>Service requested</p>
