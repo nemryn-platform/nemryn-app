@@ -1,0 +1,138 @@
+NP-UI-V2-2 — TEST RESULTS (EXACT FINAL WORKING TREE)
+====================================================
+Date: 2026-10-22.
+- Branch np-ui-v2-2-core-visual-parity, from origin/main ca2dc2e.
+- Uncommitted: 33 modified files plus RecordSummary.tsx.
+- Every gate ran on this same tree, after the last source change.
+- Environment:
+  - isolated stack ~/NemrynS1Iso (NemrynS1Iso, API 54361);
+  - app :3100 from a production build, using only ~/NemrynS1Iso/.env.isolated.local;
+  - no email provider key.
+- Production: never contacted.
+- No assertion was changed or weakened. No test file was modified (git diff tests/: empty).
+
+1. STATIC AND UNIT
+------------------
+- TypeScript (tsc --noEmit): PASS, 0 errors.
+- ESLint (`eslint .`): PASS, 0 errors.
+- Unit tests (npm test): 894 / 894 pass, 0 fail.
+- Production build (default `next build`, Next.js 16.3.3, Turbopack): PASS.
+
+2. BROWSER REGRESSION (isolated, fictional seed)
+------------------------------------------------
+QA2 strict (npm run test:e2e:qa2:strict; fresh reset before each suite): RESULT all suites pass.
+
+| Suite | Pass |
+|---|---|
+| core-requests | 25 / 25 |
+| core-trips-dispatch | 44 / 44 (incl. B2–B7 queue / assignment, L-width checks, F-1 grid keyboard scroll) |
+| core-records | 28 / 28 |
+| growth | 23 / 23 |
+| auth-access | 79 / 79 |
+| **Total** | **199 / 199** |
+
+P1a (tests/e2e/ui-foundations/p1a.e2e.mjs, fresh reset): 48 / 48, ALL PASS.
+- Includes A2: Request detail has exactly one h1 "Request Detail", and the "Request" h2.
+
+P1b (tests/e2e/ui-foundations/p1b.e2e.mjs, fresh reset): 52 / 52, ALL PASS.
+- H6 / H7: one h1 on Trip / Request detail.
+- G1–G3: Growth entitlement gating.
+- B1 / B2: Brand Lock v2 values.
+- R: 15 routes × 1440 / 1024 / 768, no overflow, 0 serious / critical axe.
+
+Strict Quotes (npm run test:e2e:quotes:strict; fresh reset before each suite): RESULT no unexpected failures.
+
+| Suite | Pass |
+|---|---|
+| s2 | 33 / 33 |
+| s3a | 31 / 31 |
+| s3b | 32 / 32 |
+| s3c | 54 / 54 |
+| o1 | 27 / 27 |
+| s4-integrated | 69 / 69 |
+| s4-a11y | 26 / 26 |
+| **Total** | **272 / 272** |
+
+3. SQL PRIVILEGE / TENANT TESTS (isolated database)
+---------------------------------------------------
+Every suite: psql exit 0, 0 FAIL lines, 0 errors.
+
+| Suite | Result |
+|---|---|
+| privilege_contract_tests | SUMMARY violations = 0 of 29 checks |
+| client_privilege_surface_tests | 21 PASS |
+| function_privilege_tests | 7 PASS |
+| mutation_privilege_tests | 7 PASS |
+| request_mutation_privilege_tests | 23 PASS |
+| create_trip_privilege_tests | 5 PASS |
+| driver_read_privilege_tests | 8 PASS |
+| privilege_baseline_behavior_tests | 30 PASS |
+| rls_adversarial_tests | 33 PASS |
+| mutation_authorization_tests | 4 PASS |
+| mutation_idempotent_authorization_tests | 6 PASS |
+| driver_read_authorization_tests | 17 PASS |
+| tenant_settings_foundation_tests | 51 PASS |
+| plus_access_helpers_tests | failures = 0 of 170 |
+
+No database object was changed by V2-2 (git diff supabase/: empty).
+
+4. ACCESSIBILITY AND RESPONSIVE SWEEP (V2-2 scratch sweep, populated fictional fixture)
+--------------------------------------------------------------------------------------
+Result: 73 / 73 PASS.
+- 23 Core screens × 1440 / 1024 / 768, each with:
+  - 0 serious / critical axe violations;
+  - no page-level horizontal overflow (main and document);
+  - exactly one visible h1.
+- The 23 screens:
+  - Requests (All);
+  - Request detail ×2 (pending / accepted);
+  - Log Request;
+  - Trips;
+  - Trip detail ×3 (en route / exception / completed);
+  - New Trip;
+  - Dispatch today / tomorrow;
+  - Tomorrow;
+  - Standing Orders, Standing Order detail ×2 (active / paused), New standing order, Review missing rides;
+  - Passengers, Facilities, Drivers, Vehicles;
+  - Proof of Service;
+  - Overview.
+- 4 dialogs (Decline Request, Manage Assignment, Add Passenger, Expected duration): open, focus inside, 0 serious /
+  critical axe.
+- Only the Dispatch grid scrolls horizontally, inside its own focusable region (F-1).
+
+390 px: the approved Operations notice is unchanged (after/c15-notice-390.png; P1b checks the notice).
+
+5. TOKEN PARITY
+---------------
+Computed styles are identical across the Overview, Requests list, Trip detail and Dispatch (visual review §1):
+- h1: Newsreader 700, 39px;
+- panels: 14px; cards: 12px;
+- primary: the teal gradient over #006E69, 9px;
+- sidebar: the slate gradient;
+- body: Geist.
+
+6. LOGO INTEGRITY
+-----------------
+- SHA-256 of all 11 files in public/brand/ = the recorded baseline (docs/reports/n0-m2-a5-production-release.txt
+  §hashes): ALL MATCH.
+- git diff ca2dc2e -- public/: empty.
+
+7. PRESERVED CONTRACTS
+----------------------
+- Database contracts, RLS and tenant isolation: unchanged (SQL suites, auth-access 79 / 79).
+- Request / Trip lifecycles: unchanged (core-requests, core-trips-dispatch).
+- Dispatch assignments: unchanged (B-checks).
+- Growth entitlement behaviour: unchanged (growth 23 / 23, P1b G1–G3).
+- Quotes and print contracts: unchanged (272 / 272).
+- Focus management and keyboard navigation: unchanged (s4-a11y, the F-1 checks, dialog focus in the sweep).
+
+8. ENVIRONMENT AFTER TESTING
+----------------------------
+- Isolated database: the V2-2 capture fixture is loaded, and the local Plus demo is re-enabled (Org A Plus active,
+  Org B Core, no grants) for owner review.
+- App :3100: the final V2-2 build.
+- The owner's :3000 dev server was not touched.
+
+VERDICT: ALL FUNCTIONAL GATES PASS on the exact final working tree.
+- Not committed, pushed, merged or deployed.
+- STOP for ChatGPT / owner visual review.

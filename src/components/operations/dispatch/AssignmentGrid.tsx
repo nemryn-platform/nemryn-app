@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { CalendarBlank, MapPin } from "@phosphor-icons/react/dist/ssr";
-import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { Panel, PanelHeader, PanelSection } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatOperationsTime } from "@/lib/operations/presentation";
 import {
@@ -83,14 +83,22 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
   }
 
   return (
-    <div className="flex flex-col gap-zw-md">
-      {/* NP-UI-P2: the shared column-header anatomy; the grid itself is unchanged (its own scroll container). */}
-      <div className="flex items-start justify-between gap-3">
-        <PanelHeader as="h2" icon={<CalendarBlank className="size-5" />} tone="info" title={day === "tomorrow" ? "Tomorrow's Assignments" : "Today\u2019s Assignments"} />
-        <span className={cn(typography.metadata, "rounded-full bg-surface-secondary px-2.5 py-1 text-text-muted")} data-testid="dispatch-axis">
-          {hourMarks[0].label} – {hourMarks[hourMarks.length - 1].label}
-        </span>
-      </div>
+    // NP-UI-V2-2: the board is one Brand Lock v2 panel (radius 14) with its header inside; the time grid below it is
+    // still its own horizontal scroll container (the F-1 region), unchanged.
+    <Panel surface="raised" padding="none" className="min-w-0">
+      <PanelSection part="header">
+        <PanelHeader
+          as="h2"
+          icon={<CalendarBlank className="size-5" />}
+          tone="info"
+          title={day === "tomorrow" ? "Tomorrow's Assignments" : "Today\u2019s Assignments"}
+          actions={
+            <span className={cn(typography.metadata, "rounded-full bg-surface-secondary px-2.5 py-1 text-text-muted")} data-testid="dispatch-axis">
+              {hourMarks[0].label} – {hourMarks[hourMarks.length - 1].label}
+            </span>
+          }
+        />
+      </PanelSection>
 
       {/*
         F-1 (NP-UI-V2-1, WCAG 2.1.1 / axe scrollable-region-focusable): the grid is a horizontally scrolling region. With
@@ -98,9 +106,8 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
         named, focusable region (arrow keys scroll it natively). Only while it holds the timeline; the "No active
         drivers" state does not scroll and gets no extra tab stop. Trip blocks keep their own buttons and actions.
       */}
-      <Panel
-        elevated
-        className="overflow-x-auto p-0"
+      <div
+        className="overflow-x-auto rounded-b-lg border-t border-border-subtle focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-border-focus"
         data-testid="dispatch-grid"
         {...(driverRows.length > 0
           ? { tabIndex: 0, role: "region", "aria-label": day === "tomorrow" ? "Tomorrow's assignments schedule" : "Today's assignments schedule" }
@@ -151,8 +158,8 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
               return (
               <div key={row.driver.id} className="flex border-b border-border-subtle last:border-b-0" data-driver-row={row.driver.id}>
                 <div
-                  className="flex shrink-0 flex-col justify-center gap-0.5 border-r border-border-subtle px-3"
-                  style={{ width: ROW_LABEL_WIDTH_PX, height: rowHeight }}
+                  className="flex shrink-0 flex-col justify-center gap-0.5 border-r border-border-subtle px-3 py-1.5"
+                  style={{ width: ROW_LABEL_WIDTH_PX, minHeight: rowHeight }}
                 >
                   <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={row.driver.displayName}>
                     {row.driver.displayName}
@@ -196,7 +203,7 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
                   )}
                 </div>
 
-                <div className="relative" style={{ width: totalWidth, height: rowHeight }}>
+                <div className="relative" style={{ width: totalWidth, minHeight: rowHeight }}>
                   {hourMarks.map(({ hour }) => (
                     <div
                       key={hour}
@@ -266,7 +273,7 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
             })}
           </div>
         )}
-      </Panel>
-    </div>
+      </div>
+    </Panel>
   );
 }

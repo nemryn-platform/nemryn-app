@@ -1,9 +1,8 @@
-import { Panel } from "@/components/ui/Panel";
+import { MapPin } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { formatRequestServiceDate } from "@/lib/operations/presentation";
 import { RETURN_TRIP_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
-import { typography } from "@/design/typography";
-import { cn } from "@/lib/cn";
 
 export interface RequestTransportationPanelProps {
   pickupDescription: string;
@@ -31,10 +30,8 @@ export function RequestTransportationPanel({
 }: RequestTransportationPanelProps) {
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
-        Transportation
-      </h3>
-      <div className="mt-zw-md">
+      <PanelHeader title="Transportation" icon={<MapPin className="size-5" />} tone="accent" />
+      <div className="mt-zw-lg">
         <DefinitionList
           columns={2}
           items={[

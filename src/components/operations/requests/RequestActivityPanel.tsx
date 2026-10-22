@@ -1,4 +1,5 @@
-import { Panel } from "@/components/ui/Panel";
+import { ClockCounterClockwise } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { requestEventLabel, formatOperationsTime, formatOperationsLongDate } from "@/lib/operations/presentation";
 import type { RequestActivityEvent } from "@/lib/operations/request-detail";
 import { typography } from "@/design/typography";
@@ -40,7 +41,7 @@ export interface RequestActivityPanelProps {
 export function RequestActivityPanel({ events, timezone }: RequestActivityPanelProps) {
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Request Activity</h3>
+      <PanelHeader title="Request Activity" icon={<ClockCounterClockwise className="size-5" />} />
       <div className="mt-zw-md">
         {events === null ? (
           <p className={cn(typography.bodySmall, "text-text-muted")}>Activity unavailable</p>

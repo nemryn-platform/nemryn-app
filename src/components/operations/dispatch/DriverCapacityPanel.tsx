@@ -1,5 +1,5 @@
 import { SteeringWheel } from "@phosphor-icons/react/dist/ssr";
-import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { Panel, PanelHeader, PanelSection } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Avatar } from "@/components/ui/Avatar";
 import { StatusBadge, type StatusCategory } from "@/components/ui/StatusBadge";
@@ -45,8 +45,9 @@ export function DriverCapacityPanel({ driverRows, day = "today" }: DriverCapacit
           `Time off recorded tomorrow: ${driverRows.filter((r) => (r.availability.day?.timeOff.length ?? 0) > 0).length}`,
         ];
   return (
-    <div className="flex flex-col gap-zw-md">
-      {/* NP-UI-P2: the shared column-header anatomy; the real summary line stays (data-testid unchanged). */}
+    // NP-UI-V2-2: one Brand Lock v2 panel with its header inside; the real summary line stays (data-testid unchanged).
+    <Panel surface="raised" padding="none" className="flex flex-col">
+      <PanelSection part="header">
       <PanelHeader
         as="h2"
         icon={<SteeringWheel className="size-5" />}
@@ -54,6 +55,8 @@ export function DriverCapacityPanel({ driverRows, day = "today" }: DriverCapacit
         title="Driver Capacity"
         description={driverRows.length > 0 ? <span data-testid="capacity-summary">{summary.join(" · ")}</span> : undefined}
       />
+      </PanelSection>
+      <div className="px-zw-md pb-zw-md">
 
       {driverRows.length === 0 ? (
         <EmptyState size="compact" title="No active drivers" description="Active drivers in this organization will appear here." />
@@ -64,7 +67,7 @@ export function DriverCapacityPanel({ driverRows, day = "today" }: DriverCapacit
             const status = availability.nowStatus;
             const dayFacts = availability.day;
             return (
-              <Panel key={driver.id} padding="dense" elevated className="flex items-center gap-3" data-testid="capacity-driver" data-driver-id={driver.id} data-now-status={status ?? ""}>
+              <Panel key={driver.id} padding="dense" className="flex items-center gap-3" data-testid="capacity-driver" data-driver-id={driver.id} data-now-status={status ?? ""}>
                 <Avatar name={driver.displayName} size="sm" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
@@ -107,6 +110,7 @@ export function DriverCapacityPanel({ driverRows, day = "today" }: DriverCapacit
           })}
         </div>
       )}
-    </div>
+      </div>
+    </Panel>
   );
 }

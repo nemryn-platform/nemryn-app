@@ -1,5 +1,5 @@
-import { Info } from "@phosphor-icons/react/dist/ssr";
-import { Panel } from "@/components/ui/Panel";
+import { Info, MapPin } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { formatOperationsTime } from "@/lib/operations/presentation";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -39,14 +39,12 @@ export function TripRoutePanel({
 }: TripRoutePanelProps) {
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "border-b border-border-subtle pb-zw-md text-text-primary")}>
-        Trip Route
-      </h3>
-      <div className="flex gap-3 pt-zw-lg">
+      <PanelHeader title="Trip Route" icon={<MapPin className="size-5" />} tone="accent" />
+      <div className="mt-zw-lg flex gap-3 pl-[0.875rem]">
         <div className="flex flex-col items-center pt-1">
           <span className="size-3 shrink-0 rounded-full bg-text-primary" aria-hidden />
           <span className="w-px flex-1 bg-border-strong" aria-hidden />
-          <span className="size-3 shrink-0 rounded-full bg-info-strong" aria-hidden />
+          <span className="size-3 shrink-0 rounded-full bg-text-link" aria-hidden />
         </div>
         <div className="flex flex-1 flex-col gap-zw-lg">
           <div>

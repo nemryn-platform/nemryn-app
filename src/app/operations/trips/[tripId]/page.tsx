@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { WarningCircle, CheckCircle, XCircle } from "@phosphor-icons/react/dist/ssr";
+import { WarningCircle, CheckCircle, XCircle, Path } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getTripDetail, getVisibleAssignerNames } from "@/lib/operations/trip-detail";
@@ -14,7 +14,8 @@ import { TripDetailActionBar } from "@/components/operations/trip-detail/TripDet
 import { canEditTrip, tripEditFieldLabels } from "@/lib/operations/trip-edit-core";
 import { canRecordCompletion } from "@/lib/operations/trip-completion-core";
 import { getActiveFacilityOptions } from "@/lib/operations/new-trip";
-import { TripInfoStrip } from "@/components/operations/trip-detail/TripInfoStrip";
+import { tripSummaryFacts } from "@/components/operations/trip-detail/TripInfoStrip";
+import { RecordSummary } from "@/components/ui/RecordSummary";
 import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePanel";
 import { PassengerInfoPanel } from "@/components/operations/trip-detail/PassengerInfoPanel";
 import { CurrentStatusPanel } from "@/components/operations/trip-detail/CurrentStatusPanel";
@@ -183,52 +184,10 @@ export default async function TripDetailPage({
 
   return (
     <>
-      <DetailPageHeader title="Trip Detail" />
-      <div className="flex flex-col gap-zw-lg">
-        <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
-          <Link href="/operations/trips" className="hover:text-text-secondary hover:underline">
-            Trips
-          </Link>
-          <span className="mx-2" aria-hidden>
-            ›
-          </span>
-          <span className="text-text-secondary">{trip.passengerName}</span>
-        </nav>
-
-        {createdNotice === "assigned" && (
-          <p role="status" data-testid="created-notice" className={cn(typography.bodySmall, "rounded-md border border-success-border bg-success-bg px-zw-lg py-zw-md text-text-primary")}>
-            Trip created and assigned.
-          </p>
-        )}
-        {createdNotice === "assignment_failed" && (
-          <div role="alert" data-testid="created-notice" className="rounded-md border border-warning-border bg-warning-bg px-zw-lg py-zw-md">
-            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Trip created, but the assignment could not be completed.</p>
-            <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
-              {dispatchErrorMessage(createdErrorCode)} The trip is saved{trip.activeAssignmentId ? "." : " without a driver"} — you can assign it from Current Status on this page.
-            </p>
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-start justify-between gap-zw-md">
-          <div>
-            <div className="flex flex-wrap items-center gap-3">
-              {/* The shell's "Trip Detail" PageHeader is this page's real <h1> (OperationsLayoutClient, NP-UI-P1b) — the Passenger name is this page's own main heading, one level down, not a second <h1> (found via real accessibility testing, not assumed). */}
-              <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>{trip.passengerName}</h2>
-              <TripStatus status={trip.statusLabel} />
-            </div>
-            {trip.scheduledPickupAt && (
-              <p className={cn(typography.body, "mt-1 text-text-secondary")}>
-                {formatOperationsLongDate(new Date(trip.scheduledPickupAt), timezone)}
-              </p>
-            )}
-            {correction && (
-              <p className={cn(typography.metadata, "mt-1 text-text-muted")} data-testid="trip-last-correction">
-                Details corrected by {correction.actorUserId && correction.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
-                {formatOperationsLongDate(new Date(correction.occurredAt), timezone)}, {formatOperationsTime(correction.occurredAt, timezone)}
-                {correction.fields.length > 0 && <> · {tripEditFieldLabels(correction.fields).join(", ")}</>}
-              </p>
-            )}
-          </div>
+      <DetailPageHeader
+        title="Trip Detail"
+        breadcrumb={[{ label: "Trips", href: "/operations/trips" }, { label: trip.passengerName }]}
+        actions={
           <TripDetailActionBar
             tripId={trip.id}
             passengerName={trip.passengerName}
@@ -263,7 +222,47 @@ export default async function TripDetailPage({
             }
             recordCompletion={canRecordCompletion(trip.state) ? { tripState: trip.state, organizationTimezone: timezone } : null}
           />
-        </div>
+        }
+      />
+      <div className="flex flex-col gap-zw-lg">
+
+        {createdNotice === "assigned" && (
+          <p role="status" data-testid="created-notice" className={cn(typography.bodySmall, "rounded-md border border-success-border bg-success-bg px-zw-lg py-zw-md text-text-primary")}>
+            Trip created and assigned.
+          </p>
+        )}
+        {createdNotice === "assignment_failed" && (
+          <div role="alert" data-testid="created-notice" className="rounded-md border border-warning-border bg-warning-bg px-zw-lg py-zw-md">
+            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>Trip created, but the assignment could not be completed.</p>
+            <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>
+              {dispatchErrorMessage(createdErrorCode)} The trip is saved{trip.activeAssignmentId ? "." : " without a driver"} — you can assign it from Current Status on this page.
+            </p>
+          </div>
+        )}
+
+        {/* The PageHeader's "Trip Detail" is this page's one <h1>; the Passenger name is the record heading, an <h2> in the summary. */}
+        <RecordSummary
+          testId="trip-record-summary"
+          title={trip.passengerName}
+          status={<TripStatus status={trip.statusLabel} />}
+          icon={<Path className="size-[1.375rem]" />}
+          meta={trip.scheduledPickupAt ? formatOperationsLongDate(new Date(trip.scheduledPickupAt), timezone) : undefined}
+          facts={tripSummaryFacts({
+            scheduledPickupAt: trip.scheduledPickupAt,
+            appointmentAt: trip.appointmentAt,
+            driverName: trip.driverName,
+            vehicleLabel: trip.vehicleLabel,
+            timezone,
+          })}
+        >
+          {correction && (
+            <p className={cn(typography.metadata, "text-text-muted")} data-testid="trip-last-correction">
+              Details corrected by {correction.actorUserId && correction.actorUserId === viewer?.id ? "you" : "a team member"} ·{" "}
+              {formatOperationsLongDate(new Date(correction.occurredAt), timezone)}, {formatOperationsTime(correction.occurredAt, timezone)}
+              {correction.fields.length > 0 && <> · {tripEditFieldLabels(correction.fields).join(", ")}</>}
+            </p>
+          )}
+        </RecordSummary>
 
         {trip.isTerminal && (
           <div
@@ -297,17 +296,12 @@ export default async function TripDetailPage({
           </div>
         )}
 
-        <TripInfoStrip
-          scheduledPickupAt={trip.scheduledPickupAt}
-          appointmentAt={trip.appointmentAt}
-          driverName={trip.driverName}
-          vehicleLabel={trip.vehicleLabel}
-          statusLabel={trip.statusLabel}
-          timezone={timezone}
-        />
-
-        <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="flex flex-col gap-zw-lg">
+        {/* NP-UI-V2-2: the record (route, passenger, exceptions, notes) in the main column; the operational controls
+            (status / assignment, readiness, duration, equipment) in the side column. DOM order = the stacked order below
+            xl (route, passenger, controls, exceptions, notes), so reading / focus order never jumps; at xl the side column
+            is placed on the right across both rows. */}
+        <div className="grid grid-cols-1 items-start gap-zw-lg xl:grid-cols-[minmax(0,1fr)_360px] xl:grid-rows-[auto_1fr]">
+          <div className="flex flex-col gap-zw-lg xl:col-start-1 xl:row-start-1">
             <TripRoutePanel
               scheduledPickupAt={trip.scheduledPickupAt}
               appointmentAt={trip.appointmentAt}
@@ -327,7 +321,7 @@ export default async function TripDetailPage({
             />
           </div>
 
-          <div className="flex flex-col gap-zw-lg">
+          <div className="flex flex-col gap-zw-lg xl:col-start-2 xl:row-span-2 xl:row-start-1">
             <CurrentStatusPanel
               statusLabel={trip.statusLabel}
               driverName={trip.driverName}
@@ -361,6 +355,7 @@ export default async function TripDetailPage({
                 ) : undefined
               }
             />
+            <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
             <TripDurationPanel
               tripId={trip.id}
               expectedDurationMinutes={trip.expectedDurationMinutes}
@@ -369,7 +364,9 @@ export default async function TripDetailPage({
               canEdit={!trip.isTerminal}
             />
             <TripWheelchairPanel tripId={trip.id} requiresWheelchairAccess={trip.requiresWheelchairAccess} canEdit={!trip.isTerminal} />
-            <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
+          </div>
+
+          <div className="flex flex-col gap-zw-lg xl:col-start-1 xl:row-start-2">
             <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />
             <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />
           </div>

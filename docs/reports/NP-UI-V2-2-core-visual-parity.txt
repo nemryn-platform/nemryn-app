@@ -1,0 +1,220 @@
+NP-UI-V2-2 — CORE OPERATIONS VISUAL COMPLETION: IMPLEMENTATION REPORT
+=====================================================================
+Date: 2026-10-22.
+Mode: controlled implementation; local / isolated environment only.
+- Not committed, pushed, merged or deployed.
+- No production access.
+- V2-3 not started.
+Companion reports:
+- docs/reports/NP-UI-V2-2-visual-review.txt
+- docs/reports/NP-UI-V2-2-test-results.txt
+Evidence: docs/design/concept-b/reviews/v2-2/ (see index.md).
+
+1. STARTING POINT
+-----------------
+- origin/main fetched: ca2dc2e, "Merge pull request #26 ... np-ui-v2-1-concept-b-foundation".
+  - The V2-1 commit 036c623 is an ancestor.
+  - The tree at ca2dc2e is identical to 036c623.
+- Brand Lock v2: docs/brand/nemryn/16-brand-lock-v2.md, status APPROVED — ACTIVE — V2. Used as the authority.
+- Branch: np-ui-v2-2-core-visual-parity, created from origin/main ca2dc2e.
+  - Previous branch: np-ui-v2-1-concept-b-foundation, which was clean.
+  - The auto-set upstream (origin/main) was removed, so a bare `git push` cannot target main.
+- Working tree at start: 0 tracked changes.
+  - 386 untracked items, preserved unchanged, including the Plus demo fixture and its reports.
+- Environment:
+  - persistent isolated stack ~/NemrynS1Iso (project NemrynS1Iso, API 54361);
+  - app :3100 served only with ~/NemrynS1Iso/.env.isolated.local (NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54361).
+  - The owner's own `next dev` on :3000 (ZenWard stack) was left running and untouched.
+    - Next.js allows one dev server per project, so every iteration used `next build` + `next start` on :3100.
+
+2. APPROACH
+-----------
+The approved V2-1 Operations Overview is the reference. Its anatomy:
+- a display h1 with actions on the right;
+- 42px fact tiles;
+- raised panels with a 45 / 40px icon circle and the title inside the panel;
+- calm empty states;
+- the teal primary.
+
+V2-2 carries that anatomy to every Core screen.
+- Shared components were improved once; screens then adopted them.
+- No new visual system, token, font, colour or radius was introduced.
+- No logic, server action, RPC, RLS, migration, authorization or quote file was touched.
+
+3. SHARED COMPONENT CHANGES
+---------------------------
+a) NEW src/components/ui/RecordSummary.tsx (exported from components/ui/index.ts)
+   - The record-detail summary: one raised panel (radius 14, panel shadow) containing:
+     - a 45px icon circle;
+     - the record heading as the page's <h2> (Geist, the existing pageTitleOperational role, not the display face);
+     - a status badge and one meta line;
+     - optional extra lines;
+     - a row of at-a-glance facts (dl/dt/dd with small icons; 2 columns, 3 or 4 on wide screens).
+   - Used by Trip, Request and Standing Order detail.
+
+b) OperationsPageHeaders.DetailPageHeader
+   - Was a quiet label-sized h1 ("Trip Detail") stacked over a breadcrumb and a second big title.
+   - Now the same display h1 as every other Operations screen (Brand Lock v2 §2, displayPage), with:
+     - the breadcrumb above;
+     - the record's own actions on the right.
+   - Same h1 text and data-testid="page-header".
+
+c) Panel.PanelHeader
+   - A header without a description now centres the title (and the actions) on the icon circle.
+   - Before, the title sat at the circle's top edge.
+   - A header with a description is unchanged.
+
+d) EmptyState (page-level form)
+   - The icon sits in the Concept B 45px mint circle.
+   - The title is 16px.
+   - The explanation is capped at a readable line length.
+   - The vertical padding is calmer (48 instead of 64px).
+   - The compact form gets a small white icon circle when an icon is passed.
+   - The API is unchanged.
+
+e) StatTile.StatTileGroup
+   - Optional `columns` (3 | 4, default 4).
+   - A row of three real facts no longer leaves an empty fourth slot.
+   - Existing callers are unchanged.
+
+f) DefinitionList
+   - Optional `fullWidth` item (spans both columns, for long values such as an email).
+   - Values wrap (`break-words`); items get `min-w-0`.
+   - Fixes the requester email overflowing its card.
+
+4. SCREENS COMPLETED
+--------------------
+A. REQUESTS
+- Request detail:
+  - display h1 "Request Detail" with breadcrumb, and Decline / Accept (or the state's actions) on the right;
+  - RecordSummary: "Request" (h2) with status and "<identity> · Logged <date>".
+    - Facts: Passenger, Preferred service, Readiness.
+    - The Passenger fact is the linked passenger. Otherwise it reads "<requested name> · not linked", never the
+      requester.
+    - The "already has a standing order / scheduled transportation" notes are kept as summary lines.
+  - The "Passenger needed" warning stays.
+  - All eight panels use the PanelHeader anatomy: Passenger, Transportation, Standing orders, Linked Trips, Requester,
+    Request Details (source as the description), Acquisition, Request Activity.
+    - Icon circles; no hairline under the title.
+  - Linked Trips uses the compact empty state, instead of a tall blank block.
+  - The requester email no longer overflows.
+- Log Request: the same page anatomy as New Trip.
+  - Full-width header, title left, Cancel + Log Request right.
+  - Main column: Requester, Transportation, Passenger. Side column: Details, Notes.
+  - Below xl the sections stack in the original order.
+- Requests directory, status tabs, empty state: already on the v2 list anatomy (P2 / V2-1); they take the new empty
+  state.
+- Request lifecycle rules unchanged: same actions, same RequestActionBar, same dialogs.
+
+B. TRIPS
+- Trip detail:
+  - display h1 "Trip Detail" with breadcrumb, and Edit / Cancel / Record completion / Contact Driver on the right;
+  - RecordSummary: passenger (h2), status badge, date, and the "details corrected" note.
+    - Facts: Pickup, Appointment, Driver, Vehicle.
+    - The old 5-cell uppercase strip is replaced. Its "Trip Status" cell repeated the badge and is not duplicated.
+  - Layout rebalanced:
+    - main column: Trip Route, Passenger & Trip Information, Trip Exceptions, Trip Notes;
+    - side column: Current Status / assignment, Preparation, Expected duration, Wheelchair equipment.
+  - DOM order = the stacked order below xl: route, passenger, controls, exceptions, notes.
+    - Reading and focus order never jump.
+    - At xl the side column is placed across both rows.
+  - Trip Exceptions and Trip Notes:
+    - Report Issue / Add Note moved into the panel header (same buttons, same dialogs);
+    - compact empty states, instead of 300px blank blocks.
+  - Current Status, Preparation, Duration, Wheelchair:
+    - icon circles and sentence-case labels;
+    - no uppercase eyebrows.
+- New Trip: side column widened to 360 to match every other two-column screen; the form is otherwise unchanged.
+- Trips directory: unchanged composition (already v2); takes the new empty state.
+- Trip business rules unchanged: same action bar, dialogs, assignment control and server actions.
+
+C. DISPATCH
+- Summary:
+  - the divided v1 strip becomes the Brand Lock v2 fact tiles (StatTile, D-6);
+  - same real counts and the same "need attention only when > 0" rule;
+  - 3 or 4 tiles, without an empty slot.
+- Needs Assignment, Today's / Tomorrow's Assignments and Driver Capacity are each one raised v2 panel, with the
+  header inside.
+  - Before, they were bare headings over loose cards.
+  - The cards inside are flat bordered tiles.
+- Grid:
+  - Driver rows grow with their label: a live-location line no longer overflows the row.
+  - The F-1 fix is preserved: the scroll region keeps data-testid="dispatch-grid", tabIndex 0, role="region" and its
+    aria-label; it is still its own horizontal scroll container.
+  - Trip blocks and their behaviour are unchanged.
+- Today / Tomorrow switch, Export Day Sheet / New Trip, live refresh: unchanged.
+- No map / live tracking added.
+
+D. TOMORROW READINESS
+- Three fact tiles now fill the row (columns={3}).
+- Lists and actions: unchanged (already v2).
+- The empty state takes the new anatomy.
+- Only existing values are used.
+
+E. STANDING ORDERS
+- Detail:
+  - display h1 "Standing Order" with breadcrumb, and Edit / Pause / End on the right;
+  - RecordSummary: passenger (h2), status, route meta.
+    - Facts: Pattern, Pickup time, Next 14 days (the existing missing-occurrence count).
+    - The approved "Wheelchair transport equipment: … · applied to trips created from now on" line and the
+      originating-request line are kept verbatim.
+  - "Upcoming transportation" / "Arrangement details" use PanelHeader. The occurrence count copy is unchanged.
+- List, New standing order, Review missing rides: already v2; unchanged.
+- The approved Standing Orders copy is preserved.
+
+F. OTHER CORE RECORDS
+- Passengers, Facilities, Drivers, Vehicles, Proof of Service: unchanged compositions (already v2 list anatomy).
+- Their empty states take the shared EmptyState change.
+
+5. FILES
+--------
+Modified (33):
+  src/app/operations/dispatch/page.tsx
+  src/app/operations/recurring-care/[arrangementId]/page.tsx
+  src/app/operations/requests/[requestId]/page.tsx
+  src/app/operations/tomorrow/page.tsx
+  src/app/operations/trips/[tripId]/page.tsx
+  src/components/operations/OperationsPageHeaders.tsx
+  src/components/operations/dispatch/{AssignmentGrid,DriverCapacityPanel,NeedsAssignmentQueue}.tsx
+  src/components/operations/new-trip/NewTripForm.tsx
+  src/components/operations/requests/{LogRequestForm,RequestAcquisitionPanel,RequestActivityPanel,RequestDetailsPanel,
+    RequestLinkedArrangementsPanel,RequestLinkedTripsPanel,RequestPassengerPanel,RequestRequesterPanel,
+    RequestTransportationPanel}.tsx
+  src/components/operations/trip-detail/{CurrentStatusPanel,PassengerInfoPanel,TripDurationPanel,TripExceptionsPanel,
+    TripInfoStrip,TripNotesPanel,TripReadinessPanel,TripRoutePanel,TripWheelchairPanel}.tsx
+  src/components/ui/{DefinitionList,EmptyState,Panel,StatTile,index}.ts(x)
+  (git diff --stat: 33 files changed, 587 insertions(+), 532 deletions(-))
+
+Added:
+  src/components/ui/RecordSummary.tsx
+  docs/design/concept-b/reviews/v2-2/ (index.md, before/ ×47, after/ ×47, 3 comparison sheets)
+  docs/reports/NP-UI-V2-2-{core-visual-parity,visual-review,test-results}.txt
+
+Not touched:
+- src/lib/**, server actions (actions.ts), supabase/** (migrations, seed, tests), tests/** assertions;
+- package.json, globals.css (tokens), typography.ts, fonts, public/brand/**.
+- TripInfoStrip.tsx keeps its file name; it now exports `tripSummaryFacts` (the same four real fields).
+
+6. BOUNDARY CHECK
+-----------------
+- Migrations / RLS / RPC: none.
+- Server actions: none.
+- Authorization: none.
+- Quote logic: none.
+- Fonts / tokens: none. Only existing tokens and typography roles are used.
+- Logo: none (SHA-256 verified; see the test report).
+- Production: no access. Only the isolated stack was used.
+- V2-3 scope: not started.
+  - Two shared improvements (the EmptyState anatomy and the PanelHeader centring) also apply wherever those
+    components appear outside Core (Growth, Quotes, Settings).
+  - That is the intended "improve once" effect.
+  - The quote regression suites were run to confirm no behavioural change (test report).
+- No new product feature.
+  - The Standing Order "Next 14 days" fact shows the page's existing missing-occurrence count.
+  - The Request "Passenger" fact shows existing fields.
+
+7. READINESS
+------------
+- Implementation complete for the V2-2 scope.
+- Readiness for owner visual approval: see the visual review (§5) and the test results.
+- STOP for ChatGPT / owner visual review.

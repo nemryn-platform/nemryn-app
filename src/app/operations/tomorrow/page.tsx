@@ -171,7 +171,7 @@ export default async function TomorrowReadinessPage() {
         </Panel>
       ) : (
         <>
-          <StatTileGroup label="Tomorrow at a glance" testId="tomorrow-summary">
+          <StatTileGroup label="Tomorrow at a glance" testId="tomorrow-summary" columns={3}>
             {[
               <StatTile key="scheduled" label={totalScheduledTrips === 1 ? "scheduled trip" : "scheduled trips"} value={totalScheduledTrips} icon={<CalendarCheck className="size-5" />} tone="info" href="/operations/dispatch?day=tomorrow" />,
               <StatTile key="ready" label="ready" value={readyCount} icon={<CheckCircle className="size-5" />} tone={readyCount > 0 ? "positive" : "neutral"} />,

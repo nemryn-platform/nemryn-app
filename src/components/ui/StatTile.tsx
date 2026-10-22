@@ -78,9 +78,22 @@ export function StatTile({ label, value, detail, icon, tone = "neutral", href, t
 }
 
 /** A responsive row of StatTiles: 1 column on narrow, 2 at sm, 4 at xl (Concept B: 4 ≥ 1100px content, 2 below). A <ul> so the count is announced. */
-export function StatTileGroup({ children, label, className, testId }: { children: ReactNode[]; label: string; className?: string; testId?: string }) {
+export function StatTileGroup({
+  children,
+  label,
+  className,
+  testId,
+  columns = 4,
+}: {
+  children: ReactNode[];
+  label: string;
+  className?: string;
+  testId?: string;
+  /** NP-UI-V2-2: wide-screen column count -- 3 when a row holds three real facts (no empty fourth slot). */
+  columns?: 3 | 4;
+}) {
   return (
-    <ul aria-label={label} className={cn("grid grid-cols-1 gap-[0.8125rem] sm:grid-cols-2 xl:grid-cols-4", className)} data-testid={testId}>
+    <ul aria-label={label} className={cn("grid grid-cols-1 gap-[0.8125rem] sm:grid-cols-2", columns === 3 ? "xl:grid-cols-3" : "xl:grid-cols-4", className)} data-testid={testId}>
       {children.map((child, index) => (
         <li key={index} className="min-w-0 [&>*]:h-full">
           {child}

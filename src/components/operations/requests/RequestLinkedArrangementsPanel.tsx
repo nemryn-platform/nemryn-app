@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Panel } from "@/components/ui/Panel";
+import { Repeat } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   formatRecurringPattern,
@@ -21,7 +22,7 @@ export function RequestLinkedArrangementsPanel({ arrangements }: { arrangements:
   if (arrangements.length === 0) return null;
   return (
     <Panel elevated data-testid="request-linked-arrangements">
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Standing orders</h3>
+      <PanelHeader title="Standing orders" icon={<Repeat className="size-5" />} tone="accent" />
       <ul className="mt-zw-md flex flex-col gap-zw-sm">
         {arrangements.map((a) => (
           <li key={a.id} className="rounded-sm border border-border-subtle px-3 py-2.5" data-testid="request-linked-arrangement">

@@ -1,0 +1,177 @@
+NP-UI-V2-2 — VISUAL REVIEW (BROWSER EVIDENCE)
+=============================================
+Date: 2026-10-22.
+
+Every image is a real browser capture of the isolated app on :3100 (production build). No generated mockups.
+- Before and after: identical fresh reset, identical fictional fixture.
+- Before = origin/main ca2dc2e (V2-1); after = the final V2-2 working tree.
+
+Evidence (docs/design/concept-b/reviews/v2-2/):
+- before/ and after/: 47 captures each, identical names, listed in index.md;
+- v2-2-before-vs-after-1.png: Request detail, Trip detail, Dispatch 1440, Standing Order detail, Log Request,
+  Dispatch 768;
+- v2-2-before-vs-after-2.png: Requests list, Trips list, Tomorrow Readiness, New Trip, Passengers, Requests empty;
+- v2-2-contact-sheet.png: all 47 after captures.
+
+Comparison references:
+1. The before capture. It already contains P2 + V2-1. The P2-era captures in reviews/p2/after predate the V2-1
+   tokens, so the before set is the current baseline.
+2. The approved V2-1 Operations Overview: after/c00-overview-1440 (unchanged by V2-2).
+3. Brand Lock v2.
+
+1. TOKEN PARITY (computed styles, 1440)
+---------------------------------------
+Pages: Overview (reference), Requests list, Trip detail, Dispatch.
+
+| Property | Value | Same on all four pages? |
+|---|---|---|
+| h1 | Newsreader 700, 39px | Yes |
+| Raised panel radius | 14px | Overview / detail / Dispatch. The list uses 12px cards only, by design. |
+| Card / table radius | 12px | Yes |
+| Primary action | linear-gradient(120deg, #006D67, #005052) over #006E69; radius 9px | Yes |
+| Sidebar | the slate gradient (155deg, #112834 → …) | Yes |
+| Body face | Geist | Yes |
+
+2. SCREEN-BY-SCREEN EVALUATION
+------------------------------
+Criteria: H = hierarchy, C = card proportions, T = typography, D = density, B = buttons, S = spacing,
+St = status, R = responsive.
+
+Request detail (c02, c02a, c02b)
+- Before:
+  - three stacked titles (a label "Request Detail", the breadcrumb, a 24px "Request");
+  - v1 hairline panel headers;
+  - the requester email spilled past its card;
+  - a 250px empty "Linked Trips" block.
+- After:
+  - H: one display h1 with breadcrumb and actions, then a raised record summary (identity, status, logged date, three
+    facts).
+  - C / T: panels follow the Overview anatomy (icon circle, title, no hairline).
+  - D: the empty Linked Trips is a single compact line.
+  - B: Decline (outline) then Accept (teal), right-aligned.
+  - St: status badge plus a colour-and-text readiness fact; the "Passenger needed" warning is kept.
+  - R: 1024 / 768 stack cleanly.
+  - The email wraps inside its own full-width row.
+  - The Passenger fact never shows the requester as the passenger.
+- Verdict: parity reached.
+
+Trip detail (c05, c05a, c05b)
+- Before:
+  - a quiet h1 label plus breadcrumb plus a second title;
+  - a 5-cell uppercase strip;
+  - a 6-card right rail with uppercase eyebrows;
+  - two 300px empty blocks (Exceptions, Notes);
+  - a short main column with a long empty area under it.
+- After:
+  - H: the display h1 and actions, then a raised record summary (passenger, status, date; Pickup / Appointment / Driver /
+    Vehicle).
+  - C:
+    - the main column carries the record (route, passenger, exceptions, notes);
+    - the side column carries the controls (status / assignment, preparation, duration, equipment);
+    - both columns now end close together.
+  - T: sentence-case labels; the display face only on the h1.
+  - B: Report Issue / Add Note sit in their panel headers instead of full-width buttons; Manage Assignment is unchanged.
+  - St: the En Route badge; the exception panel turns attention-toned only when an exception is open (c05a).
+  - R:
+    - At 768 / 1024 the stacked order is route, passenger, then the controls, then exceptions and notes. This is the DOM
+      order, so reading and focus order match the screen.
+    - A first pass put the controls after the notes on tablet; it was found in the captures and corrected.
+- Verdict: parity reached.
+
+Dispatch (c07 ×3 widths, c07t, e07)
+- Before:
+  - a divided v1 number strip;
+  - bare column headings over loose cards;
+  - driver labels overflowing their rows (the "Stale" / "2 min ago" line touched the next row).
+- After:
+  - H / C: the Overview fact tiles (3 or 4, with no empty slot), then three raised panels (Needs Assignment, the board,
+    Driver Capacity), each with its header inside.
+  - D:
+    - the board keeps its full width at 1440 (the capacity panel stays under it below 2xl, as P2 decided);
+    - driver rows grow to fit their label.
+  - St: the attention tone only when something is unassigned; trip blocks keep their status colours.
+  - R: 1024 and 768 checked. The grid scrolls only inside its own region (F-1 preserved).
+  - Usability: the queue's Assign buttons, the day switch and the header actions are unchanged in position and
+    behaviour.
+- Verdict: parity reached.
+
+Log Request (c03)
+- Before: a centred 768px column; the actions wrapped under the title at the left; a large unused right area.
+- After: New Trip's anatomy. Full-width header, actions right; main column (Requester, Transportation, Passenger) and
+  side column (Details, Notes) at ≥1280; the original stacked order below.
+- Verdict: parity reached.
+
+Standing Order detail (c09b)
+- Before: the same stacked-title problem; a loose wheelchair line between the header and the panels.
+- After:
+  - the display h1 with Edit / Pause / End;
+  - a raised summary: passenger, Active, route meta, Pattern / Pickup time / Next 14 days;
+  - the approved wheelchair and originating-request lines kept verbatim inside it;
+  - panel headers with icons;
+  - "Upcoming transportation" attention-toned only while occurrences are missing.
+- Verdict: parity reached.
+
+Tomorrow Readiness (c08, e08)
+- Before: three tiles in a four-column row (an empty slot).
+- After: three tiles span the row. The lists were already v2.
+- Verdict: parity reached.
+
+Requests / Trips directories, Passengers, Facilities, Drivers, Vehicles, Proof of Service, Standing Orders list,
+New Trip, New standing order, Review missing rides (c01, c04, c06, c09, c09c, c09d, c10–c14)
+- These were already on the v2 list / form anatomy from P2 + V2-1:
+  - display h1;
+  - FilterBar / ViewSwitch;
+  - white 12px table cards;
+  - teal primary.
+- V2-2 changes here are the shared ones (empty states; New Trip's side column 360px).
+- Verdict: at parity; no material difference to the Overview's language.
+
+Empty states (e01, e04, e07–e10)
+- Before: a grey outline icon floating in white space.
+- After: the Concept B mint icon circle, a 16px title, a readable explanation, and the real action where one exists
+  (Log Request, Create standing order).
+- Verdict: parity reached.
+
+Dialogs (c02b, c05b, c10b)
+- Unchanged components; they already carried the V2-1 14px radius and slate scrim.
+- Checked open with focus inside and 0 axe findings.
+
+390 px (c15)
+- The approved Operations notice, unchanged.
+
+3. OUTSTANDING VISUAL GAPS (documented, not fixed in V2-2)
+----------------------------------------------------------
+1. OWNER DECISION — detail-page h1.
+   - Detail screens now use the display h1 ("Trip Detail") like every other Operations screen, per Brand Lock v2 §2.
+   - P1b had made it a small label above the record name.
+   - The record name stays the h2, in Geist, inside the summary, so the display face is only on the h1.
+   - If the owner prefers the record name to read as the title, the alternative is a test-assertion change (H6 / H7 /
+     E1 / A2 expect h1 = "Trip Detail" / "Request Detail"). That was not done.
+2. Dispatch trip blocks:
+   - unknown-duration trips keep the dashed outline and truncate "· Duration not set" in narrow blocks;
+   - this is the existing duration semantics; the full text is in the title and aria-label.
+3. Facilities, Drivers and Vehicles have no FilterBar or result count, because those lists have no search. Adding
+   search would be a feature.
+4. Log Request's breadcrumb still reads "Overview › Log Request": existing navigation copy, left as is.
+5. Trip detail's "Record completion" stays a text-style action between the outline buttons and the teal Contact
+   Driver: its existing variant, unchanged.
+6. Shared-component reach:
+   - the EmptyState and PanelHeader centring improvements also show on Growth / Quotes / Settings screens;
+   - those screens' own recomposition remains V2-3.
+
+4. COMPARISON VERDICT
+---------------------
+- The Core Operations screens now use one anatomy with the approved V2-1 Overview:
+  - display h1 and actions;
+  - fact tiles;
+  - raised panels with icon headers;
+  - consistent card radii;
+  - teal primaries;
+  - calm empty states.
+- The biggest differences (the three record-detail pages, Dispatch, Log Request) are resolved.
+- The remaining items in §3 are documented decisions or out-of-scope behaviour.
+
+5. READINESS
+------------
+READY FOR CHATGPT / OWNER VISUAL REVIEW, subject to the owner decision in §3.1. All functional gates pass (test
+report).

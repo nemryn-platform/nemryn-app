@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Panel } from "@/components/ui/Panel";
+import { Path } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TripStatus } from "@/components/ui/TripStatus";
 import { operationsTripStatusLabel, formatOperationsTime } from "@/lib/operations/presentation";
@@ -33,10 +34,11 @@ export interface RequestLinkedTripsPanelProps {
 export function RequestLinkedTripsPanel({ linkedTrips, timezone }: RequestLinkedTripsPanelProps) {
   return (
     <Panel elevated>
-      <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Linked Trips</h3>
+      <PanelHeader title="Linked Trips" icon={<Path className="size-5" />} tone="accent" />
       <div className="mt-zw-md">
         {linkedTrips.length === 0 ? (
           <EmptyState
+            size="compact"
             title="No trips yet"
             description="Trips created from this request will appear here."
           />

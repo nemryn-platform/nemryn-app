@@ -1,4 +1,5 @@
-import { Panel } from "@/components/ui/Panel";
+import { ListChecks } from "@phosphor-icons/react/dist/ssr";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { tripReadinessReasonLabel } from "@/lib/operations/presentation";
 import type { TripReadinessResult } from "@/lib/operations/trip-readiness";
@@ -41,8 +42,8 @@ export function TripReadinessPanel({ readiness, unavailable = false }: TripReadi
   if (unavailable) {
     return (
       <Panel elevated>
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Preparation</h3>
-        <p className={cn(typography.bodySmall, "mt-2 text-text-muted")}>
+        <PanelHeader title="Preparation" icon={<ListChecks className="size-5" />} />
+        <p className={cn(typography.bodySmall, "mt-zw-sm pl-[3.25rem] text-text-muted")}>
           Preparation status isn&apos;t available right now.
         </p>
       </Panel>
@@ -57,16 +58,18 @@ export function TripReadinessPanel({ readiness, unavailable = false }: TripReadi
 
   return (
     <Panel elevated>
-      <div className="flex items-center justify-between gap-2">
-        <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Preparation</h3>
-        <StatusBadge label={isReady ? "Prepared" : "Needs preparation"} category={isReady ? "positive" : "warning"} />
-      </div>
+      <PanelHeader
+        title="Preparation"
+        icon={<ListChecks className="size-5" />}
+        tone={isReady ? "positive" : "attention"}
+        actions={<StatusBadge label={isReady ? "Prepared" : "Needs preparation"} category={isReady ? "positive" : "warning"} />}
+      />
       {isReady ? (
-        <p className={cn(typography.bodySmall, "mt-2 text-text-secondary")}>
+        <p className={cn(typography.bodySmall, "mt-zw-sm pl-[3.25rem] text-text-secondary")}>
           Prepared based on the information currently available.
         </p>
       ) : (
-        <ul className="mt-zw-md flex flex-col gap-1.5">
+        <ul className="mt-zw-sm flex flex-col gap-1.5 pl-[3.25rem]">
           {readiness.reasons.map((reason) => (
             <li key={reason} className={cn(typography.bodySmall, "flex items-center gap-2 text-text-secondary")}>
               <span className="size-1.5 shrink-0 rounded-full bg-warning-strong" aria-hidden />
