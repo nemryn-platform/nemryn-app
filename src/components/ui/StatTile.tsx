@@ -24,38 +24,48 @@ export interface StatTileProps {
 }
 
 /**
- * NP-UI-P1b StatTile: one compact operational fact (Concept B "Operations Brief" tile anatomy). Top row: the icon
- * tile and, only when a real destination exists, a chevron; then the value (metricValue, tabular) over its label and
- * optional detail. Status tone is never the only signal: the label always says what the number means. Not a KPI card
- * wall: use a handful, for facts that already exist.
+ * StatTile: one compact operational fact — Brand Lock v2 / Concept B `.metric` anatomy (D-6 hybrid): a 42px circular
+ * icon, then the fact (a NUMBER leads, at the display weight, followed by its label on the same line; a text value —
+ * e.g. today's date — is a bold line), the optional detail beneath, and a chevron only when a real destination exists.
+ * Status tone is never the only signal: the label always says what the number means. Not a KPI wall: a handful of
+ * facts that already exist.
  */
 export function StatTile({ label, value, detail, icon, tone = "neutral", href, testId }: StatTileProps) {
   const unavailable = value === null;
+  const numeric = typeof value === "number";
   const body = (
     <>
-      <span className="flex items-start justify-between gap-2">
-        {icon ? (
-          <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-md", iconToneClasses[unavailable ? "neutral" : tone])} aria-hidden>
-            {icon}
+      {icon && (
+        <span className={cn("flex size-[2.625rem] shrink-0 items-center justify-center rounded-full", iconToneClasses[unavailable ? "neutral" : tone])} aria-hidden>
+          {icon}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        {unavailable ? (
+          <span className="block">
+            <span className={cn(typography.bodySmall, "font-semibold text-text-muted")}>Unavailable</span>{" "}
+            <span className={cn(typography.bodySmall, "font-medium text-text-secondary")}>{label}</span>
+          </span>
+        ) : numeric ? (
+          <span className="flex flex-wrap items-baseline gap-x-1.5">
+            <span className={cn(typography.metricValue, "text-[1.375rem] text-text-primary")}>{value}</span>{" "}
+            <span className={cn(typography.bodySmall, "font-semibold text-text-primary")}>{label}</span>
           </span>
         ) : (
-          <span />
+          <span className="block">
+            <span className={cn(typography.bodySmall, "block font-semibold text-text-primary")}>{value}</span>
+            <span className={cn(typography.metadata, "mt-0.5 block text-text-secondary")}>{label}</span>
+          </span>
         )}
-        {href && <CaretRight className="mt-1 size-4 shrink-0 text-text-muted transition-transform duration-base group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden />}
+        {detail && <span className={cn(typography.metadata, "mt-1 block text-text-muted")}>{detail}</span>}
       </span>
-      <span className="mt-zw-sm block min-w-0">
-        <span className={cn("block", unavailable ? cn(typography.body, "font-medium text-text-muted") : cn(typography.metricValue, "text-text-primary"))}>
-          {unavailable ? "Unavailable" : value}
-        </span>
-        <span className={cn(typography.bodySmall, "mt-0.5 block font-medium text-text-secondary")}>{label}</span>
-        {detail && <span className={cn(typography.metadata, "mt-0.5 block text-text-muted")}>{detail}</span>}
-      </span>
+      {href && <CaretRight className="size-4 shrink-0 text-text-muted transition-transform duration-base group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden />}
     </>
   );
-  const frame = "group flex min-w-0 flex-col rounded-md border border-border-subtle bg-surface-elevated px-zw-md py-zw-md shadow-sm";
+  const frame = "group flex min-h-[4.8125rem] min-w-0 items-center gap-[0.8125rem] rounded-md border border-border-subtle bg-surface-elevated px-zw-md py-3.5 shadow-sm";
   if (href) {
     return (
-      <Link href={href} className={cn(frame, "transition-colors duration-base hover:border-border-strong motion-reduce:transition-none")} data-testid={testId}>
+      <Link href={href} className={cn(frame, "transition-colors duration-base hover:border-accent-hover-border motion-reduce:transition-none")} data-testid={testId}>
         {body}
       </Link>
     );
@@ -67,10 +77,10 @@ export function StatTile({ label, value, detail, icon, tone = "neutral", href, t
   );
 }
 
-/** A responsive row of StatTiles: 1 column on narrow, 2 at sm, up to 4 at xl. A <ul> so the count is announced. */
+/** A responsive row of StatTiles: 1 column on narrow, 2 at sm, 4 at xl (Concept B: 4 ≥ 1100px content, 2 below). A <ul> so the count is announced. */
 export function StatTileGroup({ children, label, className, testId }: { children: ReactNode[]; label: string; className?: string; testId?: string }) {
   return (
-    <ul aria-label={label} className={cn("grid grid-cols-1 gap-zw-sm sm:grid-cols-2 xl:grid-cols-4", className)} data-testid={testId}>
+    <ul aria-label={label} className={cn("grid grid-cols-1 gap-[0.8125rem] sm:grid-cols-2 xl:grid-cols-4", className)} data-testid={testId}>
       {children.map((child, index) => (
         <li key={index} className="min-w-0 [&>*]:h-full">
           {child}

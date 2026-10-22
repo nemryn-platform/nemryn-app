@@ -1,11 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
 /**
- * Nemryn typography foundation (N0-M2-A1A, LOCKED brand-lock-v1.md §10):
- * Geist Sans replaces Manrope+Inter as the single application/marketing
- * family — no separate display face. Loaded via `next/font/google`
+ * Nemryn typography foundation (N0-M2-A1A): Geist Sans replaced
+ * Manrope+Inter as the application/marketing UI family (Brand Lock v2 adds
+ * a display face for headings only — see `newsreader` below). Loaded via `next/font/google`
  * (bundled in this Next.js version, confirmed directly — no new
  * dependency), matching the exact loading mechanism Manrope/Inter already
  * used here, so the swap carries no new build/runtime machinery. Weights
@@ -26,6 +27,22 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
   weight: ["400", "500"],
+});
+
+/**
+ * Brand Lock v2 (D-1, docs/brand/nemryn/16-brand-lock-v2.md §2): Newsreader is the display face for the display
+ * tier only (`typography.display*`: page h1, major section titles, the setup hero heading, Overview panel titles).
+ * Self-hosted from the repository (src/app/fonts/newsreader — OFL 1.1, provenance in its README), so the build
+ * serves it with no runtime download. One variable file covers the weight + optical-size axes; Georgia (the Concept
+ * B reference face) is the fallback. Geist stays the UI family.
+ */
+const newsreader = localFont({
+  src: "./fonts/newsreader/Newsreader-Variable.ttf",
+  variable: "--font-newsreader",
+  weight: "200 800",
+  style: "normal",
+  display: "swap",
+  fallback: ["Georgia", "Times New Roman", "serif"],
 });
 
 export const metadata: Metadata = {
@@ -64,7 +81,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full`}>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${newsreader.variable} h-full`}>
       <body className="min-h-full font-sans text-text-primary antialiased">
         {children}
       </body>

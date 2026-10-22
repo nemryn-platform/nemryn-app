@@ -159,7 +159,7 @@ export function LogRequestForm({ passengers: initialPassengers, serviceOptions, 
 
       <div className="flex flex-wrap items-start justify-between gap-zw-md">
         <div>
-          <h1 className={cn(typography.pageTitleOperational, "text-text-primary")}>Log Request</h1>
+          <h1 className={cn(typography.displayPage, "text-text-primary")}>Log Request</h1>
           <p className={cn(typography.body, "mt-1 text-text-secondary")}>
             Record transportation demand so it can be reviewed and converted into one or more trips.
           </p>

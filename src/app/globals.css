@@ -1,10 +1,11 @@
 @import "tailwindcss";
 
 /*
-  Nemryn design tokens (N0-M2-A1A — brand foundation: tokens + typography).
-  Source of truth: docs/brand/nemryn/12-design-token-specification.md
-  (values), 05-semantic-color-system.md (meaning), 11-brand-lock-v1.md
-  (LOCKED palette/typography). Every color/typography value below traces
+  Nemryn design tokens (N0-M2-A1A; values moved to Brand Lock v2 in NP-UI-V2-1).
+  Source of truth: docs/brand/nemryn/16-brand-lock-v2.md (ACTIVE — palette,
+  display typography, shape, depth), with 12-design-token-specification.md
+  and 05-semantic-color-system.md for the token roles and status meanings
+  (Brand Lock v1, 11-brand-lock-v1.md, is superseded and kept as history). Every color/typography value below traces
   back to those documents — do not add ad hoc values here or in component
   files. Token NAMES were deliberately kept stable where the underlying
   role is unchanged (e.g. `text-primary`, `border-strong`,
@@ -27,59 +28,58 @@
      (near-unused) and `--color-brand-arrival-gold` (superseded by
      `warning-strong` below) are dropped — nothing outside the internal
      foundation/QA page ever referenced either. */
-  --color-brand-care-navy: #171a1d; /* was #123447 (navy) → Deep Graphite. Background wash / dark button / heading-accent role unchanged; only the hue moved. */
-  --color-brand-calm-mist: #e7ecf0; /* was #ddf4f0 (pale teal) → derived selection.background. Selected/active/hover-wash role unchanged; only the hue moved. */
+  --color-brand-care-navy: #112632; /* Brand Lock v2 (16-brand-lock-v2.md §1, D-2): Deep Graphite #171a1d → the deep slate shell value. Background wash / dark button / heading-accent role unchanged; only the hue moved. */
+  --color-brand-calm-mist: #e6f6f2; /* Brand Lock v2: the mint selection wash (`accent.soft`). Selected/active/hover-wash role unchanged; only the hue moved. */
 
   /* Neutrals — 1:1 purpose map to the Nemryn derived values
      (design-token-specification.md §2.1/§2.2/§2.3, §10.2). Role
      unchanged for every existing consumer; only the hex moved. */
-  --color-text-primary: #171a1d;
-  --color-text-secondary: #525a61;
+  --color-text-primary: #152c3b; /* v2 `ink` — 13.48:1 on canvas, 14.43:1 on white */
+  --color-text-secondary: #3d5566; /* v2 — 7.29:1 on canvas */
   --color-text-muted: #5f656b; /* Nemryn `text.subtle` role — captions/timestamps/muted metadata. NP-UI-P1a (U1, WCAG 1.4.3): darkened from #646a70 per design-token-spec §10.5.1 so small text on `surface.secondary` clears AA (4.84:1; 5.5:1 on surface.app, 5.9:1 on white). Derived token only — the Muted Slate primitive is unchanged. */
-  --color-text-disabled: #8a9096;
-  --color-border-subtle: #dcddd9;
-  --color-border-strong: #868b85;
-  --color-surface-app: #f7f7f4;
-  --color-surface-secondary: #e8e9e6;
+  --color-text-disabled: #8b9ba6;
+  --color-border-subtle: #dae5e9; /* v2 `line` — decorative dividers / card borders only (non-interactive) */
+  --color-border-strong: #738a97; /* v2 `control.border` — input / select / outline-button borders, 3.61:1 on white (WCAG 1.4.11). Concept B #b8cbd4 (1.68:1) deliberately not used. */
+  --color-surface-app: #f3f8fa; /* v2 `canvas` (Concept B --bg) */
+  --color-surface-secondary: #edf1f4; /* v2 neutral pill / quiet tile ground */
   --color-surface-elevated: #ffffff; /* Nemryn `surface.primary` — already correct, unchanged */
-  --color-surface-hover: #f1f1ee; /* Nemryn `action.secondary.hover` — the generic neutral hover wash role this token has always served */
+  --color-surface-hover: #eef5f7; /* Nemryn `action.secondary.hover` — the generic neutral hover wash role this token has always served */
 
-  /* Action — primary application actions (LOCKED: Deep Graphite / Ink,
-     never Signal Green — brand-lock-v1.md §9, design-token-spec §2.4). */
-  --color-action-primary-background: #171a1d;
-  --color-action-primary-foreground: #f7f7f4;
-  --color-action-primary-hover: #23282d;
-  --color-action-primary-disabled-background: #dcddd9;
-  --color-action-primary-disabled-foreground: #8a9096;
+  /* Action — primary application actions. Brand Lock v2 (D-2): teal, never the
+     status green (teal #006e69 vs positive #1f7a4d; status is never colour-only). */
+  --color-action-primary-background: #006e69; /* v2 teal primary (D-2) — white text 6.11:1 */
+  --color-action-primary-foreground: #ffffff;
+  --color-action-primary-hover: #00605c; /* CB-adj: Concept B #0b877e fails with white (4.39:1); #00605c = 7.43:1 */
+  --color-action-primary-disabled-background: #dae5e9;
+  --color-action-primary-disabled-foreground: #8b9ba6;
   --color-action-destructive-background: #a5352f;
   --color-action-destructive-foreground: #ffffff;
   --color-action-destructive-hover: #8f2e29;
 
-  /* Interactive text / focus / selection — ONE deliberate accent (a
-     deepened Steel Blue), never Signal Green, never the old teal
-     (design-token-spec §2.2 `text.link`, §2.3 `border.focus`, §2.6). */
-  --color-text-link: #37556b;
-  --color-border-focus: #37556b;
-  --color-selection-background: #e7ecf0;
-  --color-selection-border: #37556b;
+  /* Interactive text / focus / selection — ONE deliberate accent: the v2
+     brand teal (16-brand-lock-v2.md §1), never the status green. */
+  --color-text-link: #006e69; /* v2 teal accent text — 6.11:1 on white, 5.71:1 on canvas */
+  --color-border-focus: #006e69;
+  --color-selection-background: #e6f6f2;
+  --color-selection-border: #006e69;
 
   /* Semantic: success → status.ready (Signal Green, derived — design-token-spec §2.5/§10.2) */
-  --color-success-text: #22694a;
-  --color-success-bg: #eaf3ee;
-  --color-success-border: #3c8a63;
-  --color-success-strong: #3c8a63;
+  --color-success-text: #1f7a4d; /* v2 positive — 4.77:1 on #e6f6f2 */
+  --color-success-bg: #e6f6f2;
+  --color-success-border: #3c9a72;
+  --color-success-strong: #07886c; /* check badges, ready dots — 4.42:1 on white */
 
   /* Semantic: warning → status.attention (Attention Amber, derived) */
-  --color-warning-text: #7a5312;
-  --color-warning-bg: #f9efdf;
-  --color-warning-border: #b07a2b;
-  --color-warning-strong: #b07a2b;
+  --color-warning-text: #7f5f24; /* v2 attention (CB-adj from #a16c2a, 4.0:1) — 5.27:1 on #fff0df */
+  --color-warning-bg: #fff0df;
+  --color-warning-border: #d9a35c;
+  --color-warning-strong: #b8741f; /* attention icons / dots — 3.38:1 on #fff0df (non-text) */
 
   /* Semantic: critical → status.critical (Critical Red, derived) */
-  --color-critical-text: #a5352f;
-  --color-critical-bg: #f8e9e7;
-  --color-critical-border: #c15048;
-  --color-critical-strong: #c15048;
+  --color-critical-text: #a33b33; /* v2 — 5.69:1 on #fdeceb */
+  --color-critical-bg: #fdeceb;
+  --color-critical-border: #c9564d;
+  --color-critical-strong: #c9564d;
 
   /* Semantic: informational → status.information (Steel Blue, derived).
      Also reused for former brand-interactive-teal call sites whose real
@@ -87,37 +87,55 @@
      phase report's per-site table; never invented a parallel
      `status-information-*` family when this one already carries the
      identical role and values. */
-  --color-info-text: #37556b;
-  --color-info-bg: #ebeff2;
-  --color-info-border: #5e7686;
-  --color-info-strong: #5e7686;
+  --color-info-text: #2a66ad; /* v2 information — 5.08:1 on #e7f0ff */
+  --color-info-bg: #e7f0ff;
+  --color-info-border: #5b8fd0;
+  --color-info-strong: #3078d7;
 
-  /* Chrome — the application-shell frame (the Operations sidebar).
-     Renamed from the old `--color-navy-*` set: the frame is Deep
-     Graphite now, not navy, and "chrome" is Nemryn's own name for this
-     role (design-token-spec §2.7). Reserved for the sidebar frame only —
-     never a body/content surface. teal active-state → steel, per
-     Appendix A.4 ("the active nav item is not a 'ready' state; it's
-     informational"). */
-  --color-chrome-background: #171a1d;
-  --color-chrome-text-primary: #f7f7f4;
-  --color-chrome-text-secondary: #aab1b7;
-  --color-chrome-border: rgba(255, 255, 255, 0.1);
-  --color-chrome-item-hover: rgba(255, 255, 255, 0.06);
-  --color-chrome-item-active-background: rgba(111, 135, 152, 0.2);
-  --color-chrome-item-active-text: #f7f7f4;
-  --color-chrome-item-active-marker: #a8bcc8;
+  /* Chrome — the application-shell frame (the Operations sidebar). Brand
+     Lock v2 (D-2): the deep slate shell with a teal active marker (the
+     marker is a brand accent, not a "ready" status). Reserved for the
+     sidebar frame only — never a body/content surface. */
+  --color-chrome-background: #112632; /* v2 deep slate (solid fallback; the sidebar adds `bg-chrome-gradient`) */
+  --color-chrome-text-primary: #ffffff;
+  --color-chrome-text-secondary: #d3e1e7; /* nav labels — 11.65:1 on shell, 8.86:1 at the gradient end */
+  --color-chrome-text-muted: #9fb7c2; /* section labels, roles — 7.44:1 on shell, 5.66:1 at the gradient end */
+  --color-chrome-border: rgba(255, 255, 255, 0.12);
+  --color-chrome-item-hover: rgba(255, 255, 255, 0.07);
+  --color-chrome-item-active-background: #2f5262; /* solid fallback of the active gradient (`bg-chrome-active`) — white 8.39:1 */
+  --color-chrome-item-active-text: #ffffff;
+  --color-chrome-item-active-marker: #44c9aa; /* v2 teal marker — 7.56:1 on shell, 4.07:1 on the active item */
+  --color-chrome-focus: #7fb8ff; /* focus ring on the shell — 7.57:1 on shell, 4.07:1 on the active item */
+  --color-chrome-avatar-background: #eaf1f5;
+  --color-chrome-workspace-tile: #a8e8d9;
+  --color-chrome-workspace-tile-text: #0b5f59;
 
-  /* Typography families — Geist Sans replaces Manrope+Inter (LOCKED,
-     brand-lock-v1.md §10). Nemryn is single-family: no separate display
-     face, so `--font-display` is retired — every former `font-display`
-     consumer now resolves through `typography.ts`'s own role definitions
-     onto `--font-sans`, never a second family (Appendix A.5). Inter
+  /* Brand Lock v2 accent surfaces (16-brand-lock-v2.md §1/§4). Mint and sand carry MEANING (get started / positive
+     vs awaiting review / attention) — they are tints, never the only signal. */
+  --color-accent-soft: #e6f6f2; /* mint */
+  --color-accent-soft-strong: #dff6f0; /* mint icon circle */
+  --color-accent-border: #c1e0df; /* mint panel border */
+  --color-accent-hover-border: #83c2bb; /* linked tile hover border */
+  --color-accent-strong: #005d58; /* large teal figures — 7.76:1 on white */
+  --color-accent-sand: #fcf5eb;
+  --color-accent-sand-border: #f2d9b6;
+  --color-hero-border: #cbe2e7;
+  --color-step-mark-border: #92d6c8;
+  --color-step-mark-background: #f4fffd;
+  --color-progress-track: #d8e3e9;
+
+  /* Typography families — Geist Sans is the UI / body family and Geist Mono
+     the data family (unchanged). Brand Lock v2 (D-1) adds ONE display face,
+     Newsreader, for the display tier only (`--font-display` below). Inter
      remains only as the metric-adjacent fallback the typography spec
-     itself calls for (13-typography-specification.md §1), not as a
-     loaded/rendered family. */
+     calls for (13-typography-specification.md §1), not as a loaded family. */
   --font-sans: var(--font-geist-sans), "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-geist-mono), "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* Brand Lock v2 (D-1): the display tier only — page h1, major section titles, the setup hero heading and the
+     Overview panel titles (typography.ts `display*` roles). Newsreader is self-hosted (src/app/fonts/newsreader,
+     OFL 1.1) via next/font/local; Georgia is the Concept B reference face and the fallback. Never used in tables,
+     forms, navigation, buttons, badges or operational values. */
+  --font-display: var(--font-newsreader), Georgia, "Times New Roman", serif;
 
   /* Spacing — semantic aliases layered on Tailwind's 4px scale (see design-tokens.md §5)
      P1-E3-S2B: keyed as --spacing-zw-{size}, NOT --spacing-{size}. Tailwind v4's
@@ -142,23 +160,24 @@
   --spacing-zw-3xl: 4rem; /* 64px */
   --spacing-zw-4xl: 5rem; /* 80px */
 
-  /* Radius — NP-UI-P1b: the approved 3-step scale 4 / 8 / 12 (design-token-spec §5; Brand Lock D7), applied through
-     the spec's own mapping (Appendix A.5) so no class name changes: `rounded-xs` 6 → 4 (radius.sm — small controls,
-     the focus ring), `rounded-sm` stays 8 and `rounded-md` 10 → 8 (radius.md — buttons, inputs, cards, panels,
-     popovers, dialogs), `rounded-lg` 14 → 12 (radius.lg — the largest allowed: modals / feature cards only). Concept
-     B's 12–14 px card radius is deliberately NOT adopted (recorded discrepancy D9). */
+  /* Radius — Brand Lock v2 (D-7): control 9 / card 12 / panel + dialog 14 (Concept B .btn / .metric / .panel),
+     applied through the same class names so no consumer changes: `rounded-sm` = controls (buttons, inputs, nav
+     items), `rounded-md` = cards, tables, menus, tiles, `rounded-lg` = major panels and dialogs. `rounded-xs` stays 4
+     (focus ring, tiny chips). */
   --radius-xs: 4px;
-  --radius-sm: 8px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 9px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
   /* radius-full is Tailwind's built-in `rounded-full`, reserved for pills per design system */
 
-  /* Shadows — two levels only. Tint re-anchored from the old blue-slate
-     rgba(16,31,39) to the Nemryn graphite primitive rgba(23,26,29), per
-     design-token-spec §6. Same two-level structure, same consumers,
-     imperceptibly different tint. */
-  --shadow-sm: 0 1px 2px rgba(23, 26, 29, 0.06), 0 1px 3px rgba(23, 26, 29, 0.08);
-  --shadow-md: 0 2px 4px rgba(23, 26, 29, 0.08), 0 4px 12px rgba(23, 26, 29, 0.12);
+  /* Shadows — Brand Lock v2 §3: soft, low-contrast, tinted toward the slate ink (Concept B). `shadow-sm` is the card
+     shadow (tiles, tables, raised cards), `shadow-panel` the major panel, `shadow-hero` the setup hero only,
+     `shadow-md` popovers / menus, `shadow-button-hover` the restrained hover lift (no lift under reduced motion). */
+  --shadow-sm: 0 1px 2px rgba(21, 44, 59, 0.04), 0 5px 15px rgba(34, 83, 100, 0.05);
+  --shadow-md: 0 2px 4px rgba(21, 44, 59, 0.06), 0 8px 24px rgba(21, 44, 59, 0.12);
+  --shadow-panel: 0 1px 2px rgba(21, 44, 59, 0.03), 0 8px 24px rgba(51, 84, 90, 0.05);
+  --shadow-hero: 0 11px 26px rgba(46, 98, 96, 0.1);
+  --shadow-button-hover: 0 6px 12px rgba(23, 57, 67, 0.08);
 
   /* Motion — durations re-anchored to design-token-spec §8
      (120/180/240, was 120/200/280); same easing curve, unchanged. */
@@ -166,6 +185,34 @@
   --duration-base: 180ms;
   --duration-slow: 240ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Brand Lock v2 gradients (16-brand-lock-v2.md §1/§4) — named utilities so no page carries a raw gradient or hex.
+   Each sits on top of a solid token background (the fallback), and is purely decorative: meaning always comes from
+   icon + text. */
+@utility bg-chrome-gradient {
+  background-image: linear-gradient(155deg, #112834, #132936 65%, #173c46);
+}
+@utility bg-chrome-active {
+  background-image: linear-gradient(90deg, #2f5262, #284353);
+}
+@utility bg-action-primary-gradient {
+  background-image: linear-gradient(120deg, #006d67, #005052);
+}
+@utility bg-panel-mint {
+  background-image: linear-gradient(140deg, #f2fffd, #f8fcfc 75%);
+}
+@utility bg-panel-sand {
+  background-image: linear-gradient(130deg, #fff9f2, #fffdfb 80%);
+}
+@utility bg-setup-hero {
+  background-image: linear-gradient(110deg, #edfdfd 0%, #ffffff 55%, #e8f5f6 100%);
+}
+@utility bg-progress-done {
+  background-image: linear-gradient(90deg, #056e69, #13b59c);
+}
+@utility bg-canvas-glow {
+  background-image: radial-gradient(circle at 62% 7%, #e4f2f9 0, transparent 30%);
 }
 
 body {
@@ -183,11 +230,11 @@ body {
   border-radius: var(--radius-xs);
 }
 
-/* NP-UI-P1b: on the dark shell chrome the steel focus colour is only ~2:1 against Deep Graphite, so focus rings
-   inside `.chrome-surface` use the chrome marker token instead (#A8BCC8, >= 7:1; WCAG 2.4.7 / 1.4.11). Same width
-   and offset as the global rule. */
+/* On the dark slate shell the teal focus colour is too dark, so focus rings inside `.chrome-surface` use the shell
+   focus token (Brand Lock v2 `shell.focus` #7FB8FF: 7.57:1 on the shell, 4.07:1 on the active item; WCAG 2.4.7 /
+   1.4.11). Same width and offset as the global rule. */
 .chrome-surface :focus-visible {
-  outline-color: var(--color-chrome-item-active-marker);
+  outline-color: var(--color-chrome-focus);
 }
 
 /* NP-UI-P1b sidebar polish: the dark sidebar's nav list scrolls on short viewports, but its scrollbar track / thumb
@@ -209,7 +256,7 @@ body {
    Tint re-anchored to the Nemryn graphite primitive (`overlay.scrim`,
    design-token-spec §6), replacing the old slate-blue tint. */
 dialog::backdrop {
-  background: rgba(15, 18, 20, 0.45);
+  background: rgba(16, 38, 49, 0.47); /* v2 slate scrim (Concept B .scrim) */
 }
 
 @media (prefers-reduced-motion: reduce) {

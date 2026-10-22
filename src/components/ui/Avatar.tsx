@@ -28,7 +28,7 @@ export function Avatar({ name, size = "md", tone = "default", className }: Avata
       aria-label={name}
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full font-semibold",
-        tone === "chrome" ? "bg-chrome-item-active-background text-chrome-text-primary ring-1 ring-chrome-border" : "bg-brand-care-navy text-white",
+        tone === "chrome" ? "bg-chrome-avatar-background font-semibold text-text-primary" : "bg-brand-care-navy text-white",
         sizeClasses[size],
         className,
       )}

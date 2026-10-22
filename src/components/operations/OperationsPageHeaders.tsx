@@ -36,7 +36,8 @@ export function OverviewPageHeader({ timezone, operatingHours }: { timezone: str
         title="Today's Operations"
         description={
           <>
-            {formatOperationsLongDate(new Date(), timezone)}
+            {/* Concept B `.head p`: the real date at 16px, muted. */}
+            <span className="text-base text-text-muted">{formatOperationsLongDate(new Date(), timezone)}</span>
             {operatingHours && (
               <span className={cn(typography.metadata, "mt-1 flex items-center gap-1.5 text-text-secondary")} data-testid="operating-hours">
                 <Clock className="size-3.5 text-text-muted" aria-hidden />

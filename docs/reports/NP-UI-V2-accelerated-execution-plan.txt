@@ -1,0 +1,214 @@
+NP-UI-V2 — ACCELERATED EXECUTION PLAN (Brand Lock v2 → Concept B parity)
+=========================================================================
+Date: 2026-10-21.
+Status: PLAN ONLY. NOT AUTHORIZED.
+- Brand Lock v1 remains active. Nothing in this plan starts until the owner approves
+  docs/design/nemryn-brand-lock-v2-PROPOSAL.md and the decisions in NP-UI-V2-design-decision-review.txt.
+- The approved logo assets (public/brand/*) are not touched in any step.
+
+Companion documents:
+- docs/design/nemryn-brand-lock-v2-PROPOSAL.md: the values.
+- docs/design/nemryn-v2-visual-parity-spec.md: gaps G1–G14, the per-surface targets, the acceptance criteria.
+- docs/reports/NP-UI-P2-production-closeout.txt: the current production baseline and finding F-1.
+
+0. PRINCIPLES
+-------------
+- Four substantial releases, not a stream of styling-only patches. Each release is one branch → one PR → one
+  production release, with a read-only production check afterwards.
+- Change shared layers first (tokens → primitives → shell → pages). Token NAMES are kept, so most consumers move
+  without per-file edits. No per-page colour / radius overrides.
+- Presentation only:
+  - no change to routes, server actions, queries, migrations, RLS / RPC, authorization, tenant isolation, quote /
+    financial logic or print output semantics;
+  - copy changes only where already approved (Brand Lock v1 §15 terminology), or as listed in the decision
+    review.
+- Every release runs the full regression gate (§6). Only the assertions that encode v1 visual values change, and
+  only by recorded decision (§5).
+
+1. V2-0 (OPTIONAL PRE-STEP, can be folded into V2-1): F-1 ACCESSIBILITY FIX
+---------------------------------------------------------------------------
+- AssignmentGrid scroll container gets tabIndex={0}, role="region", aria-label="Today's assignments schedule".
+- A QA2 check for "drivers but no trips" (axe scrollable-region-focusable = 0).
+- Independent of v2. It can ship alone, or as the first commit of V2-1 (decision D-11).
+
+2. V2-1: TOKENS + SHELL + OPERATIONS OVERVIEW
+---------------------------------------------
+Goal: the first screen a user sees matches Concept B (gaps G1–G12 on /operations).
+
+Design changes:
+a) Tokens (src/app/globals.css @theme):
+   - the chrome-* tokens → shell values (#112632, gradient, #D3E1E7 / #9FB7C2, active gradient, marker #44C9AA,
+     focus #7FB8FF);
+   - surface-app → #F3F8FA;
+   - text-primary / secondary / muted → #152C3B / #3D5566 / #5B6E7E;
+   - border-subtle → #DAE5E9; border-control → #738A97;
+   - the action-primary-* tokens → #006E69 / hover #00605C (optional gradient);
+   - status-* tokens → the AA-checked v2 pairs;
+   - radius scale: control 9, card 12, panel 14;
+   - new shadow tokens: card / panel / hero / button-hover;
+   - focus ring on light surfaces → teal.
+b) Typography:
+   - src/design/typography.ts: new display roles (display-page clamp(28px,3vw,39px), display-section 29px,
+     display-setup 31px, display-card 22px);
+   - the display font per D-1 (option A: next/font/local with a self-hosted OFL serif; B: Georgia stack; C: none);
+   - button text 13px / 600.
+c) Primitives:
+   - Button / LinkButton / IconButton: 42px, radius 9, hover lift (reduced-motion safe);
+   - Panel + PanelHeader: radius 14, tone prop neutral | mint | sand, 45px circular icon, display-card h3;
+   - StatTile: circular 42px icon, CB anatomy per D-6;
+   - SectionHeader size="section": display-section;
+   - PageHeader: display-page h1 + date slot;
+   - StatusBadge: v2 pill tones;
+   - Input / Select / Textarea: control border, teal focus.
+d) Shell:
+   - OperationsSidebar / GrowthNavGroup / nav-styles.ts: gradient ground, 39px items, radius 9, active gradient +
+     3px marker, workspace card;
+   - AppHeader per D-4 (keep or drop the context line);
+   - AccountMenu tones.
+   - Width stays 256 / 64 rail (D-15).
+e) Overview:
+   - the OnboardingChecklistBanner hero (gradient, 31px title, segmented teal progress, 6 × 43px circular step
+     marks; collapsible; real checklist only);
+   - OperationsBrief: "Operations Brief" section title; 4 tiles; the two-column panel grid at ≥1100: Get started
+     (mint) | Requests awaiting review (sand, large real count, full-width teal "Review requests"); Needs
+     Attention / Active Now / Next Departures as v2 panels.
+f) Because tokens are global, every page changes colour / radius in V2-1. That is accepted: V2-2 / V2-3 refine
+   composition, not colour.
+
+Shared files expected to change:
+- src/app/globals.css
+- src/app/layout.tsx (font loading, only if D-1 = A)
+- src/design/typography.ts
+- src/components/ui/{Button,LinkButton,IconButton,Panel,PanelHeader,StatTile,SectionHeader,PageHeader,
+  StatusBadge,Input,Select,Textarea}.tsx (or the shared buttonStyles / class helpers they use)
+- src/components/shell/{OperationsSidebar,GrowthNavGroup,nav-styles,AppHeader,AccountMenu}
+- src/components/operations/{OnboardingChecklistBanner,OperationsBrief}.tsx
+- src/app/operations/page.tsx
+- possibly a new font asset under src/app/fonts/ (D-1 = A only; this is a new asset and needs approval; it is not a
+  package change).
+
+Acceptance (visual parity spec §4):
+- the token-parity computed-style check;
+- the Overview composition order / bounding boxes;
+- a contact sheet vs nemryn-approved-concept-b.png at 1440 with G1–G12 marked;
+- 1440 / 1024 / 768 no overflow;
+- axe 0 serious / critical;
+- logo SHA-256 unchanged.
+
+3. V2-2: CORE PAGES
+-------------------
+Goal: every Core surface reads as the same product as the Overview.
+
+Surfaces:
+- Requests (list + detail + Log Request);
+- Trips (list + detail + New Trip);
+- Dispatch;
+- Tomorrow Readiness;
+- Standing Orders (list + detail + new / create-missing);
+- Passengers; Facilities; Drivers; Vehicles; Proof of Service.
+
+Design changes:
+- display-page h1 on all of them;
+- list pages: FilterBar + DataTable on white, radius 12, card shadow; ViewSwitch per D-5; pagination restyled;
+- detail pages: panels → v2 Panel (neutral tone; attention items sand only where they carry an attention meaning);
+  the TripInfoStrip / SummaryStrip tile treatment aligned with StatTile;
+- Dispatch:
+  - queue cards radius 12; the grid panel radius 14; capacity panel v2;
+  - trip blocks keep their status colours, re-mapped to the v2 status pairs;
+- forms: FormSection cards radius 12, control borders, teal focus / selection; dialogs radius 14 (EndArrangement,
+  Edit, Decline, etc.);
+- EmptyState: circular icon tile, display-card title.
+
+Shared files: DataTable, FilterBar, ViewSwitch, SummaryStrip, Pagination, Dialog, EmptyState, FormSection,
+OperationsPageHeaders, plus the per-panel class names in the components/operations/* files that P2 touched.
+- No logic files.
+
+Acceptance:
+- the 29-route capture set (the same names as the P2 before / after set) re-captured at 1440 / 1024 / 768;
+- a contact sheet before | after;
+- token-parity checks extended to a list page, a detail page and Dispatch;
+- QA2 core suites green;
+- axe 0 serious / critical, including the Dispatch empty grid.
+
+4. V2-3: GROWTH, QUOTES, SETTINGS, AUTH
+---------------------------------------
+Goal: close gap G13; no unrefined surface remains.
+
+- Growth (Dashboard, Pipeline, Contacts, Tasks, Activities):
+  - the same page anatomy;
+  - adopt ViewSwitch + FilterBar in place of the bespoke filters (as P2 did for Core);
+  - v2 panels / tiles.
+  - The "recurring care active" copy → "standing order" terminology, if approved (D-14).
+- Quotes (directory, drafts, lifecycle, detail, print):
+  - VISUAL ONLY;
+  - the ZD-224 / ZD-226 / ZD-227 wording, notice / banner parity, lifecycle controls and print layout semantics are
+    unchanged;
+  - the print page stays print-neutral (no shell gradient, no tints that do not print);
+  - the quotes strict suite is the gate.
+- Settings:
+  - the sub-navigation frame (v1 roadmap D8) if approved (D-13);
+  - "Request Hub" → "Requests" if approved (D-14).
+- Auth (sign-in, join, confirm, reset):
+  - canvas, display-page h1, teal primary, the approved primary logo unchanged;
+  - RouteState error / not-found states in v2.
+
+Shared files: Growth page clients and filter components, Settings layout, src/components/auth/*, RouteState.
+- No server actions.
+
+Acceptance:
+- captures of every Growth / Quotes / Settings / Auth route at 1440 / 1024 / 768 + a contact sheet;
+- quotes strict at its baseline (s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26);
+- QA2 growth + auth-access green;
+- print-preview capture unchanged in structure.
+
+5. V2-4: INTEGRATED VISUAL QA AND RELEASE
+-----------------------------------------
+- A full 29+ route sweep (Core + Growth + Quotes + Settings + Auth), at 1440 / 1024 / 768, plus the 390 notice.
+- Promote the capture tooling into tests/e2e/qa2/visual-capture.mjs (fixed fictional fixtures, deterministic names).
+- A token-parity suite: tests/e2e/ui-foundations/v2.e2e.mjs (computed-style assertions for every §1 token on
+  representative elements).
+- An integrated report + the final contact sheet against Concept B; the owner signs off G1–G14.
+- Brand Lock v2 is published as a numbered brand document; v1 is marked superseded (not edited).
+- Release: PR → Vercel preview review → merge → a read-only production check (as for P2).
+
+Visual assertions that change BY DECISION (they encode v1 and would correctly fail under v2):
+- tests/e2e/ui-foundations/p1b.e2e.mjs
+  - B1 (chrome #171a1d, canvas #f7f7f4, graphite primary, radius 4 / 8 / 8 / 12) → v2 values;
+  - B2 ("Geist, no serif; graphite primary, no teal") → display serif h1 per D-1, teal primary;
+  - S10b (shell focus ring #a8bcc8) → #7FB8FF.
+- These are re-pointed in V2-1 with the decision reference in the check label. Their intent stays (brand tokens
+  are asserted); only the expected values change.
+- No behavioural, authorization, tenant or quote assertion changes.
+
+6. REGRESSION GATE (every V2 release)
+-------------------------------------
+- tsc, eslint, npm test (894+), the default `next build` (Turbopack).
+- QA2 strict 195 / 195 (+ the new F-1 check).
+- P1a 48 / 48; P1b 52 / 52 (with the B1 / B2 / S10b re-pointed).
+- Quotes strict at baseline.
+- The 13 SQL privilege / tenant suites with 0 failures.
+- axe 0 serious / critical on the route sweep.
+- The logo SHA-256 check; no fictional values; no artwork / tagline / greeting.
+
+7. SEQUENCING AND EFFORT (indicative)
+-------------------------------------
+- V2-1: the largest, because tokens + primitives + shell + Overview = the foundation.
+- V2-2 and V2-3 can be prepared in parallel branches off V2-1, but are released in order.
+- V2-4 is a QA / release step, with no new design.
+- Each release stops for an owner review of the screenshots before commit, push, merge and production, matching
+  the P1b / P2 controlled-release pattern.
+
+8. RISKS
+--------
+- R1: A global token change in V2-1 alters every page at once. This is mitigated by the 29-route sweep in V2-1
+  itself, not deferred to V2-2.
+- R2: The display serif (D-1 = B) renders differently across operating systems. Option A avoids this but adds a font
+  asset.
+- R3: Teal primary vs the status green: the distinction is kept by hue (#006E69 vs #1F7A4D) and by status never
+  being colour-only. This is verified by a review of Dispatch / Readiness screens.
+- R4: Gradient panels are decorative only. Meaning is carried by the icon + text, never the tint.
+- R5: The print output for quotes must not inherit the screen tints; this is covered by the s3c / o1 suites and a
+  print capture.
+- Open and unaffected: OD-Q13, OD-Q14, PD-10, PD-11.
+
+STOPPED FOR OWNER REVIEW. No product code changed; nothing committed, pushed, merged or deployed.

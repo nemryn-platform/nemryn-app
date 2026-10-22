@@ -38,8 +38,9 @@ export function OperationsShell({ sidebar, header, children }: OperationsShellPr
         <OperationsSidebar {...sidebar} />
         <div className="flex min-w-0 flex-1 flex-col">
           <AppHeader {...header} />
-          {/* NP-UI-P1b: page gutter 16px at tablet, 24px at desktop (lg), 32px on wide screens (xl); every page renders its own PageHeader (one h1). */}
-          <main className="flex-1 overflow-y-auto px-zw-md py-zw-lg lg:px-zw-lg xl:px-zw-xl xl:py-zw-xl">
+          {/* NP-UI-P1b: page gutter 16px at tablet, 24px at desktop (lg), 32px on wide screens (xl); every page renders its own PageHeader (one h1).
+              Brand Lock v2: the canvas carries Concept B's faint cool glow (decorative, `bg-canvas-glow`). */}
+          <main className="flex-1 overflow-y-auto bg-canvas-glow px-zw-md py-zw-lg lg:px-zw-lg xl:px-zw-xl xl:py-zw-xl">
             {children}
           </main>
         </div>

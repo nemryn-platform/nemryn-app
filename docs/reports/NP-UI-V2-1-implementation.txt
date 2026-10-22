@@ -1,0 +1,317 @@
+NP-UI-V2-1 — BRAND LOCK V2 + CONCEPT B VISUAL PARITY: IMPLEMENTATION REPORT
+==========================================================================
+Date: 2026-10-21.
+Mode: owner-approved design implementation, LOCAL / ISOLATED only.
+- NOT committed, pushed, merged or deployed.
+- No production access.
+
+Companion reports:
+- NP-UI-V2-1-visual-parity-review.txt
+- NP-UI-V2-1-test-results.txt
+
+Evidence: docs/design/concept-b/reviews/v2-1/ (index.md).
+
+1. BRANCH / STARTING HEAD
+-------------------------
+- `git fetch`: origin/main = 202c2158c4e17155ade5b6ed7a7ecb32f4a03695, the PR #25 merge; it had not advanced. Its
+  tree is identical to the approved P2 commit f595e24, so the QA2 / P2 implementation is present in main.
+- Preflight: 0 tracked modifications; 357 untracked owner files (QA scripts, reports, screenshots), all preserved.
+- Branch: np-ui-v2-1-concept-b-foundation, created from origin/main 202c215 with `git switch -c`. No stash, reset,
+  clean or worktree was needed.
+- Isolated stack NemrynS1Iso (fictional seed) and the local production build on :3100.
+
+2. PUBLISHED BRAND LOCK V2
+--------------------------
+docs/brand/nemryn/16-brand-lock-v2.md: APPROVED — ACTIVE — V2.
+- The next number in the brand series.
+- Contents: D-1 to D-17 and the V2-1 clarifications (display weight 700; the fresh-workspace tiles rule; the
+  responsive container rule).
+
+Brand Lock v1 (11-brand-lock-v1.md) is NOT edited.
+
+Pointer lines name v2 as the active lock in:
+- 00-brand-foundation.md (the brand index);
+- 12-design-token-specification.md;
+- 13-typography-specification.md;
+- docs/design/canonical-shell-specification.md.
+
+docs/design/nemryn-brand-lock-v2-PROPOSAL.md is marked SUPERSEDED by 16, so no competing specification remains.
+
+3. APPROVED TOKEN CHANGES (src/app/globals.css; token NAMES unchanged)
+--------------------------------------------------------------------
+Shell:
+- chrome-background #112632, plus the named gradient utility `bg-chrome-gradient`;
+- chrome text #FFFFFF / #D3E1E7, new chrome-text-muted #9FB7C2;
+- active #2F5262 plus `bg-chrome-active`;
+- marker #44C9AA;
+- new chrome-focus #7FB8FF (the `.chrome-surface` focus rule now uses it);
+- workspace tile and avatar tokens.
+
+Canvas and text:
+- surface-app #F3F8FA, plus `bg-canvas-glow`;
+- text #152C3B / #3D5566 / #5B6E7E;
+- border-subtle (decorative) #DAE5E9;
+- border-strong (interactive control) #738A97.
+
+Action:
+- primary #006E69, plus `bg-action-primary-gradient` (#006D67 → #005052);
+- hover #00605C;
+- white foreground;
+- link / focus / selection teal.
+
+Accent:
+- mint #E6F6F2 / #DFF6F0; sand #FCF5EB;
+- borders #C1E0DF / #F2D9B6 / #CBE2E7;
+- accent-strong #005D58;
+- step-mark and progress tokens;
+- gradients `bg-panel-mint`, `bg-panel-sand`, `bg-setup-hero`, `bg-progress-done`.
+
+Status: the v2 AA pairs:
+- positive #1F7A4D / #E6F6F2;
+- attention #7F5F24 / #FFF0DF;
+- information #2A66AD / #E7F0FF;
+- critical #A33B33 / #FDECEB;
+- neutral surface #EDF1F4.
+
+brand-care-navy → #112632 (auth background, dark accents); brand-calm-mist → mint.
+
+Shape and depth:
+- radius 4 / 9 / 12 / 14 (xs / sm / md / lg);
+- shadows sm (card) / md / panel / hero / button-hover, all slate-tinted;
+- the dialog scrim moved to slate.
+
+Rules:
+- Every gradient lives in a named @utility.
+- No page or component carries a raw brand hex.
+- All contrast pairs are listed in 16-brand-lock-v2.md §1 with measured ratios.
+
+4. NEWSREADER FONT: PROVENANCE AND LICENCE
+------------------------------------------
+- Source: google/fonts `ofl/newsreader/Newsreader[opsz,wght].ttf` at commit
+  8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5. The upstream project is github.com/productiontype/Newsreader
+  (Production Type).
+- Licence: SIL Open Font License 1.1. OFL.txt is copied unchanged beside the font.
+- File: src/app/fonts/newsreader/Newsreader-Variable.ttf (451,664 bytes; SHA-256 8a08d13f…d7c1). Byte-identical to
+  upstream; only the filename changed, to remove a comma. Provenance is in the README.md there.
+- Minimal: the upright variable file only (weight 200–800, optical size 6–72). No italic, no static set, no subset,
+  no re-encode.
+- Loaded through `next/font/local` in src/app/layout.tsx (variable --font-newsreader, display swap, Georgia fallback).
+  The build serves it as a hashed static asset, so there is no runtime download.
+- No package installed; Next.js and the build tooling unchanged; Geist Sans / Mono unchanged.
+- Visual comparison (v2-1-font-comparison.png):
+  - At 700, Newsreader matches Concept B's bold Georgia in weight; 600 was visibly lighter.
+  - Remaining gap: Newsreader is about 5% narrower. This is the face's character. It is reported, not
+    substituted.
+
+5. EXACT FILES MODIFIED
+-----------------------
+Product source (21 modified, 3 added):
+- src/app/globals.css: tokens, utilities, focus rule, scrim.
+- src/app/layout.tsx: Newsreader via next/font/local.
+- src/design/typography.ts:
+  - display roles displayPage / displaySection / displaySetup / displayCard;
+  - button 13px / 600.
+- src/components/ui/buttonStyles.ts:
+  - 42px standard;
+  - teal gradient primary with a solid hover;
+  - hover lift (enabled only; none under reduced motion).
+- src/components/ui/IconButton.tsx: teal primary variant.
+- src/components/ui/Panel.tsx:
+  - `surface` (default / raised / mint / sand);
+  - circular icon tones plus an "accent" tone;
+  - `iconCircleClasses`;
+  - PanelHeader `variant="display"`;
+  - quiet footer.
+- src/components/ui/StatTile.tsx: Concept B anatomy, number-led hybrid; group gap.
+- src/components/ui/PageHeader.tsx: the operational h1 uses `displayPage`.
+- src/components/ui/ViewSwitch.tsx: the D-5 active treatment.
+- src/components/ui/Avatar.tsx: the chrome avatar tone.
+- src/components/operations/nav-styles.ts: 39px items, active gradient plus 3px marker.
+- src/components/operations/OperationsSidebar.tsx: gradient, muted labels, workspace card, gap.
+- src/components/operations/GrowthNavGroup.tsx: flyout gradient, muted label, shell focus.
+- src/components/operations/OperationsShell.tsx: the canvas glow on <main>.
+- src/components/operations/OperationsPageHeaders.tsx: the Overview date at 16px muted.
+- src/components/operations/OnboardingChecklistBanner.tsx: the setup hero.
+- src/components/operations/OperationsBrief.tsx:
+  - display heading, fresh tiles slot;
+  - mint Get started, sand Requests awaiting review;
+  - raised display panels;
+  - responsive grid at 1100.
+- src/app/operations/page.tsx:
+  - fresh-workspace tiles;
+  - tile tones;
+  - lower panels raised / display;
+  - side column from xl.
+- src/components/operations/dispatch/AssignmentGrid.tsx: F-1.
+- src/components/operations/new-trip/NewTripForm.tsx, src/components/operations/requests/LogRequestForm.tsx: their
+  own main h1 uses `displayPage`; one class each.
+- ADDED:
+  - src/app/fonts/newsreader/Newsreader-Variable.ttf
+  - src/app/fonts/newsreader/OFL.txt
+  - src/app/fonts/newsreader/README.md
+
+Tests (4 modified):
+- tests/e2e/ui-foundations/p1b.e2e.mjs: B1, B2 and S10b re-pointed to v2, each citing its decision.
+- tests/e2e/qa2/core-trips-dispatch.e2e.mjs: the new F-1 scenario (F1–F4).
+- tests/e2e/qa2/run.mjs: expected check count 40 → 44.
+- tests/e2e/qa2/README.md
+
+Docs:
+- ADDED:
+  - docs/brand/nemryn/16-brand-lock-v2.md;
+  - the three V2-1 reports;
+  - docs/design/concept-b/reviews/v2-1/.
+- Pointer lines in 00 / 12 / 13 / canonical-shell-specification.
+- The proposal marked superseded.
+
+NOT touched:
+- supabase/ (schema, migrations, RLS, RPC);
+- any *actions.ts;
+- src/lib/auth or any authorization;
+- quote lifecycle / finance / print code;
+- public/brand/* (logos);
+- package.json / lockfile / next.config;
+- the Driver PWA components (they receive the shared tokens only).
+
+6. COMPONENTS UPDATED (shared layer, backward compatible)
+---------------------------------------------------------
+- New props are optional with defaults that keep existing callers unchanged:
+  - Panel `surface` defaults to "default";
+  - PanelHeader `variant` defaults to "standard".
+- `iconToneClasses` gains an "accent" key; every existing key is kept.
+- StatTile keeps the same props; only the layout changed.
+- Buttons keep the same API.
+- Every data-testid, accessible name and role was preserved. The setup toggle keeps its name ("Hide steps" / "Show
+  steps"), aria-expanded and aria-controls.
+
+7. OPERATIONS OVERVIEW COMPOSITION (real data only)
+---------------------------------------------------
+A. Page header:
+- "Today's Operations" in Newsreader;
+- the real date at 16px muted;
+- operating hours when set;
+- Export Day Sheet (outline 42px) and New Trip (teal 42px);
+- no greeting, tagline or service status.
+
+B. Setup hero (only while setup is incomplete):
+- gradient surface, 31px title;
+- "N of 6 complete" over a teal segmented progressbar;
+- six 43px step circles with check / empty badges, plus "Complete" / "Not complete" text;
+- one row from a 64rem container, 3 per row on tablet;
+- collapsible.
+- Completion and count are computed from the existing checklist; unchanged.
+
+C. Operations Brief:
+- a 29px display heading, then four tiles.
+- Populated: the existing today counts (trips today, active, need attention, no current issues; values and links
+  unchanged).
+- Fresh workspace (new in V2-1, Concept B parity):
+  - today's date;
+  - setup progress;
+  - pending requests;
+  - accepted requests needing a trip.
+  - These are facts this page already loaded: no new query, no new metric. Empty reads "None waiting"; a failed
+    load reads "Unavailable"; never 0.
+
+D. Panels:
+- From 1100px: Get started (mint; same rows, links and admin gating) beside Requests awaiting review (sand).
+  - A large real pending count.
+  - Rows for the oldest request and for accepted requests still needing a trip.
+  - A full-width teal "Review requests" (same destination, ?state=pending). It becomes a right-aligned button when
+    the panel spans a full row.
+- Needs Attention, Active Now, Next Departures, Tomorrow, Standing orders and Proof of service:
+  - raised panels with 45px circles and 22px display titles;
+  - the same rows, limits, copy, empty states, status semantics and actions;
+  - the fixed P0–P5 order is unchanged.
+
+E. Lower detail: Upcoming Trips / Active Trips / Activity Log as raised display panels; the side column from 1280px.
+
+No metric calculation, query, composition rule or permission was changed.
+
+8. DISPATCH F-1 FIX
+-------------------
+- AssignmentGrid's horizontal scroll container ([data-testid="dispatch-grid"]):
+  - tabIndex={0};
+  - role="region";
+  - aria-label "Today's assignments schedule" / "Tomorrow's assignments schedule".
+- Applied only while the grid shows the driver timeline. The "No active drivers" state does not scroll and gets no
+  extra tab stop.
+- Trip blocks keep their own buttons and actions; assignment logic is untouched.
+- Permanent QA2 scenario (core-trips-dispatch F1–F4), run in an isolated fictional workspace with 3 drivers and no
+  trips:
+  - F1: the grid overflows and holds no focusable controls;
+  - F2: it is a named, focusable region;
+  - F3: Tab reaches it, and ArrowRight scrolls it (0 → 320px);
+  - F4: 0 serious / critical axe findings.
+- The existing populated-grid checks (L / K / B) still pass.
+
+9. VISUAL GAP ASSESSMENT G1–G12
+-------------------------------
+Full detail is in NP-UI-V2-1-visual-parity-review.txt. Summary:
+
+MATCHED:
+- G1 shell;
+- G2 active navigation;
+- G3 primary CTA;
+- G4 canvas;
+- G5 display typography (Newsreader is about 5% narrower; noted);
+- G6 card shape and depth;
+- G7 circular icon tiles;
+- G10 two-column panels;
+- G12 badge tone.
+
+MATCHED with intentional differences:
+- G8 setup hero: no artwork or tagline; workspace eyebrow; visible step state text; real order.
+- G9 tiles: Concept B's "Service day" has no data source, so it is replaced by real setup progress.
+- G12 badge size: 12px, not 10px, for table legibility.
+
+INTENTIONALLY DIFFERENT: G11 header. The context line is kept (D-4); no greeting, fake search or notification dot.
+
+NOT MATCHED: none.
+
+10. FUNCTIONAL TESTS
+--------------------
+See NP-UI-V2-1-test-results.txt:
+- TypeScript, ESLint and npm test;
+- the default production build;
+- QA2 strict (199 checks);
+- P1a and P1b;
+- strict quotes;
+- 13 SQL suites.
+
+11. ACCESSIBILITY AND RESPONSIVE
+--------------------------------
+- Every new colour pair was AA-measured; the ratios are in 16-brand-lock-v2.md §1.
+- Text pairs are ≥ 4.5:1. The shell focus ring, the active marker and the control borders are ≥ 3:1.
+- The hover lift is disabled under prefers-reduced-motion; the global reduced-motion rule still applies.
+- Focus is visible on the shell (#7FB8FF) and on the canvas (teal).
+- The axe and width sweeps (1440 / 1024 / 768) and the 390 notice: see the test report.
+
+12. LOGO HASH VERIFICATION
+--------------------------
+SHA-256 of all 11 files in public/brand/ was recorded before any UI change and compared after implementation and
+final QA. They are byte-identical; see the test report.
+
+The shell still uses only:
+- the inverse logo (expanded);
+- the inverse symbol (rail);
+- the primary logo (auth).
+
+13. REMAINING DESIGN DEVIATIONS (documented, not hidden)
+--------------------------------------------------------
+- Newsreader is about 5% narrower than Georgia (the face's character).
+- G11 header, G8 eyebrow / step text, G9 service-day tile, G12 badge size, as described above.
+- The Concept B PNG is drawn at about 1.3× its own prototype scale. Nemryn uses the prototype's real pixel values.
+- Shared-token side effects that are visual but intentional:
+  - every page now has the slate shell, teal actions, the cool canvas and 9 / 12 / 14 radii;
+  - every Operations main h1 uses the display face.
+- Deeper page recomposition stays deferred:
+  - V2-2: Trip / Request detail;
+  - V2-3: Growth tiles and filters, the Quotes strip, Settings sub-navigation, the auth card (its hard-coded
+    12px-radius button).
+
+14. READINESS FOR OWNER REVIEW
+------------------------------
+READY FOR OWNER VISUAL REVIEW.
+- Start with v2-1-concept-b-vs-actual-1440.png, then the contact sheet.
+- No commit, push, PR, merge or deployment was performed.

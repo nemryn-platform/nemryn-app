@@ -10,7 +10,7 @@ const variantClasses: Record<IconButtonVariant, string> = {
   outline:
     "border border-border-strong bg-surface-elevated text-text-primary hover:bg-surface-hover",
   primary:
-    "bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
+    "bg-action-primary-background bg-action-primary-gradient text-action-primary-foreground hover:bg-action-primary-hover hover:bg-none",
   // NP-UI-P1b: on the dark shell chrome (sidebar) -- chrome.text tokens, never body-text greys on graphite.
   chrome: "bg-transparent text-chrome-text-secondary hover:bg-chrome-item-hover hover:text-chrome-text-primary",
 };

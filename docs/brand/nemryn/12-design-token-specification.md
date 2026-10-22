@@ -5,6 +5,8 @@
 **Date:** 2026-09-07
 **Depends on:** [`05-semantic-color-system.md`](./05-semantic-color-system.md), [`04-visual-direction.md`](./04-visual-direction.md), [`11-brand-lock-v1.md`](./11-brand-lock-v1.md)
 
+> **Active brand lock (2026-10-21): [`16-brand-lock-v2.md`](./16-brand-lock-v2.md) — APPROVED, ACTIVE.** It supersedes [`11-brand-lock-v1.md`](./11-brand-lock-v1.md) for palette, display typography, shape and depth; where a token value here disagrees with `16`, `16` wins.
+
 ---
 
 ## 0. Conventions

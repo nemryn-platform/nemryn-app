@@ -243,7 +243,7 @@ export function NewTripForm({
 
       <div className="flex flex-wrap items-start justify-between gap-zw-md">
         <div>
-          <h1 className={cn(typography.pageTitleOperational, "text-text-primary")}>New Trip</h1>
+          <h1 className={cn(typography.displayPage, "text-text-primary")}>New Trip</h1>
           <p className={cn(typography.body, "mt-1 text-text-secondary")}>Create and coordinate a transportation trip.</p>
         </div>
         <div className="flex gap-2">

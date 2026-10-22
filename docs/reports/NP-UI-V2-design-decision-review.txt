@@ -1,0 +1,129 @@
+NP-UI-V2 — DESIGN DECISION REVIEW (owner decisions required before any V2 work)
+===============================================================================
+Date: 2026-10-21.
+Status: AWAITING OWNER DECISIONS.
+- Brand Lock v1 remains active.
+- Brand Lock v2 is NOT authorized for implementation.
+
+References:
+- docs/design/nemryn-brand-lock-v2-PROPOSAL.md (PROPOSAL)
+- docs/design/nemryn-v2-visual-parity-spec.md
+- docs/reports/NP-UI-V2-accelerated-execution-plan.txt
+- docs/reports/NP-UI-P2-production-closeout.txt
+
+For each decision: the options, the recommendation, and what it affects. "CB" = the Concept B reference.
+
+A. BRAND FOUNDATION
+-------------------
+D-1. Display heading typeface (proposal §2)
+  - A (recommended): a self-hosted OFL display serif (e.g. Source Serif 4 / Newsreader) via next/font/local. It
+    renders consistently and is closest to CB, but it is a new font asset, so it needs approval. No package or build
+    tooling change.
+  - B: the Georgia system stack (exactly CB). No asset, but inconsistent on Android / Linux.
+  - C: no serif; Geist only. This is the furthest from CB.
+  - Affects: every h1 / section title / card title; P1b check B2.
+
+D-2. Adopt the slate shell + teal primary as the core palette (proposal §1)
+  - Recommended: YES, with the AA-adjusted values:
+    - text.muted #5B6E7E (CB #66798A fails at 4.20:1);
+    - control.border #738A97 (CB #B8CBD4 fails at 1.68:1);
+    - primary hover #00605C (CB #0B877E with white fails at 4.39:1);
+    - attention text #7F5F24; neutral pill #5B6E7E.
+  - Alternative: CB values verbatim. Not recommended; it fails WCAG AA.
+  - Affects: all surfaces; P1b B1. It replaces the v1 rule "Primary CTA = Deep Graphite".
+
+D-3. Greeting ("Good morning, …") on the Overview
+  - Recommended: NO (the v1 decision is kept). The h1 stays "Today's Operations".
+
+D-4. Header context line ("workspace / section › area")
+  - Recommended: KEEP. CB has utilities only, but the context line carries workspace identity for multi-workspace
+    users. It is restyled to v2.
+  - Alternative: remove it and rely on the sidebar workspace card.
+
+D-5. ViewSwitch active treatment
+  - Recommended: a white segment + teal text + a 2px teal underline.
+  - Alternative: a solid teal segment with white text (heavier; competes with the primary CTA).
+
+D-6. Stat tile anatomy
+  - Recommended: a hybrid: the CB circular icon + bold label, keeping the real number prominent (the number-led
+    content is operationally more useful than CB's label-led copy).
+  - Alternative: the CB anatomy verbatim (label + detail sentence).
+
+B. SHAPE, DEPTH, COMPOSITION
+----------------------------
+D-7. Radius scale
+  - Recommended: control 9 / card 12 / panel and dialog 14 (CB).
+  - Alternative: 8 / 12 / 12 (a smaller change from v1).
+
+D-8. Tinted gradient panels (mint / sand) and soft shadows
+  - Recommended: YES, applied by MEANING only:
+    - mint = get started / positive;
+    - sand = awaiting review / attention;
+    - neutral elsewhere.
+  - Tints are decorative; meaning stays in the icon + text. Print views stay neutral.
+  - Alternative: flat solid tints, no gradients.
+
+D-9. Setup / onboarding card hero
+  - Recommended: the CB hero (gradient, 31px title, segmented teal progress, 43px circular step marks), WITHOUT the
+    landscape artwork and tagline (v1 §17 kept).
+  - It shows only while the setup is incomplete; it is collapsible.
+
+D-10. Mobile drawer (<740)
+  - Recommended: NOT adopted in V2-1..4. The approved 390 notice remains (v1 D5); mobile Operations is a separate
+    phase.
+
+D-15. Sidebar width
+  - Recommended: keep 256 / 64 rail (CB uses 245). It avoids layout churn in every page and in the Dispatch width
+    budget.
+
+C. SCOPE AND COPY
+-----------------
+D-11. F-1 Dispatch empty-grid accessibility fix
+  - Recommended: approve. Ship it as the first commit of V2-1, or as a standalone patch earlier (owner's choice):
+    - tabIndex 0, role region, aria-label;
+    - plus a QA2 "drivers but no trips" check.
+
+D-13. Settings sub-navigation frame (v1 roadmap D8) in V2-3
+  - Recommended: YES, layout only, with the routes unchanged.
+
+D-14. Pending copy items folded into V2-3
+  - Settings "Request Hub" → "Requests".
+  - The Growth "recurring care active" → "standing order" terminology.
+  - Recommended: YES (both follow Brand Lock v1 §15).
+
+D. PROCESS
+----------
+D-12. Visual baseline / assertion update policy
+  - Recommended:
+    - the assertions that encode v1 values (P1b B1, B2, S10b) are re-pointed to v2 in V2-1, in the same PR, with the
+      decision ID in the check label;
+    - no behavioural, authorization, tenant or quote assertion may change;
+    - a new token-parity suite (ui-foundations/v2) is added;
+    - screenshot sets are regenerated per release with identical names;
+    - the old sets are kept locally as "before".
+
+D-16. Release shape
+  - Recommended: four releases (V2-1 … V2-4). Each:
+    - one PR;
+    - stops for an owner screenshot review before commit, push, merge and production;
+    - is followed by a read-only production check.
+  - No styling-only micro-releases.
+
+D-17. Brand Lock document handling
+  - Recommended: on approval of D-1…D-10, publish Brand Lock v2 as a new numbered brand document; mark v1
+    superseded (not edited).
+  - Until then, v1 governs every change, including F-1.
+
+E. UNCHANGED, NOT UP FOR DECISION HERE
+--------------------------------------
+- The approved logo assets (public/brand/*): byte-identical; verified by SHA-256 in every V2 release.
+- Routes, server actions, DB contracts, RLS / RPC, authorization, tenant isolation, quotes / financial workflows and
+  print semantics.
+- QA regression coverage.
+- The open items OD-Q13, OD-Q14, PD-10, PD-11.
+
+OWNER ACTION REQUESTED
+----------------------
+Approve, amend or reject D-1 … D-17. Implementation starts only after explicit approval of Brand Lock v2.
+
+STOPPED FOR OWNER REVIEW.
