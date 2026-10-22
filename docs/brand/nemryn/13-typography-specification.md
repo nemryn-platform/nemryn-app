@@ -5,6 +5,8 @@
 **Date:** 2026-09-07
 **Depends on:** [`06-typography-system.md`](./06-typography-system.md) (roles), [`11-brand-lock-v1.md`](./11-brand-lock-v1.md) §10 (font LOCKED), [`04-visual-direction.md`](./04-visual-direction.md)
 
+> **Active brand lock (2026-10-21): [`16-brand-lock-v2.md`](./16-brand-lock-v2.md) — APPROVED, ACTIVE.** It supersedes [`11-brand-lock-v1.md`](./11-brand-lock-v1.md) for palette, display typography, shape and depth; where this file disagrees with `16`, `16` wins. (v2 adds the Newsreader display tier, §2 there.)
+
 ---
 
 ## 1. Fonts (LOCKED)

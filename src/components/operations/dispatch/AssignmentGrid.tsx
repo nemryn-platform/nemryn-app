@@ -92,7 +92,20 @@ export function AssignmentGrid({ driverRows, timezone, day, dayStartUtc, onReass
         </span>
       </div>
 
-      <Panel elevated className="overflow-x-auto p-0" data-testid="dispatch-grid">
+      {/*
+        F-1 (NP-UI-V2-1, WCAG 2.1.1 / axe scrollable-region-focusable): the grid is a horizontally scrolling region. With
+        driver rows but no trip blocks it contains nothing focusable, so a keyboard user could not scroll it — it is a
+        named, focusable region (arrow keys scroll it natively). Only while it holds the timeline; the "No active
+        drivers" state does not scroll and gets no extra tab stop. Trip blocks keep their own buttons and actions.
+      */}
+      <Panel
+        elevated
+        className="overflow-x-auto p-0"
+        data-testid="dispatch-grid"
+        {...(driverRows.length > 0
+          ? { tabIndex: 0, role: "region", "aria-label": day === "tomorrow" ? "Tomorrow's assignments schedule" : "Today's assignments schedule" }
+          : {})}
+      >
         {driverRows.length === 0 ? (
           <div className="p-zw-lg">
             <EmptyState title="No active drivers" description="Add an active driver to see assignments here." action={emptyAction} />

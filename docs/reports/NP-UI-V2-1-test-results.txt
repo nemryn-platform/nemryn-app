@@ -1,0 +1,157 @@
+NP-UI-V2-1 — TEST RESULTS
+=========================
+Date: 2026-10-21.
+- Run against the exact final working tree, branch np-ui-v2-1-concept-b-foundation from 202c215.
+- The app was served from the default production build (`next build`, Turbopack; build 4) of that tree.
+- Isolated stack NemrynS1Iso, fictional seed, fresh reset per suite.
+- No production access.
+
+Tree integrity:
+- The tracked diff fingerprint was identical before and after the gate run (no source change during the gates).
+- The untracked file list changed only because this report set was written meanwhile.
+
+1. STATIC, UNIT, BUILD
+----------------------
+| Check | Result |
+|---|---|
+| TypeScript (`tsc --noEmit`) | exit 0 |
+| ESLint (src + tests) | exit 0 |
+| npm test | 894 / 894 pass, 0 fail |
+| Default production build (Turbopack) | PASS ("Compiled successfully"); the Newsreader asset is bundled via next/font/local |
+
+2. BROWSER REGRESSION SUITES
+----------------------------
+QA2 strict: 199 / 199, ALL PASS.
+
+| Suite | Result |
+|---|---|
+| core-requests | 25 / 25 |
+| core-trips-dispatch | 44 / 44 (40 existing + 4 new F-1 checks) |
+| core-records | 28 / 28 |
+| growth | 23 / 23 |
+| auth-access | 79 / 79 |
+
+UI foundations:
+
+| Suite | Result | Notes |
+|---|---|---|
+| UI-P1a | 48 / 48 ALL PASS | |
+| UI-P1b | 52 / 52 ALL PASS | includes the R sweeps: 14–15 routes each at 1440 / 1024 / 768, no page overflow, 0 serious / critical axe, sidebar 256 / 64; and the Overview checks O1–O9 (tiles, heading outline, fresh state with no zero tiles, setup progress, "Hide / Show steps" by keyboard, axe) |
+
+P1b checks re-pointed by decision (intent unchanged; the decision is cited in each label):
+- **B1:**
+  - v1: #171a1d chrome, #f7f7f4 canvas, graphite primary, radius 4 / 8 / 8 / 12.
+  - v2: #112632, #f3f8fa, #006e69, radius 4 / 9 / 12 / 14 [D-2, D-7]. PASS.
+- **B2:**
+  - v1: "Geist h1, no serif, graphite New Trip".
+  - v2: the h1 in the approved Newsreader display face with Georgia fallback, body text still Geist, New Trip teal
+    rgb(0,110,105) [D-1, D-2]. PASS.
+- **S10b:**
+  - v1: shell focus ring #a8bcc8.
+  - v2: #7fb8ff [D-2]. PASS.
+
+Strict quotes (at the S4 baseline): no unexpected failures.
+
+| Suite | Result |
+|---|---|
+| s2 | 33 / 33 |
+| s3a | 31 / 31 |
+| s3b | 32 / 32 |
+| s3c | 54 / 54 |
+| o1 | 27 / 27 |
+| s4-integrated | 69 / 69 |
+| s4-a11y | 26 / 26 (U1 / U2 RESOLVED) |
+
+The quote lifecycle, financial snapshot, print and wording checks are all unchanged and passing.
+
+3. SQL PRIVILEGE AND TENANT SUITES (fresh reset each; all 0 failures)
+--------------------------------------------------------------------
+| Suite | Passed |
+|---|---|
+| client_privilege_surface | 21 |
+| create_trip_privilege | 5 |
+| driver_read_privilege | 8 |
+| function_privilege | 7 |
+| mutation_privilege | 7 |
+| request_mutation_privilege | 23 |
+| privilege_baseline_behavior | 30 |
+| privilege_contract | 0 violations |
+| rls_adversarial | 33 |
+| tenant_settings_foundation | 51 |
+| plus_entitlement | 150 |
+| plus_member_grants | 76 |
+| plus_request_attributions | 73 |
+
+No schema, RLS, RPC or authorization file was changed. These confirm the backend contract is intact.
+
+4. F-1 DISPATCH ACCESSIBILITY (new, permanent: QA2 core-trips-dispatch)
+-----------------------------------------------------------------------
+Fixture: an isolated fictional workspace with 3 active drivers and no trips, at 1024px.
+
+| Check | What it verifies | Result |
+|---|---|---|
+| F1 | the grid lists 3 drivers, has 0 trip blocks and 0 focusable controls, and overflows by 375px | PASS |
+| F2 | tabindex 0, role region, name "Today's assignments schedule" | PASS |
+| F3 | Tab reaches the grid; ArrowRight scrolls it, scrollLeft 0 → 320 | PASS |
+| F4 | axe: 0 serious / critical, including scrollable-region-focusable | PASS |
+
+The existing populated-grid checks still pass:
+- L1440 / L1024 / L768: contained scroll, no clipped controls;
+- K1440 / K1024 / K768: keyboard assignment with focus return;
+- B3: axe.
+
+5. ACCESSIBILITY AND RESPONSIVE
+-------------------------------
+- axe: 0 serious / critical across:
+  - the P1b R sweeps (3 widths);
+  - every QA2 per-screen axe check;
+  - the Overview checks (seeded and empty);
+  - quotes s4-a11y;
+  - the new F4.
+- Contrast: all v2 pairs measured; ratios are in 16-brand-lock-v2.md §1.
+  - Text ≥ 4.5:1: muted #5B6E7E is 4.93 on canvas; white on teal is 6.11; the status pairs are 4.65–5.69.
+  - Non-text ≥ 3:1: control border 3.61; shell focus 7.57 / 4.07; active marker 4.07.
+- Status indicators always carry text, not colour alone: badges, step "Complete / Not complete", tile labels.
+- Keyboard and focus return: QA2 K* and U2, P1b S / O8 checks. PASS.
+- Reduced motion: the button hover lift and the chevron nudge are disabled under prefers-reduced-motion; the global
+  reduced-motion rule is unchanged.
+- No page-level overflow at 1440 / 1024 / 768 (P1b R, QA2 B9 / L*), and in the V2-1 captures.
+- At 390, the approved Operations notice is unchanged (capture o04).
+
+6. TOKEN PARITY: COMPUTED STYLES OF THE RENDERED OVERVIEW (browser probe)
+------------------------------------------------------------------------
+| Element | Computed value |
+|---|---|
+| Sidebar | rgb(17,38,50) plus linear-gradient(155deg, #112834, #132936 65%, #173C46) |
+| Active nav | gradient #2F5262 → #284353; inset 3px rgb(68,201,170) marker plus 1px inner edge; 39px high; radius 9; weight 600 |
+| New Trip | bg rgb(0,110,105) plus gradient #006D67 → #005052; white; 42px; radius 9; 13px / 600 |
+| Export Day Sheet | border rgb(115,138,151), 42px |
+| Canvas | rgb(243,248,250) plus the radial glow |
+| h1 | Newsreader (the font face loaded), 39px, 700, rgb(21,44,59) |
+| "Operations Brief" | Newsreader 29px |
+| Panel titles | Newsreader 22px |
+| Body | Geist |
+| Tile | radius 12, height 77, shadow rgba(21,44,59,.04) 0 1px 2px plus rgba(34,83,100,.05) 0 5px 15px; icon 42px, fully round |
+| Panels | radius 14 |
+
+7. LOGO INTEGRITY
+-----------------
+SHA-256 of all 11 files in public/brand/ was recorded before any change and compared after the final QA: IDENTICAL.
+- `git status public/` shows 0 changes.
+- Files: README.txt, app-icon, favicon, logo-inverse, logo-on-steel-blue, logo-primary-preview.png, logo-primary,
+  symbol-inverse, symbol-primary, wordmark-inverse, wordmark-primary.
+- Baseline and after lists: scratchpad/v21/logo-baseline.sha256 and logo-after.sha256.
+
+8. FAILURES / DEVIATIONS
+------------------------
+None in the gate runs.
+
+Test-authoring fixes made before the final run:
+- the new F-1 scenario's first draft reused a variable name (`before`) already declared in the suite — a syntax
+  error caught on the first run, renamed;
+- the capture seed used source 'website' where the schema allows 'web'.
+
+The first full gate run was stopped deliberately after its static checks, when New Trip / Log Request were moved to
+the display h1. The complete gate was then re-run from the start on the final tree; the results above are that run.
+
+No test was weakened or skipped. Only B1, B2 and S10b changed their expected values, by decision.

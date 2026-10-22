@@ -128,7 +128,7 @@ export function OperationsSidebar({
       data-testid="operations-sidebar"
       data-collapsed={collapsed ? "true" : "false"}
       className={cn(
-        "chrome-surface hidden shrink-0 flex-col bg-chrome-background md:flex md:w-16",
+        "chrome-surface hidden shrink-0 flex-col bg-chrome-background bg-chrome-gradient md:flex md:w-16",
         "transition-[width] duration-base ease-standard motion-reduce:transition-none",
         !collapsed && "lg:w-64",
       )}
@@ -187,11 +187,11 @@ export function OperationsSidebar({
               {index > 0 && <div className={cn("mx-2 mb-3 border-t border-chrome-border", !collapsed && "lg:hidden")} aria-hidden />}
               <p
                 id={labelId}
-                className={cn(typography.metadata, "px-3 pb-1.5 font-medium text-chrome-text-secondary", section.key === "growth" ? "sr-only" : labelVisibility)}
+                className={cn(typography.metadata, "px-3 pb-1.5 font-medium text-chrome-text-muted", section.key === "growth" ? "sr-only" : labelVisibility)}
               >
                 {section.label}
               </p>
-              <ul aria-labelledby={labelId} className="flex flex-col gap-0.5">
+              <ul aria-labelledby={labelId} className="flex flex-col gap-[3px]">
                 {section.key === "growth" ? (
                   <GrowthNavGroup key="growth-group" pathname={pathname} collapsed={collapsed} />
                 ) : (
@@ -231,18 +231,18 @@ export function OperationsSidebar({
           more than one workspace — the account menu's existing destination), then the person below it.
         */}
         <div
-          className={cn("items-center gap-2.5 rounded-md bg-chrome-item-hover px-2.5 py-2 ring-1 ring-inset ring-chrome-border", collapsed ? "hidden" : "hidden lg:flex")}
+          className={cn("items-center gap-2.5 rounded-sm bg-chrome-item-hover px-2.5 py-2.5 ring-1 ring-inset ring-chrome-border", collapsed ? "hidden" : "hidden lg:flex")}
           data-testid="sidebar-workspace"
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-sm bg-chrome-item-active-background text-chrome-text-primary" aria-hidden>
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-[8px] bg-chrome-workspace-tile text-chrome-workspace-tile-text" aria-hidden>
             <Buildings className="size-4" />
           </span>
           {/* min-w-0: lets `truncate` clip a long organization name (editable in Settings -> Organization) instead of overflowing the fixed-width sidebar. */}
           <div className="min-w-0 flex-1">
-            <p className={cn(typography.bodySmall, "truncate font-medium text-chrome-text-primary")} title={location}>
+            <p className={cn(typography.bodySmall, "truncate font-semibold text-chrome-text-primary")} title={location}>
               {location}
             </p>
-            <p className={cn(typography.metadata, "text-chrome-text-secondary")}>Workspace</p>
+            <p className={cn(typography.metadata, "text-chrome-text-muted")}>Workspace</p>
           </div>
           {hasMultipleOrganizations && (
             <Link
@@ -265,11 +265,11 @@ export function OperationsSidebar({
             AccountMenu, reachable regardless of sidebar state.
           */}
           <div className={cn("min-w-0 flex-1", collapsed ? "hidden" : "hidden lg:block")}>
-            <p className={cn(typography.bodySmall, "truncate font-medium text-chrome-text-primary")} title={dispatcherName}>
+            <p className={cn(typography.bodySmall, "truncate font-semibold text-chrome-text-primary")} title={dispatcherName}>
               {dispatcherName}
             </p>
             {dispatcherRole && (
-              <p className={cn(typography.metadata, "truncate text-chrome-text-secondary")} title={dispatcherRole}>
+              <p className={cn(typography.metadata, "truncate text-chrome-text-muted")} title={dispatcherRole}>
                 {dispatcherRole}
               </p>
             )}

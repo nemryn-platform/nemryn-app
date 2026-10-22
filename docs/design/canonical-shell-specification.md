@@ -2,6 +2,8 @@
 
 **Phase:** NP-UI-P1b (canonical visual system and application shell)
 **Built against:** Brand Lock v1 (`docs/brand/nemryn/11-brand-lock-v1.md`) and the approved Concept B visual direction
+
+> **Active brand lock (2026-10-21): [`16-brand-lock-v2.md`](../brand/nemryn/16-brand-lock-v2.md).** The shell's colours and shape follow v2 (deep slate gradient, teal marker, 9px items); its structure and behaviour in this spec are unchanged.
 (`docs/design/concept-b/`). Brand Lock wins every conflict; see the reconciliation in §8.
 **Status:** implemented on branch `np-ui-p1b-canonical-shell`. **Owner-approved 2026-10-20**, including the final
 polish:

@@ -9,7 +9,7 @@ export interface PageHeaderProps {
   breadcrumb?: BreadcrumbItem[];
   /** Page actions, in reading order: secondary first, the one primary action last (rightmost). */
   actions?: ReactNode;
-  /** Both variants render in Geist Sans (single-family, N0-M2-A1A); `variant` only selects the size/weight role — `pageTitleOperational` (app) vs `pageTitleMarketing` (marketing). */
+  /** "operational" (default) = the Brand Lock v2 display h1 (Newsreader, `typography.displayPage`, D-1); "marketing" = the Geist marketing title role. */
   variant?: "operational" | "marketing";
   /**
    * NP-UI-P1b: "compact" is for a detail screen whose own record heading (an h2 in the page, e.g. the passenger
@@ -46,7 +46,7 @@ export function PageHeader({
                 ? cn(typography.label, "text-text-secondary")
                 : variant === "marketing"
                   ? typography.pageTitleMarketing
-                  : typography.pageTitleOperational,
+                  : typography.displayPage,
               size !== "compact" && "text-text-primary",
             )}
           >

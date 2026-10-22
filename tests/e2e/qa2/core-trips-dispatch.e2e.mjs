@@ -192,6 +192,34 @@ try {
   await go(s, "/day-sheet?day=today");
   t.check("Y4 Day Sheet print view renders outside the shell and lists today's assigned fixture", !(await has(s, 'nav[aria-label="Primary"]')) && (await text(s)).includes(PAX));
 
+  t.section("Dispatch F-1 (NP-UI-V2-1): drivers present, no trips -- the schedule grid is a focusable, named, keyboard-scrollable region");
+  // An isolated fictional workspace with three active drivers and no trips at all, so the grid holds no trip-block
+  // buttons (the state that hid axe "scrollable-region-focusable" from every earlier suite).
+  const ORG_F = "10000000-0000-0000-0000-0000000000f5";
+  one(`insert into organizations (id, name, timezone, business_stage) values ('${ORG_F}', 'QA2 Empty Day ${STAMP}', 'America/New_York', 'starting') returning id`);
+  one(`insert into memberships (organization_id, user_id, role) values ('${ORG_F}', '${userId("no-membership@example.test")}', 'organization_admin') returning id`);
+  for (const n of ["A", "B", "C"]) one(`insert into drivers (organization_id, display_name) values ('${ORG_F}', 'QA2 Empty Day Driver ${n}') returning id`);
+  const ed = await t.open("empty-day", "no-membership@example.test", 1024, 800);
+  await go(ed, "/operations/dispatch");
+  const g = await ed.evaluate(`(function(){const g=document.querySelector('[data-testid="dispatch-grid"]'); return g ? { overflow: g.scrollWidth - g.clientWidth, trips: g.querySelectorAll('[data-trip-id]').length, focusables: g.querySelectorAll('button, a, input, select, textarea').length, tab: g.getAttribute('tabindex'), role: g.getAttribute('role'), name: g.getAttribute('aria-label'), drivers: (g.innerText.match(/QA2 Empty Day Driver/g) || []).length } : null;})()`);
+  t.check("F1 drivers present, no trips: the grid lists the 3 drivers, holds no trip blocks or other focusable controls, and overflows horizontally (scrollable region)",
+    !!g && g.drivers === 3 && g.trips === 0 && g.focusables === 0 && g.overflow > 0, JSON.stringify(g));
+  t.check("F2 the grid is a focusable, named region (tabindex 0, role region, \"Today's assignments schedule\")", !!g && g.tab === "0" && g.role === "region" && g.name === "Today's assignments schedule", JSON.stringify(g));
+  await ed.evaluate(`document.querySelector('[data-testid="dispatch-day-switch"] a[aria-current="page"]').focus()`);
+  let gridFocused = false;
+  for (let i = 0; i < 15 && !gridFocused; i++) {
+    await key(ed, "Tab");
+    gridFocused = await ed.evaluate(`document.activeElement?.getAttribute('data-testid') === 'dispatch-grid'`);
+  }
+  const gridLeft0 = await ed.evaluate(`document.querySelector('[data-testid="dispatch-grid"]').scrollLeft`);
+  for (let i = 0; i < 8; i++) await key(ed, "ArrowRight");
+  await sleep(400);
+  const gridLeft1 = await ed.evaluate(`document.querySelector('[data-testid="dispatch-grid"]').scrollLeft`);
+  t.check("F3 keyboard: Tab reaches the grid region and ArrowRight scrolls it to later hours", gridFocused && gridLeft1 > gridLeft0, `${gridFocused} ${gridLeft0}->${gridLeft1}`);
+  const fx = await axe(ed);
+  t.check("F4 Dispatch with drivers but no trips: 0 serious / critical axe violations (incl. scrollable-region-focusable)", fx.length === 0, JSON.stringify(fx));
+  await t.close(ed);
+
   t.section("role + tenant boundaries");
   const drv = await t.open("driver", "org-a-driver-a@example.test");
   await go(drv, `/operations/trips/${TOMORROW}`);

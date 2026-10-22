@@ -6,6 +6,8 @@
 **Read this first.** Every other file in `docs/brand/nemryn/` assumes the definitions here.
 **Authoritative on locked decisions:** [`11-brand-lock-v1.md`](./11-brand-lock-v1.md). Where this file and `11` disagree, `11` wins. G1-B changes are logged in [`CHANGELOG-g1-b.md`](./CHANGELOG-g1-b.md).
 
+> **Active brand lock (2026-10-21): [`16-brand-lock-v2.md`](./16-brand-lock-v2.md) — APPROVED, ACTIVE.** It supersedes [`11-brand-lock-v1.md`](./11-brand-lock-v1.md) for palette, display typography, shape and depth; where this file disagrees with `16`, `16` wins.
+
 ---
 
 ## 0. Purpose of this document

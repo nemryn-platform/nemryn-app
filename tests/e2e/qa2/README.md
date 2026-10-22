@@ -37,7 +37,9 @@ The suites:
   - Today / Tomorrow;
   - the Needs Assignment queue;
   - keyboard assignment with focus return;
-  - contained grid scrolling at 1024 / 768.
+  - contained grid scrolling at 1024 / 768;
+  - F-1 (NP-UI-V2-1): with drivers but no trips, the schedule grid is a focusable, named region that scrolls by
+    keyboard, with 0 serious axe findings.
 - Tomorrow Readiness and the Day Sheet.
 - Role and tenant boundaries.
 

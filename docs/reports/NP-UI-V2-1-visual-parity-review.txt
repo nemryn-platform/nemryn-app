@@ -1,0 +1,189 @@
+NP-UI-V2-1 — VISUAL PARITY REVIEW (Operations Overview vs approved Concept B)
+=============================================================================
+Date: 2026-10-21.
+Status: FOR OWNER VISUAL REVIEW. Local / isolated only; nothing committed, pushed or deployed.
+Governing brand: docs/brand/nemryn/16-brand-lock-v2.md (APPROVED, ACTIVE).
+
+1. METHOD
+---------
+Baseline: docs/design/concept-b/nemryn-approved-concept-b.png, with the prototype nemryn-operations-overview.html
+for exact CSS values.
+
+After: real browser screenshots of the isolated app (production build of the final working tree, fictional
+fixtures, fresh reset). Three Overview states were captured:
+- (a) setup in progress: a fictional workspace at 4 of 6 steps, with 3 pending requests and 2 accepted requests that
+  need a trip. This is the real-state equivalent of the Concept B scene.
+- (b) a populated operational workspace (Fictional Org A with today / tomorrow trips).
+- (c) a brand-new empty workspace.
+
+Widths: 1440, 1024 and 768 (full page), plus 1440 × 1086 fold crops matching the Concept B frame, plus the 390
+notice.
+
+Main comparison: docs/design/concept-b/reviews/v2-1/v2-1-concept-b-vs-actual-1440.png.
+
+Iteration log (screenshot-driven, not token-driven):
+- Iteration 1:
+  - The composition matched.
+  - Fixed: the "Review requests" CTA centred its label (class precedence); it is now label-left with the arrow
+    right, as in Concept B.
+  - Fixed: the stranded-requests row lacked a chevron.
+  - Fixed: a full-row Requests panel stretched its CTA to about 800px; it is now a right-aligned button when the
+    panel spans the row.
+  - Fixed: setup steps showed only 2 per row at 1024; now 3, as in Concept B.
+- Iteration 2:
+  - Added the thin step dividers of the one-row hero.
+  - In a browser font comparison, Newsreader 600 read visibly lighter than Concept B's bold Georgia. The display
+    tier moved to 700 (v2-1-font-comparison.png).
+- Final:
+  - re-captured from a fresh build and reset;
+  - every row below re-checked against the side-by-side.
+
+Scale note: the Concept B PNG is a mockup drawn at about 1.3× the scale of its own prototype CSS. Nemryn is rendered
+at the prototype's real pixel values (h1 39px, controls 42px, nav 39px, tiles 77px), so the screenshot looks
+slightly smaller at the same 1440 frame. Proportions and composition are the comparison basis, not absolute glyph
+size.
+
+2. GAP ASSESSMENT G1–G12
+------------------------
+G1 — Shell colour: MATCHED.
+- Deep slate gradient (#112834 → #132936 → #173C46) on the 256px sidebar.
+- The section labels and nav text use the Concept B values.
+
+G2 — Active navigation: MATCHED.
+- The #2F5262 → #284353 gradient pill, the 3px #44C9AA inset marker plus a faint inner edge, white semibold text,
+  39px height, 9px radius.
+
+G3 — Primary CTA: MATCHED.
+- Teal gradient #006D67 → #005052 over #006E69, 42px, 9px radius, 13px / 600, restrained hover lift (none under
+  reduced motion).
+- Hover is #00605C (CB-adj for AA).
+
+G4 — Canvas: MATCHED.
+- #F3F8FA with Concept B's faint radial glow.
+
+G5 — Display typography: MATCHED, with a noted character difference.
+- Newsreader 700 at the Concept B sizes: h1 clamp(28px,3vw,39px), hero 31px, section 29px, panel titles 22px.
+- Weight and contrast match Georgia bold. Newsreader is about 5% narrower and slightly more refined. This is
+  reported, not hidden; no other face was substituted (D-1).
+
+G6 — Card shape / depth: MATCHED.
+- Tiles at 12px radius with the soft card shadow.
+- Panels and the hero at 14px with panel / hero shadows.
+- Mint and sand panels use the Concept B gradients and borders.
+- Inner white list cards sit inside the tinted panels.
+
+G7 — Circular icon tiles: MATCHED.
+- 42px tile circles, 45px panel circles, 43px setup marks.
+- Semantic tints: teal / mint, info blue, attention amber, positive green.
+
+G8 — Setup hero: MATCHED, with intentional differences.
+- Matches: the mint-to-white hero, the 31px display title, the "4 of 6 complete" label over a teal segmented bar,
+  six circular marks with check badges (empty badge when not done), dividers, collapse control top-right.
+- INTENTIONALLY DIFFERENT:
+  - No landscape artwork and no tagline (Brand Lock §17 / D-9).
+  - The eyebrow says "WORKSPACE SETUP", not "GET STARTED WITH NEMRYN": the hero is about the tenant's workspace.
+  - Each step keeps a visible "Complete" / "Not complete" line, so state is never shown only by colour or badge.
+  - Completion order and count are real: Business profile, First vehicle, Driver setup and First passenger done;
+    facility and trip not. The mockup's swapped facility / passenger state is not copied.
+
+G9 — Four metric tiles: MATCHED, with intentional differences.
+- Four tiles, Concept B anatomy: circle, bold fact, muted detail, chevron. 4 across at 1440 and 2 across at
+  1024 / 768.
+- Setup state, all real facts:
+  - today's date;
+  - "4 of 6 setup steps complete";
+  - "3 requests · Awaiting review";
+  - "2 need a trip · Accepted, not yet scheduled".
+- INTENTIONALLY DIFFERENT:
+  - Concept B's "Service day · Operations active" has no data source and is replaced by the real setup-progress
+    fact.
+  - Populated workspaces keep the existing authoritative today counts (trips today / active / need attention / no
+    current issues), number-led per D-6.
+  - An empty workspace shows "None waiting", never a 0 (P1-OPS-PROG3B).
+
+G10 — Two-column panels: MATCHED.
+- From 1100px: Get started (mint) beside Requests awaiting review (sand).
+- The Requests panel has the large real count, fact rows (oldest request; accepted requests still needing a trip,
+  with chevron) and the full-width teal "Review requests".
+- In a populated workspace the work sections keep their fixed priority order (Needs Attention first); Needs
+  Attention, Active Now, Next Departures, Tomorrow, Standing orders and Proof of service use raised v2 panels with
+  45px circles and 22px display titles.
+
+G11 — Header treatment: INTENTIONALLY DIFFERENT (D-4).
+- The white 56px header keeps the workspace / section › area context line plus the real utilities: notifications
+  (role-gated), help, account.
+- Concept B's greeting (D-3), search (no product search exists) and notification dot (no count source) are not
+  added.
+- The page header itself matches: display h1, 16px muted date, outline Export Day Sheet, teal New Trip.
+
+G12 — Badge / pill treatment: MATCHED in tone; INTENTIONALLY DIFFERENT in size.
+- Status badges use the v2 AA-checked pill pairs (see the Needs Attention "Needs assignment" / "Location
+  unavailable" pills).
+- Text stays 12px rather than Concept B's 10px. StatusBadge is shared by every table in the application, and 10px
+  harms legibility at the density of those tables.
+
+Summary:
+- 12 of 12 gaps addressed.
+- 9 MATCHED: G1, G2, G3, G4, G5, G6, G7, G10, plus G12 tone.
+- 3 MATCHED with documented intentional differences: G8, G9, G12 size.
+- 1 INTENTIONALLY DIFFERENT by decision: G11 (D-4).
+- NOT MATCHED: none.
+
+3. STATES AND WIDTHS
+--------------------
+Setup state:
+- 1440: Concept B composition.
+- 1024: 3-column steps, 2 × 2 tiles, panels stacked.
+- 768: icon rail, same stacking.
+- No page overflow at any width.
+
+Populated:
+- the tiles, Needs Attention, the Requests (sand) full row with a right-aligned CTA, then Active Now / Next
+  Departures, Tomorrow / Standing orders, Proof of service, the calm line, and the Upcoming Trips table with Active
+  Trips / Activity Log (side column at 1280 and above).
+
+Empty:
+- the hero at 1 of 6;
+- four tiles, two reading "None waiting";
+- a full-width mint Get started panel;
+- no Requests panel (nothing pending), as before.
+
+390: the approved Operations notice, unchanged.
+
+4. CROSS-APPLICATION VISUAL SAFETY (shared-token side effects)
+--------------------------------------------------------------
+Inspected at 1440 after the global token change:
+- Requests, Trips, New Trip, Dispatch (and at 1024 / 768, plus the empty workspace);
+- Tomorrow Readiness, Standing Orders, Passengers, Facilities, Drivers, Vehicles, Proof of Service;
+- Growth Dashboard / Pipeline / Contacts / Tasks, Estimates & Quotes;
+- Settings and Settings › Team & Access;
+- an open dialog (Add Passenger);
+- sign-in and forgot-password;
+- the public root;
+- the Driver PWA at 390.
+
+Findings:
+- No invisible actions: every primary is teal with white text, outline buttons have AA borders.
+- No clipped controls, unreadable tables or broken dialogs: the dialog is at 14px radius with the slate scrim.
+- No loss of hierarchy: page h1s use the display face via the shared PageHeader.
+- No responsive breakage; the P1b/QA2 width sweeps are in the test report.
+- Auth screens take the deep slate background and teal action through brand tokens. Their full-width buttons keep a
+  12px radius from a hard-coded `rounded-md` (auth layout is V2-3).
+
+Deferred page-specific items (NOT V2-1 scope):
+- V2-3:
+  - the Growth Dashboard's flat zero tiles and bespoke filters;
+  - the Estimates & Quotes summary strip;
+  - the Settings sub-navigation (D-13);
+  - the auth card composition.
+- V2-2: the Trip / Request detail recomposition.
+
+New Trip and Log Request render their own h1 (not through PageHeader). Both moved to the same `displayPage` role in
+V2-1, so every Operations main h1 uses the display face.
+
+5. VERDICT
+----------
+The browser-rendered Operations Overview now closely resembles Concept B. The approved Nemryn logo is unchanged
+(SHA-256 verified; see the test report).
+
+Ready for owner visual review.

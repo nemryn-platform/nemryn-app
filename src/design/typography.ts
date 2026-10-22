@@ -1,5 +1,5 @@
 /**
- * Typography tokens (N0-M2-A1A — Nemryn brand foundation).
+ * Typography tokens (N0-M2-A1A — Nemryn brand foundation; Brand Lock v2 adds the `display*` roles at the end).
  * See docs/brand/nemryn/13-typography-specification.md for the full,
  * LOCKED scale this file implements.
  *
@@ -40,8 +40,8 @@ export const typography = {
   label: "font-sans text-[0.8125rem] font-medium leading-[1.3]",
   /** Geist Sans. Timestamps, captions, muted metadata (type.app.caption). */
   metadata: "font-sans text-xs font-normal leading-[1.4]",
-  /** Geist Sans. Button and interactive-control labels — sentence case, never ALL CAPS (type.app.button). */
-  button: "font-sans text-[0.8125rem] font-medium leading-none",
+  /** Geist Sans. Button and interactive-control labels — sentence case, never ALL CAPS (type.app.button). Brand Lock v2 §2: 13px / 600 (Concept B .btn 650). */
+  button: "font-sans text-[0.8125rem] font-semibold leading-none",
   /** Geist Sans. Table header cells — same role as `label` (type.app.label). */
   tableHeader: "font-sans text-[0.8125rem] font-medium leading-[1.3]",
   /** Geist Sans. Table body cells — same size/weight as `bodySmall` for row-text; a numeric-column cell should additionally add `tabular-nums` at the call site (type.app.data direction). */
@@ -50,6 +50,19 @@ export const typography = {
   metricValue: "font-sans text-2xl font-semibold leading-[1.15] tracking-[-0.01em] tabular-nums",
   /** Geist Sans. The single headline number of a view — rare, at most one per screen. `tabular-nums` included (type.app.numeric). */
   numericDisplay: "font-sans text-[1.75rem] font-semibold leading-[1.1] tracking-[-0.01em] tabular-nums",
+  /**
+   * Brand Lock v2 display tier (D-1, 16-brand-lock-v2.md §2) — Newsreader, the ONLY roles that use it. Never in
+   * tables, forms, navigation, buttons, badges or operational values; never below 22px. Sizes from Concept B; weight
+   * 700 matches Concept B's bold Georgia heads in a browser comparison (600 read visibly lighter).
+   */
+  /** The one page title (h1) of an Operations screen — Concept B `.head h1` clamp(28px, 3vw, 39px). */
+  displayPage: "font-display text-[clamp(1.75rem,3vw,2.4375rem)] font-bold leading-[1.1] tracking-[-0.025em]",
+  /** A major section title on a dashboard page (e.g. "Operations Brief") — Concept B `.section-title` 29px. */
+  displaySection: "font-display text-[1.8125rem] font-bold leading-[1.15] tracking-[-0.02em]",
+  /** The setup hero heading — Concept B `.setup h2` 31px. */
+  displaySetup: "font-display text-[1.9375rem] font-bold leading-[1.12] tracking-[-0.02em]",
+  /** Overview panel titles — Concept B `.panel h3` 22px (the smallest display size allowed). */
+  displayCard: "font-display text-[1.375rem] font-bold leading-[1.2] tracking-[-0.015em]",
 } as const;
 
 export type TypographyToken = keyof typeof typography;

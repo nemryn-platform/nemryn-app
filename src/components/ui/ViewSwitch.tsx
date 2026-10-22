@@ -39,7 +39,11 @@ export function ViewSwitch({ label, items, activeKey, className, testId }: ViewS
             className={cn(
               typography.bodySmall,
               "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 font-medium transition-colors duration-base motion-reduce:transition-none",
-              active ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle" : "text-text-secondary hover:bg-surface-elevated/70 hover:text-text-primary",
+              // Brand Lock v2 (D-5): the active option = a white segment, teal text and a 2px teal underline (plus the
+              // semibold weight) — never colour alone.
+              active
+                ? "bg-surface-elevated font-semibold text-text-link shadow-[inset_0_-2px_0_var(--color-text-link)] ring-1 ring-border-subtle"
+                : "text-text-secondary hover:bg-surface-elevated/70 hover:text-text-primary",
             )}
           >
             {item.label}
@@ -47,7 +51,7 @@ export function ViewSwitch({ label, items, activeKey, className, testId }: ViewS
               <>
                 {/* separator so the link's accessible name / text reads "Pending, 3" -- not a merged "Pending3" */}
                 <span className="sr-only">, </span>
-                <span className={cn(typography.metadata, "min-w-5 rounded-full px-1.5 text-center font-medium tabular-nums", active ? "bg-surface-secondary text-text-primary" : "bg-surface-elevated text-text-secondary")}>
+                <span className={cn(typography.metadata, "min-w-5 rounded-full px-1.5 text-center font-medium tabular-nums", active ? "bg-accent-soft text-text-link" : "bg-surface-elevated text-text-secondary")}>
                   {item.count}
                 </span>
               </>

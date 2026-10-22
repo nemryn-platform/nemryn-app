@@ -18,7 +18,7 @@ import {
   SteeringWheel,
   ListChecks,
 } from "@phosphor-icons/react/dist/ssr";
-import { Panel, PanelHeader, PanelSection, iconToneClasses, type PanelTone } from "@/components/ui/Panel";
+import { Panel, PanelHeader, PanelSection, iconCircleClasses, iconToneClasses, type PanelTone } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -48,7 +48,10 @@ export interface OperationsBriefProps {
   isAdmin: boolean;
   /** The caller has an active linked Driver (owner-as-driver). */
   hasLinkedDriver: boolean;
-  /** NP-UI-P1b: today's fact tiles (the page's real summary counts), shown under the heading on a standard Brief. */
+  /**
+   * The Brief's fact tiles, shown under the heading: today's real summary counts on a standard Brief, or (NP-UI-V2-1,
+   * Concept B) the fresh-workspace facts — today's date, setup progress and the request queue — never a zero counter.
+   */
   summaryTiles?: ReactNode;
 }
 
@@ -75,7 +78,7 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
 
   const heading = (
     <div>
-      <h2 className={cn(typography.sectionHeading, "text-text-primary")} id="operations-brief-heading">
+      <h2 className={cn(typography.displaySection, "text-text-primary")} id="operations-brief-heading">
         Operations Brief
       </h2>
       <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>What needs your attention and what is happening next.</p>
@@ -85,10 +88,11 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
   if (composition.kind === "fresh") {
     return (
       <section className="flex flex-col gap-zw-md" data-testid="brief" data-brief-kind="fresh" aria-labelledby="operations-brief-heading">
-      {/* NP-UI-P1b: heading 16px above its first card. */}
+        {/* NP-UI-V2-1 (Concept B): heading -> its fact tiles -> the two panels, 16px apart. */}
         {heading}
-        {/* NP-UI-P1b (Concept B): Get started and Requests awaiting review side by side when both are present. */}
-        <div className={cn("grid grid-cols-1 gap-zw-lg", composition.showRequests && "lg:grid-cols-2")}>
+        {summaryTiles}
+        {/* Concept B: Get started (mint) and Requests awaiting review (sand) side by side from 1100px when both are present. */}
+        <div className={cn("grid grid-cols-1 gap-zw-md", composition.showRequests && "min-[1100px]:grid-cols-2")}>
           <GetStartedPanel timezone={timezone} isAdmin={isAdmin} hasLinkedDriver={hasLinkedDriver} />
           {composition.showRequests && (
             <div data-brief-section="requests" className="[&>*]:h-full">
@@ -105,7 +109,7 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
 
   const noOtherWork = composition.work.every((section) => section === "today");
   return (
-    <section className="flex flex-col gap-zw-lg" data-testid="brief" data-brief-kind="standard" aria-labelledby="operations-brief-heading">
+    <section className="flex flex-col gap-zw-md" data-testid="brief" data-brief-kind="standard" aria-labelledby="operations-brief-heading">
       {/* NP-UI-P1b rhythm: heading -> its fact tiles 16px; then 24px between the Brief's cards. */}
       <div className="flex flex-col gap-zw-md">
         {heading}
@@ -120,9 +124,9 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
       />
       {/* NP-UI-P1b: the WORK sections keep their fixed P0..P5 order (reading order is row by row); the wide blocks
           (Needs Attention, Today) span both columns at lg, the compact single-row blocks pair up. */}
-      <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-zw-md min-[1100px]:grid-cols-2">
       {composition.work.map((section, index) => (
-        <div key={section} data-brief-section={section} className={cn(spansFullRow(composition.work, index) ? "lg:col-span-2" : "[&>*]:h-full")}>
+        <div key={section} data-brief-section={section} className={cn(spansFullRow(composition.work, index) ? "min-[1100px]:col-span-2" : "[&>*]:h-full")}>
           {section === "attention" && (
             <NeedsAttentionBlock items={attention ?? []} unassignedCount={unassignedCount ?? 0} timezone={timezone} />
           )}
@@ -131,8 +135,8 @@ export function OperationsBrief({ brief, composition, timezone, nextTodayPickupA
           {section === "today" && (
             <div
               className={cn(
-                "grid grid-cols-1 gap-zw-lg",
-                composition.todayShowsActiveNow && composition.todayShowsNextDepartures && "lg:grid-cols-2",
+                "grid grid-cols-1 gap-zw-md",
+                composition.todayShowsActiveNow && composition.todayShowsNextDepartures && "min-[1100px]:grid-cols-2",
               )}
             >
               {composition.todayShowsActiveNow && <ActiveNowBlock trips={activeNow ?? []} timezone={timezone} />}
@@ -182,14 +186,14 @@ function TodayHeadline({
 }) {
   if (headline === "today_unavailable") {
     return (
-      <Panel data-testid="brief-headline" data-headline={headline}>
+      <Panel surface="raised" data-testid="brief-headline" data-headline={headline}>
         <EmptyState title="Today's operations unavailable" description="We couldn't load today's trip activity. Refresh the page to try again." />
       </Panel>
     );
   }
   if (headline === "all_clear") {
     return (
-      <Panel data-testid="brief-headline" data-headline={headline}>
+      <Panel surface="raised" data-testid="brief-headline" data-headline={headline}>
         <EmptyState title="All clear" description="Every trip today is complete. Nothing is waiting for you." />
       </Panel>
     );
@@ -218,19 +222,19 @@ function TodayHeadline({
 
 /** Fresh organization (never had a trip, setup incomplete): one concise Get started panel instead of empty widgets. */
 function GetStartedPanel({ timezone, isAdmin, hasLinkedDriver }: { timezone: string; isAdmin: boolean; hasLinkedDriver: boolean }) {
-  // NP-UI-P1b (Concept B "Get started"): each action is one row link (icon, action, one-line purpose, chevron). The
-  // destinations and their role gating are unchanged; admin-only links stay admin-only (and server-guarded).
+  // Concept B "Get started" (NP-UI-V2-1): the mint panel, a 45px icon circle and display title, then one white list of
+  // row links (icon, action, one-line purpose, chevron). The destinations and their role gating are unchanged;
+  // admin-only links stay admin-only (and server-guarded).
   return (
-    <Panel padding="none" elevated className="flex flex-col" data-testid="get-started">
-      <div className="p-zw-lg pb-zw-md">
-        <PanelHeader
-          icon={<ListChecks className="size-5" />}
-          tone="info"
-          title="Get started"
-          description="Set up your workspace and schedule your first trip."
-        />
-      </div>
-      <ul className="mx-zw-lg mb-zw-lg flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
+    <Panel surface="mint" padding="none" className="flex flex-col gap-zw-md p-[1.125rem]" data-testid="get-started">
+      <PanelHeader
+        variant="display"
+        icon={<ListChecks className="size-5" />}
+        tone="accent"
+        title="Get started"
+        description="Set up your workspace and schedule your first trip."
+      />
+      <ul className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface-elevated/95 px-[0.9375rem] py-1">
         <QuickActionRow href="/operations/trips/new" icon={<Path className="size-5" />} title="Create your first trip" description="Put a trip on the schedule." />
         {isAdmin ? (
           <QuickActionRow
@@ -264,28 +268,28 @@ function GetStartedPanel({ timezone, isAdmin, hasLinkedDriver }: { timezone: str
   );
 }
 
-/** One quick-action row: a whole-row link when there is a destination, otherwise a static fact row (no chevron). */
+/** One quick-action row (Concept B `.detail-row`): a whole-row link when there is a destination, otherwise a static fact row (no chevron). */
 function QuickActionRow({ href, icon, title, description }: { href?: string; icon: ReactNode; title: string; description: ReactNode }) {
   const body = (
     <>
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-surface-secondary text-text-secondary" aria-hidden>
+      <span className="flex size-6 shrink-0 items-center justify-center text-text-link" aria-hidden>
         {icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className={cn(typography.bodySmall, "block font-medium text-text-primary")}>{title}</span>
-        <span className={cn(typography.metadata, "block text-text-secondary")}>{description}</span>
+        <span className={cn(typography.bodySmall, "block font-semibold text-text-primary")}>{title}</span>
+        <span className={cn(typography.metadata, "mt-0.5 block text-text-secondary")}>{description}</span>
       </span>
-      {href && <CaretRight className="size-4 shrink-0 text-text-muted" aria-hidden />}
+      {href && <CaretRight className="size-4 shrink-0 text-text-secondary transition-transform duration-base group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden />}
     </>
   );
   return (
     <li>
       {href ? (
-        <Link href={href} className="flex items-center gap-3 px-zw-md py-zw-sm transition-colors duration-base first:rounded-t-md hover:bg-surface-hover">
+        <Link href={href} className="group -mx-2 flex min-h-[3.625rem] items-center gap-[0.8125rem] rounded-sm px-2 py-2.5 transition-colors duration-base hover:bg-surface-hover">
           {body}
         </Link>
       ) : (
-        <div className="flex items-center gap-3 px-zw-md py-zw-sm">{body}</div>
+        <div className="flex min-h-[3.625rem] items-center gap-[0.8125rem] py-2.5">{body}</div>
       )}
     </li>
   );
@@ -315,7 +319,7 @@ function NoActiveDriversRow({ isAdmin }: { isAdmin: boolean }) {
 /** One compact group of single-line summaries -- no zero tiles, no percentages. */
 function CalmGroup({ lines, brief }: { lines: BriefCalmLine[]; brief: OperationsBriefData }) {
   return (
-    <Panel padding="dense" elevated data-testid="brief-calm">
+    <Panel surface="raised" padding="dense" data-testid="brief-calm">
       <ul className="divide-y divide-border-subtle">
         {lines.map((line) => {
           const row = calmRow(line, brief);
@@ -406,9 +410,10 @@ function NeedsAttentionBlock({
   // route, explanation, the row's one action) · footer only when more items wait in Dispatch. Same rows, limit,
   // reasons, explanations and destinations as before.
   return (
-    <Panel padding="none" elevated className="flex h-full flex-col">
+    <Panel surface="raised" padding="none" className="flex h-full flex-col">
       <PanelSection part="header">
         <PanelHeader
+          variant="display"
           icon={<WarningCircle className="size-5" weight="fill" />}
           tone={items.length > 0 ? "attention" : "neutral"}
           title="Needs Attention"
@@ -466,7 +471,7 @@ function NeedsAttentionBlock({
  * competing set of page-level h2s alongside the existing Needs Attention/
  * Upcoming Trips/Active Trips/Activity Log panels below). */
 function BlockHeading({ title, description, icon }: { title: string; description?: string; icon?: ReactNode }) {
-  return <PanelHeader title={title} description={description} icon={icon} tone="info" />;
+  return <PanelHeader variant="display" title={title} description={description} icon={icon} tone="accent" />;
 }
 
 /**
@@ -490,15 +495,15 @@ function CompactBlock({
   testId?: string;
 }) {
   return (
-    <Panel padding="none" elevated className="flex flex-col" data-testid={testId}>
+    <Panel surface="raised" padding="none" className="flex flex-col" data-testid={testId}>
       <PanelSection part="header" className="pb-zw-lg">
-        <div className="flex items-start gap-3">
-          <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-md", iconToneClasses[tone])} aria-hidden>
+        <div className="flex items-start gap-[0.8125rem]">
+          <span className={cn(iconCircleClasses.lg, iconToneClasses[tone])} aria-hidden>
             {icon}
           </span>
-          <div className="min-w-0 flex-1 pt-0.5">
-            <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>{title}</h3>
-            <div className="mt-1">{children}</div>
+          <div className="min-w-0 flex-1 pt-[3px]">
+            <h3 className={cn(typography.displayCard, "text-text-primary")}>{title}</h3>
+            <div className="mt-1.5">{children}</div>
           </div>
         </div>
       </PanelSection>
@@ -530,7 +535,7 @@ function BriefTripRow({ trip, timezone, status }: { trip: TodaysOperationsTrip; 
 
 function ActiveNowBlock({ trips, timezone }: { trips: TodaysOperationsTrip[]; timezone: string }) {
   return (
-    <Panel padding="none" elevated className="flex h-full flex-col">
+    <Panel surface="raised" padding="none" className="flex h-full flex-col">
       <PanelSection part="header">
         <BlockHeading title="Active Now" description="What's happening right now." icon={<Lightning className="size-5" />} />
       </PanelSection>
@@ -565,7 +570,7 @@ function NextDeparturesBlock({ trips: allTrips, timezone }: { trips: TodaysOpera
   const trips = allTrips.slice(0, BRIEF_ROW_LIMIT);
   const overflow = allTrips.length - trips.length;
   return (
-    <Panel padding="none" elevated className="flex h-full flex-col">
+    <Panel surface="raised" padding="none" className="flex h-full flex-col">
       <PanelSection part="header">
         <BlockHeading title="Next Departures" description="Scheduled to depart within 2 hours." icon={<NavigationArrow className="size-5" />} />
       </PanelSection>
@@ -611,15 +616,33 @@ function RequestsAwaitingReviewBlock({
   summary: OperationsBriefData["requestSummary"];
   timezone: string;
 }) {
+  // NP-UI-V2-1 (Concept B "Requests awaiting review"): the sand panel — inbound demand awaiting a decision, visually
+  // distinct from (and quieter than) Needs Attention: no warning icon, no StatusBadge. The pending count is the
+  // headline figure inside a white card, the oldest request and the stranded accepted requests are fact rows beneath
+  // it, and "Review requests" is the panel's full-width action. Same facts, copy and destinations as before.
+  const header = (
+    <PanelHeader
+      variant="display"
+      icon={<Tray className="size-5" />}
+      tone="attention"
+      title="Requests awaiting review"
+      description="New requests from your website, phone and other sources that need a decision."
+    />
+  );
+
   if (summary === null) {
     // P1-PILOT-S3R: the underlying `getRequestSummary` fetch genuinely
     // failed — "Request summary unavailable," never a fabricated "No
     // requests awaiting review" (that copy is reserved for the real,
     // successfully-fetched `pendingRequestCount === 0` case).
     return (
-      <CompactBlock icon={<Tray className="size-5" />} title="Requests awaiting review" action={<ReviewRequestsLink />}>
-        <p className={cn(typography.bodySmall, "text-text-muted")}>Request summary unavailable</p>
-      </CompactBlock>
+      <Panel surface="sand" padding="none" className="flex flex-col gap-zw-md p-[1.125rem]">
+        {header}
+        <div className="rounded-md border border-border-subtle bg-surface-elevated/95 px-zw-md py-zw-md">
+          <p className={cn(typography.bodySmall, "text-text-muted")}>Request summary unavailable</p>
+        </div>
+        <ReviewRequestsLink />
+      </Panel>
     );
   }
 
@@ -628,48 +651,61 @@ function RequestsAwaitingReviewBlock({
   // P1-PILOT-R2B (PR-03): a plain fact line, no score / aging / severity; zero or unknown -> nothing.
   const strandedLine = strandedRequestsLine(strandedAcceptedCount ?? 0);
 
-  // NP-UI-P1b (Concept B): the pending count is the block's headline figure; the oldest request and the stranded
-  // accepted requests are fact rows beneath it. Same facts, same copy, same links as before.
   return (
-    <CompactBlock icon={<Tray className="size-5" />} tone={hasPending ? "info" : "neutral"} title="Requests awaiting review" action={<ReviewRequestsLink />}>
-      <p className={cn(typography.bodySmall, "text-text-secondary")}>
+    <Panel surface="sand" padding="none" className="@container flex flex-col gap-zw-md p-[1.125rem]">
+      {header}
+      <div className="flex-1 rounded-md border border-border-subtle bg-surface-elevated/95 px-[1.375rem] py-zw-sm">
         {hasPending ? (
-          <>
-            <span className={cn(typography.metricValue, "text-text-primary")}>{pendingRequestCount}</span>{" "}
-            {pendingRequestCount === 1 ? "request" : "requests"}
-          </>
+          <p className="pb-zw-sm pt-zw-sm">
+            <span className="block text-[2.3125rem] font-bold leading-[1.15] tabular-nums text-accent-strong">{pendingRequestCount}</span>{" "}
+            <span className={cn(typography.body, "block text-text-secondary")}>{pendingRequestCount === 1 ? "request" : "requests"} awaiting review</span>
+          </p>
         ) : (
-          "No requests awaiting review"
+          <p className={cn(typography.body, "py-zw-md text-text-secondary")}>No requests awaiting review</p>
         )}
-      </p>
-      {((hasPending && oldestPendingRequestCreatedAt) || strandedLine) && (
-        <ul className="mt-zw-md flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface-app px-zw-sm">
-          {hasPending && oldestPendingRequestCreatedAt && (
-            <li className={cn(typography.metadata, "flex items-center gap-2 py-zw-sm text-text-muted")}>
-              <Clock className="size-4 shrink-0" aria-hidden />
-              <span>Oldest request received {formatOperationsLongDate(new Date(oldestPendingRequestCreatedAt), timezone)}</span>
-            </li>
-          )}
-          {strandedLine && (
-            <li className="py-zw-sm">
-              <p className={cn(typography.bodySmall, "flex items-center gap-2")} data-testid="brief-stranded-requests">
-                <Path className="size-4 shrink-0 text-text-muted" aria-hidden />
-                <Link href={STRANDED_REQUESTS_HREF} className="text-text-link underline-offset-2 hover:underline">
-                  {strandedLine}
-                </Link>
-              </p>
-            </li>
-          )}
-        </ul>
-      )}
-    </CompactBlock>
+        {((hasPending && oldestPendingRequestCreatedAt) || strandedLine) && (
+          <ul className="flex flex-col divide-y divide-border-subtle border-t border-border-subtle">
+            {hasPending && oldestPendingRequestCreatedAt && (
+              <li className="flex min-h-[4.5rem] items-center gap-[0.8125rem] py-2.5">
+                <Clock className="size-5 shrink-0 text-text-link" aria-hidden />
+                <span className="min-w-0">
+                  <span className={cn(typography.bodySmall, "block font-semibold text-text-primary")}>Oldest request</span>
+                  <span className={cn(typography.metadata, "mt-0.5 block text-text-secondary")}>
+                    Received {formatOperationsLongDate(new Date(oldestPendingRequestCreatedAt), timezone)}
+                  </span>
+                </span>
+              </li>
+            )}
+            {strandedLine && (
+              <li className="min-h-[4.5rem]">
+                <p className={cn(typography.bodySmall, "flex min-h-[4.5rem] items-center gap-[0.8125rem] py-2.5")} data-testid="brief-stranded-requests">
+                  <Path className="size-5 shrink-0 text-text-link" aria-hidden />
+                  <Link href={STRANDED_REQUESTS_HREF} className="flex-1 font-semibold text-text-primary underline-offset-2 hover:text-text-link hover:underline">
+                    {strandedLine}
+                  </Link>
+                  <CaretRight className="size-4 shrink-0 text-text-secondary" aria-hidden />
+                </p>
+              </li>
+            )}
+          </ul>
+        )}
+      </div>
+      <ReviewRequestsLink />
+    </Panel>
   );
 }
 
 function ReviewRequestsLink() {
+  // Concept B `.review`: the panel's full-width primary action -> the Requests Pending filter (unchanged destination).
   return (
-    <LinkButton href="/operations/requests?state=pending" variant="outline" size="sm" trailingIcon={<ArrowRight className="size-4" aria-hidden />}>
-      Review requests
+    // On a full-row panel (container >= 48rem) the action becomes a right-aligned button instead of a very wide bar.
+    <LinkButton
+      href="/operations/requests?state=pending"
+      variant="primary"
+      className="w-full px-zw-lg @3xl:w-auto @3xl:min-w-64 @3xl:self-end"
+      trailingIcon={<ArrowRight className="size-4" aria-hidden />}
+    >
+      <span className="flex-1 text-left">Review requests</span>
     </LinkButton>
   );
 }

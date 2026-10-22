@@ -17,7 +17,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** [key, file, expected check count at the QA2 baseline] */
 const SUITES = [
   ["core-requests", "core-requests.e2e.mjs", 25],
-  ["core-trips-dispatch", "core-trips-dispatch.e2e.mjs", 40],
+  ["core-trips-dispatch", "core-trips-dispatch.e2e.mjs", 44],
   ["core-records", "core-records.e2e.mjs", 28],
   ["growth", "growth.e2e.mjs", 23],
   ["auth-access", "auth-access.e2e.mjs", 79],

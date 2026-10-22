@@ -1,0 +1,96 @@
+NP-UI-P2 — PRODUCTION CLOSEOUT (QA2 + UI-P2, PR #25)
+====================================================
+Date: 2026-10-21.
+Read-only production verification:
+- no records created or modified;
+- no database queries;
+- no form submissions;
+- no code changes.
+
+1. RELEASE IDENTIFICATION
+-------------------------
+- PR #25 "feat(ui): refine core operations and preserve regressions": MERGED 2026-10-21T06:34:05Z.
+- Merge commit 202c2158c4e17155ade5b6ed7a7ecb32f4a03695 on main (parent f595e24, the approved commit;
+  base 8131f0f).
+
+2. PRODUCTION DEPLOYMENT
+------------------------
+- The GitHub Production deployment for sha 202c215: status "success", created 2026-10-21T06:34:47Z (automatic
+  Vercel production deployment).
+- Production (https://app.nemryn.com) serves the P2 build. The browser checks below see P2-only UI:
+  - "Requests" / "Tomorrow Readiness" / "Standing Orders" / "Vehicles" titles;
+  - the ViewSwitch controls;
+  - the "New standing order" action.
+- No migration was in the release.
+
+3. READ-ONLY BROWSER VERIFICATION
+---------------------------------
+Signed in as the SIM Organization Admin of the synthetic "Nemryn Pilot Simulation" workspace:
+- credentials from the git-ignored .env.sim.local, never printed;
+- the ACK-gated read-only harness tests/prod-readonly/plus-quotes/_prod.mjs;
+- page views only.
+
+Result: 12 / 13 checks PASS. 1 finding, separate issue (§4).
+
+Per route at 1440 px. Each checks:
+- exactly one visible h1 with the expected text;
+- the sidebar active item;
+- the header context line "Nemryn Pilot Simulation / <section> <area>" and the sidebar workspace card;
+- the expected header actions present (not clicked);
+- the shared ViewSwitch where expected;
+- no error / not-found boundary;
+- no legacy terms (Request Hub / Recurring Care / recurring arrangement / Fleet);
+- 0 serious / critical axe violations.
+
+| Route | h1 / actions | Result |
+|---|---|---|
+| /operations | "Today's Operations"; Export Day Sheet, New Trip | PASS |
+| /operations/requests | "Requests"; Log Request; "Request status" view switch | PASS |
+| /operations/trips | "Trips"; New Trip, Apply (filter bar), pagination | PASS |
+| /operations/dispatch | "Dispatch"; Export Day Sheet, New Trip; "Dispatch day" view switch | all checks pass EXCEPT axe: 1 serious (§4) |
+| /operations/tomorrow | "Tomorrow Readiness"; Open in Dispatch | PASS |
+| /operations/recurring-care | "Standing Orders"; New standing order; "Standing order status" view switch | PASS |
+| /operations/passengers | "Passengers"; Add Passenger | PASS |
+| /operations/facilities | "Facilities"; Add Facility | PASS |
+| /operations/drivers | "Drivers"; Invite Driver | PASS |
+| /operations/fleet | "Vehicles"; Add Vehicle | PASS |
+| /operations/proof-of-service | "Proof of Service"; window view switch (no nav item: reached from the Brief) | PASS |
+
+Widths:
+
+| Check | Result |
+|---|---|
+| 1024 px: all 11 routes, no page-level horizontal overflow; Dispatch grid scroll contained | PASS |
+| 768 px: same | PASS |
+
+Navigation, headers, visible actions and the workspace context are all as specified; the account was an Organization
+Admin.
+
+Evidence (outside the repository): $TMPDIR/nemryn-plus-quotes-prod-readonly/p2-production-closeout/
+- 11 route screenshots at 1440
+- dispatch-1024.png, dispatch-768.png
+- results.txt
+
+4. FINDING (reported separately; NOT fixed here)
+------------------------------------------------
+F-1. Dispatch grid scroll container is not keyboard-focusable when no trips are on the grid.
+- axe "scrollable-region-focusable" (serious), WCAG 2.1.1.
+- Production state: 3 drivers, 0 trips today. The horizontally scrollable grid ([data-testid="dispatch-grid"],
+  overflow-x: auto) contains no focusable element, so a keyboard user cannot scroll it.
+- Pre-existing, NOT introduced by P2:
+  - the grid's overflow container dates from P1-E3-S5;
+  - P2 changed only its width / raise.
+  - It went undetected because every isolated suite had trips on the grid (trip blocks are focusable buttons).
+- Impact: low. An empty grid has no actions to reach; the only thing a keyboard user can't do is scroll to see later
+  empty hours.
+- Proposed fix (needs approval):
+  - give the grid container tabIndex={0}, role="region" and aria-label="Today's assignments schedule" (a focusable,
+    named, keyboard-scrollable region);
+  - add a QA2 check for "drivers but no trips" (the coverage gap).
+
+5. VERDICT
+----------
+P2 production release: VERIFIED, with one pre-existing low-impact accessibility finding (F-1) recorded for a
+separately approved fix.
+
+No production records created or modified.

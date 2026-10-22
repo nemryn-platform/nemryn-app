@@ -113,7 +113,8 @@ try {
   const tip = await admin.evaluate(`(function(){const t=document.querySelector('[data-testid="sidebar-rail-tooltip"]'); return t ? t.textContent.trim() + '|' + t.getAttribute('aria-hidden') + '|' + t.checkVisibility() : '';})()`);
   check("S10 rail: keyboard focus on an item shows its label beside the rail (visual only; aria-hidden — the name is the aria-label)", tip === "Dispatch|true|true", tip);
   const ring = await admin.evaluate(`getComputedStyle(document.activeElement).outlineColor + '|' + getComputedStyle(document.activeElement).outlineStyle`);
-  check("S10b focus ring on the dark chrome uses the chrome marker token (#a8bcc8, >= 7:1), not the ~2:1 steel focus colour", ring === "rgb(168, 188, 200)|solid", ring);
+  // Brand Lock v2 (D-2, 16-brand-lock-v2.md §1 `shell.focus`): expectation re-pointed from the v1 #a8bcc8 to #7fb8ff; intent unchanged.
+  check("S10b focus ring on the dark chrome uses the shell focus token (#7fb8ff, 7.57:1 on the shell), not the page's teal focus colour [Brand Lock v2 D-2]", ring === "rgb(127, 184, 255)|solid", ring);
   await key(admin, "Escape", "Escape", 27);
   check("S11 rail tooltip: Escape hides it", !(await has(admin, '[data-testid="sidebar-rail-tooltip"]')));
   await shot(admin, "05-sidebar-collapsed", '[data-testid="operations-sidebar"]');
@@ -272,10 +273,14 @@ try {
 
   section("B — brand preservation");
   const brand = await admin.evaluate(`(function(){const cs=getComputedStyle(document.documentElement); return ['--color-chrome-background','--color-surface-app','--color-action-primary-background','--radius-xs','--radius-sm','--radius-md','--radius-lg'].map(v => v + '=' + cs.getPropertyValue(v).trim()).join(' ');})()`);
-  check("B1 Deep Graphite chrome, Mineral White canvas, graphite primary action; radius scale 4 / 8 / 8 / 12", brand === "--color-chrome-background=#171a1d --color-surface-app=#f7f7f4 --color-action-primary-background=#171a1d --radius-xs=4px --radius-sm=8px --radius-md=8px --radius-lg=12px", brand);
+  // Brand Lock v2 (D-2 palette, D-7 radius; 16-brand-lock-v2.md §1/§3): expectations re-pointed from the v1 values; the check still asserts the active brand tokens.
+  check("B1 deep slate chrome, cool canvas, teal primary action; radius scale 4 / 9 / 12 / 14 [Brand Lock v2 D-2, D-7]", brand === "--color-chrome-background=#112632 --color-surface-app=#f3f8fa --color-action-primary-background=#006e69 --radius-xs=4px --radius-sm=9px --radius-md=12px --radius-lg=14px", brand);
   await go(admin, "/operations");
   const ff = await admin.evaluate(`(function(){const f=getComputedStyle(document.querySelector('h1')).fontFamily; const btn=getComputedStyle([...document.querySelectorAll('main a')].find(a => a.textContent.trim() === 'New Trip')).backgroundColor; return f + '|' + btn;})()`);
-  check("B2 page title in Geist Sans (no serif); New Trip is the graphite primary (no teal)", /^Geist/i.test(ff) && !ff.split("|")[0].split(",").map((f) => f.trim().replace(/"/g, "").toLowerCase()).some((f) => f === "serif" || /georgia|times|garamond|playfair|serif display/.test(f)) && /rgb\(23, 26, 29\)/.test(ff), ff);
+  // Brand Lock v2 (D-1 display face, D-2 teal primary; 16-brand-lock-v2.md §1/§2): expectations re-pointed — the page title is the approved
+  // self-hosted Newsreader display face (Georgia fallback) while the UI body stays Geist; New Trip is the teal primary (no graphite).
+  const bodyFont = await admin.evaluate(`getComputedStyle(document.querySelector('main p') || document.body).fontFamily`);
+  check("B2 page title in the approved Newsreader display face (body text stays Geist Sans); New Trip is the teal primary [Brand Lock v2 D-1, D-2]", /newsreader/i.test(ff.split("|")[0]) && /georgia/i.test(ff.split("|")[0]) && /geist/i.test(bodyFont) && /rgb\(0, 110, 105\)/.test(ff), `${ff} body=${bodyFont}`);
 } catch (e) {
   fails++;
   console.log(`FAIL — unexpected error :: ${e?.stack ?? e}`);

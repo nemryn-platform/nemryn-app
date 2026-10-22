@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CheckCircle, ClockCounterClockwise, Lightning, Path, WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, CalendarBlank, CheckCircle, ClockCounterClockwise, Lightning, ListChecks, Path, Tray, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import {
@@ -23,7 +23,8 @@ import {
   type OperationsBriefRecurringCareSummary,
   type OperationsBriefProofOfServiceSummary,
 } from "@/lib/operations/operations-brief-core";
-import { formatOperationsTime } from "@/lib/operations/presentation";
+import { formatOperationsLongDate, formatOperationsTime } from "@/lib/operations/presentation";
+import { STRANDED_REQUESTS_HREF } from "@/lib/operations/request-fulfilment-core";
 import { OnboardingChecklistBanner } from "@/components/operations/OnboardingChecklistBanner";
 import { OperationsBrief } from "@/components/operations/OperationsBrief";
 import { OverviewPageHeader } from "@/components/operations/OperationsPageHeaders";
@@ -222,7 +223,7 @@ export default async function OperationsOverviewPage() {
     composition.kind !== "fresh" && data !== null ? (
       <StatTileGroup label="Today at a glance" testId="brief-summary-tiles">
         {[
-          <StatTile key="today" label="trips today" value={data.summary.todayCount} icon={<Path className="size-5" />} tone="info" href="#today-trips" testId="tile-trips-today" />,
+          <StatTile key="today" label="trips today" value={data.summary.todayCount} icon={<Path className="size-5" />} tone="accent" href="#today-trips" testId="tile-trips-today" />,
           <StatTile key="active" label="active" value={data.summary.activeCount} icon={<Lightning className="size-5" />} tone="info" href="#active-trips" testId="tile-active" />,
           <StatTile
             key="attention"
@@ -245,6 +246,52 @@ export default async function OperationsOverviewPage() {
       </StatTileGroup>
     ) : null;
 
+  // NP-UI-V2-1 (Concept B "Operations Brief" tiles on a fresh workspace): four real facts this page already loaded —
+  // today's date, the setup progress, the pending requests and the accepted requests that still need a trip. Never a
+  // zero counter (P1-OPS-PROG3B): an empty queue reads "None waiting"; a failed load reads "Unavailable", never 0.
+  // Each tile links only to an existing destination; no new query, no new metric.
+  const pendingCount = requestSummary?.pendingRequestCount ?? null;
+  const strandedCount = requestSummary ? requestSummary.strandedAcceptedCount ?? 0 : null;
+  const freshTiles =
+    composition.kind === "fresh" ? (
+      <StatTileGroup label="Today at a glance" testId="brief-fresh-tiles">
+        {[
+          <StatTile key="date" label="Today" value={formatOperationsLongDate(now, timezone)} icon={<CalendarBlank className="size-5" />} tone="accent" href="/operations/dispatch" testId="tile-today-date" />,
+          checklist ? (
+            <StatTile
+              key="setup"
+              label="setup steps complete"
+              value={`${checklist.completedCount} of ${checklist.totalCount}`}
+              icon={<ListChecks className="size-5" />}
+              tone="accent"
+              href="#setup"
+              testId="tile-setup"
+            />
+          ) : null,
+          <StatTile
+            key="pending"
+            label={pendingCount === null ? "requests awaiting review" : pendingCount > 0 ? (pendingCount === 1 ? "request" : "requests") : "Requests awaiting review"}
+            value={pendingCount === null ? null : pendingCount > 0 ? pendingCount : "None waiting"}
+            detail={pendingCount !== null && pendingCount > 0 ? "Awaiting review" : undefined}
+            icon={<Tray className="size-5" />}
+            tone={pendingCount !== null && pendingCount > 0 ? "info" : "neutral"}
+            href="/operations/requests?state=pending"
+            testId="tile-pending-requests"
+          />,
+          <StatTile
+            key="stranded"
+            label={strandedCount === null ? "accepted requests need a trip" : strandedCount > 0 ? "need a trip" : "Accepted requests needing a trip"}
+            value={strandedCount === null ? null : strandedCount > 0 ? strandedCount : "None waiting"}
+            detail={strandedCount !== null && strandedCount > 0 ? "Accepted, not yet scheduled" : undefined}
+            icon={<Path className="size-5" />}
+            tone={strandedCount !== null && strandedCount > 0 ? "attention" : "neutral"}
+            href={STRANDED_REQUESTS_HREF}
+            testId="tile-stranded-requests"
+          />,
+        ].filter(Boolean)}
+      </StatTileGroup>
+    ) : null;
+
   return (
     <>
       <OverviewPageHeader timezone={timezone} operatingHours={operatingSchedule ? formatSchedule(operatingSchedule) : null} />
@@ -253,7 +300,7 @@ export default async function OperationsOverviewPage() {
         <OnboardingChecklistBanner checklist={checklist} />
 
         <OperationsBrief
-          summaryTiles={summaryTiles}
+          summaryTiles={composition.kind === "fresh" ? freshTiles : summaryTiles}
           brief={brief}
           composition={composition}
           timezone={timezone}
@@ -275,7 +322,7 @@ export default async function OperationsOverviewPage() {
           // underlying failure (dayState === "UNAVAILABLE"); this is the
           // separate, larger detail region below it. No raw Supabase/SQL/
           // PostgREST/ZW error text is ever surfaced here.
-          <Panel>
+          <Panel surface="raised">
             <EmptyState
               title="Today's operations unavailable"
               description="We couldn't load today's trip activity. Refresh the page to try again."
@@ -283,15 +330,15 @@ export default async function OperationsOverviewPage() {
           </Panel>
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-[minmax(0,1fr)_340px]">
-              <div className="flex flex-col gap-zw-lg">
+            <div className="grid grid-cols-1 gap-zw-md xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="flex flex-col gap-zw-md">
                 {/* P1-OPS-PROG3B (owner decision Q1): the full Needs Attention
                     table that used to be here duplicated the Brief's own
                     attention list -- removed. The Brief shows the first 5 with
                     their actions; Dispatch is the complete surface. */}
-                <Panel elevated className="scroll-mt-24 p-0" id="today-trips">
+                <Panel surface="raised" className="scroll-mt-24 p-0" id="today-trips">
                   <div className="p-zw-lg pb-0">
-                    <PanelHeader as="h2" icon={<Path className="size-5" />} title="Upcoming Trips" description="Every trip scheduled for today." />
+                    <PanelHeader as="h2" variant="display" tone="accent" icon={<Path className="size-5" />} title="Upcoming Trips" description="Every trip scheduled for today." />
                   </div>
                   <div className="p-zw-lg">
                     {data.todayTrips.length === 0 ? (
@@ -311,10 +358,12 @@ export default async function OperationsOverviewPage() {
                 </Panel>
               </div>
 
-              <div className="flex flex-col gap-zw-lg">
-                <Panel elevated id="active-trips" className="scroll-mt-24">
+              <div className="flex flex-col gap-zw-md">
+                <Panel surface="raised" id="active-trips" className="scroll-mt-24">
                   <PanelHeader
                     as="h2"
+                    variant="display"
+                    tone="accent"
                     icon={<Lightning className="size-5" />}
                     title="Active Trips"
                     actions={
@@ -355,8 +404,8 @@ export default async function OperationsOverviewPage() {
                   </div>
                 </Panel>
 
-                <Panel elevated>
-                  <PanelHeader as="h2" icon={<ClockCounterClockwise className="size-5" />} title="Activity Log" />
+                <Panel surface="raised">
+                  <PanelHeader as="h2" variant="display" tone="accent" icon={<ClockCounterClockwise className="size-5" />} title="Activity Log" />
                   <div className="mt-zw-md">
                     {data.activityLog.length === 0 ? (
                       <EmptyState size="compact" title="No activity yet today" description="Trip updates will appear here as they happen." />
