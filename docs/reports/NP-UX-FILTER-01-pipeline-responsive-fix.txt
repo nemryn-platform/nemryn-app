@@ -1,0 +1,186 @@
+NP-UX-FILTER-01 — PIPELINE RESPONSIVE SEARCH AND FILTER LAYOUT FIX
+=================================================================
+Date: 2026-10-23.
+Mode: local implementation on the isolated stack (~/NemrynS1Iso, app :3100, fictional seed).
+- No Git operation, no database / RLS / entitlement change, no production access, no deployment.
+- The queued Requests full-row navigation change is NOT included.
+
+0. BRANCH / BASELINE NOTE
+-------------------------
+- The brief asked for an owner-created dedicated branch. None existed at the start.
+- The checkout was still np-p2-s6b-consent-preferences-ui at d91daeb. I did not switch branches, as instructed.
+- d91daeb's tree is byte-identical to origin/main fa949eb (tree cb92624…), so the baseline is correct.
+- The change is uncommitted. `git switch -c <branch>` carries it to a new branch based on the same tree.
+
+1. DEFECT AND ROOT CAUSE
+------------------------
+File: src/app/operations/growth/pipeline/page.tsx (the filter <form role="search">).
+- From the md breakpoint (viewport ≥ 768) the form became ONE flex row:
+  - Search: `min-w-0 flex-1`;
+  - fixed-width selects: Stage md:w-48 (192px), Source md:w-44 (176px), Owner md:w-44 (176px);
+  - then Apply (plus Clear when filtered), with 16px gaps.
+- The fixed parts total about 690px (about 760px with Clear). When the form's content width fell below that plus room
+  for Search, Search, the only flexible item with min-w-0, shrank to its padding (26px).
+- Its "Search" label then visibly overflowed into the Stage label.
+- The breakpoint is viewport-based, but the space depends on the collapsible sidebar (expanded from 1024, icon rail
+  below). The defect therefore appears in two bands:
+  - with the sidebar expanded: Search is 231px at 1280 and 147px at 1180, collapses to 67px at 1100 and 26px at 1024;
+  - with the icon rail: 135px at 960 and 75px at 900, then 26px at 860 / 822 / 800 / 768.
+  - An active search plus filters (the Clear button present) makes it worse: 26px already at 1100.
+- Before measurements: docs/design/concept-b/reviews/ux-filter-01/search-width-before-after.txt.
+
+The same pattern elsewhere (measured, NOT changed; outside this brief's Pipeline scope):
+
+| Page | Search width at 768 (before) | Status |
+|---|---|---|
+| Estimates & Quotes | 56px at 800, 26px at 768 | SAME defect (selects md:w-60 + md:w-56). Recommended follow-up |
+| Contacts | 134px | narrow but usable |
+| Tasks | 310px | fine |
+
+2. FIX (one file; layout classes only)
+--------------------------------------
+- The form is now a container (`@container`). The layout follows the FORM's own width, not the viewport, so it is
+  correct whether the sidebar is expanded or collapsed. This is the existing Tailwind v4 container-query idiom already
+  used in OperationsBrief and OnboardingChecklistBanner.
+- Inside the form, a `flex flex-wrap items-end gap-zw-md` row.
+- When the form is ≥ 64rem (`@5xl`), it is a single row, as before:
+  - Search `@5xl:flex-1 @5xl:basis-60 @5xl:min-w-60` is the flexible field and can never go below 15rem; it would
+    wrap instead;
+  - Stage / Source / Owner keep their previous fixed widths (w-48 / w-44 / w-44);
+  - then Apply and Clear.
+- When the form is narrower:
+  - Search takes a full row (`basis-full`);
+  - Stage / Source / Owner share the next row (`flex-1 min-w-40`, i.e. ≥ 10rem each);
+  - Apply / Clear (`shrink-0`) sit at the end of that row, and wrap to their own row rather than shrinking if ever
+    needed.
+- Below md, unchanged: the Operations shell shows its approved "designed for tablet and desktop use" notice.
+- Unchanged:
+  - the form method / action / role="search" / data-testid;
+  - the hidden view / layout inputs;
+  - the field names (q, stage, source, owner), the options and the defaults;
+  - Apply and Clear (and its href);
+  - the Open / Lost / All and Board / List controls;
+  - the DOM order (and therefore Tab order);
+  - every token / colour / typography.
+  - A data-testid "pipeline-filter-search" was added to the Search wrapper (test hook only).
+- No route, query parameter, server code, data access or business logic changed.
+
+3. VERIFICATION (real local app, production build, Chrome via CDP)
+-----------------------------------------------------------------
+Search width (px), before → after:
+
+| Width | Board | List | Active search + filters |
+|---|---|---|---|
+| 1440 | 391 → 391 (single row, unchanged) | 406 → 406 | 331 → 331 |
+| 1280 | 231 → 911 | 246 → 926 | 171 → 926 |
+| 1100 | 67 → 747 | 82 → 747 | 26 → 762 |
+| 1024 | 26 → 671 | 26 → 671 | 26 → 686 |
+| 900 | 75 → 755 | 90 → 755 | 26 → 770 |
+| 822 | 26 → 677 | 26 → 677 | 26 → 692 |
+| 768 | 26 → 623 | 26 → 623 | 26 → 638 |
+
+From 1280 down the layout is two rows. Selects are ≥ 164px everywhere; page and form overflow = 0 at every width.
+
+Behaviour, keyboard and accessibility: 32 / 32 PASS (docs/design/concept-b/reviews/ux-filter-01/behaviour-results.txt).
+- Board, List, empty-filtered (active search, no results) and Lost views, at 1440 / 1024 / 900 / 822 / 768:
+  - Search ≥ 240px;
+  - selects ≥ 160px;
+  - no overlap of label TEXT (measured by text width, not the clipped box);
+  - Apply visible inside the panel;
+  - no page or form overflow.
+- 390: the approved Operations notice is shown and the filter form is not displayed (all four views).
+- Keyboard:
+  - Tab order Search → Stage → Source → Owner → Apply (it follows the visual order);
+  - the focus ring is visible and not clipped by the panel.
+- Behaviour:
+  - Enter in Search submits;
+  - the URL keeps layout=list and carries q / source; the results are filtered;
+  - Clear removes the filters and keeps the List layout;
+  - Apply keeps view=all (Open / Lost / All preserved);
+  - the Board → List switch works and the hidden layout input is present.
+- axe: the filter panel at 822 has no violations; the Pipeline page at 1440 has 0 serious / critical.
+- Long labels: a temporary fictional profile name "Alexandrina Montgomery-Fitzwilliam (Fictional Org A Administrator)"
+  in the Owner select. At 822 the select stays 186px, the native select truncates the text inside, and there is no
+  overflow. The temporary profile row was removed afterwards; it had not existed before.
+- Populated (7 fictional opportunities) and empty (filtered, no match) pipelines were both covered.
+
+Screenshots (fictional data), docs/design/concept-b/reviews/ux-filter-01/:
+- before-pipeline-822.png / after-pipeline-822.png (the requested before / after at 822);
+- before / after-pipeline-active-filters-822.png;
+- after-board-1440 / 1024 / 768 / 390, after-list-822, after-lost-822, after-empty-filtered-822, after-longname-822.
+
+Regressions:
+- Unit tests: 902 / 902.
+- TypeScript: PASS.
+- ESLint (src): 0 errors; 1 pre-existing warning in growth/tasks/page.tsx (unchanged file).
+- Production build: PASS (the :3100 server runs it; no source newer than BUILD_ID).
+- QA2 strict: 199 / 199 PASS, 0 failures, "RESULT: all suites pass", exit 0. Raw output:
+  docs/design/concept-b/reviews/ux-filter-01/qa2-strict-results.txt.
+  - Run on the isolated stack (app http://localhost:3100, database supabase_db_NemrynS1Iso), starting from the
+    runner's verified fresh reset.
+
+  | Suite | Pass | Fail | Expected |
+  |---|---|---|---|
+  | core-requests | 25 | 0 | 25 |
+  | core-trips-dispatch | 44 | 0 | 44 |
+  | core-records | 28 | 0 | 28 |
+  | growth (includes the Pipeline) | 23 | 0 | 23 |
+  | auth-access | 79 | 0 | 79 |
+
+  - Baseline vs introduced: there were no failures at all, so there is nothing to classify and nothing was suppressed.
+    The counts equal the established QA2 baseline (199).
+- The build under test includes the fix:
+  - .next/BUILD_ID was written at 15:03:09, after the last edit to pipeline/page.tsx (15:02:42);
+  - the :3100 next-server was started at 15:03:19 from that build;
+  - the compiled server chunk contains the new "pipeline-filter-search" hook;
+  - no source file is newer than BUILD_ID.
+
+4. NOT CHANGED / OUT OF SCOPE
+-----------------------------
+- Estimates & Quotes has the same defect (§1). Recommended as a follow-up with the identical pattern; not included
+  because this brief targets the Pipeline.
+- The queued Requests full-row navigation change.
+- No database, RLS, entitlement, production data, Brand Lock token or Git change.
+
+5. FILES
+--------
+Modified: src/app/operations/growth/pipeline/page.tsx (the filter form layout only).
+Added:
+- docs/design/concept-b/reviews/ux-filter-01/ (screenshots and measurements);
+- this report.
+
+6. OWNER SIGN-OFF MATERIAL
+--------------------------
+Before / after at 822px (absolute paths):
+- /Users/datamatics/Nemryn/docs/design/concept-b/reviews/ux-filter-01/before-pipeline-822.png
+- /Users/datamatics/Nemryn/docs/design/concept-b/reviews/ux-filter-01/after-pipeline-822.png
+- /Users/datamatics/Nemryn/docs/design/concept-b/reviews/ux-filter-01/before-pipeline-active-filters-822.png
+- /Users/datamatics/Nemryn/docs/design/concept-b/reviews/ux-filter-01/after-pipeline-active-filters-822.png
+  ("Fictional" search + source = Phone call, view = All: the Clear button is shown)
+Other widths: after-board-1440.png, after-board-1024.png, after-board-768.png, after-board-390.png (the notice),
+after-list-822.png, after-lost-822.png, after-empty-filtered-822.png, after-longname-822.png (same folder).
+
+7. WORKING-TREE STATE (for the owner's dedicated branch)
+-------------------------------------------------------
+- Current branch: np-p2-s6b-consent-preferences-ui (already merged as PR #31). HEAD d91daeb. Its tree is
+  byte-identical to origin/main fa949eb (tree cb9262404458374c572afb5d267ddab12a06b55c).
+- Tracked change, the only one: M src/app/operations/growth/pipeline/page.tsx (+29 / −23).
+- New (untracked) files from this work:
+  - docs/reports/NP-UX-FILTER-01-pipeline-responsive-fix.txt;
+  - docs/design/concept-b/reviews/ux-filter-01/ (screenshots, measurements, behaviour and QA2 results).
+- Unchanged: the S6 consent-ledger implementation, supabase/**, every other source file. There are no production
+  writes and no Git operations.
+- The other untracked items in the checkout are pre-existing (.tmp-qa/, earlier reports and screenshots). They are
+  unrelated and untouched.
+- Safe branch creation: `git switch -c <ux-fix-branch>` (or with an explicit start point, `git switch -c
+  <ux-fix-branch> origin/main`). Because HEAD's tree equals origin/main, both carry the uncommitted change over without
+  conflict.
+  - Do NOT run `git checkout -- .`, `git stash` or `git reset --hard` beforehand; they would discard or hide the change.
+
+8. CONFIRMED FOLLOW-UP (NOT IMPLEMENTED)
+---------------------------------------
+- Estimates & Quotes (/operations/growth/quotes) has the same defect, measured before any change: Search is 72px at
+  1024, 78px at 822, 56px at 800 and 26px at 768.
+- The same container-query pattern would fix it. It is left for a separate, owner-approved change.
+
+STOP FOR OWNER VISUAL REVIEW.

@@ -1,0 +1,6 @@
+core-requests        pass= 25 fail=0  (expected 25 checks)  PASS
+core-trips-dispatch  pass= 44 fail=0  (expected 44 checks)  PASS
+core-records         pass= 28 fail=0  (expected 28 checks)  PASS
+growth               pass= 23 fail=0  (expected 23 checks)  PASS
+auth-access          pass= 79 fail=0  (expected 79 checks)  PASS
+RESULT: all suites pass
