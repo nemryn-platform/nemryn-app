@@ -158,11 +158,11 @@ export function ContactWriteActions({
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-2" data-testid="contact-log-actions">
         {LOGGABLE_ACTIVITY_TYPES.map((type) => (
-          <Button key={type} type="button" size="sm" variant={type === "note" ? "primary" : "outline"} onClick={() => { setNotice(null); setLogType(type); }} data-testid={`log-${type}`}>
+          <Button key={type} type="button" size="sm" variant="outline" onClick={() => { setNotice(null); setLogType(type); }} data-testid={`log-${type}`}>
             {logActionLabel(type)}
           </Button>
         ))}
-        <Button type="button" size="sm" variant="text" onClick={() => { setNotice(null); setArchiving(true); }} data-testid="contact-archive">
+        <Button type="button" size="sm" variant="destructive-outline" onClick={() => { setNotice(null); setArchiving(true); }} data-testid="contact-archive">
           Archive contact
         </Button>
       </div>

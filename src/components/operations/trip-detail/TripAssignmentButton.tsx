@@ -34,7 +34,7 @@ export function TripAssignmentButton({
   canManageDriverSetup,
   recurringHint = null,
   label,
-  fullWidth = true,
+  fullWidth = false,
 }: TripAssignmentButtonProps) {
   const [open, setOpen] = useState(false);
   const mode = trip.activeAssignmentId ? "reassign" : "assign";

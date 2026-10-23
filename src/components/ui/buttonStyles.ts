@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 
-export type ButtonVariant = "primary" | "secondary" | "outline" | "text" | "destructive";
+export type ButtonVariant = "primary" | "secondary" | "outline" | "text" | "destructive" | "destructive-outline";
 export type ButtonSize = "sm" | "md" | "lg";
 
 /**
@@ -26,6 +26,10 @@ export const buttonVariantClasses: Record<ButtonVariant, string> = {
   outline: "border border-border-strong bg-surface-elevated text-text-primary hover:bg-surface-hover",
   text: "bg-transparent text-text-link hover:bg-surface-hover",
   destructive: "bg-action-destructive-background text-action-destructive-foreground hover:bg-action-destructive-hover",
+  // NP-UI-V2-4: the TRIGGER of a consequential action (Cancel Trip, End, Withdraw...) -- distinct from the neutral
+  // outline without the weight of the solid red, which stays for the confirmation inside its dialog. Existing critical
+  // tokens only; the label always names the action (never colour alone).
+  "destructive-outline": "border border-critical-border bg-surface-elevated text-critical-text hover:bg-critical-bg",
 };
 
 // NP-UI-P1b: one control radius for every size (rounded-sm = 8px, the same as inputs and nav items) and one height

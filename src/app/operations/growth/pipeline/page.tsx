@@ -263,7 +263,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
             }
             action={
               !filtered && canWrite && params.view === "open" ? (
-                <LinkButton href="/operations/growth/pipeline/new" size="sm">
+                <LinkButton href="/operations/growth/pipeline/new" size="sm" variant="outline">
                   New opportunity
                 </LinkButton>
               ) : undefined

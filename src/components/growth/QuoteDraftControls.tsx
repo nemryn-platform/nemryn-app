@@ -165,7 +165,7 @@ export function QuoteDraftControls({
           <Button type="button" size="sm" variant="outline" onClick={() => show("edit")} data-testid="quote-edit-open">
             Edit draft
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => show("withdraw")} data-testid="quote-withdraw-open">
+          <Button type="button" size="sm" variant="destructive-outline" onClick={() => show("withdraw")} data-testid="quote-withdraw-open">
             Withdraw draft
           </Button>
         </div>
@@ -187,13 +187,13 @@ export function QuoteDraftControls({
               Revise
             </Button>
           )}
-          <Button type="button" size="sm" variant="text" onClick={() => show("withdraw-sent")} data-testid="quote-withdraw-sent-open">
+          <Button type="button" size="sm" variant="destructive-outline" onClick={() => show("withdraw-sent")} data-testid="quote-withdraw-sent-open">
             Withdraw sent quote
           </Button>
         </div>
       )}
       {!draft && !sent && canCreate && (
-        <Button type="button" size="sm" onClick={() => show("create")} data-testid="quote-create-open">
+        <Button type="button" size="sm" variant="outline" onClick={() => show("create")} data-testid="quote-create-open">
           New estimate or quote
         </Button>
       )}

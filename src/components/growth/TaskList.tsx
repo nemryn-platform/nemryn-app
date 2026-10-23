@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition, type ReactNode } from "react";
 import { Plus } from "@phosphor-icons/react/dist/ssr";
 import { cancelTaskAction, completeTaskAction, reassignTaskAction, type TaskActionState } from "@/app/operations/growth/tasks/actions";
 import { Button } from "@/components/ui/Button";
@@ -191,6 +191,7 @@ export function TaskList({
   selfHandle,
   showSubject = true,
   emptyText,
+  emptyState,
   createSubject,
   subjectOptions,
   createLabel = "New task",
@@ -202,6 +203,8 @@ export function TaskList({
   selfHandle: string | null;
   showSubject?: boolean;
   emptyText: string;
+  /** NP-UI-V2-4: a page-level empty state (the Tasks page); omitted = the compact line used inside panels. */
+  emptyState?: ReactNode;
   /** When set, "New task" creates a task for this fixed subject. */
   createSubject?: { kind: "contact" | "opportunity"; id: string; label: string };
   /** When set (Tasks page), "New task" lets the person pick a subject. */
@@ -234,9 +237,11 @@ export function TaskList({
         </p>
       )}
       {tasks.length === 0 ? (
-        <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="task-empty">
-          {emptyText}
-        </p>
+        emptyState ?? (
+          <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="task-empty">
+            {emptyText}
+          </p>
+        )
       ) : (
         <Panel>
           <ul aria-label="Tasks">

@@ -65,7 +65,7 @@ export function ArrangementLifecycleControls({
             Resume
           </Button>
         )}
-        <Button variant="destructive" onClick={() => setActiveDialog("end")}>
+        <Button variant="destructive-outline" onClick={() => setActiveDialog("end")}>
           End
         </Button>
       </div>

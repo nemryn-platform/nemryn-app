@@ -1,0 +1,104 @@
+NP-UI-V2-4 — VISUAL REVIEW (BROWSER EVIDENCE)
+=============================================
+Date: 2026-10-23.
+
+Every image is a real browser capture of the isolated app on :3100 (production build, Plus demo, fictional data). No
+generated mockups.
+- Before = origin/main d14fbf5 (V2-3).
+- After = the final V2-4 tree.
+- Same fresh reset and fixture for both.
+
+Evidence (docs/design/concept-b/reviews/v2-4/):
+- before/ and after/: 33 captures each, identical names; index.md;
+- v2-4-buttons-before-vs-after.png: Trip Detail, Dispatch, Opportunity (sent and draft quote), Contact;
+- v2-4-empty-states-before-vs-after.png: Tasks, Quotes, Standing Orders, filtered Tasks, Requests, Pipeline;
+- v2-4-dialogs-before-vs-after.png: Cancel Trip, Decline Request, Assign Driver, Withdraw draft, New task;
+- v2-4-desktop-contact-sheet.png (1440) and v2-4-tablet-contact-sheet.png (768);
+- v2-4-mobile-auth-sheet.png (auth-390/, 390×667 full page).
+
+Compared against Brand Lock v2, the approved V2-1 Overview (after/b01), the V2-2 Core and the V2-3 Growth / Settings
+sets.
+
+1. BUTTONS AND ACTION HIERARCHY
+-------------------------------
+- Trip Detail:
+  - "Cancel Trip" now reads as a consequential action (red outline) beside the neutral "Edit Trip".
+  - The assignment control is a compact outline under the status facts instead of a full-width bar.
+  - Its dialog commit stays solid red.
+- Dispatch:
+  - The queue card's "Assign" is a compact outline under the trip.
+  - The page has one teal action again: "New Trip".
+  - The queue stays readable and quick to act on; the attention badge still marks each card.
+- Opportunity:
+  - Header: "Edit opportunity" (outline) then the teal "Create transportation request". Same height, same order as
+    every other page.
+  - Stage "Move" and "New estimate or quote" are outline.
+  - "Withdraw draft" / "Withdraw sent quote" are red outlines.
+  - Record accepted / declined and Revise stay neutral outline.
+- Contact:
+  - The same header order.
+  - "Add note" matches its sibling log actions.
+  - "Archive contact" is a red outline.
+- Standing Order: "End" is a red outline instead of a solid red block in the header. Pause stays neutral; the End
+  dialog commit stays solid red.
+- Result: one clear teal action per view, neutral supporting actions, low-priority text actions, and destructive
+  actions that are distinct without dominating.
+
+2. EMPTY STATES
+---------------
+- Tasks:
+  - From a floating sentence to a calm raised panel: mint icon, "No follow-ups yet.", an explanation of where
+    follow-ups come from, "Open Contacts" / "Open the Pipeline".
+  - Filtered: "No tasks match these filters." with "Clear filters".
+- Estimates & Quotes: from two lines to the same anatomy, explaining that quotes start from an opportunity, with
+  "Open the Pipeline". No standalone quote action exists.
+- Standing Orders / Requests / Pipeline / Contacts: the empty-state action is outline beneath the header's teal
+  action.
+- No sample data or counts anywhere. The error states (critical, with Retry) remain visibly different from empty
+  states.
+
+3. DIALOGS AND FORMS
+--------------------
+Dialogs:
+- Unchanged composition (v2 radius, slate scrim).
+- Footers read Cancel / Keep (outline) then the commit: teal for a positive commit, solid red for a destructive one.
+- Disabled commits are clearly dimmed until valid (Decline Request).
+
+Forms: New Trip, Log Request and the Growth forms (V2-3 final polish) all share the FormSection anatomy.
+
+4. CROSS-MODULE CONSISTENCY
+---------------------------
+The desktop and tablet contact sheets show one visual language across Core, Growth, Quotes and Settings:
+- the display h1 with breadcrumb and actions (secondary first, primary last);
+- fact tiles from real counts;
+- raised panels with icon headers;
+- the ViewSwitch and framed filters;
+- consistent tables;
+- calm empty states.
+
+Navigation:
+- the sidebar, Growth group and Settings sub-navigation are unchanged and correct in every capture;
+- breadcrumbs are present on detail, form and Settings pages.
+
+5. RESPONSIVE AND MOBILE
+------------------------
+- 1024 / 768: no clipped action bars. The header actions wrap under the h1 and the compact Assign / Withdraw controls
+  fit their cards.
+- 390: the approved Operations notice is unchanged.
+- Auth at 390×844 / 390×667: cards scroll fully and are never clipped; every control is ≥44px; submits are 48px.
+
+6. REMAINING EXCEPTIONS (documented, intentional)
+-------------------------------------------------
+- The Overview has two teal actions ("New Trip", "Review requests"). This is the approved Concept B composition (D-8).
+- Settings › Operations and Settings › Notifications each have two Saves, because each page holds two independent
+  forms.
+- Destructive-outline is classified as "outline" by the automated audit (white fill). It is visually red-bordered;
+  see the sheets.
+
+7. VERDICT
+----------
+- Every implemented screen uses the same Concept B / Brand Lock v2 language.
+- Buttons are intentional and weighted by importance.
+- Empty states guide without misrepresenting what is possible.
+
+READY FOR FINAL OWNER ACCEPTANCE, subject to the regression results in NP-UI-V2-4-test-results.txt.

@@ -72,7 +72,7 @@ export function RequestActionBar({ requestId, actions, createTripHref, createRec
           </form>
         )}
         {actions.canCancel && (
-          <Button type="button" variant="outline" onClick={() => setActiveDialog("cancel")}>
+          <Button type="button" variant="destructive-outline" onClick={() => setActiveDialog("cancel")}>
             Cancel Request
           </Button>
         )}

@@ -76,7 +76,7 @@ export function TripDetailActionBar({
           </Button>
         )}
         {eligibleForCancel && (
-          <Button variant="outline" onClick={() => setActiveDialog("cancel")}>
+          <Button variant="destructive-outline" onClick={() => setActiveDialog("cancel")}>
             Cancel Trip
           </Button>
         )}

@@ -67,7 +67,7 @@ export function NeedsAssignmentQueue({ trips, timezone, day = "today", onAssign 
                   {trip.pickupDescription} → {trip.destinationDescription}
                 </span>
               </p>
-              <Button onClick={() => onAssign(trip)} data-trip-id={trip.id} size="sm" className="mt-zw-xs w-full">
+              <Button onClick={() => onAssign(trip)} data-trip-id={trip.id} size="sm" variant="outline" className="mt-zw-xs self-start">
                 Assign
               </Button>
             </Panel>

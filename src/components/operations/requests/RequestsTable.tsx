@@ -156,7 +156,7 @@ export function RequestsTable({ rows, hasActiveFilters, organizationHasAnyReques
             title="No requests yet"
             description="Log Request records incoming transportation demand so it can be reviewed and converted into trips."
             action={
-              <LinkButton href="/operations/requests/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
+              <LinkButton href="/operations/requests/new" variant="outline" leadingIcon={<Plus className="size-4" aria-hidden />}>
                 Log Request
               </LinkButton>
             }

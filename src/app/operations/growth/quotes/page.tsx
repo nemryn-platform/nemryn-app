@@ -30,7 +30,9 @@ import { LinkButton } from "@/components/ui/LinkButton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
 import { StatTile, StatTileGroup } from "@/components/ui/StatTile";
-import { CheckCircle, Hourglass, PaperPlaneTilt, PencilSimpleLine } from "@phosphor-icons/react/dist/ssr";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Panel } from "@/components/ui/Panel";
+import { CheckCircle, Hourglass, PaperPlaneTilt, PencilSimpleLine, Receipt } from "@phosphor-icons/react/dist/ssr";
 import { QuotesDirectoryTable, type QuotesDirectoryRow } from "@/components/growth/QuotesDirectoryTable";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -170,19 +172,31 @@ export default async function QuotesDirectoryPage({ searchParams }: { searchPara
           </Link>
         </p>
       ) : list.rows.length === 0 ? (
-        <div className="flex flex-col gap-1" data-testid="quotes-directory-empty">
-          <p className={cn(typography.bodySmall, "text-text-primary")}>
-            {filtered ? "No estimates or quotes match these filters." : "No estimates or quotes yet."}
-          </p>
-          <p className={cn(typography.bodySmall, "text-text-secondary")}>
-            {filtered ? "Change the search or status, or " : "Estimates and quotes start from an opportunity. "}
-            {/* NP-UI-P1b (WCAG 1.4.1, as P1a A1): a link inside running text is underlined, never colour-only. */}
-            <Link className="text-text-link underline underline-offset-2" href={PIPELINE}>
-              open the Pipeline
-            </Link>
-            .
-          </p>
-        </div>
+        // NP-UI-V2-4: the V2 EmptyState anatomy in a raised panel. Quotes always belong to an opportunity, so the only
+        // next step offered is the Pipeline (no standalone quote is ever created from here). Same wording and test id.
+        <Panel surface="raised" padding="none" data-testid="quotes-directory-empty">
+          <EmptyState
+            icon={<Receipt className="size-6" aria-hidden />}
+            title={filtered ? "No estimates or quotes match these filters." : "No estimates or quotes yet."}
+            description={
+              filtered
+                ? "Change the search or status, or open the Pipeline to work from an opportunity."
+                : "Estimates and quotes start from an opportunity. Open one in the Pipeline and use its Estimates & quotes panel."
+            }
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                {filtered && (
+                  <LinkButton href="/operations/growth/quotes" size="sm" variant="text">
+                    Clear filters
+                  </LinkButton>
+                )}
+                <LinkButton href={PIPELINE} size="sm" variant="outline">
+                  Open the Pipeline
+                </LinkButton>
+              </div>
+            }
+          />
+        </Panel>
       ) : (
         <>
           <QuotesDirectoryTable rows={list.rows.map((r) => toRow(r, tz))} />
