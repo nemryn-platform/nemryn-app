@@ -1,0 +1,310 @@
+NP-RELEASE-01 — PRODUCTION DEPLOYMENT DEPENDENCY GATE: IMPLEMENTATION
+====================================================================
+Date: 2026-10-23.
+Mode: local implementation and verification.
+- No GitHub ruleset or branch-protection change, no Vercel setting change, no secret or credential created.
+- No production write or migration, no deploy, no Git staging / commit / push.
+Branch: np-release-01-deployment-gate at de99716 (= origin/main, which includes the S6-C4 closeout, PR #33).
+
+>>> CORRECTED BY NP-RELEASE-01A (docs/reports/NP-RELEASE-01A-security-hardening.txt), 2026-10-23:
+    (1) Supabase supports FINE-GRAINED personal access tokens scoped to a project and to specific permissions; the
+        statement below that every PAT is account-wide was OUTDATED. Required token: Nemryn project only,
+        Project Settings: Read (project_admin_read) + Migrations: Read (database_migrations_read).
+    (2) The credentialed PR check now runs as `pull_request_target` with TRUSTED base-branch code and inspects the PR
+        head only as git data; the gate's own unit tests run in a separate secret-free `pull_request` workflow.
+    (3) The Vercel wrapper now forces exit 0 (skip) on every unexpected termination path.
+    Where this report differs, NP-RELEASE-01A is authoritative.
+
+FINAL VERDICT: READY FOR OWNER REVIEW
+- The gate is IMPLEMENTED AND TESTED LOCALLY ONLY.
+- It is NOT active in CI: the workflow is not on main and has no secret.
+- It is NOT enforced in production: Vercel is not configured, and main has no branch protection or required checks.
+- Activation needs the owner decisions in §11.
+
+1. CURRENT GITHUB AND VERCEL ARCHITECTURE (audited read-only)
+-------------------------------------------------------------
+- GitHub nemryn-platform/nemryn-app:
+  - PUBLIC repository; forking allowed;
+  - default branch main;
+  - merges are done by "nemryn" (merge commits, squash allowed).
+  - main has NO branch protection and NO rulesets: "Branch not protected", rulesets [], protected=false.
+  - Actions are enabled (all actions allowed), but the repository had NO .github directory, so NO workflows / CI ran.
+  - The only commit status on main is "Vercel" (success).
+  - GitHub environments: Preview, Production, "Production – nemryn-app", "Production – zenward-app-staging". None has
+    protection rules.
+  - A second Vercel project (zenward-app-staging) is also connected to this repository. It was not inspected or
+    touched.
+- Vercel: the Git integration (vercel[bot]) builds every push to main as a PRODUCTION deployment and every branch
+  commit as a Preview.
+  - Recent history: a3fd9b0 (preview), 6af7924 (prod), d91daeb (preview), fa949eb (prod), 956f273 (preview), 1413517
+    (prod), 141605e (preview), de99716 (prod).
+  - There is no vercel.json, no local .vercel link, and no Vercel CLI or token on this machine. The project's settings
+    (Ignored Build Step, environment-variable scopes, deployment protection) COULD NOT BE INSPECTED and are not
+    assumed.
+- Supabase: production wyocbivzgrbekuyqdfts "Nemryn". 93 applied migrations, head 20261023100000. Repository: 93
+  conforming files, YYYYMMDDHHMMSS_name.sql, strictly ordered. The production history table
+  supabase_migrations.schema_migrations has columns version, name and statements.
+- The migration workflow is owner-run Supabase CLI (preflight → backup → dry run → `db push --linked` → read-only
+  verification), as in S6-C2. It is independent of the app deploy.
+- Build / test: `next build`; `npm test` (node --test src/**/*.test.mjs); ESLint; tsc. No CI ran any of them.
+
+2. ROOT CAUSE OF THE S6 RELEASE-ORDER INCIDENT (NP-P2-S6C1)
+----------------------------------------------------------
+- PR #31 (S6-B UI, which calls four new RPCs) was merged to main.
+- Vercel's Git integration deployed it to production within about one minute (fa949eb, 13:51 UTC).
+- Migration 20261023100000 was not yet applied (it was applied later, in O2).
+- Nothing compared the application's database dependencies with the production migration state:
+  - no CI;
+  - no required check;
+  - no deploy-time gate;
+  - no branch protection.
+- The repository containing the migration file was taken as if the migration existed.
+
+3. ENFORCEMENT ARCHITECTURE
+---------------------------
+Two independent layers share ONE checker; the database-first process sits on top.
+L1 PR status check (GitHub Actions, .github/workflows/release-db-compat.yml; [01A: now `pull_request_target`, trusted
+   base code, PR head inspected as data; result posted as the commit status "nemryn/release-db-compat"] → main):
+- application change: every repository migration must already be applied in production; otherwise BLOCKED.
+  Unreachable or unknown state is UNVERIFIABLE (fails).
+- migration-only change: PASS as DATABASE-FIRST, with the pending versions listed. The check never applies
+  migrations; the owner-run release applies them.
+- documentation / test-only change: PASS, even with pending migrations or an unreachable production.
+- drift always BLOCKS:
+  - remote-only versions;
+  - the same version under a different name;
+  - repository migrations older than the production head that were never applied.
+- a mixed application + migration PR is BLOCKED until its migrations are in production. Policy: split it, or release
+  the migration first.
+L2 Deploy-time gate (Vercel Ignored Build Step → scripts/release/vercel-ignore-build.sh):
+- production builds proceed ONLY if, at build time, every repository migration of the commit is applied and there is
+  no drift;
+- otherwise the build is SKIPPED, and production stays on the previous deployment.
+- This catches the race in which a PR check passed but the state changed before deploy (T11).
+- It also catches merges with no PR, or with the check bypassed.
+- Previews follow the preview policy (default: build without the check; §8).
+L3 Process (database-first):
+1. Migration-only PR merged. Production build of that commit SKIPPED: the app is unchanged, so this is harmless.
+2. Owner-run migration release.
+3. Application PR passes L1 and is merged. L2 allows its production build.
+After step 2 a redeploy can also be triggered, but it isn't required, because the app was unchanged.
+Fail-closed rules:
+- unknown / malformed / empty / duplicate state, a wrong project ref or name, missing credentials, an unknown Vercel
+  environment, a crashed checker, or a missing node binary NEVER produce a build;
+- an unknown change set (a git failure) is treated as an application change.
+
+4. IMPLEMENTATION FILES (all new, except package.json)
+------------------------------------------------------
+- scripts/release/db-compat-core.mjs: the pure core.
+  - classifyPath / classifyChanges (conservative: anything not docs / tests / migrations is application);
+  - parseRepoMigrations;
+  - validateProductionState (shape, ref / name identity, version format, duplicates, empty list);
+  - compareMigrations (pending, missing-historical, remote-only, name mismatch);
+  - evaluate (pr / deploy);
+  - formatReport;
+  - vercelIgnoreExit (0 = skip / 1 = build; ONLY a production PASS builds).
+  - Exit codes: PASS 0, BLOCKED 1, UNVERIFIABLE 2.
+- scripts/release/check-db-compat.mjs: the CLI and three READ-ONLY transports:
+  - management-api: two GETs, https://api.supabase.com/v1/projects/{ref} (identity) and
+    /v1/projects/{ref}/database/migrations (history);
+  - supabase-cli: the fixed argv `supabase migration list --linked` (owner / local);
+  - state-file: tests / simulations; refused when VERCEL=1.
+  - Errors are sanitised (the token is redacted; the ref is replaced by {ref}).
+  - `--vercel` prints a single VERCEL_BUILD_DECISION line.
+- scripts/release/vercel-ignore-build.sh: the Vercel Ignored Build Step wrapper. It exits 1 (build) ONLY when the
+  checker completed with exit 0 AND printed exactly VERCEL_BUILD_DECISION=BUILD; every other case exits 0 (skip).
+- scripts/release/release-config.json:
+  - expectedProjectRef wyocbivzgrbekuyqdfts and expectedProjectName "Nemryn" (public identifiers);
+  - managementApiBase;
+  - previewPolicy "build".
+- scripts/release/db-compat.test.mjs: 20 tests (§6).
+- .github/workflows/release-db-compat.yml: the L1 workflow. Report-only by default (§9).
+- package.json: + "test:release".
+No application, database, UI or business-logic change. Nothing is imported by src/, so no browser-bundle exposure.
+
+5. SECURITY AND CREDENTIAL DESIGN
+---------------------------------
+- Never mutates: the transports are GETs only (no SQL / query endpoint) and the fixed CLI argv `migration list
+  --linked`. Test T15 scans the gate code for push / reset / repair / query / up / dump / POST / PATCH / PUT / DELETE.
+- No secrets in source, logs or bundles:
+  - the token is read only from the environment;
+  - it is redacted from any error;
+  - the reports print versions, counts and the public project ref only.
+  This matters because the repository is PUBLIC: Actions logs are publicly readable.
+- Workflow hardening:
+  - `pull_request` only (never pull_request_target);
+  - permissions contents: read;
+  - persist-credentials: false;
+  - third-party actions pinned to commit SHAs (checkout v7.0.1 3d3c42e5…, setup-node v7.1.0 949feb24…);
+  - the secret is exposed to ONE step through env;
+  - no untrusted strings are interpolated into scripts (SHAs pass through env).
+  - Fork PRs get no secrets, so they are UNVERIFIABLE (fail closed).
+- Credential (NOT created; owner decision D2):
+  - The management-api transport needs a Supabase access token. [CORRECTED by 01A: Supabase fine-grained personal
+    access tokens can be restricted to the Nemryn project and to Project Settings: Read + Migrations: Read; that is the
+    approved credential (D2). The original text here said all PATs are account-wide, which was outdated.]
+  - Options:
+    - (a) a dedicated machine Supabase account with access to the Nemryn project only; its token stored as a GitHub
+      Actions secret NEMRYN_RELEASE_SUPABASE_TOKEN and a Vercel env var SUPABASE_ACCESS_TOKEN scoped to Production
+      only;
+    - (b, more least-privilege) a dedicated read-only Postgres role (SELECT on
+      supabase_migrations.schema_migrations(version, name) only), connected through the pooler. This needs a
+      reviewed production role change plus a small DB-client dependency; a transport can be added to the same core.
+  - Whichever is chosen, code merged to main runs in the Vercel production build with access to that credential. The
+    trust boundary is therefore main write access (D3).
+
+6. SIMULATED TEST RESULTS — node --test scripts/release/db-compat.test.mjs: 20 / 20 PASS
+---------------------------------------------------------------------------------------
+- baseline: 93 conforming, ordered repository migrations.
+- T1 app change, compatible → PASS (exit 0), PR and deploy.
+- T2 one required migration missing → BLOCKED (exit 1), naming 20261023100000_plus_communication_consents.
+- INCIDENT REPLAY: the real S6-B commit fa949eb (its migrations from git) against production as it was (92) → BLOCKED,
+  in PR mode and deploy mode.
+- T3 several missing → BLOCKED, all listed.
+- T4 migration-only PR awaiting release → PASS DATABASE-FIRST with the pending version listed. The same commit's
+  production build → SKIP. A migration-only PR with drift → BLOCKED.
+- T5 docs / tests-only → PASS even with pending migrations or unreachable production. Classification is conservative:
+  package.json, next.config, .github, scripts, a non-conforming migrations-folder file and supabase/seed.sql are all
+  application.
+- T6 status unavailable → UNVERIFIABLE (exit 2), never compatible.
+- T7 wrong project (ref "chelth" or name "ZenWard") → rejected.
+- T8 unexpected remote-only migration → BLOCKED DRIFT; the same version under a different name → DRIFT.
+- T9 a missing historical migration (older than the head) → BLOCKED DRIFT; a deleted-but-applied repository migration
+  → DRIFT.
+- T10 malformed states (null, array, string, missing / empty / non-array lists, bad version format, numeric version,
+  duplicates, a bad name, no source) → rejected; non-conforming repository file names → BLOCKED.
+- T11 race: a PR check passes, then a new migration lands on main (or production history changes) before deploy → the
+  deploy-time check is BLOCKED.
+- T12 missing credentials → fail closed. A failing request containing the token → token redacted. HTTP 401 → the path
+  is reported with {ref}. The report never contains the token.
+- management-api transport: exactly two GETs to api.supabase.com, project identity checked; a wrong project name →
+  rejected.
+- T13 preview / development build → proceed; unknown or missing VERCEL_ENV → never proceed.
+- T14 the REAL wrapper, end to end:
+  - production compatible → exit 1 (build);
+  - production missing a migration → exit 0 (skip);
+  - no credentials → exit 0;
+  - the state-file source under VERCEL=1 → exit 0;
+  - node missing from PATH (bash present) → exit 0;
+  - preview → exit 1;
+  - VERCEL_ENV unset → exit 0.
+- T15 the CLI transport invokes exactly ["supabase","migration","list","--linked"]; the static scan finds no mutating
+  command or HTTP verb.
+- CLI end to end: exit codes 0 / 1 / 2; an unknown change set → treated as an application change.
+- T16 see §7.
+- Live, read-only checks against production (supabase-cli transport, no writes):
+  - deploy mode → PASS (93 = 93, head 20261023100000);
+  - PR mode over HEAD~3..HEAD → PASS.
+- Workflow simulation: the final step was run locally with bash against the real S6-B PR range (6af7924...fa949eb),
+  with no token:
+  - report mode → "UNVERIFIABLE … SUPABASE_ACCESS_TOKEN is not set", job exit 0 (not enforced);
+  - enforce mode → exit 2 (fails).
+- YAML: parsed and validated (trigger pull_request only; permissions contents: read; 4 steps; 2 pinned actions).
+  actionlint is not installed and was not run.
+- Bug found and fixed during testing: the first "node missing" test used PATH=/nonexistent, so bash itself could not
+  start (status null). It now runs /bin/bash with PATH=/usr/bin:/bin, where node is absent.
+
+7. REGRESSION RESULTS (T16)
+---------------------------
+- npm test 902 / 902 (unchanged).
+- npm run test:release 20 / 20.
+- tsc --noEmit PASS.
+- ESLint (scripts/release + src): 0 errors; 1 pre-existing warning (src/app/operations/growth/tasks/page.tsx, unused
+  Link; unrelated).
+- next build PASS (the gate is not part of the app bundle).
+- No existing workflow existed to be affected.
+
+8. LIMITATIONS AND BYPASS PATHS (none of these is closed until activation, §9)
+-----------------------------------------------------------------------------
+- B1 Not enforced today: no branch protection, no required checks, no Vercel Ignored Build Step. Any merge or direct
+  push to main deploys.
+- B2 Admin / owner bypass: until branch protection or a ruleset is configured with "do not allow bypassing", the owner
+  (and any admin) can merge without the check. L2 still applies at build time once it is configured.
+- B3 Self-modification:
+  - a PR can change the workflow or the checker, and `pull_request` runs the PR's version;
+  - mitigations: required review plus CODEOWNERS for .github/** and scripts/release/** (D4);
+  - L2 runs the code that is actually on main, so it only changes through a reviewed merge.
+- B4 Vercel paths that may not run the Ignored Build Step (to be verified at activation): `vercel deploy --prod` from
+  the CLI, deploy hooks, dashboard "Redeploy", and Instant Rollback (which re-promotes an existing build; it is
+  database-unsafe only when rolling back across a migration).
+  - Mitigation: restrict Vercel team roles and tokens; disable unused deploy hooks; treat manual production deploys as
+    owner-only; document "never roll back across a migration boundary".
+- B5 Previews:
+  - preview builds proceed without the check (policy "build");
+  - if the Preview environment uses the PRODUCTION Supabase variables (not inspectable here), a preview of an app
+    change can call missing RPCs against production (read failures; writes fail closed) before its migration exists;
+  - decide the preview policy (D5): keep "build", gate previews too ("gate"), or point previews at a non-production
+    database.
+- B6 Version comparison is not a content proof. A migration applied with different SQL, or schema changes made outside
+  migrations, are not detected by version / name alone. Mitigation: keep the post-release privilege contract and
+  catalog fingerprint verification (S6-C2 scripts) mandatory for every migration release. Optionally extend the gate to
+  compare a schema-contract fingerprint.
+- B7 The management API migrations endpoint and its response shape were verified only against simulated responses
+  here, because no token was used. Activation step A3 validates it live, read-only, before anything becomes blocking.
+- B8 Residual race: the seconds between the Vercel build-time check and the deployment going live. Production schema
+  changes happen only through the owner-run process, so this is accepted.
+- B9 Skipped production builds do not auto-deploy later. After a migration is released, the next app merge deploys; or
+  the owner triggers a redeploy of main.
+- B10 Fork PRs: application changes are always UNVERIFIABLE (no secrets). Same-repo branches are the supported
+  workflow.
+
+9. EXACT ACTIVATION REQUIREMENTS (owner-run; NOT done)
+------------------------------------------------------
+A1 Review and merge this branch (the owner's Git process). The workflow starts in REPORT-ONLY mode: it never fails
+   PRs.
+A2 Credential (D2): create the least-privilege credential, then add:
+   - GitHub repository secret NEMRYN_RELEASE_SUPABASE_TOKEN;
+   - Vercel env var SUPABASE_ACCESS_TOKEN scoped to Production ONLY (never Preview or Development).
+   Verify that neither appears in any log.
+A3 Live validation (read-only): open a docs-only PR and an application-only PR. Confirm the job summaries show the real
+   production state (PASS, 93 = 93). Confirm the management-API transport works; if its endpoint or shape differs,
+   adjust the transport before going further.
+A4 Demonstrate allowed and blocked (report-only):
+   - an application PR at the current head → PASS;
+   - a test PR adding a dummy future migration file → BLOCKED (do not merge it);
+   - a migration-only test PR → DATABASE-FIRST PASS.
+A5 Vercel L2: Project nemryn-app → Settings → Git → Ignored Build Step → command
+   `bash scripts/release/vercel-ignore-build.sh`. Confirm that the Production environment exposes SUPABASE_ACCESS_TOKEN
+   to the Ignored Build Step. Test with a harmless docs commit on main: the log should show
+   "VERCEL_BUILD_DECISION=BUILD" and the build proceeds (PASS). Leave zenward-app-staging unchanged unless the owner
+   decides otherwise.
+A6 Enforce L1:
+   - set the repository variable NEMRYN_RELEASE_GATE_MODE=enforce;
+   - add branch protection or a ruleset on main requiring the status check "release-db-compat / db-compat" (and the
+     branch up to date), required reviews, CODEOWNERS for .github/** and scripts/release/**, and no bypass (D3 / D4).
+A7 Outage recovery:
+   - if Supabase or the API is unreachable, application PRs show UNVERIFIABLE and production builds skip (fail closed);
+   - docs-only PRs still pass;
+   - an emergency release requires an explicit, logged owner action: temporarily set the gate to report mode, or
+     remove the Ignored Build Step, ship, then restore. It is recorded in a release report.
+A8 Migration-only releases after activation:
+   1. merge the migration PR (L1: DATABASE-FIRST; L2 skips the production build);
+   2. owner-run release (preflight, backup, dry run, push, verification);
+   3. merge the dependent application PR (L1 PASS; L2 builds).
+
+10. STATUS
+----------
+- Implemented locally: YES (files in §4; 20 / 20 tests; live read-only PASS).
+- Active in CI: NO. The workflow is not on main and there is no secret; once merged it is report-only until A6.
+- Enforced in production: NO. No Ignored Build Step is configured, there is no branch protection, and no required
+  check.
+
+11. OWNER DECISIONS REQUIRED
+----------------------------
+- D1 Approve the architecture: L1 PR check + L2 Vercel Ignored Build Step + the database-first process.
+- D2 Credential: a machine-account Supabase token (simplest; account-wide power) or a read-only Postgres role (least
+  privilege; needs a production role change and a DB-client dependency).
+- D3 Branch protection / ruleset on main: required check, required review, no admin bypass, up-to-date branches.
+- D4 CODEOWNERS for .github/** and scripts/release/**.
+- D5 Preview policy ("build" or "gate"), and whether previews should stop using production database variables.
+- D6 Vercel hardening for the bypass paths in B4 (CLI production deploys, deploy hooks, rollback policy).
+- D7 Optional: extend the gate with a schema-contract fingerprint (B6).
+- D8 Whether zenward-app-staging, connected to the same repository, needs any gate (out of scope here).
+
+12. FINAL VERDICT
+-----------------
+READY FOR OWNER REVIEW.
+The checker, wrapper, workflow and tests are complete and pass locally. They are NOT active and NOT enforcing until the
+owner completes §9.
+
+STOP.

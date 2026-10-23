@@ -1,0 +1,261 @@
+NP-RELEASE-01A — DEPLOYMENT SAFETY GATE: FINAL SECURITY REFINEMENT
+==================================================================
+Date: 2026-10-23.
+Branch: np-release-01-deployment-gate (uncommitted changes).
+- No production write, token creation, secret installation, ruleset / branch-protection change, Vercel change,
+  deployment or Git staging / commit / push.
+- No Zenward or Chelth change.
+Owner decisions applied: D1 approve the PR check + Vercel gate; D2 a project-scoped read-only PAT; D3 PR plus a
+successful check, no routine bypass; D4 advisory CODEOWNERS (no forced second reviewer); D5 previews keep building, with
+their database separation audited; D6 document manual-deploy restrictions; D7 schema fingerprint deferred; D8
+zenward-app-staging unchanged.
+
+FINAL VERDICT: READY FOR OWNER REVIEW. The gate is hardened and tested locally, but NOT active and NOT enforced (§8).
+
+1. CHANGES MADE
+---------------
+- scripts/release/check-db-compat.mjs:
+  - `--candidate <40-hex sha>` reads the candidate's migration file names from git objects
+    (`git ls-tree -z --name-only <sha> -- supabase/migrations/`) as DATA. There is no checkout.
+  - `git diff -z` (NUL-separated): a path containing a newline cannot split into two entries.
+  - Project identity is accepted ONLY from the response's `ref` field. The earlier `id` fallback is removed, because
+    `id` is a different identifier.
+  - The change set used in PR mode is the candidate's.
+- scripts/release/db-compat-core.mjs: `sanitizeForLog`. Every reason / notice / summary is stripped of control
+  characters (CR / LF / U+2028 / U+2029 …), "::" is broken up, and length is capped, so an untrusted file name can
+  never start a GitHub workflow-command line.
+- scripts/release/vercel-ignore-build.sh, hardened for Vercel's "exit ≥ 1 = BUILD" rule:
+  - no set -e / set -u;
+  - `trap 'exit 0' EXIT` plus `trap 'exit 0' TERM INT HUP`, so every unexpected termination path ends with 0 (SKIP);
+  - the single explicit BUILD path clears the trap and exits 1;
+  - it locates the repository from its own path (works from any start directory).
+- .github/workflows/release-db-compat.yml (rewritten): the TRUSTED check (§3).
+- .github/workflows/release-gate-tests.yml (new): the UNTRUSTED unit tests of the gate on the PR's code, with no
+  secrets.
+- .github/CODEOWNERS (new, advisory): /.github/, /scripts/release/ and /supabase/migrations/ → @nemryn.
+- scripts/release/db-compat.test.mjs: +7 security regression tests (27 in total).
+- docs/reports/NP-RELEASE-01-deployment-gate-implementation.txt: corrected in place (header note, the credential
+  paragraph, the L1 trigger).
+- package.json: still only adds "test:release" (unchanged since 01).
+- No application, database, UI or business-logic change.
+
+2. CREDENTIAL MODEL (validated against the official Supabase documentation)
+--------------------------------------------------------------------------
+- Fine-grained personal access tokens "can be scoped to specific organizations, projects, and permissions"; each
+  permission is Read or Read-write. Full-access ("Legacy") tokens also exist and must NOT be used.
+- The two endpoints the gate calls, and the minimum permissions:
+
+  | Endpoint | Purpose | Fine-grained permission (Dashboard label) |
+  |---|---|---|
+  | GET /v1/projects/{ref} | identity (ref, name) | project_admin_read ("Project Settings: Read"; OAuth projects:read) |
+  | GET /v1/projects/{ref}/database/migrations | applied history, response [{version, name}] | database_migrations_read ("Migrations: Read"; OAuth database:read) |
+
+  The documented response shapes match the transport's validation: `ref` and `name` on the project; an array of
+  {version, name} for migrations.
+- REQUIRED token: scoped to the Nemryn project (wyocbivzgrbekuyqdfts) ONLY, with exactly Project Settings: Read and
+  Migrations: Read. No Read-write permission, no organization or account permission, an expiry as short as is
+  practical, and rotation on schedule.
+  - A permission can only narrow the creating account's role. Create it from an account whose role covers those reads.
+- Explicitly NOT valid for this purpose:
+  - a Legacy full-access token;
+  - Migrations: Read-write (it unlocks apply / patch / rollback / upsert);
+  - Database or Data API permissions;
+  - the database password (password-based CLI commands such as db push are not limited by token permissions).
+- Storage:
+  - GitHub repository secret NEMRYN_RELEASE_SUPABASE_TOKEN, used only by the trusted workflow;
+  - Vercel environment variable SUPABASE_ACCESS_TOKEN, scoped to Production ONLY;
+  - never in the repository, a committed environment file or a NEXT_PUBLIC_* variable.
+- Blast radius if leaked: read access to the Nemryn project's settings metadata and migration history. No data rows,
+  no writes, no other projects.
+- Verification status:
+  - the permissions above come from the documentation and are not yet live-tested (no token was created);
+  - activation step A3 proves them read-only before anything blocks;
+  - a token missing a permission gets HTTP 401 / 403, which is UNVERIFIABLE (fail closed; test "01A identity").
+
+3. CI TRUST-BOUNDARY REVIEW
+---------------------------
+Risk in the 01 design:
+- `pull_request` ran the PR's OWN workflow file and the PR's OWN scripts/release with the token in the environment.
+- Any same-repository branch could therefore change the checker or workflow to exfiltrate the token, or always pass.
+Fix (01A):
+- Trusted workflow release-db-compat.yml on `pull_request_target`:
+  - GitHub runs the workflow file from the BASE branch, so a PR's edits to it do not apply until reviewed and merged;
+  - it checks out the BASE commit (github.event.pull_request.base.sha) with persist-credentials false;
+  - it runs the base checker;
+  - it fetches refs/pull/<n>/head as git objects only and verifies they equal the event's head SHA;
+  - it passes the head SHA to `--candidate`;
+  - it never checks out, installs, builds, tests or executes anything from the PR.
+- Permissions: contents: read, statuses: write. The result is posted as commit status "nemryn/release-db-compat" on the
+  PR head SHA.
+- Only SHAs and the PR number are interpolated, through env. No title, body or branch name reaches a shell.
+- The checker's output is printed between `::stop-commands::<random>` markers. The step summary replaces "::".
+- Untrusted workflow release-gate-tests.yml on `pull_request`: runs the PR's version of the gate tests with a
+  read-only token and NO secrets.
+- Fork PRs:
+  - the token expression is `head.repo.full_name == github.repository && secrets.… || ''`, so fork PRs receive an EMPTY
+    token;
+  - application changes → UNVERIFIABLE (fail closed);
+  - docs / test-only → PASS.
+  The workflow-simulation test confirmed the empty-token path.
+- Residual risks (documented, accepted or owner-mitigated):
+  - (a) Someone with write access can push a malicious change to the trusted workflow directly to main. Mitigation:
+    required PR on main (D3); only the owner has write access.
+  - (b) pull_request_target runs with base-branch privileges for every PR, including forks. That is safe here only
+    because no PR content is executed. Any future edit to that workflow must keep this property; static test "01A
+    workflows" enforces it.
+  - (c) GITHUB_TOKEN with statuses: write could set statuses on other commits if the trusted code were compromised.
+    It is limited to base-branch code.
+
+4. GITHUB PROTECTION RECOMMENDATIONS (single-maintainer workflow; no deadlock)
+-----------------------------------------------------------------------------
+On main (a ruleset or branch protection):
+- require a pull request before merging, with **required approvals: 0**. GitHub does not allow authors to approve
+  their own PRs; requiring 1 with a single maintainer deadlocks every merge;
+- require status check "nemryn/release-db-compat" (the commit status posted by the trusted workflow);
+- require branches to be up to date before merging (the check then reflects the merge base);
+- block force pushes and deletions;
+- include administrators / no routine bypass (D3).
+CODEOWNERS: added as ADVISORY. Do NOT enable "Require review from Code Owners" until a second eligible reviewer
+exists; it would deadlock in the same way.
+Emergency procedure (no routine bypass): the owner temporarily relaxes the rule or sets NEMRYN_RELEASE_GATE_MODE back
+to report, records the reason in a release report, then restores it.
+Deadlock check: with 0 approvals and one required status, the owner can open a PR, wait for "nemryn/release-db-compat"
+= success, and merge. No second person is needed.
+- Docs-only PRs pass without production access.
+- Fork PRs are UNVERIFIABLE for app changes, by design.
+- Caveat: the status is posted only once the workflow exists on main. The PR that introduces the workflow will not
+  receive it; merge that one PR before making the status required (A1 → A6).
+
+5. PREVIEW SAFETY FINDINGS (D5)
+-------------------------------
+Observed (read-only):
+- preview deployments exist for every branch commit (Vercel Git integration);
+- the latest preview URLs redirect to Vercel Authentication (HTTP 302), so Deployment Protection is ON for previews.
+  Positive.
+UNKNOWN (not inspectable without Vercel access; the preview bundle is behind authentication):
+- whether the Preview environment uses the PRODUCTION Supabase project (NEXT_PUBLIC_SUPABASE_URL /
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY / SUPABASE_SERVICE_ROLE_KEY scoped to Preview).
+If they are shared, a preview of an application change:
+- runs against production data;
+- can call RPCs before their migration exists (reads fail; writes fail closed);
+- runs unreviewed branch code with production server credentials (the service-role key, if scoped to Preview).
+That last point is the main risk.
+Owner check (Vercel → nemryn-app → Settings → Environment Variables → filter "Preview"):
+- confirm whether each Supabase variable is set for Preview and to which project;
+- recommended: give Preview its own non-production Supabase project (or none), and NEVER scope
+  SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ACCESS_TOKEN to Preview.
+Policy kept (D5): previews build without the gate (previewPolicy "build").
+
+6. VERCEL GATE: EXIT CODES, ROOT AND ENVIRONMENT (documentation-validated)
+--------------------------------------------------------------------------
+- Exit codes (Vercel): "If the command returns 0, the build will be skipped"; 1 or greater builds.
+  The wrapper:
+  - builds (exit 1) only on checker exit 0 AND the exact line VERCEL_BUILD_DECISION=BUILD;
+  - every other outcome is 0: BLOCKED, UNVERIFIABLE, checker crash or signal, a near-miss line, missing node, a script
+    error, TERM / INT / HUP.
+  All tested (§7). SIGKILL cannot be trapped; a hard kill exits 137, which is ≥ 1, so it would BUILD. This is a
+  residual risk; the checker's own timeouts (20s per API request) keep it well within normal build limits.
+- Root: the command runs in the project's Root Directory. The wrapper resolves the repository from its own location,
+  so it works from any start directory (tested from "/").
+- Environment:
+  - VERCEL_ENV is available only when "Automatically Expose System Environment Variables" is enabled. If it is
+    missing, the wrapper SKIPS every build, previews included. Safe, but noticeable: enable the setting (A5).
+  - Whether PROJECT environment variables (SUPABASE_ACCESS_TOKEN) are available to the Ignored Build Step is not
+    stated in the documentation. Verify at A5; if absent, production builds SKIP (fail closed).
+- Vercel clones with --depth=10. The deploy check reads migrations from the checked-out files, not git history, so it
+  is unaffected.
+- Manual production deploy paths (D6): the documentation does not say whether CLI deploys (`vercel --prod`), deploy
+  hooks or dashboard Redeploy run the Ignored Build Step. Treat them as UNGATED:
+  - owner-only;
+  - no deploy hooks for production;
+  - restrict Vercel team roles and tokens;
+  - never Instant-Rollback across a migration boundary;
+  - before any manual production deploy, run `node scripts/release/check-db-compat.mjs --mode deploy --source
+    supabase-cli` locally and require PASS.
+
+7. TEST RESULTS
+---------------
+- Gate tests: 27 / 27 PASS (node --test scripts/release/db-compat.test.mjs). That is the 20 from 01 plus 7 for 01A:
+  - identity by `ref` only: an id-only response is rejected; the wrong ref is WRONG PROJECT; HTTP 403 (missing
+    permission) fails closed;
+  - candidate-as-data with the REAL S6-B commit: 93 paths read from git objects; vs 92 → BLOCKED; vs 93 → PASS; a
+    short SHA → UNVERIFIABLE; an unknown commit → fails closed;
+  - log injection: a file name containing "\n::set-env …" and "\r::add-mask …" → BLOCKED, and no report line starts
+    with "::";
+  - NUL-separated git output: a name containing a newline stays one entry and is classified as application;
+  - wrapper fail-closed with a fake node, run from "/":
+    - exact BUILD + exit 0 → 1;
+    - BUILD + exit 3 → 0;
+    - "BUILD " near-miss → 0;
+    - prefixed line → 0;
+    - SIGSEGV → 0;
+    - exit 1 → 0;
+  - wrapper TERM during the check → 0 (not 143);
+  - workflow static trust-boundary checks:
+    - trusted file = pull_request_target, base checkout, never a head checkout, no npm / npx / tests / scripts from
+      the PR;
+    - exactly one secret reference, behind the same-repo condition;
+    - permissions exactly contents read + statuses write;
+    - no title / body / head.ref interpolation;
+    - stop-commands present;
+    - the untrusted file = pull_request with no secrets;
+    - all 4 `uses:` pinned to 40-hex SHAs.
+- Trusted-step simulation (bash, with `gh` stubbed to record arguments only, nothing sent to GitHub), on real commits:
+  - report mode, S6-B app range, no token → status success "report-only: UNVERIFIABLE (not enforced)", job 0;
+  - enforce, the same → status failure "UNVERIFIABLE", job 1;
+  - enforce, the docs-only S6-C4 commit → status success "PASS", job 0;
+  - the stop-commands guard is present in every run.
+  The status was posted only to the PR head SHA, context nemryn/release-db-compat.
+- Live read-only production check (supabase-cli transport): PASS, 93 = 93, head 20261023100000.
+- Regressions:
+  - npm test 902 / 902;
+  - test:release 27 / 27;
+  - tsc PASS;
+  - ESLint 0 errors (1 pre-existing, unrelated warning in growth/tasks/page.tsx);
+  - next build PASS;
+  - both workflow YAML files parse (Ruby YAML). actionlint is not installed.
+- Two bugs found and fixed during testing:
+  - my first static test matched "uses:" inside "statuses: write"; the regex is now anchored to `uses:` keys;
+  - (01) the earlier node-missing test design.
+
+8. REMAINING OWNER ACTIVATION STEPS (nothing below has been done)
+----------------------------------------------------------------
+A1 Review, then commit / push / merge this branch through a normal PR. Note that the PR itself cannot run the trusted
+   check, because the workflow is not on main yet.
+A2 Create the fine-grained PAT (§2): Nemryn project only; Project Settings: Read + Migrations: Read; short expiry.
+   Store it as the GitHub secret NEMRYN_RELEASE_SUPABASE_TOKEN and as the Vercel SUPABASE_ACCESS_TOKEN (Production
+   scope only).
+A3 Live validation (report mode, the default): open a docs-only PR and an application-only test PR. Check that the
+   status "nemryn/release-db-compat" appears with "report-only: PASS" and that the job summary shows 93 = 93.
+   - A failure HTTP 401 / 403 means the permissions need correcting.
+   - Confirm no token appears in the logs (GitHub also masks secrets).
+A4 Demonstrate:
+   - an application PR at head → PASS;
+   - a throw-away PR adding a dummy future migration plus an app file → BLOCKED (do not merge);
+   - a migration-only PR → DATABASE-FIRST PASS.
+A5 Vercel (nemryn-app only; D8 leaves zenward-app-staging unchanged):
+   - enable "Automatically Expose System Environment Variables";
+   - set Ignored Build Step = `bash scripts/release/vercel-ignore-build.sh`;
+   - push a harmless docs commit to main and confirm "VERCEL_BUILD_DECISION=BUILD" in the build log (this proves the
+     token reaches the step);
+   - confirm a preview build shows the preview-policy line.
+   - Audit the Preview environment variables (§5).
+A6 Enforce:
+   - set the repository variable NEMRYN_RELEASE_GATE_MODE=enforce;
+   - apply the §4 ruleset (PR required, 0 approvals, required status "nemryn/release-db-compat", up to date, no force
+     push, no routine bypass).
+A7 Operate: database-first releases (a migration PR; the owner-run release; then the app PR); the emergency procedure
+   from §4; restrict manual production deploys (§6).
+
+9. FINAL VERDICT
+----------------
+READY FOR OWNER REVIEW.
+- Status: implemented and hardened locally (27 / 27 tests, live read-only PASS).
+- NOT active in CI: the workflows are not on main and no secret exists.
+- NOT enforced in production: no Vercel Ignored Build Step and no ruleset.
+Open unknowns that block nothing now but need owner confirmation at activation:
+- preview database separation (§5);
+- token availability to the Ignored Build Step and the exposed system variables (§6);
+- the live PAT permissions (A3).
+
+STOP for owner review.

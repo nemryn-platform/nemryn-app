@@ -1,0 +1,90 @@
+# NP-RELEASE-01 / 01A -- TRUSTED production database compatibility check for pull requests into main.
+#
+# TRUST BOUNDARY (01A): `pull_request_target` runs THIS file and the checker as they exist on the BASE branch (main).
+# A pull request cannot change the code that holds the token: edits to this workflow or to scripts/release take effect
+# only after review and merge. The pull request's head commit is fetched and inspected as DATA only:
+#   `git diff -z --name-only` (changed paths) and `git ls-tree -z --name-only` (its migration file names).
+# NOTHING from the pull request is checked out as the working tree, installed or executed (no npm, no scripts, no
+# tests). The unit tests of the gate run separately, without secrets, in release-gate-tests.yml.
+#
+# Token: project-scoped fine-grained Supabase PAT, permissions Project Settings: Read + Migrations: Read only.
+# It is passed to ONE step, and only for pull requests from THIS repository; fork pull requests get no token, so their
+# application changes are UNVERIFIABLE (fail closed). The repository is public: output contains versions, counts and the
+# (already public) project ref only; workflow commands are disabled while the checker's output is printed.
+#
+# Result: the commit status "nemryn/release-db-compat" on the PR head SHA. Report-only until the owner sets the
+# repository variable NEMRYN_RELEASE_GATE_MODE=enforce and makes that status a required check (see the 01A report).
+name: release-db-compat
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: release-db-compat-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  db-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the TRUSTED base branch (never the pull request)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Fetch the pull request head as data (no checkout)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          test "$(git rev-parse refs/remotes/pr/head)" = "$HEAD_SHA"
+
+      - name: Production database compatibility (trusted checker, candidate as data)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.NEMRYN_RELEASE_SUPABASE_TOKEN || '' }}
+          GATE_MODE: ${{ vars.NEMRYN_RELEASE_GATE_MODE }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set +e
+          node scripts/release/check-db-compat.mjs --mode pr --base "$BASE_SHA" --candidate "$HEAD_SHA" --source management-api > gate-report.txt 2>&1
+          rc=$?
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::${stop}"
+          cat gate-report.txt
+          echo "::${stop}::"
+          case "$rc" in 0) verdict=PASS ;; 1) verdict=BLOCKED ;; *) verdict=UNVERIFIABLE ;; esac
+          if [ "${GATE_MODE:-report}" = "enforce" ]; then
+            if [ "$rc" -eq 0 ]; then state=success; else state=failure; fi
+            desc="$verdict"
+          else
+            state=success
+            desc="report-only: $verdict (not enforced)"
+          fi
+          {
+            echo "### Production database compatibility: $desc"
+            echo '```'
+            sed 's/::/: :/g' gate-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          gh api --method POST "repos/${REPO}/statuses/${HEAD_SHA}" -f state="$state" -f context="nemryn/release-db-compat" -f description="$desc" > /dev/null
+          if [ "$state" = "failure" ]; then exit 1; fi
+          exit 0

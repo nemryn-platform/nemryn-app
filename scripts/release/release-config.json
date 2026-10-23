@@ -1,0 +1,7 @@
+{
+  "_comment": "NP-RELEASE-01 release gate configuration. Not secret: the project ref is already public in the Supabase URL. Changing it requires review.",
+  "expectedProjectRef": "wyocbivzgrbekuyqdfts",
+  "expectedProjectName": "Nemryn",
+  "managementApiBase": "https://api.supabase.com",
+  "previewPolicy": "build"
+}
