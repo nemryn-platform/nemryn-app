@@ -382,21 +382,39 @@ There is **no contact PII, no message text and no JSON** in this table. Drafts a
 
 ## 12. `plus_communication_consents` (P2-S6; moved from NP-P4) — append-only ledger
 
+> **APPROVED (ZD-228 … ZD-242, 2026-10-23).** The S6-A migration is `20261023100000_plus_communication_consents.sql`. The full specification is in [NP-P2-S6-consent-ledger-design.md](NP-P2-S6-consent-ledger-design.md). The table below replaces the earlier proposal; the differences are listed after it.
+
 | Column | Rule |
 |---|---|
-| `id`, `organization_id`, `contact_id` (composite FK) | |
-| `inquiry_id` | composite FK → `plus_inquiries`, added in P2-S7 (nullable). Records that consent arrived with a web inquiry |
-| `channel` | `email`, `sms`, `voice` |
-| `purpose` | `service_followup` (responding to this person's own inquiry or booking), `marketing` (promotional) |
+| `id`, `organization_id`, `contact_id` | composite FK `(contact_id, organization_id)` → `plus_contacts`; `unique (id, organization_id)` and `unique (id, organization_id, contact_id)` |
+| `seq` | bigint identity, server-assigned after the contact lock: the ordering key (ZD-231) |
+| `channel` | `email`, `sms`, `voice` (ZD-229) |
+| `purpose` | `service_followup`, `marketing` (ZD-230) |
 | `status` | `granted`, `revoked` |
-| `captured_via` | `verbal_phone`, `web_form`, `written`, `email_reply`, `imported` |
-| `consent_text_version` | text ≤ 40, required for `web_form`; the exact wording version shown |
-| `evidence_note` | ≤ 500 |
-| `captured_by` (NULL for `web_form`), `captured_at` | |
+| `captured_via` | staff: `verbal_phone`, `in_person`, `written`, `email_reply`; system: `do_not_contact` (ZD-233 / ZD-238). P2-S7 adds `web_form` by named-constraint replacement |
+| `captured_at` | when the person said it; staff-declared within now − 366 days … now + 5 min |
+| `address_digest` | server-computed, domain-separated SHA-256 of the address; required for grants; NOT readable by clients (ZD-232 / ZD-240) |
+| `evidence_note` | ≤ 500; required for corrections; C6 notice |
+| `corrects_consent_id` | composite self FK `(corrects_consent_id, organization_id, contact_id)` (ZD-234) |
+| `consent_text_version` | NULL in S6 (CHECK); P2-S7 makes it required for `web_form` |
+| `idempotency_key` | 8–200 `[A-Za-z0-9._:-]`, `unique (organization_id, idempotency_key)`; NOT readable by clients |
+| `recorded_by`, `recorded_at` | server-set (`auth.uid()`, `now()`) |
 
-- **Current consent** = the latest row per `(contact_id, channel, purpose)`. `do_not_contact` overrides everything.
+- **Recorded consent** = the highest-`seq` row per `(contact_id, channel, purpose)`.
+- **Effective consent** (`_plus_effective_consent`) is one of `not_found`, `suppressed_archived`, `suppressed_do_not_contact`, `no_consent_on_record`, `address_changed`, `consent_on_record`. `do_not_contact` overrides everything.
+- **Lawful permission** is never computed. "Consent on record" is not authorization to contact.
+- **Append-only:** no client write privilege, and triggers refuse UPDATE / DELETE / TRUNCATE for every role.
 - **Moved earlier because** the web inquiry form (P2-S7) captures consent, and the ledger must exist before that.
-- **Sending** is still NP-P4. In P2, consent is *recorded* only.
+- **Sending** is still NP-P4. In P2, consent is *recorded* only. A subscription-independent opt-out is an NP-P4 prerequisite (ZD-239).
+
+**Differences from the earlier proposal (A02R):**
+- `captured_by` (NULL for `web_form`) is replaced by `recorded_by`, always the staff member who wrote the row. In P2-S7 that is the converter.
+- Added:
+  - `seq`, `address_digest`, `corrects_consent_id`, `idempotency_key`;
+  - the method `in_person`;
+  - the system method `do_not_contact`.
+- `web_form` and `imported` are removed from the S6 CHECK. `web_form` arrives with P2-S7; `imported` needs its own decision.
+- **S7 forward compatibility is preserved:** P2-S7 adds `inquiry_id` (composite FK → `plus_inquiries`, never a Core table) and widens `captured_via` and the `consent_text_version` CHECK through named-constraint replacement.
 
 ## 13. Plus public inquiry (P2-S7) — separate from Core public intake
 

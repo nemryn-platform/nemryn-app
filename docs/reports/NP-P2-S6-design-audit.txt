@@ -1,0 +1,227 @@
+NP-P2-S6 — COMMUNICATION CONSENT LEDGER: DESIGN AUDIT
+=====================================================
+Date: 2026-10-23.
+Mode: read-only repository research and design.
+- No migration, product code, database write, production change or Git operation.
+- The only files written are this report, docs/product/NP-P2-S6-consent-ledger-design.md and
+  docs/reports/NP-P2-S6-decision-review.txt.
+
+1. BASELINE
+-----------
+- origin/main is 64396db, the current Production deployment (NP-UI-V2-final-production-closeout.txt §1).
+- Repository migration head: 20261021100000_plus_quote_lifecycle_activity.sql (92 files on origin/main).
+- Production migration head: 20261021100000, with 92 versions = 92 files.
+  - Last verified read-only in NP-P2-S5-S3C-production-smoke-signoff.txt §3 and NP-P2-S5-O1-production-release.txt
+    (lines 44–45).
+  - No migration has been added since. The last commit touching supabase/migrations is 6eeefa1, and the V2-1…V2-4
+    reports confirm "git diff origin/main -- supabase/: empty".
+- No consent object exists on main:
+  - no plus_communication_consents table;
+  - no consent RPCs;
+  - no consent UI.
+  The only consent-related code is:
+  - CONSENT_CAVEAT (src/lib/plus/agent-core.ts:24);
+  - the DNC acknowledgment copy (src/lib/plus/quotes-core.ts:453), which explicitly says it is not consent;
+  - the booking DNC reminder (src/lib/plus/booking-core.ts:24).
+
+2. CANONICAL REFERENCES READ
+----------------------------
+- plus-product-spec.md:
+  - §8 P2-S6 row (line 402): 1 table, T20, latest-row semantics, DNC overrides, depends on P1-S4, excludes any
+    sending;
+  - §4.2 (consent on the S7 form);
+  - lines 142, 170, 351, 355 (the existing DNC and "no consent claimed" rules);
+  - line 289 (Contact detail "record consent (P2-S6)").
+- plus-domain-model.md §12 (the column proposal), §13 (S7 inquiry consent booleans and conversion → ledger rows).
+- plus-access-model.md:
+  - §2.1 actor matrix;
+  - §3.1 / §3.2 helpers and table pattern;
+  - §6 communications and consent (sending gate, revocation without cache, follow-up ≠ marketing);
+  - §6b S7 boundary;
+  - §8 T1–T32 (T20 append-only, T25 inquiry consent);
+  - §9 compliance gates.
+- plus-decisions-proposed.md:
+  - PD-10 (gate OPEN);
+  - PD-11 (owner + counsel);
+  - PD-12 (separate inquiry boundary);
+  - PD-19 (ledger moves to P2-S6; PROPOSED, not yet ratified);
+  - PD-20 / ZD-209.
+- decision-register.md: ZD-209 / ZD-210 (grants, reactivation), ZD-211 (grant changes audited in audit_events only),
+  ZD-223 (DNC acknowledgment is not consent), up to ZD-227.
+- NP-POST-UI-product-completion-audit.txt (S6 not started; recommended as the next phase).
+
+3. EXISTING ARCHITECTURE FINDINGS
+---------------------------------
+F1 Contacts (20261014100000_plus_contacts_activities.sql)
+   - plus_contacts has:
+     - unique (id, organization_id), the target for tenant-isolating composite FKs;
+     - phone / email normalised by CHECK;
+     - preferred_channel in (phone, email, none);
+     - do_not_contact boolean ("Every FUTURE outbound action must refuse when true");
+     - status active / archived / redacted ("redacted" is reserved; no function sets it before PD-11).
+   - Reads go through plus_get_contact; a foreign / unknown / redacted contact gives ZW002 (no oracle).
+   - Writes are create / update / archive. plus_update_contact is the ONLY path that changes do_not_contact:
+     - it uses a version token (ZW003);
+     - archived contacts give ZW004;
+     - it audits the NAMES of changed fields only.
+F2 Activities: plus_activities is append-only. There is no update / delete privilege, policy or function (T20).
+   - The activity_type CHECK has been replaced additively by named constraint, most recently in 20261021100000:54.
+     "consent_recorded" is not in it, and staff cannot log it:
+     - L4 in plus_contacts_activities_tests.sql:330;
+     - src/lib/plus/contacts-core.test.mjs:26.
+   - plus_log_contact_activity shows the established patterns:
+     - FOR NO KEY UPDATE on the contact to serialize writers;
+     - a 30-second duplicate guard;
+     - ZW004 for archived contacts.
+F3 Access helpers (20261013120000, replaced by 20261013160100):
+   - plus_can_read / plus_can_write are grant-aware;
+   - _require_plus_write gives ZW002 (cannot read) or ZW001 (readable but not writable);
+   - read_only means Admin-only reads with no writes; locked / none mean nobody;
+   - Drivers, inactive members, suspended organizations and Platform Admins without a membership are always refused.
+F4 Owner eligibility: _plus_user_can_write(org, user) is reusable for "is this person a Plus writer".
+F5 Idempotency: _plus_require_idempotency_key (20261015140000:100) validates 8–200 characters of [A-Za-z0-9._:-]. It
+   is owner-internal and reusable.
+F6 Audit: audit_events (20260830131500) is system-owned and append-only, readable by Organization Admins.
+   - The Plus convention is entity_type 'plus_contact' and actions plus_contact_*, with field NAMES only and never
+     values. Plus actions are not in the Core Settings → Activity allow-list.
+F7 DNC handling today:
+   - a badge and definition on Contact Detail;
+   - a reminder in the booking / rebooking dialogs (OD-6, NP-P2-S4-R3);
+   - the quote Mark-sent acknowledgment (ZD-223), audited and explicitly NOT consent (test D5 in
+     plus_quotes_lifecycle_tests.sql:327);
+   - Growth Agent drafts are suppressed for DNC.
+F8 SECURITY DEFINER discipline: every Plus function uses `set search_path = public, pg_temp`. Each starts with
+   `revoke all … from public, anon, authenticated, service_role` and then gives explicit grants. Errors use only
+   ZW001–ZW006.
+F9 Privilege contract (supabase/tests/privilege_contract_tests.sql): an explicit allow-list of tables, table / column
+   privileges and functions. Checks 01 / 08 fail for any unlisted object, by design.
+F10 Tests: rollback-only pg_temp.try_as suites, with a bash concurrency script per Plus table. The guarded browser
+    E2E is tests/e2e/plus-quotes/_config.mjs (local-only fingerprint). QA2 has a growth suite (23).
+F11 UI (src/app/operations/growth/contacts/[contactId]/page.tsx):
+    - page header: Edit contact (outline) then the teal "Create another transportation request" (V2-4);
+    - Details panel (raised, SectionHeader with the AddressBook icon, the DNC badge);
+    - SubjectTasksPanel;
+    - LinkedRequestsPanel;
+    - the Opportunities panel;
+    - the Timeline panel (append-only copy).
+    The kit available: Panel, SectionHeader, StatusBadge, AttentionState, EmptyState, Dialog (focus return),
+    RadioGroup, Checkbox, Textarea, DefinitionList, Button variants including destructive-outline.
+F12 Correction to the NP-POST-UI audit: it cited plus_contacts_activities_tests.sql:198 as the negative schema
+    assertion S6 must change.
+    - That line (K8) only asserts the FK targets of plus_contacts / plus_activities and that plus_accounts is absent.
+      S6 does not affect it.
+    - No existing test asserts that plus_communication_consents is absent.
+    - The assertions S6 must change DELIBERATELY are the privilege-contract allow-lists (F9), plus the companion
+      surface suites.
+
+4. CONTRACTS P2-S6 MUST PRESERVE
+--------------------------------
+C1 RLS deny-by-default. Client SELECT only, via plus_can_read. No client insert / update / delete (access model §3.2).
+C2 Every write RPC calls _require_plus_write first. No existence oracle: foreign, unknown and unauthorised all give
+   ZW002.
+C3 Tenant isolation by composite FK (id, organization_id), not by policy alone (T12).
+C4 Append-only for activities and consents (T20). No function updates or deletes either.
+C5 read_only never writes (T6). Grant holders lose read in read_only. locked / none mean no access (T6a / T7).
+C6 do_not_contact semantics:
+   - a stored preference, changed only through plus_update_contact;
+   - reminders never block Core Requests;
+   - the ZD-223 acknowledgment is not consent;
+   - Growth Agent drafts are suppressed for DNC.
+C7 Nothing is sent, called or scheduled. Plus has no service-role path (access model §1.4). No Core change; Core never
+   calls Plus helpers.
+C8 audit_events records field names / enumerations, never contact values. The Core Activity allow-list is unchanged.
+C9 Privilege contract: every new object is listed with a decided ACL. Privilege contract 0 violations in production
+   after release.
+C10 Free-text C6 notice ("Don't record medical details").
+C11 Synthetic data only until PD-10 / PD-11 close.
+C12 PD-12: Plus enquiry consent (S7) never touches Core intake objects.
+C13 Brand Lock v2 / V2 UI:
+    - raised panels with icon headers;
+    - one teal primary per view;
+    - destructive-outline only for destructive triggers;
+    - the EmptyState anatomy;
+    - dialog keyboard behaviour.
+C14 Existing regression baselines unchanged:
+    - QA2 199;
+    - P1a 48 / P1b 52;
+    - Quotes 272;
+    - the 15 SQL suites;
+    - unit tests;
+    - the a11y sweep.
+
+5. DESIGN VERIFIED AGAINST THE CONTRACTS
+----------------------------------------
+| Contract | How the design complies |
+|---|---|
+| C1 | One SELECT policy (plus_can_read); no write privilege; column-level SELECT recommended (OD-S6-12) |
+| C2 | Both write RPCs start with _require_plus_write; read RPCs use the plus_get_contact error semantics |
+| C3 | (contact_id, organization_id) FK and a (corrects_consent_id, organization_id, contact_id) self FK |
+| C4 | No update / delete function; plus triggers that refuse UPDATE / DELETE / TRUNCATE for every role |
+| C5 | ZW001 in read_only for grants AND revocations (OD-S6-11 A); readers per plus_can_read |
+| C6 | DNC overrides in the resolver. Grants refused while DNC; revocations allowed. DNC switch-on appends revocations (OD-S6-5 B is the ONE change to a released function body, signature unchanged). Booking / quote / Agent DNC behaviour untouched |
+| C7 | No sending, no service role, no route handler, no Core object, no proxy / config change. The effective resolver has no client grant |
+| C8 | audit after_data = consent id, channel, purpose, method, correction flag. No note or address |
+| C9 | Every table / function is added to the allow-lists in the same change |
+| C10 | The note carries the C6 notice; 500-character limit |
+| C11 | Synthetic only; the release does not imply real data (OD-S6-13) |
+| C12 | Only a future inquiry_id → plus_inquiries; no Core FK (test P22) |
+| C13 | Panel after Details; outline "Record consent"; no new teal; existing Dialog / RadioGroup / EmptyState |
+| C14 | Timeline untouched (OD-S6-8 B); only additive tests and one strengthened side-effect counter |
+
+Deviations from earlier proposals, called out for review:
+- Domain model §12 has captured_by NULL for web_form. The design always records recorded_by (the staff member who
+  writes the row) and treats the contact as the giver.
+- The design adds:
+  - captured_via "in_person";
+  - the system method "do_not_contact";
+  - seq;
+  - address_digest;
+  - corrects_consent_id;
+  - idempotency_key.
+- Domain model §12 should be updated when S6 is approved.
+
+6. SUMMARY OF THE PROPOSAL (details in the design document)
+-----------------------------------------------------------
+- Schema: plus_communication_consents (§2 of the design):
+  - channel email / sms / voice;
+  - purpose service_followup / marketing;
+  - status granted / revoked;
+  - staff methods;
+  - server-set actor, time and sequence;
+  - address digest;
+  - corrections;
+  - idempotency key.
+- Rules (§3):
+  - A, recorded = the latest row by seq;
+  - B, effective = archived / DNC suppression, then the recorded state, then the address match;
+  - C, lawful permission = never computed; the UI never says "allowed".
+- RPCs (§4):
+  - plus_get_contact_consents, plus_list_contact_consent_events (read);
+  - plus_record_consent, plus_revoke_consent (write);
+  - internal _plus_effective_consent and _plus_consent_address_digest;
+  - the plus_update_contact body gains the DNC revocation step.
+- UI (§5): Contact Detail → "Communication preferences" panel: a state table, history, dialogs, the DNC warning, the
+  empty state.
+- Privacy (§6): every PD-10 / PD-11 dependency is marked. Everything can be built and tested on fictional data.
+- Tests (§7): the new SQL suite P1–P23, a concurrency script, deliberate contract updates, E2E and a11y.
+- Slices (§8):
+  - S6-A database;
+  - S6-B application;
+  - S6-C release.
+  Each needs separate owner authorization.
+
+7. OPEN DECISIONS
+-----------------
+See NP-P2-S6-decision-review.txt.
+- Decided before the migration: OD-S6-1 … 7, 10, 11, 12, plus PD-19 confirmation.
+- Before the UI: OD-S6-9 and 14.
+- Real-data gates: PD-10 and PD-11 (unchanged, not closed by S6).
+
+8. RECOMMENDATION
+-----------------
+- The design is implementation-ready once the blocking decisions are closed.
+- The smallest safe next step after approval is S6-A (database only, with its SQL / concurrency / privilege-contract
+  tests on the isolated stack). S6-B (UI) follows.
+- No real operator data until PD-10 and PD-11 close.
+
+STOP for owner / ChatGPT design review.

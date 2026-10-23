@@ -1,0 +1,450 @@
+NP-P2-S6-A — COMMUNICATION CONSENT LEDGER: DATABASE FOUNDATION — IMPLEMENTATION AND VERIFICATION
+==============================================================================================
+Date: 2026-10-23.
+Mode: owner-approved local implementation.
+- Isolated stack only (~/NemrynS1Iso: API 54361, DB 54362, app :3100; fictional seed).
+- No Git write (no stage, commit, push, PR, merge, reset, stash or clean).
+- No deployment. No production access of any kind. No production migration.
+- No live entitlement change. No outbound communication. The owner's :3000 dev server and the ZenWard stack were not
+  touched.
+Companion: docs/reports/NP-P2-S6-decision-lock.txt (decisions, refinements R1 to R3).
+Evidence: docs/reports/np-p2-s6a-evidence/ (logs without credentials or local paths).
+
+1. BASELINE AND BRANCH
+----------------------
+- Branch: np-p2-s6a-consent-ledger-foundation (owner-created). HEAD = origin/main = 64396db, "Merge pull request #29 …
+  np-ui-v2-4-final-visual-acceptance".
+  - That is the Production deployment per NP-UI-V2-final-production-closeout.txt.
+  - The tracked tree was clean at the start. The pre-existing untracked files are preserved.
+- Previous migration head: 20261021100000_plus_quote_lifecycle_activity.sql.
+  - 92 files on main.
+  - The isolated DB was at 20261021100000 / 92 before the work.
+  - Production was last verified read-only at the same head by NP-P2-S5-S3C / O1. This phase did not access
+    production.
+- Brand Lock v2 is present: public/brand unchanged (git diff HEAD -- public/ empty). No src/app or src/components
+  change.
+- The S6 design files (design, design audit, decision review) were preserved. The decision review is unchanged; the
+  design was updated to APPROVED.
+
+2. DECISION-REGISTER IDS
+------------------------
+- PD-19 → ZD-228.
+- OD-S6-1 … OD-S6-14 → ZD-229 … ZD-242.
+- Approved choices: A, A, A, A, B, A, A, B, B, A, A, A, A, A.
+- All are CONFIRMED — OWNER-APPROVED, 2026-10-23. The details are in the decision lock §1.
+
+3. CANONICAL DOCUMENTATION CHANGES
+----------------------------------
+- docs/product/decision-register.md: +ZD-228 … ZD-242.
+- docs/product/plus-decisions-proposed.md: PD-19 → RECORDED; index; PD-10 / PD-11 OPEN.
+- docs/product/NP-P2-S6-consent-ledger-design.md:
+  - APPROVED; option language resolved;
+  - R1 (§2.6), R2 (§9), R3 (§4.1);
+  - final function list (§4.2).
+- docs/product/plus-domain-model.md §12: the approved schema, the differences from A02R, S7 forward compatibility.
+- docs/product/plus-product-spec.md §8: the P2-S6 row, with scope and exclusions.
+- docs/security/plus-access-model.md: §6.5b (effective consent, DNC transitions, read_only, the NP-P4 prerequisite)
+  and §8 T33.
+- docs/security/database-privilege-contract.md: the NP-P2-S6-A additions.
+- New: docs/reports/NP-P2-S6-decision-lock.txt and this report.
+
+4. ADDRESS-DIGEST SECURITY ASSESSMENT (R1)
+-----------------------------------------
+The full comparison of plain SHA-256 and keyed HMAC-SHA-256 is in the decision lock §3. In summary:
+- HMAC only helps against an attacker who has the digests but neither the plaintext (which sits in the same tenant
+  row) nor the key.
+- It would need new secret custody (Vault in every environment), key versioning and rotation semantics (a schema
+  change), and a hard deployment dependency.
+- No material blocker was found for plain SHA-256, given the narrow equality purpose and the absence of client read
+  access.
+
+5. SELECTED DIGEST IMPLEMENTATION AND RESIDUAL RISKS
+---------------------------------------------------
+- The digest is:
+
+    sha256(convert_to('nemryn.plus.consent-address.v1|' || organization_id || '|' || kind || '|' || normalized, 'UTF8'))
+
+  - stored as lowercase hex; built-in sha256(), no extension;
+  - kind = email | phone (SMS and voice share the phone);
+  - normalized = lower(btrim(email)) or the phone's digits only;
+  - computed only on the server, from the locked contact row;
+  - stored for grants only. Revocations cover the channel whatever the address.
+- Residual risks:
+  - (a) Not anonymisation. A phone digest is reversible by enumeration of about 10¹⁰ numbers; an email digest by
+    dictionary. It is personal data.
+  - (b) PD-11 erasure must remove or neutralise digests together with the plaintext. The append-only triggers make
+    any such procedure an explicit, reviewed migration.
+  - (c) Reformatting a phone so that its DIGITS change (for example, adding a leading "1") yields address_changed.
+    That is the conservative direction: consent stops being effective until it is re-recorded.
+  - (d) Only someone with database-owner access can read digests. No client role can (column-level SELECT, ZD-240).
+
+6. MIGRATION INVENTORY
+----------------------
+One additive migration: supabase/migrations/20261023100000_plus_communication_consents.sql (682 lines).
+- Table public.plus_communication_consents:
+  - columns: id, organization_id, contact_id, seq (identity), channel, purpose, status, captured_via, captured_at,
+    address_digest, evidence_note, corrects_consent_id, consent_text_version, idempotency_key, recorded_by,
+    recorded_at;
+  - keys: unique (id, organization_id), (id, organization_id, contact_id), (seq), (organization_id, idempotency_key);
+  - composite FKs: (contact_id, organization_id) → plus_contacts; (corrects_consent_id, organization_id, contact_id)
+    → self;
+  - named CHECKs: channel, purpose, status, captured_via, digest format, granted ⇒ digest, DNC row rules, note,
+    correction ⇒ note, not-self, captured ≤ recorded + 5 min, consent_text_version IS NULL (reserved for S7),
+    idempotency format.
+- Indexes: (org, contact, channel, purpose, seq desc) and (org, contact, seq desc).
+- Triggers: plus_consents_append_only (BEFORE UPDATE OR DELETE, row) and plus_consents_no_truncate (BEFORE
+  TRUNCATE, statement), both on _plus_consents_append_only() → ZW004 append_only.
+- RLS enabled. One policy, plus_communication_consents_select_plus (SELECT TO authenticated USING
+  plus_can_read(organization_id)).
+- Grants:
+  - revoke all from public, anon, authenticated, service_role;
+  - grant SELECT on 14 columns (not address_digest, not idempotency_key) to authenticated.
+- Type: plus_consent_write_result (consent_id, changed, recorded_status, effective_status).
+- Functions: see §7.
+- plus_update_contact: CREATE OR REPLACE with an identical signature. The body is byte-identical to 20261014100000
+  except one inserted block, the ZD-233 DNC step (verified by diff). Its ACL is untouched; the comment is updated.
+- No other object is altered. No plus_activities change (ZD-236). No Core object. No data migration.
+
+7. FUNCTION AND RLS CONTRACTS
+-----------------------------
+All functions use SET search_path = public, pg_temp and fully qualified names. EXECUTE is revoked from PUBLIC / anon
+/ service_role, and granted explicitly where listed.
+
+| Function | Kind | EXECUTE | Contract |
+|---|---|---|---|
+| plus_get_contact_consents(org, contact) | read, SECURITY DEFINER, stable | authenticated | ZW001 no uid; ZW002 not plus_can_read, or a foreign / unknown / redacted contact (no oracle). Exactly 6 rows (email / sms / voice × service_followup / marketing): recorded_status (granted / revoked / none), effective_status, and the latest row's method, times, recorder name and correction flag. Never the digest, key or note |
+| plus_list_contact_consent_events(org, contact, limit, offset) | read, SECURITY DEFINER, stable | authenticated | Same guard. Limit 1–100 (default 50), offset ≥ 0, else ZW006. Newest first by seq, with the evidence note (ZD-242) and total_count. Never the digest or key |
+| plus_record_consent(org, contact, channel, purpose, captured_via, captured_at, evidence_note, corrects_consent_id, idempotency_key) | write (SQL wrapper, SECURITY DEFINER) | authenticated | Status fixed to granted (see §7a) |
+| plus_revoke_consent(same signature) | write (SQL wrapper, SECURITY DEFINER) | authenticated | Status fixed to revoked |
+| _plus_append_consent(status, …) | internal, SECURITY DEFINER | none | The shared write body (§7a) |
+| _plus_effective_consent(org, contact, channel, purpose) | internal resolver, SECURITY DEFINER, stable | none | First match wins: not_found / suppressed_archived / suppressed_do_not_contact / no_consent_on_record / address_changed / consent_on_record. Unknown channel / purpose → ZW006 |
+| _plus_consent_address_digest(org, channel, phone, email) | internal, stable | none | R1 digest; NULL when there is no address |
+| _plus_consents_revoke_for_dnc(org, contact) | internal, SECURITY DEFINER | none | ZD-233 step: one system revocation plus one audit row per granted pair |
+| _plus_consents_append_only() | trigger | none | ZW004 append_only |
+
+7a. The write algorithm (_plus_append_consent):
+1. _require_plus_write: ZW002 when the caller cannot read; ZW001 in read_only or with a read grant.
+2. Validate the idempotency key with the existing _plus_require_idempotency_key (8–200 characters of
+   [A-Za-z0-9._:-]).
+3. Validate the input:
+   - the channel and purpose sets;
+   - staff methods only (do_not_contact / web_form / imported → ZW006);
+   - captured_at within now − 366 days … now + 5 min;
+   - note ≤ 500 characters, trimmed, blank = NULL;
+   - a correction requires a note.
+4. Lock the contact FOR NO KEY UPDATE. A missing or redacted contact gives ZW002.
+5. Replay: the same key with the same contact, pair, status and correction → the existing row with changed=false.
+   Otherwise ZW006 idempotency_conflict. A concurrent first use is caught as unique_violation and resolved the same
+   way.
+6. Correction: it must reference the pair's current latest row (else ZW003). A do_not_contact system row → ZW004.
+7. Grant rules:
+   - an archived contact → ZW004;
+   - Do not contact → ZW004 do_not_contact;
+   - no address for the channel → ZW006;
+   - captured_at earlier than the latest revocation, excluding the row being corrected → ZW004 stale_evidence.
+   Revocations are allowed for active and archived contacts, while DNC is on, and for any date.
+8. Insert. The server sets recorded_by = auth.uid(), recorded_at = now(), seq, and (for grants) address_digest.
+9. One audit_events row: plus_consent_granted / plus_consent_revoked, after_data = {consent_id, channel, purpose,
+   captured_via, correction}.
+
+Error codes are the existing ZW001 / 002 / 003 / 004 / 006 only. A caller cannot supply an actor, time, order,
+digest or status parameter (verified by catalog; a named call with p_recorded_by → 42883).
+
+8. PRIVILEGE MATRIX (verified by tests A1 to A13, P1 to P3, S2, S3 and S8)
+------------------------------------------------------------------------
+| Actor | State / history read | Grant | Revoke | Direct table |
+|---|---|---|---|---|
+| Org Admin, Plus write (active / trial) | yes | yes | yes | SELECT of the 14 columns via RLS |
+| Org Admin, read_only (expired) | yes | ZW001 | ZW001 | SELECT via RLS |
+| Org Admin, locked / none | ZW002 | ZW002 | ZW002 | 0 rows |
+| Dispatcher, write grant, Plus write | yes | yes | yes | SELECT via RLS |
+| Dispatcher, read grant | yes (incl. notes) | ZW001 | ZW001 | SELECT via RLS |
+| Dispatcher, grant, read_only / locked | ZW002 | ZW002 | ZW002 | 0 rows |
+| Dispatcher, no grant or revoked grant | ZW002 | ZW002 | ZW002 | 0 rows |
+| Inactive Dispatcher (even with a write grant) | ZW002 | ZW002 | ZW002 | 0 rows |
+| Driver | ZW002 | ZW002 | ZW002 | 0 rows |
+| Suspended organization (Admin) | ZW002 | ZW002 | ZW002 | 0 rows |
+| Platform Admin without membership; no-membership user | ZW002 | ZW002 | ZW002 | 0 rows |
+| Another organization's member | ZW002 | ZW002 | ZW002 | 0 rows |
+| No uid (authenticated, empty claim) | ZW001 | refused | refused | — |
+| anon | 42501 | 42501 | 42501 | 42501 |
+| Any client role: INSERT / UPDATE / DELETE / TRUNCATE; SELECT of address_digest / idempotency_key | — | — | — | 42501 |
+| Client role calling an internal helper (resolver, digest, DNC step) | — | — | — | 42501 |
+
+9. APPEND-ONLY GUARANTEES (T20)
+------------------------------
+- Privileges: no client INSERT / UPDATE / DELETE / TRUNCATE (S2, P3).
+- Triggers: owner-level UPDATE, DELETE, TRUNCATE, and TRUNCATE plus_contacts CASCADE → ZW004; the row is unchanged
+  (P4).
+- No public function contains UPDATE or DELETE of the table (P4b).
+- Corrections and revocations are new rows; originals are never changed (C2).
+- No retention bypass or erasure procedure was built (PD-11 open).
+- The concurrency script's cleanup removes its own throwaway rows using session_replication_role = replica. This is a
+  test-only owner action, documented in the script header.
+
+10. DNC TRANSITION BEHAVIOUR (ZD-233)
+------------------------------------
+- false → true (plus_update_contact):
+  - in the same transaction and under the existing FOR UPDATE lock, one revoked row (captured_via = do_not_contact,
+    recorded_by = the editor, captured_at = now(), no note or digest, a system key "dnc:<hex>") is appended for each
+    pair whose latest row is granted;
+  - one audit row per revocation;
+  - no activity row;
+  - previous grants are untouched;
+  - the released plus_contact_updated audit is unchanged (field names only).
+- true → false: nothing is written. Every pair stays revoked (no revival). A grant dated before the DNC switch-on is
+  refused (stale_evidence). A system revocation can never be corrected (ZW004).
+- While DNC is on: grants → ZW004; revocations accepted; every pair resolves to suppressed_do_not_contact.
+- Unchanged:
+  - the plus_update_contact signature, grant, authorization, version token (ZW003) and archived rule (ZW004);
+  - owner logic, the identical-values no-op (changed=false), and the quote DNC acknowledgment (ZD-223);
+  - the booking DNC reminder and Growth Agent DNC suppression.
+- Tests: N1 to N9, U-DNC0 to U-DNC2, I1, and concurrency S5, S6, S9 and S10.
+
+11. CONCURRENCY AND REVOCATION-ORDERING EVIDENCE (R2)
+----------------------------------------------------
+supabase/tests/plus_communication_consents_concurrency_test.sh, run against the isolated container
+(NEMRYN_TEST_DB_CONTAINER=supabase_db_NemrynS1Iso). Real parallel psql sessions, each holding its locks for about 1s.
+Result: 14 / 14 PASS, ALL PASS.
+- S1 grant vs revoke, both orders: both rows; the waiting writer's seq is higher and decides the state.
+- S2 same key, same contact, at once: one row; changed true, then false; the same consent id.
+- S3 same key on two contacts at once: one row; the waiting writer gets ZW006 (unique index + conflict mapping).
+- S4 two corrections of the same latest row: one applies, the other ZW003.
+- S5 DNC switch-on first, grant waits: the grant re-reads the contact and is refused (ZW004). The earlier grant is
+  revoked; 0 granted pairs.
+- S6 grant first, DNC switch-on waits: the DNC step sees the committed grant and revokes it (grant seq < system
+  revocation seq).
+- S7 a delayed grant with older captured_at vs a revocation that committed while it waited: stale_evidence; the state
+  stays revoked.
+- S8 revocation, then a later grant: granted (no false refusal).
+- S9 DNC on, then off, after system revocations: nothing revives.
+- S10 two DNC switch-ons from the same version: one applies, the other ZW003; exactly one revocation set.
+- S11 a transaction failing after the write (division by zero; and an explicit rollback after a grant plus a DNC
+  switch-on): no consent row, no audit row, no DNC change. The same key then works.
+- S12 six staggered writers on one pair: seq order equals the lock-acquisition (post-call clock) order; final state =
+  last writer; no errors.
+- INVARIANT: no DNC contact has a pair whose latest row is granted, and every DNC pair resolves to
+  suppressed_do_not_contact.
+- Cleanup verified: 0 consent rows, 0 throwaway organizations, 0 throwaway users afterwards.
+- Additional rollback evidence in the SQL suite, F1: an injected audit failure after the consent insert rolls back the
+  insert, and an injected failure inside the DNC step rolls back the whole contact update.
+No concurrency ambiguity or unprotected race was found.
+
+12. SQL TEST RESULTS
+--------------------
+New suite, supabase/tests/plus_communication_consents_tests.sql (rollback-only): SUMMARY failures = 0 of 78.
+It covers P1 to P23 of the design and every Phase 4 item:
+- schema, privileges, columns, FKs, constraints, triggers, EXECUTE, search_path (S1 to S12);
+- the happy path and audit minimisation (H1 to H6, I2);
+- cross-tenant (P1, P2, P2b, P5b);
+- direct DML and append-only (P3, P4, P4b);
+- the authorization matrix including read_only / locked / none / suspended / trial (A1 to A13);
+- ordering, stale evidence, idempotency (O1 to O9);
+- validation (V1 to V3);
+- address binding and R1 domain separation (D1a, D1b, D2, D3);
+- DNC (N1 to N9);
+- archived / redacted and all six effective outcomes (R1 to R5);
+- corrections (C1 to C4);
+- rollback (F1, F2);
+- the R2 invariant (I1).
+Full listing: evidence/plus_communication_consents_tests.txt.
+
+Existing suites changed deliberately (none weakened):
+- privilege_contract_tests.sql: + the table, 14 column-SELECT rows, 9 functions. Result: violations = 0 of 29.
+- plus_contacts_activities_tests.sql: + U-DNC0 to U-DNC2 (the DNC transition through the released RPC). K8 and L4 are
+  unchanged and pass. Result: 0 of 85.
+- plus_quotes_lifecycle_tests.sql: side() now also counts plus_communication_consents (strengthens D5). Result: 0 of
+  41.
+- src/lib/plus/quotes-print-followup.test.mjs:
+  - the O1 test pinned "the newest migration is 20261021100000", which any later migration breaks;
+  - it is replaced with an equivalent, stricter check of its intent: 20261021100000 exists AND no later migration
+    references plus_quotes / plus_get_quote / plus_quote_*.
+  This is the only src/ file changed, and it is test-only.
+
+Full SQL regression, comparing the same 69 suites in the same order, each on a fresh reset:
+- (a) main's test files on a fresh database at 20261021100000 (no S6);
+- (b) the working tree on a fresh database at 20261023100000 (with S6), plus the new suite.
+- Failures present in (b) but not in (a): NONE.
+- Failures present in both, pre-existing and unrelated to S6 (state-dependent historical suites, e.g. EXPAND-phase
+  compat tests whose transitional functions were removed long ago):
+  - request_decision_expand_compat_tests: 9 FAIL + 1 ERROR;
+  - website_requests_form_tests: 4;
+  - notifications_activity_tests: 2;
+  - website_request_form_publication_tests: 1.
+- One baseline-only failure: plus_conversion_rebooking_tests V7 failed in (a) WITHOUT S6 and passed in (b).
+  - V7 scans every audit_events row for the text "555", which random UUIDs can contain. It is a pre-existing
+    intermittent assertion, not caused by S6.
+- Every Plus suite: 0 failures (access helpers 170, booking service type 27, contacts 85, conversion 44, entitlement
+  150, entitlement versioned 17, growth agent 40, member grants 76, opportunities 75, quotes 83, quotes directory 34,
+  quotes lifecycle 41, request attributions 73, tasks 58, consents 78).
+- The 15 V2 gate suites are unchanged from the V2-4 baseline:
+  - privilege contract 0 / 29;
+  - client surface 21, function privilege 7, mutation privilege 7, request mutation privilege 23, create-trip
+    privilege 5, driver read privilege 8, baseline behaviour 30, RLS adversarial 33, mutation authorization 4,
+    idempotent authorization 6, driver read authorization 17, tenant settings 51;
+  - plus_access_helpers 0 / 170, plus_member_grants 0 / 76.
+- Evidence: evidence/sql-suites-*.txt, evidence/sql-failures-*.txt.
+
+Plus concurrency suites (isolated container): all 11 at TOTAL FAILURES 0 / ALL PASS:
+- consents 14;
+- contacts, conversion / rebooking, entitlement, entitlement versioned, growth agent, member grants, opportunities,
+  quotes (18), request attributions, tasks.
+The existing scripts hardcode the ZenWard container, so they were run from scratch copies retargeted to
+NemrynS1Iso. The repository files are unchanged.
+
+13. MIGRATION REHEARSAL
+-----------------------
+- Upgrade from the exact previous head:
+  - the isolated database at 20261021100000 (92) with existing fictional data;
+  - `supabase migration up --local` applied 20261023100000 → 93 versions;
+  - row counts (contacts / activities / opportunities / quotes / requests / trips / audit / modules = 2 / 9 / 7 / 7 /
+    2 / 22 / 13 / 1) and the md5 of plus_contacts and transportation_requests are identical before and after;
+  - 0 consent rows.
+- Fresh chain: `supabase db reset --local` on the full 93-migration chain, rc 0, no errors. Head 20261023100000 / 93.
+- T27 forward safety:
+  - the migration applies on top of the previous released head alone;
+  - it references only organizations, auth.users, plus_contacts and itself;
+  - no existing row is rewritten (no backfill);
+  - the existing named constraints are untouched.
+- Released RPC compatibility:
+  - plus_update_contact has one overload with the identical signature and grant (S11);
+  - the existing contacts / quotes / opportunity suites calling it pass unchanged.
+- RLS is enabled and deny-by-default. The privilege contract has 0 violations.
+
+14. EXISTING REGRESSION RESULTS (isolated stack, fictional data)
+---------------------------------------------------------------
+- Unit tests: 894 / 894.
+- TypeScript (tsc --noEmit): PASS.
+- ESLint: 0 errors. 112 warnings, all pre-existing: 111 in untracked .tmp-qa scratch scripts and 1 existing warning
+  in src/app. No warning comes from this change.
+- Production build: not re-run. No application source changed (only one test file), so the existing :3100 build is
+  the same application code that runs on main.
+- Browser QA2 strict (fresh reset, the S6 schema, the app on :3100): 199 / 199. core-requests 25, core-trips-dispatch
+  44, core-records 28, growth 23, auth-access 79.
+- Browser Quotes strict (each suite on a verified fresh reset, with the S6 schema): 272 / 272, every suite at its S4
+  baseline. s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26. "RESULT: no unexpected failures".
+  - No harness stall occurred in this run. That includes the d5 recent-activity check and the print navigation, which
+    stalled during V2-4.
+- The Core Requests / dispatch non-interference is shown by:
+  - QA2 core suites;
+  - the SQL core suites unchanged vs baseline;
+  - the consent suite N9 (no Request / Trip / Passenger / assignment / notification / task / opportunity / quote /
+    activity change).
+
+15. EXPECTED VS UNEXPECTED FAILURES
+-----------------------------------
+Expected and documented (pre-existing, identical with and without S6): the historical-suite failures listed in §12.
+
+Unexpected failures caused by S6: none.
+
+Development-time issues found and fixed in the TEST code only (no product change):
+- (a) Some test idempotency keys were under 8 characters. The RPC correctly refused them (ZW006); the keys were
+  lengthened.
+- (b) Assertions mixed writes and direct subqueries in one statement, and so read the pre-statement snapshot. They
+  were split into sequential statements.
+- (c) A regex in N4 also matched "no_consent_on_record".
+- (d) Concurrency-harness parsing (psql echo lines, BSD grep, FROM ordering).
+- (e) The O1 unit test that pinned the migration head (§12).
+
+16. DIFFERENCES FROM THE APPROVED DESIGN
+----------------------------------------
+- _plus_consent_address_digest takes the organization id (4 arguments instead of 3). This is the R1 domain separation,
+  documented in design §2.6 and the decision lock §3.
+- plus_list_contact_consent_events adds total_count, following the plus_list_contact_activities precedent, for the
+  S6-B "History (n)".
+- Two internal helpers were added: _plus_append_consent (the shared body) and _plus_consents_revoke_for_dnc (the DNC
+  step). Both have no client EXECUTE and are listed in the contract.
+- Stale-evidence precision: the row being corrected is excluded from the comparison (ZD-231 / ZD-234).
+- A system DNC revocation cannot be corrected (ZD-233).
+- unique (seq) is added as an explicit constraint; an identity column alone is not unique.
+- A defensive TRUNCATE guard is added: a statement trigger, in addition to the row trigger.
+All are recorded in the design / decision lock. No approved behaviour was replaced.
+
+17. REMAINING PD-10 / PD-11 BLOCKERS
+-----------------------------------
+- PD-10 (HIPAA / BAA): OPEN. It blocks real customer consent data (ZD-241).
+- PD-11 (retention / erasure): OPEN, owner plus counsel. Open sub-questions:
+  - retention of consent events after archive;
+  - which fields of an opt-out record survive erasure;
+  - redaction of the note and digest;
+  - the reviewed procedure for working around the append-only triggers.
+  No purge, redaction or erasure exists.
+- OD-Q13 and OD-Q14: OPEN, unrelated to S6.
+
+18. read_only OPT-OUT LIMITATION AND NP-P4 PREREQUISITE
+-------------------------------------------------------
+- In read_only, neither a revocation nor a DNC change can be recorded (ZW001), by design (ZD-239, tests A9 / A10).
+  Nothing is sent in that state; Plus has no sending at all.
+- MANDATORY before NP-P4 enables any outbound communication:
+  - a separately reviewed, subscription-independent opt-out mechanism;
+  - it must remain usable while Plus is expired, cancelled, read_only or otherwise refusing CRM writes.
+  It is recorded in ZD-239, access model §6.5b and design §4.1. It is not implemented, and no read_only exception
+  exists.
+
+19. PRODUCTION RELEASE PREREQUISITES (S6-C; owner-run; not started)
+-------------------------------------------------------------------
+1. Owner review of this report and the decision lock, including the R1 digest selection.
+2. Owner Git operations: stage, commit, PR, merge.
+3. Before migrating, read-only checks:
+   - the production head is 20261021100000 / 92;
+   - the privilege contract shows 0 violations.
+4. Apply 20261023100000 through the owner's release procedure. No data migration is needed: the table starts empty.
+5. Read-only checks after migrating:
+   - head 20261023100000 / 93 = repository;
+   - privilege_contract_tests.sql → 0 violations;
+   - plus_update_contact still has a single overload.
+6. A synthetic-tenant smoke only ("Nemryn Pilot Simulation"), once S6-B provides a UI. Until then, verify read-only
+   that the RPCs exist and that there are 0 consent rows.
+7. Real-operator consent data only after PD-10 and PD-11 close (ZD-241).
+The deploy order is safe in either direction:
+- S6-A adds no application dependency;
+- the existing app never calls the new RPCs;
+- the replaced plus_update_contact keeps its signature.
+
+20. PR-READINESS VERDICT
+-----------------------
+READY FOR OWNER REVIEW AND PR.
+- Every required gate passes on the isolated stack:
+  - the new consent suite 78 / 78;
+  - consent concurrency 14 / 14;
+  - all Plus SQL suites at 0 failures;
+  - privilege contract 0 violations;
+  - no new failure across all 69 SQL suites;
+  - all 11 Plus concurrency scripts;
+  - QA2 strict 199 / 199;
+  - Quotes strict 272 / 272;
+  - unit tests 894 / 894; tsc; lint 0 errors.
+- Upgrade and fresh-chain rehearsals are clean.
+- No concurrency ambiguity. No release blocker.
+- Production use stays gated by S6-C (owner-run release) and, for real customer data, PD-10 / PD-11.
+
+Files for the owner's PR (S6-A scope):
+- New:
+  - supabase/migrations/20261023100000_plus_communication_consents.sql;
+  - supabase/tests/plus_communication_consents_tests.sql;
+  - supabase/tests/plus_communication_consents_concurrency_test.sh.
+- Modified (tests):
+  - supabase/tests/privilege_contract_tests.sql;
+  - supabase/tests/plus_contacts_activities_tests.sql;
+  - supabase/tests/plus_quotes_lifecycle_tests.sql;
+  - src/lib/plus/quotes-print-followup.test.mjs.
+- Modified (docs):
+  - decision-register.md, plus-decisions-proposed.md, plus-domain-model.md, plus-product-spec.md;
+  - plus-access-model.md, database-privilege-contract.md.
+- New or updated docs:
+  - docs/product/NP-P2-S6-consent-ledger-design.md;
+  - docs/reports/NP-P2-S6-design-audit.txt, NP-P2-S6-decision-review.txt, NP-P2-S6-decision-lock.txt;
+  - docs/reports/NP-P2-S6A-database-implementation.txt;
+  - docs/reports/np-p2-s6a-evidence/.
+- Not part of S6-A (pre-existing untracked files; leave out unless intended): .tmp-qa/, tests/e2e/fixtures/,
+  historical reports and screenshots.
+
+Environment left:
+- the isolated DB at 20261023100000 / 93, after the last browser-suite reset;
+- the app :3100 unchanged;
+- ~/NemrynS1Iso/supabase/migrations includes the new migration, synced from the repository;
+- the owner's :3000 server and the ZenWard stack untouched.
+
+S6-B (UI), S6-C (release) and P2-S7 have not been started.
+
+STOP FOR OWNER REVIEW.

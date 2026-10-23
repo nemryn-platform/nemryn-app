@@ -141,7 +141,7 @@ declare
   c_d1 constant uuid := '20000000-0000-0000-0000-0000000000d1';
   c_e1 constant uuid := '20000000-0000-0000-0000-0000000000e1';
   v text; v_c uuid; v_c2 uuid; v_bc uuid; v_ver timestamptz; v_n bigint;
-  v_core_before text; v_core_after text; v_rec record;
+  v_core_before text; v_core_after text; v_rec record; v_s6 uuid;
 begin
   v_core_before := (select count(*) from public.transportation_requests)::text || '/' || (select count(*) from public.passengers)::text
                    || '/' || (select count(*) from public.trips)::text || '/' || (select count(*) from public.facilities)::text;
@@ -471,6 +471,25 @@ begin
     pg_temp.lst(c_c1, c_a)::int > 0 and pg_temp.lst(c_c1, c_b) = 'ERR:ZW002' and pg_temp.rls(c_c1, c_b) = '0');
   perform pg_temp.t('X5 Org B Dispatcher (no grant in B) sees nothing in B or A',
     pg_temp.lst(c_b2, c_b) = 'ERR:ZW002' and pg_temp.lst(c_b2, c_a) = 'ERR:ZW002' and pg_temp.rls(c_b2, c_a) = '0');
+
+  -- =================================================== NP-P2-S6-A: plus_update_contact DNC transition (ZD-233)
+  perform pg_temp.mk(c_a1, c_a, 'S6 Dnc Fictional', '404 555 0190', 's6dnc@example.test');
+  v_s6 := pg_temp.cid(c_a, 'S6 Dnc Fictional');
+  v := pg_temp.val_as('authenticated', c_a1, format(
+    'select r.recorded_status from public.plus_record_consent(%L, %L, ''email'', ''marketing'', ''written'', null, null, null, ''s6-contacts-suite-1'') r', c_a, v_s6));
+  perform pg_temp.t('U-DNC0 a consent grant is recorded on the contact (fixture)', v = 'granted', v);
+  v := pg_temp.upd(c_a1, c_a, v_s6, pg_temp.ver(v_s6), 'S6 Dnc Fictional', '404 555 0190', 's6dnc@example.test', 'individual', null, 'phone', true);
+  perform pg_temp.t('U-DNC1 switching Do not contact ON keeps the released result and audit, and appends exactly one system revocation for the granted pair (no activity)',
+    v = 'changed=true'
+    and (select do_not_contact from public.plus_contacts where id = v_s6)
+    and (select after_data from public.audit_events where entity_id = v_s6 and action = 'plus_contact_updated') = jsonb_build_object('fields', jsonb_build_array('do_not_contact'))
+    and (select count(*) from public.plus_communication_consents where contact_id = v_s6 and status = 'revoked' and captured_via = 'do_not_contact') = 1
+    and pg_temp.acount(v_s6) = 0, v);
+  v := pg_temp.upd(c_a1, c_a, v_s6, pg_temp.ver(v_s6), 'S6 Dnc Fictional', '404 555 0190', 's6dnc@example.test', 'individual', null, 'phone', false);
+  perform pg_temp.t('U-DNC2 switching it OFF writes no consent row and revives nothing (latest row stays revoked)',
+    v = 'changed=true'
+    and (select count(*) from public.plus_communication_consents where contact_id = v_s6) = 2
+    and (select status from public.plus_communication_consents where contact_id = v_s6 order by seq desc limit 1) = 'revoked', v);
 
   -- =================================================== Core isolation
   v_core_after := (select count(*) from public.transportation_requests)::text || '/' || (select count(*) from public.passengers)::text

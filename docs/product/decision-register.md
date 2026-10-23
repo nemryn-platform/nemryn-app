@@ -2899,6 +2899,232 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A request for full revision traceability on printed or listed quotes
 
+### ZD-228 — The communication consent ledger ships in the private-pay MVP as NP-P2-S6 (PD-19)
+
+- **Date:** 2026-10-23
+- **Category:** Privacy / Product
+- **Decision:**
+  - `plus_communication_consents` ships in NP-P2-S6, before the web enquiry form (P2-S7) that captures consent.
+  - Recording only. Sending stays NP-P4.
+  - A follow-up consent never implies marketing consent.
+  - S6 is delivered in three separately authorized slices:
+    - S6-A database;
+    - S6-B application / UI;
+    - S6-C release.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-P2-S6-A decision lock, 2026-10-23; was PD-19)
+- **Reason:** The enquiry form must write consent into a ledger that already exists.
+- **Affected Product Areas:** `plus_communication_consents`; Contact Detail (S6-B); P2-S7 conversion
+- **Dependencies:** ZD-211, ZD-223, PD-10, PD-11, PD-12
+- **Owner:** Product / Compliance
+- **Review Trigger:** Any sending capability (NP-P4) or the P2-S7 design
+
+### ZD-229 — Consent channels are email, SMS and voice only (OD-S6-1 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Privacy / Data
+- **Decision:**
+  - `channel in ('email', 'sms', 'voice')`. The UI labels are Email / Text messages (SMS) / Phone calls.
+  - WhatsApp, chat, push, post and any other channel are excluded. Each needs its own product decision and vendor / BAA review.
+  - Recording SMS consent sends nothing; SMS sending remains gated by TCPA / 10DLC in NP-P4.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-1 = A, 2026-10-23)
+- **Security implications:** none for recording. A new channel would add a vendor surface.
+- **Affected Product Areas:** `plus_consents_channel_check`
+- **Dependencies:** ZD-228
+- **Owner:** Product
+- **Review Trigger:** A request for a new channel
+
+### ZD-230 — Consent purposes are service follow-up and marketing only (OD-S6-2 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Privacy / Architecture
+- **Decision:**
+  - `purpose in ('service_followup', 'marketing')`. Neither implies the other.
+  - Core operational / trip messages are NOT a Plus purpose and never read the Plus ledger.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-2 = A, 2026-10-23)
+- **Security implications:** Core messaging stays independent of Plus entitlement state ("Core never calls Plus helpers").
+- **Affected Product Areas:** `plus_consents_purpose_check`
+- **Dependencies:** ZD-228; access model §6.1
+- **Owner:** Product / Compliance
+- **Review Trigger:** Any proposal to route Core transactional messages through Plus consent
+
+### ZD-231 — Consent events are ordered by a server sequence; stale grants are refused (OD-S6-3 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Data / Security
+- **Decision:**
+  - The ordering key is a server-assigned identity `seq`, allocated after the per-contact row lock. The latest recorded row (highest `seq`) per (contact, channel, purpose) is the recorded state.
+  - Staff-declared `captured_at` never reorders history.
+  - A grant whose `captured_at` is earlier than the `captured_at` of the pair's latest revocation is refused (ZW004 `stale_evidence`). Revocations are never refused for their date.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-3 = A, 2026-10-23)
+- **Security implications:** a backdated or late-entered grant cannot override a real revocation.
+- **Affected Product Areas:** `plus_communication_consents.seq`; `plus_record_consent`
+- **Dependencies:** ZD-228
+- **Owner:** Engineering
+- **Review Trigger:** Any import or bulk-capture path
+
+### ZD-232 — A grant is bound to the address it was given for, by a server-computed SHA-256 digest (OD-S6-4 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Privacy / Security
+- **Decision:**
+  - Each grant stores `address_digest`: a server-computed SHA-256 of the normalised email (email channel) or phone digits (SMS / voice).
+  - If the contact's current address no longer matches, the effective state is `address_changed`, not consent on record.
+  - There is no plaintext address copy on the ledger.
+  - Refinement R1 (NP-P2-S6-A, documented in NP-P2-S6-decision-lock.txt and the design §2.6): the hashed input is domain-separated by a version label, the organization id and the address kind. Plain SHA-256 was selected; keyed HMAC was not.
+  - **The digest is NOT anonymisation:** a phone-number digest is trivially reversible by enumeration.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-4 = A, 2026-10-23); R1 implementation detail recorded for owner review
+- **Security implications:**
+  - no client role can read the digest (ZD-240);
+  - PD-11 erasure must remove or neutralise digests together with the contact's plaintext.
+- **Affected Product Areas:** `_plus_consent_address_digest`; `_plus_effective_consent`
+- **Dependencies:** ZD-240, PD-11
+- **Owner:** Engineering / Compliance
+- **Review Trigger:** A PD-11 erasure design, any export of the ledger, or a request for keyed digests
+
+### ZD-233 — Switching Do not contact on appends revocations; clearing it never revives consent (OD-S6-5 Option B)
+
+- **Date:** 2026-10-23
+- **Category:** Security / Privacy
+- **Decision:**
+  - While `do_not_contact = true`, grants are refused (ZW004) and revocations are always accepted.
+  - When `plus_update_contact` changes `do_not_contact` from false to true, the same transaction appends one `revoked` row (`captured_via = 'do_not_contact'`) for every (channel, purpose) whose recorded state is `granted`.
+  - Clearing Do not contact writes nothing and never revives an earlier grant. Fresh consent must be recorded, dated after the system revocation.
+  - A system `do_not_contact` revocation cannot be corrected.
+  - Only the BODY of `plus_update_contact` changes. Its signature, authorization, version token, archived rule, audit and owner logic are unchanged. No activity row is written.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-5 = B, 2026-10-23)
+- **Security implications:** closes the "revival" risk for the future NP-P4 sending check.
+- **Affected Product Areas:** `plus_update_contact` (body only)
+- **Dependencies:** ZD-223 (unchanged), ZD-231
+- **Owner:** Product / Engineering
+- **Review Trigger:** Any other path that changes `do_not_contact`
+
+### ZD-234 — Corrections are new rows that reference the entry they correct (OD-S6-6 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Data
+- **Decision:**
+  - A correction is a new grant or revoke row with `corrects_consent_id`.
+  - It must reference the pair's current latest row (ZW003 otherwise) and requires an evidence note.
+  - The original row is unchanged. Latest-row semantics are unchanged.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-6 = A, 2026-10-23)
+- **Security implications:** history stays truthful; no void / rewrite path exists.
+- **Affected Product Areas:** `corrects_consent_id` (tenant- and contact-scoped self FK)
+- **Dependencies:** ZD-231, ZD-233
+- **Owner:** Engineering
+- **Review Trigger:** A request to hide or delete entries
+
+### ZD-235 — Archived contacts accept revocations only; redacted contacts accept nothing (OD-S6-7 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Product / Privacy
+- **Decision:**
+  - Archived contacts: revocations are accepted; grants give ZW004.
+  - Redacted contacts: ZW002 for every consent read and write.
+  - This intentionally differs from "archived contacts are read-only", and only for revocations.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-7 = A, 2026-10-23)
+- **Affected Product Areas:** `plus_record_consent`, `plus_revoke_consent`
+- **Dependencies:** ZD-228
+- **Owner:** Product
+- **Review Trigger:** PD-11 redaction design
+
+### ZD-236 — Consent events are not written to the activity timeline in S6 (OD-S6-8 Option B)
+
+- **Date:** 2026-10-23
+- **Category:** Product
+- **Decision:**
+  - S6 writes no `plus_activities` row, and `plus_activities_activity_type_check` is not replaced.
+  - Consent history lives in its own Contact Detail panel (S6-B); the audit trail is in `audit_events`.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-8 = B, 2026-10-23)
+- **Security implications:** consent activity does not appear in the Dashboard recent-activity feed.
+- **Affected Product Areas:** none changed (timeline contract preserved)
+- **Dependencies:** ZD-222
+- **Owner:** Product
+- **Review Trigger:** A request to show consent changes on the timeline
+
+### ZD-237 — The Growth Agent consent caveat becomes neutral copy (OD-S6-9 Option B)
+
+- **Date:** 2026-10-23
+- **Category:** Product
+- **Decision:**
+  - `CONSENT_CAVEAT` becomes: "Check this person's communication preferences before using this draft. A recorded consent isn't permission to send, and Nemryn sends nothing."
+  - Copy only, with no logic change. It is implemented in S6-B, not S6-A.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-9 = B, 2026-10-23)
+- **Affected Product Areas:** `src/lib/plus/agent-core.ts` (S6-B)
+- **Dependencies:** ZD-228
+- **Owner:** Product
+- **Review Trigger:** A state-aware Agent design
+
+### ZD-238 — Staff capture methods; "imported" excluded (OD-S6-10 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Data / Privacy
+- **Decision:**
+  - Staff methods: `verbal_phone`, `in_person`, `written`, `email_reply`.
+  - System method: `do_not_contact`, written only by the ZD-233 step.
+  - `web_form` is added by P2-S7 through a named-constraint replacement.
+  - `imported` is excluded; any import needs its own decision.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-10 = A, 2026-10-23)
+- **Security implications:** no unverifiable bulk grants.
+- **Affected Product Areas:** `plus_consents_captured_via_check`
+- **Dependencies:** ZD-233
+- **Owner:** Product
+- **Review Trigger:** P2-S7, or any import request
+
+### ZD-239 — Only Plus writers record consent; read_only refuses every consent write (OD-S6-11 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Security
+- **Decision:**
+  - Grants and revocations need Plus WRITE (Organization Admin, or a Dispatcher with an active write grant, in effective state `write`).
+  - In `read_only`, Admins read state and history but every consent write gives ZW001. Do not contact can't change either (`plus_update_contact` also requires Plus write).
+  - No helper or RPC bypasses read_only.
+  - **Mandatory NP-P4 prerequisite (refinement R3):** before any Plus outbound communication is enabled, a separately reviewed, subscription-independent opt-out mechanism must exist. It must remain usable when Plus is expired, cancelled, read_only or otherwise unable to accept CRM writes. It is not built in S6, and no read_only write exception is created.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-11 = A, 2026-10-23)
+- **Security implications:** preserves the T6 contract. The read_only gap has no outbound effect, because nothing sends.
+- **Affected Product Areas:** consent RPC guards; NP-P4 entry criteria
+- **Dependencies:** ZD-207, ZD-210
+- **Owner:** Product / Compliance
+- **Review Trigger:** NP-P4 planning
+
+### ZD-240 — Client roles cannot read address digests or idempotency keys (OD-S6-12 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Security
+- **Decision:**
+  - `authenticated` gets column-level SELECT on `plus_communication_consents` for every column except `address_digest` and `idempotency_key`. There is no table-level SELECT.
+  - The RPCs never return either column.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-12 = A, 2026-10-23)
+- **Affected Product Areas:** privilege contract `c_auth_col`
+- **Dependencies:** ZD-232
+- **Owner:** Engineering
+- **Review Trigger:** Any export or reporting surface
+
+### ZD-241 — S6 may be released to production on its gates; real data waits for PD-10 / PD-11 (OD-S6-13 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Release
+- **Decision:**
+  - S6 is released through the owner-run procedure once its gates pass (S6-C).
+  - Only synthetic tenants record consent until PD-10 and PD-11 close.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-13 = A, 2026-10-23)
+- **Affected Product Areas:** S6-C release
+- **Dependencies:** PD-10, PD-11
+- **Owner:** Owner
+- **Review Trigger:** PD-10 / PD-11 resolution
+
+### ZD-242 — Evidence notes are visible to every Plus reader (OD-S6-14 Option A)
+
+- **Date:** 2026-10-23
+- **Category:** Product / Privacy
+- **Decision:**
+  - Evidence notes are readable by everyone who can read the contact's Plus data, the same as activity bodies.
+  - Notes are never copied into `audit_events`.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S6-14 = A, 2026-10-23)
+- **Affected Product Areas:** `plus_list_contact_consent_events`
+- **Dependencies:** ZD-228
+- **Owner:** Product
+- **Review Trigger:** PD-11 / PD-10 review of free-text evidence
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

@@ -1,0 +1,210 @@
+NP-P2-S6 — COMMUNICATION CONSENT LEDGER: DECISION REVIEW
+========================================================
+Date: 2026-10-23.
+Mode: design only.
+- No decision below is approved by this document.
+- "Recommended" is a proposal for the owner / ChatGPT review.
+Design: docs/product/NP-P2-S6-consent-ledger-design.md.
+Findings: docs/reports/NP-P2-S6-design-audit.txt.
+
+"Blocks" means:
+- MIGRATION: must be decided before the S6-A migration is written, because it changes the schema or the RPC contract;
+- UI: must be decided before S6-B;
+- REAL DATA: blocks real-operator use only, not implementation or a synthetic release;
+- NO: can be decided later.
+
+1. S6 DESIGN DECISIONS
+----------------------
+
+OD-S6-1 Channel set
+- Option A: email, sms, voice (as in domain model §12). WhatsApp, chat, push and post are excluded.
+- Option B: email and voice only. SMS consent is deferred to NP-P4 (TCPA / 10DLC).
+- Option C: A plus WhatsApp.
+- Recommended: A. Recording SMS consent sends nothing. Excluding it would force a CHECK replacement later. C needs
+  its own product decision and vendor / BAA review.
+- Security: none for A / B (recording only). C adds a vendor surface.
+- Migration: the channel CHECK. Widening later uses a named-constraint replacement.
+- Blocks: MIGRATION.
+
+OD-S6-2 Purpose set
+- Option A: service_followup and marketing (domain model §12; access model §6.3a).
+- Option B: A plus "operational" (trip or booking notices).
+- Recommended: A. Operational messages are Core transactional messages and must never depend on the Plus ledger
+  (access model §6.1; "Core never calls Plus helpers").
+- Security: B would couple Core messaging to Plus entitlement state.
+- Migration: the purpose CHECK.
+- Blocks: MIGRATION.
+
+OD-S6-3 Event ordering
+- Option A: server sequence (an identity column, assigned after the per-contact lock); the latest recorded row wins.
+  A grant whose captured_at is older than the pair's latest revocation is refused (stale_evidence).
+- Option B: order by captured_at, the staff-declared time.
+- Recommended: A. It is deterministic and cannot be reordered by backdating. Revocations are never refused.
+- Security: B lets a backdated or late-entered grant silently override a real revocation.
+- Migration: the seq column and index; the RPC rule.
+- Blocks: MIGRATION.
+
+OD-S6-4 Binding consent to an address
+- Option A: a server-computed SHA-256 digest of the email or phone digits at capture. A changed address makes the
+  effective state "address_changed".
+- Option B: a plaintext snapshot of the address on each row.
+- Option C: no binding; consent follows whatever address the contact has.
+- Recommended: A. Consent (especially SMS / voice under TCPA) is given for a specific address. A avoids duplicating
+  personal data (better for PD-11 erasure).
+- Security: C can carry consent to a reassigned number. B duplicates PII.
+- Migration: the column and the CHECK "granted ⇒ digest".
+- Blocks: MIGRATION.
+
+OD-S6-5 Do-not-contact versus recorded grants
+- Option A: suppress at read time only. Grants are refused while DNC is on; revocations are always allowed; setting
+  DNC writes nothing.
+- Option B: A, plus switching DNC on (in plus_update_contact) appends a revocation row for each granted pair
+  (captured_via = do_not_contact). Clearing DNC never revives old consent.
+- Option C: A, plus a new plus_contacts.do_not_contact_changed_at column, with the resolver ignoring grants older than
+  it.
+- Recommended: B.
+  - It keeps the ledger self-describing and closes the "revival" risk (R2).
+  - It changes the BODY of a released RPC, with the same signature. That needs explicit owner approval, the existing
+    contact suites unchanged, and new tests (P15).
+  - If the owner declines any change to plus_update_contact, use A and record risk R2 as accepted until NP-P4.
+- Security: under A, clearing DNC would silently re-enable years-old grants for the future NP-P4 sending check.
+- Migration: B replaces the plus_update_contact body. C adds a Core-adjacent column to plus_contacts plus a body
+  change.
+- Blocks: MIGRATION.
+
+OD-S6-6 Correcting an entry recorded in error
+- Option A: a new grant / revoke row with corrects_consent_id. It must reference the pair's current latest row and
+  needs a note. Latest-row semantics are unchanged.
+- Option B: a separate "void" event type that the resolver skips.
+- Option C: no correction concept; staff just record the opposite.
+- Recommended: A. History stays truthful (the error is marked as an error, not presented as the person's revocation)
+  and the resolver stays simple.
+- Security: B adds resolver complexity and a way to rewrite effective history. C leaves misleading evidence.
+- Migration: a nullable self composite FK plus the note CHECK.
+- Blocks: MIGRATION.
+
+OD-S6-7 Archived and redacted contacts
+- Option A: archived contacts accept revocations only (no grants); redacted contacts give ZW002 for everything.
+- Option B: archived contacts are fully read-only (the existing contact rule).
+- Recommended: A. A person's opt-out must always be recordable. A grant on an archived (inactive) relationship
+  serves no purpose.
+- Security: neutral. It differs from the "archived is read-only" rule for contacts, intentionally and only for
+  revocations.
+- Migration: an RPC rule only.
+- Blocks: MIGRATION (the RPC contract).
+
+OD-S6-8 Timeline entries for consent events
+- Option A: also write a plus_activities "consent_recorded" row. This replaces plus_activities_activity_type_check and
+  extends timeline rendering and the recent-activity feed.
+- Option B: no timeline row. History is in the Communication preferences panel; the audit is in audit_events.
+- Recommended: B for S6. It leaves the released timeline contract untouched (QA2 growth, quotes d5 and the
+  recent-activity suites stay stable). A can follow in a later slice.
+- Security: A puts consent activity in the Dashboard recent-activity feed seen by all Plus readers (no note bodies
+  are shown there today).
+- Migration: A replaces a constraint. B: none.
+- Blocks: MIGRATION (if A).
+
+OD-S6-9 Growth Agent consent caveat
+- Option A: leave CONSENT_CAVEAT ("Nemryn has no consent record for this person yet…") unchanged.
+- Option B: neutral copy: "Check this person's communication preferences before using this draft. A recorded
+  consent isn't permission to send, and Nemryn sends nothing."
+- Option C: make the caveat state-aware, showing the contact's recorded state.
+- Recommended: B. A becomes factually wrong once records exist. C couples the Agent to the ledger and needs its own
+  review (access model §6.5a).
+- Security: none. Drafts still never claim consent and stay suppressed for DNC.
+- Migration: none.
+- Blocks: UI.
+
+OD-S6-10 Capture methods
+- Option A: staff methods verbal_phone, in_person, written, email_reply; system method do_not_contact; web_form added
+  by P2-S7; "imported" excluded.
+- Option B: A, plus "imported" now.
+- Recommended: A. No import feature exists. Importing consent evidence from another system needs a separate decision
+  on provenance and verification.
+- Security: B allows unverifiable bulk grants.
+- Migration: the captured_via CHECK. "in_person" is new relative to domain model §12.
+- Blocks: MIGRATION.
+
+OD-S6-11 Who may record, and what read_only allows
+- Option A: Plus write (Organization Admin, and Dispatchers with a write grant) for both grants and revocations;
+  read_only refuses everything (ZW001).
+- Option B: as A, but revocations allowed in read_only for the Admin.
+- Option C: Admin only.
+- Recommended: A. It is consistent with every Plus write and with the DNC field itself (also Plus write). B breaks the
+  "read_only never writes" contract (T6), which is risky to make exceptions to. Nothing sends in read_only, so the
+  gap has no outbound effect (R6).
+- Security: B would add a write path in a state the helpers treat as non-writable. C is stricter but removes the
+  intake staff who actually take these calls.
+- Migration: RPC guards.
+- Blocks: MIGRATION.
+
+OD-S6-12 Column visibility of digest and idempotency key
+- Option A: column-level SELECT grants on the table, excluding address_digest and idempotency_key. The RPCs never
+  return them.
+- Option B: table-level SELECT, like the other plus_* tables.
+- Recommended: A. The fields are not secret within the tenant, but they serve no UI purpose. A uses the existing
+  c_auth_col contract mechanism.
+- Security: slight minimisation gain.
+- Migration: the grant statements and the contract rows.
+- Blocks: MIGRATION.
+
+OD-S6-13 Production release timing
+- Option A: release S6 to production when its gates pass. Real-operator use waits for PD-10 / PD-11; only the
+  synthetic tenant is used.
+- Option B: hold the production release until PD-10 / PD-11 close.
+- Recommended: A. It is the pattern of every released Plus slice. The table is empty and gated by entitlement. It lets
+  S7 build on a released ledger.
+- Security: no real data under either option.
+- Migration: none.
+- Blocks: NO (release planning only).
+
+OD-S6-14 Visibility of evidence notes
+- Option A: every Plus reader sees notes (the same as activity bodies).
+- Option B: Admin only.
+- Recommended: A. Notes are operational evidence the intake staff wrote. B adds a new visibility tier that no other
+  Plus object has.
+- Security: B is marginally more private.
+- Migration: under B, an RPC filter.
+- Blocks: UI.
+
+2. INHERITED OPEN DECISIONS (NOT CLOSED BY S6)
+----------------------------------------------
+PD-10 HIPAA applicability / BAA
+- Status: proposed (owner-approved direction); gate OPEN. Owner + counsel.
+- Effect on S6: none on implementation. Blocks REAL DATA in S6 and every Plus slice.
+
+PD-11 Retention / erasure
+- Status: proposed; needs an owner + counsel decision.
+- S6 sub-questions:
+  - (a) how long consent events are kept after a contact is archived;
+  - (b) on an erasure request, which fields of an opt-out record survive (suppression evidence);
+  - (c) whether the note is redacted;
+  - (d) the procedure for working around the append-only triggers.
+- Blocks: REAL DATA. No final period is proposed here.
+
+PD-19 Consent ledger in the private-pay MVP
+- Status: proposed. S6 implements it.
+- Recommended: approve together with S6, since it is the authority for this slice.
+- Blocks: MIGRATION, as the formal scope authority.
+
+OD-Q13 / OD-Q14 (quotes)
+- Unrelated to S6. Still open. Listed for completeness.
+
+3. SUMMARY
+----------
+Must be decided before the S6-A migration:
+- OD-S6-1, 2, 3, 4, 5, 6, 7, 10, 11, 12;
+- (OD-S6-8 only if Option A is chosen);
+- PD-19 confirmation.
+Before S6-B: OD-S6-9 and OD-S6-14.
+Later or release planning: OD-S6-13.
+Real-data gates (unchanged): PD-10 and PD-11.
+
+The recommended set (A, A, A, A, B, A, A, B, B, A, A, A, A, A) changes one released function body
+(plus_update_contact, under OD-S6-5 B). It changes no Core object, no existing table and no existing constraint.
+Existing test changes are limited to:
+- the deliberate privilege-contract additions;
+- one strengthened side-effect counter (quotes D5);
+- the Agent caveat copy expectation (OD-S6-9 B).
+
+STOP for owner / ChatGPT design review.

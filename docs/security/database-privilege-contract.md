@@ -147,6 +147,24 @@ Codes: **A** no client access (RPC / server only) · **B** authenticated read ·
   * A gains `_plus_quote_activity`, `_plus_quote_related_number` and the trigger function `_plus_activities_quote_guard`.
   * `plus_activities` gains `quote_id` / `quote_status`, a composite FK, a CHECK and a trigger. Its privileges are unchanged (class B, SELECT only).
 * **NP-P2-S5-S3C (printable quotes + optional follow-up task):** no database change. No function, table, policy or grant is added or altered. The print page reads through the existing authenticated-only `plus_get_quote` and the `organizations` member SELECT on the per-request client. The follow-up uses the existing `plus_create_task`. No service-role client is used.
+* **NP-P2-S6-A additions (Plus communication consent ledger, `20261023100000_plus_communication_consents.sql`; ZD-228 … ZD-242):**
+  * Table `plus_communication_consents` is class **B with column-level SELECT** (ZD-240):
+    * `authenticated` holds SELECT on 14 columns through the single policy `plus_communication_consents_select_plus` (`plus_can_read(organization_id)`). It has **no** table-level privilege and no SELECT on `address_digest` or `idempotency_key`.
+    * No INSERT, UPDATE, DELETE or TRUNCATE for any client role. `anon` / `service_role` have nothing.
+    * Append-only: the row trigger `plus_consents_append_only` (BEFORE UPDATE OR DELETE) and the statement trigger `plus_consents_no_truncate` (BEFORE TRUNCATE) raise ZW004 for every role, including the owner.
+    * The contract lists the 14 columns in `c_auth_col`.
+  * D gains four authenticated-only RPCs:
+    * Plus read: `plus_get_contact_consents(uuid,uuid)`, `plus_list_contact_consent_events(uuid,uuid,integer,integer)`;
+    * Plus write: `plus_record_consent(...)`, `plus_revoke_consent(...)`.
+    All are SECURITY DEFINER with `search_path` pinned.
+  * A gains five internals with no client EXECUTE:
+    * `_plus_consents_append_only` (trigger function);
+    * `_plus_consent_address_digest`;
+    * `_plus_effective_consent` (the NP-P4 resolver);
+    * `_plus_append_consent`;
+    * `_plus_consents_revoke_for_dnc`.
+  * `plus_update_contact` is CREATE OR REPLACE with the same signature, grant and SECURITY DEFINER. Its body gains only the ZD-233 Do-not-contact revocation step.
+  * The type `plus_consent_write_result` is added. No other table, policy or grant changes, and no service-role path is added.
 * **NC-REQUEST-SERVICE-TYPE-S1 changes (Core):**
   * `log_transportation_request` gains a trailing `p_service_type text DEFAULT NULL`. It is replaced by DROP + CREATE (exact 14-argument identity, no CASCADE): ONE function remains, never an overload. Its new contract signature is `(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text)`. It stays SECURITY DEFINER with `search_path` pinned, and EXECUTE is `authenticated` only (no PUBLIC, `anon` or `service_role`).
   * `get_organization_service_offerings` (owner-approved, read-only) now admits an active Organization Admin OR Dispatcher of that organization. The signature, grant and SECURITY DEFINER are unchanged, and it returns only the enabled service identifiers. `set_organization_service_offerings` stays Organization Admin only, and `organization_service_offerings` keeps RLS on, with no policy and no client grant.
