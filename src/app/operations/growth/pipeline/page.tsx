@@ -205,34 +205,40 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
         </p>
       </div>
 
-      <form method="get" action="/operations/growth/pipeline" role="search" className="flex flex-col gap-zw-md rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm md:flex-row md:items-end" data-testid="pipeline-filters">
+      {/* NP-UX-FILTER-01: the layout follows the FORM's own width (container query), not the viewport -- the sidebar
+          expands / collapses independently, so a viewport breakpoint can leave too little room. One row only when the
+          form is at least 64rem wide (Search keeps >= 15rem and can never collapse); otherwise Search takes a full row
+          and Stage / Source / Owner share the next row (each >= 10rem), with Apply wrapping rather than shrinking. */}
+      <form method="get" action="/operations/growth/pipeline" role="search" className="@container rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm" data-testid="pipeline-filters">
         {params.view !== "open" && <input type="hidden" name="view" value={params.view} />}
         {params.view === "open" && params.layout === "list" && <input type="hidden" name="layout" value="list" />}
-        <div className="min-w-0 flex-1">
-          <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Title or contact name" maxLength={200} />
-        </div>
-        {stageOptions.length > 0 && (
-          <div className="md:w-48">
-            <Select name="stage" label="Stage" options={[{ value: "", label: "All stages" }, ...stageOptions]} defaultValue={params.stage ?? ""} />
+        <div className="flex flex-wrap items-end gap-zw-md">
+          <div className="min-w-0 basis-full @5xl:min-w-60 @5xl:flex-1 @5xl:basis-60" data-testid="pipeline-filter-search">
+            <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Title or contact name" maxLength={200} />
           </div>
-        )}
-        <div className="md:w-44">
-          <Select name="source" label="Source" options={[{ value: "", label: "All sources" }, ...SOURCE_OPTIONS]} defaultValue={params.source ?? ""} />
-        </div>
-        {owners.length > 0 && (
-          <div className="md:w-44">
-            <Select name="owner" label="Owner" options={[{ value: "", label: "Anyone" }, ...owners.map((o) => ({ value: o.handle, label: o.isSelf ? `${o.name} (you)` : o.name }))]} defaultValue={params.owner ?? ""} />
-          </div>
-        )}
-        <div className="flex gap-2">
-          <Button type="submit" variant="outline">
-            Apply
-          </Button>
-          {filtered && (
-            <LinkButton href={pipelineHref(params, { search: "", stage: null, source: null, owner: null })} variant="text">
-              Clear
-            </LinkButton>
+          {stageOptions.length > 0 && (
+            <div className="min-w-40 flex-1 @5xl:w-48 @5xl:flex-none">
+              <Select name="stage" label="Stage" options={[{ value: "", label: "All stages" }, ...stageOptions]} defaultValue={params.stage ?? ""} />
+            </div>
           )}
+          <div className="min-w-40 flex-1 @5xl:w-44 @5xl:flex-none">
+            <Select name="source" label="Source" options={[{ value: "", label: "All sources" }, ...SOURCE_OPTIONS]} defaultValue={params.source ?? ""} />
+          </div>
+          {owners.length > 0 && (
+            <div className="min-w-40 flex-1 @5xl:w-44 @5xl:flex-none">
+              <Select name="owner" label="Owner" options={[{ value: "", label: "Anyone" }, ...owners.map((o) => ({ value: o.handle, label: o.isSelf ? `${o.name} (you)` : o.name }))]} defaultValue={params.owner ?? ""} />
+            </div>
+          )}
+          <div className="flex shrink-0 gap-2">
+            <Button type="submit" variant="outline">
+              Apply
+            </Button>
+            {filtered && (
+              <LinkButton href={pipelineHref(params, { search: "", stage: null, source: null, owner: null })} variant="text">
+                Clear
+              </LinkButton>
+            )}
+          </div>
         </div>
       </form>
 

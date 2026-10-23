@@ -1,0 +1,32 @@
+PASS — board @1440: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":391,"minSelect":176,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — board @1024: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":671,"minSelect":184,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — board @900: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":755,"minSelect":212,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — board @822: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":677,"minSelect":186,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — board @768: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":623,"minSelect":168,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — board @390: the approved Operations tablet/desktop notice; the filter form is not displayed :: {"notice":true,"formVisible":false}
+PASS — list @1440: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":406,"minSelect":176,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — list @1024: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":671,"minSelect":184,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — list @900: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":755,"minSelect":212,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — list @822: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":677,"minSelect":186,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — list @768: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":623,"minSelect":168,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — list @390: the approved Operations tablet/desktop notice; the filter form is not displayed :: {"notice":true,"formVisible":false}
+PASS — empty-filtered @1440: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":331,"minSelect":176,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — empty-filtered @1024: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":686,"minSelect":164,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — empty-filtered @900: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":770,"minSelect":192,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — empty-filtered @822: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":692,"minSelect":166,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — empty-filtered @768: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":638,"minSelect":202,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — empty-filtered @390: the approved Operations tablet/desktop notice; the filter form is not displayed :: {"notice":true,"formVisible":false}
+PASS — lost @1440: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":614,"minSelect":176,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — lost @1024: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":686,"minSelect":291,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — lost @900: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":770,"minSelect":333,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — lost @822: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":692,"minSelect":294,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — lost @768: search >= 240px, selects >= 160px, no label-text overlap, Apply visible inside the panel, no page / form overflow :: {"search":638,"minSelect":267,"labelTextOverlap":0,"applyVisible":true,"overflow":0,"formOverflow":0}
+PASS — lost @390: the approved Operations tablet/desktop notice; the filter form is not displayed :: {"notice":true,"formVisible":false}
+PASS — KEY Tab order follows the visual order: Search -> Stage -> Source -> Owner -> Apply :: q>stage>source>owner>Apply
+PASS — KEY focus ring visible on Apply and not clipped by the filter panel :: {"outline":true,"clipped":false}
+PASS — BEHAVIOUR Enter in Search submits; the query keeps layout=list and carries q and source; results filtered :: ?layout=list&q=A11y&stage=&source=phone&owner=
+PASS — BEHAVIOUR Clear removes search / filters and keeps the List layout :: ?layout=list
+PASS — BEHAVIOUR Apply keeps view=all (Open / Lost / All switching preserved) :: ?view=all&q=&stage=&source=phone&owner=
+PASS — BEHAVIOUR Board / List switch still works
+PASS — AXE filter panel @822: no violations
+PASS — AXE pipeline page @1440: 0 serious / critical
