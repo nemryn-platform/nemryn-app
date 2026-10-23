@@ -1,0 +1,141 @@
+NP-P2-S6 — COMMUNICATION CONSENT LEDGER: DECISION LOCK
+=====================================================
+Date: 2026-10-23.
+Branch: np-p2-s6a-consent-ledger-foundation (owner-created). HEAD = origin/main = 64396db.
+Mode: owner-approved. The decisions below are FINAL owner approvals, recorded exactly as defined in
+NP-P2-S6-decision-review.txt. That review is preserved unchanged as historical evidence.
+
+1. RECORDED DECISIONS
+---------------------
+| Proposal | Approved | Register | Exact meaning (from the decision review) |
+|---|---|---|---|
+| PD-19 | approved | ZD-228 | The ledger ships in P2-S6, before P2-S7. Recording only; sending stays NP-P4. Follow-up never implies marketing |
+| OD-S6-1 | A | ZD-229 | channel ∈ {email, sms, voice}; WhatsApp, chat, push and post excluded |
+| OD-S6-2 | A | ZD-230 | purpose ∈ {service_followup, marketing}; Core operational messages are not a Plus purpose |
+| OD-S6-3 | A | ZD-231 | A server sequence (identity, allocated after the contact lock) orders events; the latest row wins; a grant older than the pair's latest revocation is refused (stale_evidence); revocations are never refused for their date |
+| OD-S6-4 | A | ZD-232 | A server-computed SHA-256 digest binds each grant to its address; a changed address gives address_changed |
+| OD-S6-5 | B | ZD-233 | Grants are refused while DNC; revocations always allowed. DNC false→true (plus_update_contact) appends one system revocation per granted pair in the same transaction; clearing DNC revives nothing |
+| OD-S6-6 | A | ZD-234 | A correction is a new row with corrects_consent_id → the pair's current latest row (else ZW003), and needs a note |
+| OD-S6-7 | A | ZD-235 | Archived contacts: revocations only. Redacted: ZW002 for everything |
+| OD-S6-8 | B | ZD-236 | No plus_activities row; the activity_type CHECK is not replaced |
+| OD-S6-9 | B | ZD-237 | Neutral CONSENT_CAVEAT copy, implemented in S6-B (not S6-A) |
+| OD-S6-10 | A | ZD-238 | Staff methods verbal_phone / in_person / written / email_reply; system do_not_contact; web_form added by P2-S7; "imported" excluded |
+| OD-S6-11 | A | ZD-239 | Plus WRITE records grants and revocations; read_only refuses every consent write (ZW001), with no bypass |
+| OD-S6-12 | A | ZD-240 | Column-level SELECT excludes address_digest and idempotency_key; the RPCs never return them |
+| OD-S6-13 | A | ZD-241 | Release on the S6 gates (S6-C); real data waits for PD-10 / PD-11 |
+| OD-S6-14 | A | ZD-242 | Evidence notes are visible to every Plus reader; never copied into audit_events |
+
+Two precisions were made while implementing. Both are within the approved options; neither is a new behaviour.
+- ZD-231 / ZD-234: the stale-evidence comparison ignores the row being corrected by the same call. Otherwise a
+  correction of an erroneous revocation could never restore the earlier grant.
+- ZD-233: a system do_not_contact revocation can never be corrected (ZW004). Otherwise a correction after DNC is
+  cleared would revive a pre-DNC grant, which ZD-233 forbids.
+
+Still OPEN (unchanged): PD-10, PD-11, OD-Q13, OD-Q14. Real customer data remains unauthorized.
+
+2. CANONICAL DOCUMENTATION UPDATED
+----------------------------------
+- docs/product/decision-register.md: ZD-228 … ZD-242 added (CONFIRMED — OWNER-APPROVED, 2026-10-23).
+- docs/product/plus-decisions-proposed.md:
+  - PD-19 → "OWNER-APPROVED — RECORDED AS ZD-228";
+  - the header index updated;
+  - PD-10 / PD-11 kept OPEN.
+- docs/product/NP-P2-S6-consent-ledger-design.md:
+  - status APPROVED, with option-dependent wording resolved;
+  - §2.6 R1 digest;
+  - §3 stale-evidence and DNC-correction precisions;
+  - §4.1 R3 prerequisite;
+  - §4.2 final function list;
+  - §9 concurrency contract (R2);
+  - §10 risks.
+- docs/product/plus-domain-model.md §12:
+  - the approved schema and semantics;
+  - the differences from the A02R proposal;
+  - S7 forward compatibility (inquiry_id, web_form, consent_text_version through named-constraint replacement).
+- docs/product/plus-product-spec.md §8 P2-S6 row: approved scope and explicit exclusions.
+- docs/security/plus-access-model.md:
+  - §6 item 5b (effective-consent rules, DNC transitions, read_only, the NP-P4 prerequisite);
+  - §8 T33.
+- docs/security/database-privilege-contract.md: the NP-P2-S6-A additions.
+
+3. REFINEMENT R1 — ADDRESS DIGEST: PLAIN SHA-256 vs KEYED HMAC-SHA-256
+----------------------------------------------------------------------
+Purpose of the digest (ZD-232): a narrow equality check. "Is the contact's CURRENT email / phone the one this grant was
+given for?" The plaintext address lives in the same tenant row (plus_contacts.email / phone), and the comparison is
+always made against it.
+
+| Criterion | A. Plain SHA-256 | B. Keyed HMAC-SHA-256 |
+|---|---|---|
+| Dictionary / enumeration attack on a stolen digest | Weak. About 10¹⁰ phone numbers are enumerable in seconds to minutes; emails fall to a dictionary | Strong while the key stays secret |
+| Entropy of the input | Phone about 33 bits; email low to moderate. Hashing adds no entropy | Same input. Security rests on the key |
+| Exposure if the database is compromised | The attacker also reads the plaintext in plus_contacts, so the digest adds nothing | Same, unless the key is stored outside the database. With Supabase Vault (inside the same database) a database compromise exposes the key too |
+| Exposure to clients | None: no client SELECT, never returned (ZD-240) | None |
+| Normalisation consistency | Deterministic in SQL (lower / trim; digits only) | Same |
+| Cross-tenant correlation | Mitigated: the organization id is part of the input, so the same phone in two organizations gives different digests | Mitigated by a per-tenant key or input |
+| Key custody | None | A new secret in every environment (local, CI, production). It must not be in migrations, source or committed env files. Needs Vault provisioning plus an owner-run procedure |
+| Availability in DB functions | Built-in sha256() (PostgreSQL ≥ 11); no extension | Needs pgcrypto hmac() plus a Vault read in a SECURITY DEFINER function; the function then depends on secret state |
+| Rotation / historical verification | Not applicable; the version label "v1" in the input allows an algorithm change | Old digests become incomparable after rotation. Needs a key_version column and retained old keys, or recomputing every grant: a schema and contract change |
+| Deployment dependencies | None beyond the migration | A secret must exist before the migration runs; a missing key breaks every grant |
+| Retention / redaction / erasure | The digest is personal data (reversible for phones). PD-11 erasure must remove it with the plaintext | Also personal data while the key exists. Destroying a per-tenant key could neutralise digests ("crypto-shredding"), but that is a PD-11 design question |
+| address_changed behaviour | Fully supported | Supported, but rotation without key_version would wrongly report address_changed for every grant |
+
+Assessment:
+- B protects only against an attacker who holds the digests but neither the plaintext nor the key. In this design the
+  plaintext sits beside the digest, so that scenario requires a partial leak of the ledger alone. Even then, no client
+  role can read the column.
+- B would add:
+  - a new secret-management architecture (Vault provisioning, owner-run key custody);
+  - a key_version column and rotation semantics, which change the approved schema;
+  - a hard deployment dependency.
+
+DECISION (implementation refinement within the approved OD-S6-4 A, recorded for owner review):
+- Plain SHA-256 with domain separation and a version label:
+
+    sha256('nemryn.plus.consent-address.v1|' || organization_id || '|' || kind || '|' || normalized)
+
+  - kind = 'email' or 'phone' (SMS and voice share the phone);
+  - normalized = lower(trim(email)), or the phone's digits only.
+- The approved representation is unchanged: a server-computed SHA-256 hex digest.
+- The organization id and version label are additions to the hashed input, documented here and in design §2.6. They
+  remove cross-tenant equality and allow a future change.
+
+Privacy limitations, stated plainly:
+- the digest is NOT anonymisation, NOT irreversible removal and NOT proof of compliance;
+- a phone digest is reversible by enumeration; an email digest by dictionary;
+- it is personal data and is handled like the address;
+- PD-11 erasure must remove or neutralise it.
+
+No material security blocker was found, so S6-A proceeded. If the owner later wants keyed digests, that is a separate
+decision (Vault key custody, key_version column, rotation) and a later migration.
+
+4. REFINEMENT R2 — CONCURRENCY AND REVOCATION ORDERING
+-----------------------------------------------------
+Mechanism:
+- Consent writes lock the contact FOR NO KEY UPDATE; plus_update_contact locks it FOR UPDATE. These conflict, so every
+  consent write and contact edit on one contact is serialized.
+- seq is allocated at INSERT, after the lock, so for a contact seq order is the serialized write order.
+- The DNC step runs inside plus_update_contact, under its lock, in the same transaction.
+
+Verified by plus_communication_consents_concurrency_test.sh (12 scenarios plus the global invariant). Results are in
+NP-P2-S6A-database-implementation.txt §11.
+
+Required invariant: turning DNC on cannot leave an effective grant active, and clearing DNC cannot revive a previous
+grant. VERIFIED.
+
+5. REFINEMENT R3 — read_only AND SUBSCRIPTION-INDEPENDENT OPT-OUT
+----------------------------------------------------------------
+- Preserved OD-S6-11 A. In read_only:
+  - Admins read state and history;
+  - grants → ZW001; revocations → ZW001;
+  - a DNC change through plus_update_contact → ZW001;
+  - grant-holding Dispatchers lose read (ZW002).
+- No helper, RPC or exception bypasses read_only. Tested in A9 / A10.
+- Operational limitation: while Plus is read_only (expired, cancelled, elapsed trial or period), a customer's request
+  to stop contact cannot be recorded in Plus. Nothing is sent in that state, because no Plus sending exists at all.
+- MANDATORY NP-P4 PREREQUISITE (recorded in ZD-239, access model §6.5b, design §4.1):
+  - Before any Plus outbound communication is enabled, a separately reviewed, subscription-independent opt-out
+    mechanism must exist.
+  - It must remain usable when Plus is expired, cancelled, read_only or otherwise unable to accept CRM writes.
+  - Not built in S6-A; no read_only write exception was created.
+
+STOP: S6-A implementation evidence is in NP-P2-S6A-database-implementation.txt.

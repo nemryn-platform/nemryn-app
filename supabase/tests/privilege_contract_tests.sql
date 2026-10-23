@@ -70,7 +70,9 @@ c_tables(tbl) as (values
   ('plus_request_attributions'),
   -- NP-P2-S5-S1 estimates & quotes (SELECT via RLS plus_can_read; writes through RPCs only) + number allocator (class A)
   ('plus_quotes'),
-  ('plus_quote_counters')
+  ('plus_quote_counters'),
+  -- NP-P2-S6-A consent ledger (append-only; column-level SELECT via RLS plus_can_read; writes through RPCs only)
+  ('plus_communication_consents')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -128,7 +130,22 @@ c_auth_col(tbl, priv, col) as (values
   ('passengers', 'UPDATE', 'phone'),
   ('passengers', 'UPDATE', 'status'),
   ('vehicles', 'UPDATE', 'label'),
-  ('vehicles', 'UPDATE', 'status')
+  ('vehicles', 'UPDATE', 'status'),
+  -- NP-P2-S6-A (ZD-240): column-level SELECT on the consent ledger; address_digest and idempotency_key are NOT granted
+  ('plus_communication_consents', 'SELECT', 'captured_at'),
+  ('plus_communication_consents', 'SELECT', 'captured_via'),
+  ('plus_communication_consents', 'SELECT', 'channel'),
+  ('plus_communication_consents', 'SELECT', 'consent_text_version'),
+  ('plus_communication_consents', 'SELECT', 'contact_id'),
+  ('plus_communication_consents', 'SELECT', 'corrects_consent_id'),
+  ('plus_communication_consents', 'SELECT', 'evidence_note'),
+  ('plus_communication_consents', 'SELECT', 'id'),
+  ('plus_communication_consents', 'SELECT', 'organization_id'),
+  ('plus_communication_consents', 'SELECT', 'purpose'),
+  ('plus_communication_consents', 'SELECT', 'recorded_at'),
+  ('plus_communication_consents', 'SELECT', 'recorded_by'),
+  ('plus_communication_consents', 'SELECT', 'seq'),
+  ('plus_communication_consents', 'SELECT', 'status')
 ),
 -- service_role: the only direct table privilege the server needs (website-intake CORS lookup)
 c_service_tbl(tbl, priv) as (values ('request_intake_integrations', 'SELECT')),
@@ -362,7 +379,17 @@ c_fn(sig, roles) as (values
   ('plus_get_quote(uuid,uuid)', 'u'),
   -- NP-P2-S5-S3A: organization-wide quote directory reads (Plus read; authenticated EXECUTE only)
   ('plus_list_organization_quotes(uuid,text,text,text,integer,integer)', 'u'),
-  ('plus_quote_directory_summary(uuid)', 'u')
+  ('plus_quote_directory_summary(uuid)', 'u'),
+  -- NP-P2-S6-A consent ledger: internals (no client EXECUTE) + Plus read / write RPCs (authenticated only)
+  ('_plus_consents_append_only()', ''),
+  ('_plus_consent_address_digest(uuid,text,text,text)', ''),
+  ('_plus_effective_consent(uuid,uuid,text,text)', ''),
+  ('_plus_append_consent(text,uuid,uuid,text,text,text,timestamp with time zone,text,uuid,text)', ''),
+  ('_plus_consents_revoke_for_dnc(uuid,uuid)', ''),
+  ('plus_get_contact_consents(uuid,uuid)', 'u'),
+  ('plus_list_contact_consent_events(uuid,uuid,integer,integer)', 'u'),
+  ('plus_record_consent(uuid,uuid,text,text,text,timestamp with time zone,text,uuid,text)', 'u'),
+  ('plus_revoke_consent(uuid,uuid,text,text,text,timestamp with time zone,text,uuid,text)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

@@ -2,7 +2,7 @@
 
 **Work item:** NP-P0-A02 · **Date:** 2026-10-13
 **Revised:** NP-P0-A02R (2026-10-13). PD-02, PD-03, PD-04, PD-08 and PD-12 were changed; PD-16 to PD-20 were added.
-**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14); PD-08 Q1 → ZD-212 to ZD-220 (NP-P2-S5-S1, 2026-10-18; Q2 and Q3 still proposed). All others have no ZD number yet.
+**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14); PD-08 Q1 → ZD-212 to ZD-220 (NP-P2-S5-S1, 2026-10-18; Q2 and Q3 still proposed); PD-19 → ZD-228 (NP-P2-S6-A, 2026-10-23). All others have no ZD number yet. PD-10 and PD-11 remain OPEN.
 On approval, each accepted entry is copied into the register as the next ZD number, with `Status: CONFIRMED`.
 
 Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in the NP-P0-A02 brief. They still need formal recording.
@@ -182,7 +182,8 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
 
 - **Category:** Privacy
 - **Decision:** `plus_communication_consents` ships in P2-S6, before the web inquiry form that captures consent. Recording only; sending stays NP-P4. A follow-up consent never implies marketing consent.
-- **Status:** PROPOSED
+- **Status:** **OWNER-APPROVED — RECORDED AS ZD-228** (NP-P2-S6-A decision lock, 2026-10-23). The S6 design decisions OD-S6-1 to OD-S6-14 are recorded as ZD-229 to ZD-242. History: PROPOSED.
+- **Does not close:** PD-10 or PD-11. Real consent data stays unauthorized until both close (ZD-241).
 
 ### PD-20 — Additive Core constraint for member grants
 

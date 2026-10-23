@@ -245,6 +245,10 @@ test("O1 source rules: the stage comes from the existing plus_get_quote row; the
   assert.doesNotMatch(block, /print:hidden/);
   assert.equal((page.match(/getQuote\(/g) ?? []).length, 2, "the quote and (superseded only) its successor -- no extra read");
   assert.doesNotMatch(page, /getOpportunity|plus_get_opportunity/);
+  // O1 shipped no migration: the quote schema still ends at 20261021100000, and no later migration touches quotes
+  // (NP-P2-S6-A added 20261023100000_plus_communication_consents.sql, which is unrelated to quotes)
   const migrations = readdirSync(new URL("../../../supabase/migrations/", import.meta.url).pathname).sort();
-  assert.equal(migrations.at(-1), "20261021100000_plus_quote_lifecycle_activity.sql");
+  assert.ok(migrations.includes("20261021100000_plus_quote_lifecycle_activity.sql"));
+  const later = migrations.filter((m) => m > "20261021100000_plus_quote_lifecycle_activity.sql");
+  for (const m of later) assert.doesNotMatch(src(`supabase/migrations/${m}`), /plus_quotes|plus_get_quote|plus_quote_/, m);
 });

@@ -201,6 +201,22 @@ create policy <t>_select_plus on … for select to authenticated
     A follow-up consent never implies marketing consent.
 4. **SMS** additionally requires a TCPA/10DLC review, a provider decision and a BAA determination before activation.
 5. **Revocation** takes effect on the next send check (a ledger row, no cache).
+5b. **Consent ledger rules (NP-P2-S6, ZD-228 … ZD-242):**
+    - **Recorded consent** = the latest (`seq`) row per (contact, channel, purpose).
+    - **Effective consent** (`_plus_effective_consent`, internal) is evaluated in order:
+      - not found / redacted;
+      - archived → suppressed;
+      - `do_not_contact` → suppressed;
+      - no row or revoked → no consent on record;
+      - grant for a different address → `address_changed`;
+      - otherwise `consent_on_record`.
+    - **Lawful permission** is never computed. "Consent on record" is a necessary input to the NP-P4 send check, not permission.
+    - **DNC transitions:**
+      - switching `do_not_contact` on appends a system revocation for every granted pair, in the same transaction;
+      - while it is on, grants are refused and revocations accepted;
+      - clearing it revives nothing.
+    - **read_only:** Admins read state and history; every consent write and every DNC change gives ZW001 (ZD-239).
+    - **NP-P4 prerequisite:** before any Plus outbound communication, a separately reviewed, subscription-independent opt-out mechanism must exist that works in `read_only`, `expired`, `cancelled` or any state that refuses CRM writes. S6 creates no read_only exception.
 5a. **Growth Agent boundary (NP-P2-S2).** The supervised Growth Agent is **not** a sending system.
     - It detects deterministically in the database and proposes internal follow-up tasks only.
     - Staff approve, dismiss or mark not relevant. Approval creates one `plus_tasks` row after revalidating the situation.
@@ -264,6 +280,7 @@ Harness: the existing `pg_temp.try_as(role, uid, stmt)` pattern (`supabase/tests
 | T18 | Public intake unchanged: the existing `public_request_intake_tests.sql`, `public_intake_rate_limit_tests.sql` and concurrency scripts pass with no diff to any intake function | pass |
 | T19 | Privilege contract: every new table/function listed; `privilege_contract_tests.sql` | 0 violations |
 | T20 | Append-only: no RPC can update or delete `plus_activities` / `plus_communication_consents` rows | no such function in the contract |
+| T33 | Consent ledger (NP-P2-S6-A; `plus_communication_consents_tests.sql`, `plus_communication_consents_concurrency_test.sh`): append-only triggers for every role; column privileges hide `address_digest` / `idempotency_key`; tenant / role / state matrix; DNC precedence and switch-on revocations; no revival; address binding; `seq` ordering and stale evidence; idempotency; corrections; minimised audit; no side effects | as stated |
 | T21 | Grants: an Admin grants write to a Dispatcher → Dispatcher reads/writes; revoke → ZW002; grant to a Driver membership or a foreign membership → ZW006 / ZW002; a Dispatcher cannot grant | as stated |
 | T22 | Grant holder in `read_only` cannot export; Admin can | as stated |
 | T23 | Inquiry abuse: direct anon/authenticated call to `submit_plus_inquiry` → permission denied; unknown, draft, disabled, suspended-org, read-only and locked forms → identical 404; extra or forbidden keys (organization_id, status, contact_id) → 400; rate limit trips after the threshold; replay with the same key → one row | as stated |

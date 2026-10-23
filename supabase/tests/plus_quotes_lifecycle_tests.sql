@@ -123,7 +123,9 @@ create function pg_temp.nacts() returns bigint language sql as $$ select count(*
 create function pg_temp.naudit() returns bigint language sql as $$ select count(*) from public.audit_events where entity_type = 'plus_quote' $$;
 create function pg_temp.side() returns text language sql as $$
   select (select count(*) from public.transportation_requests) || '/' || (select count(*) from public.trips) || '/' || (select count(*) from public.passengers)
-    || '/' || (select count(*) from public.trip_assignments) || '/' || (select count(*) from public.notification_events) || '/' || (select count(*) from public.plus_tasks);
+    || '/' || (select count(*) from public.trip_assignments) || '/' || (select count(*) from public.notification_events) || '/' || (select count(*) from public.plus_tasks)
+    -- NP-P2-S6-A: D5 "creates no consent record" is now literally checked against the consent ledger
+    || '/' || (select count(*) from public.plus_communication_consents);
 $$;
 create temp table t_ctx (name text primary key, val text);
 insert into t_ctx values ('side0', pg_temp.side());

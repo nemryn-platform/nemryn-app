@@ -1,0 +1,187 @@
+NP-P2-S6A — FINAL PRE-PR SECURITY CHECK
+======================================
+Date: 2026-10-23.
+Branch: np-p2-s6a-consent-ledger-foundation (HEAD = origin/main 64396db, plus the uncommitted S6-A work).
+Mode: inspection of the actual source, plus the catalog of the isolated stack (supabase_db_NemrynS1Iso).
+- No Git operation, production access, migration or deployment.
+- Approved product behaviour is unchanged.
+The one code change made: an isolation guard in the concurrency test harness (finding 1).
+
+Files inspected:
+- supabase/tests/plus_communication_consents_concurrency_test.sh
+- supabase/migrations/20261023100000_plus_communication_consents.sql
+- every other S6-A file, for the credential scan only.
+
+RESULT SUMMARY
+--------------
+| # | Check | Before | After |
+|---|---|---|---|
+| 1 | The concurrency script fails closed unless the target is NemrynS1Iso | FAIL: defaulted to supabase_db_ZenWard, accepted any container | PASS (guard added, verified) |
+| 2 | No production Supabase database can be targeted | PASS (docker exec only), now also enforced | PASS |
+| 3 | replica role only for isolated fixture cleanup | PASS | PASS (now also behind the guard and id checks) |
+| 4 | The harness cannot remove existing or shared records | Conditional (scoped by fresh ids, but runnable against the shared dev stack) | PASS |
+| 5 | SECURITY DEFINER: safe search_path, restricted EXECUTE | PASS | PASS |
+| 6 | Table / column privileges match ZD-240 | PASS | PASS |
+| 7 | No credentials or keys in tracked files | PASS | PASS |
+| 8 | The migration doesn't modify unrelated Core objects | PASS | PASS |
+
+1. CONCURRENCY HARNESS ISOLATION (FINDING, FIXED)
+------------------------------------------------
+Finding:
+- The script copied the repository's existing concurrency-script convention: CONTAINER defaulted to
+  supabase_db_ZenWard, and NEMRYN_TEST_DB_CONTAINER accepted any value.
+- Run without the variable, it would therefore have written and then cleaned up throwaway rows in the owner's shared
+  ZenWard dev database. It did not fail closed.
+- The fictional-seed fingerprint alone cannot distinguish the two local stacks: both return 2/1/0, because both use
+  the same seed. So the container identity itself must be verified.
+
+Guard added (before ANY write; exit code 2; no override variable):
+- (a) The container must equal supabase_db_NemrynS1Iso.
+- (b) The database must equal "postgres".
+- (c) DOCKER_HOST must be unset, and the active Docker context endpoint must be a local unix:// socket.
+- (d) docker inspect must show the label com.supabase.cli.project = NemrynS1Iso, and State.Running = true.
+- (e) The fictional seed fingerprint must be 2/1/0, the same fingerprint as tests/e2e/plus-quotes/_config.mjs.
+- (f) The throwaway organization and both throwaway users must be freshly created, valid UUIDs, or the script refuses.
+  cleanup() returns without doing anything unless all three ids are valid UUIDs. This prevents an empty or garbled id
+  from ever reaching a DELETE.
+The header comment documents the guard.
+
+Verification (the guard must refuse and write nothing):
+
+| Invocation | Result |
+|---|---|
+| NEMRYN_TEST_DB_CONTAINER=supabase_db_ZenWard | REFUSED, rc 2 |
+| NEMRYN_TEST_DB_CONTAINER=some_remote_db | REFUSED, rc 2 |
+| DOCKER_HOST=tcp://db.example.invalid:2376 | REFUSED, rc 2 |
+| NEMRYN_TEST_DB=other | REFUSED, rc 2 |
+
+Organization counts before and after the four refused runs: ZenWard 4 → 4; isolated 3 → 3. Nothing was written.
+
+Positive rerun on the isolated stack (default target, no variables): rc 0, 14 / 14 PASS, "ALL PASS".
+- Cleanup verified afterwards:
+  - 0 plus_communication_consents rows;
+  - organizations back to the seed 3;
+  - 0 s6-conc-* users.
+
+2. PRODUCTION CANNOT BE TARGETED
+--------------------------------
+- The script reaches Postgres only through `docker exec -i <local container> psql -U postgres`. It reads no
+  connection string, URL, host, port, environment file or key, so a hosted Supabase database is not addressable.
+- The guard additionally pins the container name and Supabase CLI project label, refuses any remote Docker endpoint
+  (DOCKER_HOST or a non-unix context), and verifies the fictional seed.
+- The new SQL suite (plus_communication_consents_tests.sql) is a single transaction ending in ROLLBACK, the
+  repository's suite convention.
+  - Its header shows the repository's standard local docker-exec invocation.
+  - It never commits; it was run against NemrynS1Iso in this phase.
+  - No production command line exists for it.
+  - Even a mistaken run against a local stack leaves no data, because of the rollback.
+
+3. session_replication_role = replica
+-------------------------------------
+- It is used exactly once in the repository, in cleanup() of this script (lines 57–59). It is set, then one DELETE,
+  then reset to origin, in one psql session that ends immediately.
+- The DELETE is scoped to `plus_communication_consents WHERE organization_id = '<throwaway org id>'`. That
+  organization is created by the same run (from a fresh row in organizations) and validated as a UUID.
+- It is reachable only after the guard passes, i.e. only on NemrynS1Iso. It exists only because the approved
+  append-only triggers (correctly) refuse DELETE for every role.
+- No migration, product function or other test uses it.
+
+4. NO EXISTING OR SHARED RECORDS CAN BE REMOVED
+-----------------------------------------------
+- Every cleanup DELETE (consents, audit_events, plus_activities, plus_contacts, organization_modules, memberships,
+  organizations, auth.users) is keyed only to:
+  - ORG: the organization this run inserted;
+  - AD1 / AD2: users this run generated with gen_random_uuid() and inserted with s6-conc-*@example.test emails.
+- No DELETE uses a pattern, a range, a seed id or an unscoped predicate.
+- The cleanup is skipped unless all three ids are valid UUIDs.
+- The script can't run on the shared ZenWard stack or any non-isolated target.
+- Seed records (Org A / Org B, the fixture users) and the Plus demo fixture are never touched. The positive rerun left
+  the organization count at the seed 3.
+
+5. SECURITY DEFINER FUNCTIONS (catalog of the migrated isolated database)
+------------------------------------------------------------------------
+| Function | DEFINER | search_path | owner | anon | authenticated | service_role | PUBLIC |
+|---|---|---|---|---|---|---|---|
+| plus_get_contact_consents(uuid,uuid) | yes | public, pg_temp | postgres | no | YES | no | no |
+| plus_list_contact_consent_events(uuid,uuid,integer,integer) | yes | public, pg_temp | postgres | no | YES | no | no |
+| plus_record_consent(uuid,uuid,text,text,text,timestamptz,text,uuid,text) | yes | public, pg_temp | postgres | no | YES | no | no |
+| plus_revoke_consent(same) | yes | public, pg_temp | postgres | no | YES | no | no |
+| _plus_append_consent(text,…) | yes | public, pg_temp | postgres | no | no | no | no |
+| _plus_effective_consent(uuid,uuid,text,text) | yes | public, pg_temp | postgres | no | no | no | no |
+| _plus_consents_revoke_for_dnc(uuid,uuid) | yes | public, pg_temp | postgres | no | no | no | no |
+| _plus_consent_address_digest(uuid,text,text,text) | no (invoker) | public, pg_temp | postgres | no | no | no | no |
+| _plus_consents_append_only() (trigger) | no (invoker) | public, pg_temp | postgres | no | no | no | no |
+| plus_update_contact(…11 args) (replaced body) | yes | public, pg_temp | postgres | no | YES (unchanged) | no | no |
+
+- pg_temp is last in every search_path, so temporary objects cannot shadow names.
+- Object references in the bodies are schema-qualified (public., auth.uid(), extensions.gen_random_uuid()). The only
+  unqualified calls are pg_catalog built-ins (sha256, convert_to, encode, regexp_replace, btrim, now), which pg_catalog
+  resolves first.
+- No dynamic SQL (EXECUTE) is used in any new function.
+- Every write RPC starts with _require_plus_write. The internals have no client EXECUTE (also asserted by suite test
+  S8 and privilege-contract checks 13–18: 0 violations).
+
+6. TABLE AND COLUMN PRIVILEGES (ZD-240)
+--------------------------------------
+- Table-level privileges for anon / authenticated / service_role (SELECT, INSERT, UPDATE, DELETE, TRUNCATE,
+  REFERENCES, TRIGGER): NONE.
+- authenticated column SELECT: id, organization_id, contact_id, seq, channel, purpose, status, captured_via,
+  captured_at, evidence_note, corrects_consent_id, consent_text_version, recorded_by, recorded_at (14 columns).
+- Not granted: address_digest, idempotency_key.
+- No column INSERT or UPDATE for any role. anon and service_role have no column privilege.
+- RLS is enabled. The single policy is plus_communication_consents_select_plus (SELECT, USING
+  plus_can_read(organization_id)).
+- Append-only triggers: BEFORE UPDATE OR DELETE (row) and BEFORE TRUNCATE (statement) → ZW004 for every role.
+This matches ZD-240 and the privilege-contract c_auth_col rows (contract: 0 violations).
+
+7. CREDENTIALS / KEYS
+---------------------
+- Scanned every S6-A file (migration, both new tests, the modified tests, the unit test, the S6 reports, the design,
+  the evidence directory, and the updated canonical docs) for JWTs (eyJ…), Supabase secret / publishable keys,
+  service-role and anon key variables, Stripe-style keys, PEM blocks, password literals, postgres:// URLs with
+  credentials, *.supabase.co hosts and api_key assignments.
+- One match: a pre-existing NEGATIVE assertion in quotes-print-followup.test.mjs:138. It checks that the print page
+  does NOT contain SUPABASE_SERVICE. It is not a credential.
+- The concurrency script inserts throwaway auth.users rows with encrypted_password = 'x', a non-functional placeholder
+  (the same convention as the existing scripts). It is not a credential.
+- The evidence files contain no local paths, passwords, tokens or keys.
+- The only tracked environment file is .env.example. All its values are empty, and it is unchanged by S6-A.
+- .env.sim.local is git-ignored. ~/NemrynS1Iso/.env.isolated.local is outside the repository.
+- No credential was read or printed during this check.
+
+8. NO UNRELATED CORE OBJECTS MODIFIED
+-------------------------------------
+- Every DDL / DCL statement in the migration targets the new objects:
+  - plus_communication_consents and its constraints, indexes, triggers, RLS, policy and grants;
+  - plus_consent_write_result;
+  - the nine new functions;
+  - the CREATE OR REPLACE of plus_update_contact (Plus).
+- The data statements inside function bodies are:
+  - INSERTs into public.audit_events (the established Plus audit pattern);
+  - the original plus_update_contact statements: UPDATE public.plus_contacts and the owner_changed INSERT into
+    public.plus_activities. These are byte-identical to 20261014100000 apart from the inserted DNC block (verified by
+    diff in the implementation report).
+- No ALTER, DROP, GRANT or REVOKE on any Core table or function. No change to memberships, organizations, Requests,
+  Trips, Passengers, Drivers, intake or notification objects. No change to any RLS policy outside the new table.
+- Cross-check: the full SQL regression found no new failure in any Core suite, and QA2 core-requests / trips-dispatch
+  / records passed 25 / 44 / 28.
+
+CHANGE MADE IN THIS CHECK
+-------------------------
+supabase/tests/plus_communication_consents_concurrency_test.sh:
+- the isolation guard (§1);
+- UUID validation of the throwaway ids;
+- the cleanup short-circuit;
+- the header documentation.
+No other file was changed. No product, migration or approved behaviour changed.
+
+VERDICT
+-------
+PASS. The single finding (the harness default target) is fixed and verified, and the consent concurrency suite passes
+14 / 14 under the guard. S6-A is clear for the owner's PR, from a security standpoint.
+
+Note for the owner (pre-existing, outside S6-A, not changed): the OTHER supabase/tests/*_concurrency_test.sh scripts
+still default to supabase_db_ZenWard, the repository's historical convention. They create and remove only their own
+throwaway fixtures, but they lack this guard. Applying the same guard to them is a separate, optional hardening.
+
+STOP.
