@@ -5,10 +5,12 @@
 - OD-S6-1 … 14 → ZD-229 … ZD-242. Approved choices: A, A, A, A, B, A, A, B, B, A, A, A, A, A.
 - The three mandatory refinements R1 to R3 are incorporated (§2.6, §9, §4.1).
 - Slices:
-  - S6-A (database) is merged (PR #30);
-  - S6-B (UI) is implemented locally (NP-P2-S6B-consent-preferences-ui-implementation.txt), with the implementation
-    notes in §5.9;
-  - S6-C (release) is not started.
+  - S6-A (database) merged (PR #30); migration 93 applied to production 2026-10-23 (NP-P2-S6C2-O2-production-migration.txt);
+  - S6-B (UI) merged (PR #31) and deployed (NP-P2-S6B-consent-preferences-ui-implementation.txt; implementation notes §5.9);
+  - S6-C released: readiness, backup and migration (S6-C1 / C2 / O1 / O2), synthetic production smoke PASS (S6-C3),
+    closeout NP-P2-S6C4-final-production-closeout.txt.
+  - Status: P2-S6 COMPLETE — PRODUCTION DEPLOYED, SYNTHETIC TESTING VERIFIED, REAL-CUSTOMER USE RESTRICTED (PD-10 /
+    PD-11 open; ZD-241).
 - The history of the proposal is preserved in [NP-P2-S6-decision-review.txt](../reports/NP-P2-S6-decision-review.txt); the lock is in [NP-P2-S6-decision-lock.txt](../reports/NP-P2-S6-decision-lock.txt).
 - Where this document says "[OD-S6-n]", the approved option applies. Text describing a rejected option is historical.
 
