@@ -26,6 +26,7 @@ import { AddressBook, ClockCounterClockwise, Handshake } from "@phosphor-icons/r
 import { isQuoteActivity, quoteActivityLine } from "@/lib/plus/quotes-core";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
+import { ContactConsentsPanel } from "@/components/growth/ContactConsentsPanel";
 import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
 import { getServiceOfferings } from "@/lib/operations/organization-services";
 import { serviceRequestedOptions } from "@/lib/operations/log-request-options";
@@ -81,7 +82,11 @@ export default async function ContactDetailPage({
   const tz = context.organizationTimezone;
   const archived = contact.status === "archived";
   const canWrite = canWriteGrowth(plus.state, plus.capability) && !archived;
-  const saved = (await searchParams).saved;
+  const query = await searchParams;
+  const saved = query.saved;
+  // NP-P2-S6-B: ?consentHistory=N opens the consent history at page N (1-based); absent keeps it collapsed.
+  const consentHistoryRaw = typeof query.consentHistory === "string" ? Number.parseInt(query.consentHistory, 10) : NaN;
+  const consentHistoryPage = Number.isInteger(consentHistoryRaw) && consentHistoryRaw >= 1 && consentHistoryRaw <= 10_000 ? consentHistoryRaw : null;
   const savedMessage = typeof saved === "string" ? SAVED_MESSAGES[saved] : undefined;
   // NP-P2-S4.1-S2 rebooking "Service requested (optional)" (OD-S3): the organization's configured Services, or all nine
   // when none are configured; a FAILED read is never "none configured" (only "Not specified", with a short note).
@@ -163,6 +168,15 @@ export default async function ContactDetailPage({
         />
       </Panel>
 
+      {/* NP-P2-S6-B: Communication preferences, directly after Details (design section 5.1) */}
+      <ContactConsentsPanel
+        organizationId={context.organizationId}
+        timezone={tz}
+        contact={{ id: contact.id, displayName: contact.displayName, phone: contact.phone, email: contact.email, doNotContact: contact.doNotContact, archived }}
+        canWritePlus={canWriteGrowth(plus.state, plus.capability)}
+        plusReadOnly={isPlusReadOnly(plus.state)}
+        historyPage={consentHistoryPage}
+      />
       <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "contact", id: contact.id, label: contact.displayName }} canWrite={canWrite} />
       <LinkedRequestsPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "contact", id: contact.id }} />
 

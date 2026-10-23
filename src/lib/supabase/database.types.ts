@@ -936,6 +936,85 @@ export type Database = {
           },
         ]
       }
+      plus_communication_consents: {
+        Row: {
+          address_digest: string | null
+          captured_at: string
+          captured_via: string
+          channel: string
+          consent_text_version: string | null
+          contact_id: string
+          corrects_consent_id: string | null
+          evidence_note: string | null
+          id: string
+          idempotency_key: string
+          organization_id: string
+          purpose: string
+          recorded_at: string
+          recorded_by: string
+          seq: number
+          status: string
+        }
+        Insert: {
+          address_digest?: string | null
+          captured_at: string
+          captured_via: string
+          channel: string
+          consent_text_version?: string | null
+          contact_id: string
+          corrects_consent_id?: string | null
+          evidence_note?: string | null
+          id?: string
+          idempotency_key: string
+          organization_id: string
+          purpose: string
+          recorded_at?: string
+          recorded_by: string
+          seq?: never
+          status: string
+        }
+        Update: {
+          address_digest?: string | null
+          captured_at?: string
+          captured_via?: string
+          channel?: string
+          consent_text_version?: string | null
+          contact_id?: string
+          corrects_consent_id?: string | null
+          evidence_note?: string | null
+          id?: string
+          idempotency_key?: string
+          organization_id?: string
+          purpose?: string
+          recorded_at?: string
+          recorded_by?: string
+          seq?: never
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_communication_consents_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plus_consents_contact_fkey"
+            columns: ["contact_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_consents_corrects_fkey"
+            columns: ["corrects_consent_id", "organization_id", "contact_id"]
+            isOneToOne: false
+            referencedRelation: "plus_communication_consents"
+            referencedColumns: ["id", "organization_id", "contact_id"]
+          },
+        ]
+      }
       plus_contacts: {
         Row: {
           contact_kind: string
@@ -2584,6 +2663,40 @@ export type Database = {
         }
       }
       _plus_agent_threshold: { Args: { p_key: string }; Returns: number }
+      _plus_append_consent: {
+        Args: {
+          p_captured_at: string
+          p_captured_via: string
+          p_channel: string
+          p_contact_id: string
+          p_corrects_consent_id: string
+          p_evidence_note: string
+          p_idempotency_key: string
+          p_organization_id: string
+          p_purpose: string
+          p_status: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_consent_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_consent_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _plus_consent_address_digest: {
+        Args: {
+          p_channel: string
+          p_email: string
+          p_organization_id: string
+          p_phone: string
+        }
+        Returns: string
+      }
+      _plus_consents_revoke_for_dnc: {
+        Args: { p_contact_id: string; p_organization_id: string }
+        Returns: number
+      }
       _plus_contact_matches: {
         Args: {
           p_display_name: string
@@ -2601,6 +2714,15 @@ export type Database = {
       }
       _plus_core_request_source: {
         Args: { p_opportunity_source: string }
+        Returns: string
+      }
+      _plus_effective_consent: {
+        Args: {
+          p_channel: string
+          p_contact_id: string
+          p_organization_id: string
+          p_purpose: string
+        }
         Returns: string
       }
       _plus_entitlement_state: {
@@ -3952,6 +4074,21 @@ export type Database = {
           updated_at: string
         }[]
       }
+      plus_get_contact_consents: {
+        Args: { p_contact_id: string; p_organization_id: string }
+        Returns: {
+          captured_at: string
+          captured_via: string
+          channel: string
+          effective_status: string
+          is_correction: boolean
+          latest_consent_id: string
+          purpose: string
+          recorded_at: string
+          recorded_by_name: string
+          recorded_status: string
+        }[]
+      }
       plus_get_opportunity: {
         Args: { p_opportunity_id: string; p_organization_id: string }
         Returns: {
@@ -4194,6 +4331,27 @@ export type Database = {
           quote_status: string
           recorded_at: string
           related_quote_number: number
+          total_count: number
+        }[]
+      }
+      plus_list_contact_consent_events: {
+        Args: {
+          p_contact_id: string
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+        }
+        Returns: {
+          captured_at: string
+          captured_via: string
+          channel: string
+          corrects_consent_id: string
+          evidence_note: string
+          id: string
+          purpose: string
+          recorded_at: string
+          recorded_by_name: string
+          status: string
           total_count: number
         }[]
       }
@@ -4495,6 +4653,26 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_record_consent: {
+        Args: {
+          p_captured_at: string
+          p_captured_via: string
+          p_channel: string
+          p_contact_id: string
+          p_corrects_consent_id: string
+          p_evidence_note: string
+          p_idempotency_key: string
+          p_organization_id: string
+          p_purpose: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_consent_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_consent_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_record_quote_response: {
         Args: {
           p_expected_updated_at: string
@@ -4536,6 +4714,26 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_quote_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_revoke_consent: {
+        Args: {
+          p_captured_at: string
+          p_captured_via: string
+          p_channel: string
+          p_contact_id: string
+          p_corrects_consent_id: string
+          p_evidence_note: string
+          p_idempotency_key: string
+          p_organization_id: string
+          p_purpose: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_consent_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_consent_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -5338,6 +5536,12 @@ export type Database = {
         opportunity_id: string | null
         request_state: string | null
         changed: boolean | null
+      }
+      plus_consent_write_result: {
+        consent_id: string | null
+        changed: boolean | null
+        recorded_status: string | null
+        effective_status: string | null
       }
       plus_contact_write_result: {
         contact_id: string | null

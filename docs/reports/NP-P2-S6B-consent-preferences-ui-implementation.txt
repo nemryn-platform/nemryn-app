@@ -1,0 +1,244 @@
+NP-P2-S6-B — COMMUNICATION PREFERENCES UI — IMPLEMENTATION AND VERIFICATION
+==========================================================================
+Date: 2026-10-23.
+Mode: owner-approved local application implementation.
+- Isolated stack only (~/NemrynS1Iso, app :3100, fictional seed).
+- No Git write, no production access, no migration, no deployment, no outbound communication.
+Note on the brief: the pasted brief ended inside Phase 9 ("Widths: 1440 -"). The remaining phases were completed on
+the conventions of earlier slices: widths 1440 / 1024 / 768 / 390; axe; keyboard; the QA2 and Quotes strict
+regressions; this report; STOP.
+
+1. BASELINE (PHASE 0)
+---------------------
+- Branch np-p2-s6b-consent-preferences-ui. HEAD = origin/main = 6af7924 ("Merge pull request #30 …
+  np-p2-s6a-consent-ledger-foundation"). The tracked tree was clean at the start.
+- S6-A is merged:
+  - supabase/migrations/20261023100000_plus_communication_consents.sql is present and byte-identical to the isolated
+    copy;
+  - 93 migrations.
+- The isolated DB is at 20261023100000 / 93, with plus_communication_consents present.
+- Read before implementing: the approved design, the decision lock, and the S6-A implementation and security reports.
+  ZD-228 … ZD-242 are present in the decision register (15 entries).
+- Inspected:
+  - Contact Detail (src/app/operations/growth/contacts/[contactId]/page.tsx) and the contact server actions;
+  - SubjectTasksPanel (the server-panel pattern), ContactActions (the dialog / action pattern);
+  - the UI kit: Panel, SectionHeader, StatusBadge, AttentionState, EmptyState, Dialog, RadioGroup, Checkbox, Input,
+    Textarea, Button variants.
+
+2. WHAT WAS BUILT
+-----------------
+New:
+- src/lib/plus/consents-core.ts (pure):
+  - closed sets (channels, purposes, STAFF methods only);
+  - the approved state labels and badge categories;
+  - copy constants;
+  - validation (mirrors the RPC);
+  - error mapping;
+  - date helpers.
+  It holds a forbidden-phrase list ("allowed to contact", "approved to send", "legally permitted", "opted in",
+  "can contact") that the tests apply to every label.
+- src/lib/plus/consents-core.test.mjs: 8 tests.
+- src/lib/plus/consents.ts (server-only reads, through the per-request cookie client; never the service role):
+  - getContactConsents → plus_get_contact_consents;
+  - listContactConsentEvents → plus_list_contact_consent_events.
+- src/components/growth/ContactConsentsPanel.tsx (server): loads the state and one history page; computes the write
+  rules from the server-resolved capability.
+- src/components/growth/ConsentPreferences.tsx (client): the panel, the six-cell table, the history, and the
+  Record / Revoke / Correct dialog.
+- tests/e2e/plus-consents/consents.e2e.mjs: 49 browser checks. It reuses the guarded plus-quotes config, which refuses
+  any target other than the isolated stack.
+
+Modified:
+- src/app/operations/growth/contacts/[contactId]/page.tsx: the panel is inserted after Details and before Open tasks;
+  ?consentHistory=N opens the history at page N. Nothing else on the page changed.
+- src/app/operations/growth/contacts/actions.ts: + recordConsentAction (§4).
+- src/lib/supabase/database.types.ts: regenerated from the S6-A schema (`supabase gen types --local`). The diff is
+  purely additive: the consent table, type and RPCs.
+- src/lib/plus/agent-core.ts and agent-core.test.mjs: the ZD-237 caveat copy (§6).
+- docs/product/plus-product-spec.md and docs/security/plus-access-model.md: the caveat text updated to ZD-237.
+- docs/product/NP-P2-S6-consent-ledger-design.md: the S6-B status and §5.9 implementation notes.
+- package.json: + "test:e2e:consents".
+
+Not touched:
+- supabase/** (no migration, RPC or test change);
+- public/brand/**, design tokens, other Growth / Core pages;
+- the plus_activities timeline (consent events are never written there; ZD-236; checked by E2E A15).
+
+3. UI (PHASES 1, 2, 6)
+----------------------
+- Placement: directly after Details and before Open tasks (checked by DOM order). Header actions, details and editing,
+  tasks, linked requests, opportunities, timeline and breadcrumbs are unchanged.
+- Panel anatomy:
+  - Panel surface="raised"; data-testid="contact-consents";
+  - SectionHeader "Communication preferences" (h2) with the Phosphor ChatCircleText icon on the accent tone;
+  - description: "What this person told your team about being contacted. A recorded consent isn't permission to
+    send, and Nemryn sends nothing."
+- State: a semantic table (sr-only caption; channel row headers; purpose column headers) with all six cells: Email /
+  Text messages (SMS) / Phone calls × Service follow-up / Marketing.
+  - Each cell has a StatusBadge with the approved label: Consent recorded, No record, Revoked, Recorded for a previous
+    address, Suppressed — do not contact, Contact archived.
+  - The meta line shows the method, the capture date and "by <staff>", and "correction" where relevant.
+  - Recorded and effective states are both exposed (as data attributes, for tests).
+  - "Consent recorded" is evidence wording. No label says allowed / approved / permitted / opted in (unit and E2E
+    tests).
+- Footnote: "The preferred channel in Details is a convenience for your team. It isn't consent."
+- Empty state (no record and DNC off): the V2 EmptyState, "No communication preferences recorded. Nemryn never
+  assumes consent…"
+- Error state: a critical AttentionState with reload guidance, distinct from the empty state.
+- History:
+  - a native <details>, collapsed by default, with "History (n)" from total_count;
+  - newest first;
+  - each entry shows the channel · purpose · Granted / Revoked; the method and capture date; "recorded <time> by
+    <staff>"; the evidence note (ZD-242); "Corrects an earlier entry" / "Corrected"; and for do_not_contact rows,
+    "Recorded automatically when Do not contact was switched on.";
+  - 20 entries per page through the RPC (?consentHistory=N), with Newer / Older links; a page past the end falls back
+    to the newest page.
+- Never shown: address_digest, idempotency_key, internal function names. E2E A6 scans the full page HTML for the stored
+  digest and key.
+
+4. RECORD / REVOKE / CORRECT (PHASES 3, 4, 5)
+--------------------------------------------
+- One dialog, using the existing Dialog, RadioGroup, Input type=date, Textarea and Checkbox:
+  - channel: email is disabled without an email and SMS / calls without a phone, with the reason shown;
+  - purpose, with "Separate from follow-up";
+  - method: verbal_phone / in_person / written / email_reply only;
+  - date: default today, min today − 365 days, max today;
+  - note: ≤ 500 characters, with the existing no-medical-details notice;
+  - the required self-confirmation checkbox (grants only).
+  The commit stays disabled until the entry is valid.
+- Idempotency: one key per dialog (consent-<uuid>), so a retry of the same intent reuses it; a replay gives "That
+  entry was already recorded."
+- Server action recordConsentAction:
+  - requirePlusAccess plus the organization binding (the form must be from the session's workspace) plus
+    canWriteGrowth;
+  - pure validation, mirroring the RPC;
+  - the date is converted in the organization timezone (today → NULL = now; a past date → midday local);
+  - then plus_record_consent or plus_revoke_consent. "mode" only selects the RPC; the form carries no actor, recorded
+    time, order, digest or status;
+  - revalidatePath on success;
+  - error codes and messages mapped to plain copy, with role=alert for errors and role=status for success.
+  - The RPC remains the authority.
+- Revocation: header "Record revocation" (any channel / purpose; allowed for archived and DNC contacts) and per-cell
+  "Revoke" on granted cells (full accessible name). It is always a new row (E2E A9: the grant row is untouched).
+- Correction:
+  - "This entry was recorded in error" appears only on the pair's latest entry, never on a do_not_contact system
+    entry;
+  - it records the opposite state with corrects_consent_id and a REQUIRED note;
+  - it is offered only when that opposite write is itself allowed.
+  - A stale correction gives a clear ZW003 alert (E2E A13).
+  - Older evidence gives the stale_evidence copy (A14).
+  - Neither DNC, entitlement nor ordering rules can be bypassed: the same RPCs decide.
+
+5. AUTHORIZATION AND STATES (PHASE 7) — browser-verified
+-------------------------------------------------------
+| Case | Result (E2E) |
+|---|---|
+| A. Admin, Plus write | read, record, revoke, correct (A1–A15) |
+| B. Dispatcher, write grant | records; recorded_by = the Dispatcher (D2) |
+| C. Dispatcher, read grant | reads state, history and notes; no controls; view-only note (D1) |
+| D. Admin, read_only | state and history readable; no Record / Revoke / Correct; "Changes to communication preferences can be recorded again when Nemryn Plus is active." (E2). DNC can't change (S6-A A9) |
+| E. locked / none | no consent access; Growth route refused (E3, E4) |
+| F. Driver; another org's Admin; signed out; revoked grant | refused / not found / sign-in (F1–F3, D4) |
+| G. Archived contact | read; revocations only; "Contact archived" cells; explanation line (C1, C2) |
+| H. Redacted contact; foreign contact id | not found; no consent exposure (F4, F5) |
+| I. DNC on | prominent warning with Edit contact; no Record consent; Record revocation works; all cells suppressed (B1, B2). DNC switch-on shows the system revocations in history (B3); clearing it revives nothing (B4) |
+
+Server-side enforcement, not hidden buttons:
+- D3: a dialog opened with a write grant, then submitted after the grant was downgraded to read → refused, nothing
+  written.
+- E1: a dialog opened while Plus was active, then submitted after Plus became read_only → refused, nothing written.
+No read_only exception exists. The NP-P4 subscription-independent opt-out prerequisite (ZD-239) is unchanged and not
+implemented.
+
+6. GROWTH AGENT COPY (PHASE 8, ZD-237)
+-------------------------------------
+- CONSENT_CAVEAT is now: "Check this person's communication preferences before using this draft. A recorded consent
+  isn't permission to send, and Nemryn sends nothing."
+- The exact copy test was updated: equality, plus a forbidden-phrase check.
+- No selection rule, DNC suppression, draft, scheduling or outbound behaviour changed. QA2 growth: 23 / 23.
+
+7. RESPONSIVE AND ACCESSIBILITY (PHASE 9)
+----------------------------------------
+- 1440 / 1024 / 768: the table is visible, with no page-level horizontal overflow and one visible h1 (H1).
+- 390: the Operations shell shows its approved "designed for tablet and desktop use" notice (NP-UI-P1b), so the panel is
+  not rendered at phone width. The stacked phone layout from design §5.7 was therefore not built (it would be dead
+  code); see design §5.9.
+- axe: 0 serious / critical violations on Contact Detail at 1440 and 768, with the DNC warning, and with the Record
+  consent dialog open.
+- Keyboard (Record consent and Record revocation):
+  - Enter opens the dialog with focus inside;
+  - arrow keys move within a radio group;
+  - Escape closes it;
+  - focus returns to the trigger.
+- Screen readers:
+  - table caption and headers;
+  - the badge text carries the state (never colour alone);
+  - success role=status; errors role=alert;
+  - full aria-labels on per-cell Revoke and on the correction buttons;
+  - the history summary includes its count.
+- Screenshots (fictional data): docs/design/concept-b/reviews/s6b/*.png and consents-e2e-results.txt.
+
+8. VERIFICATION RESULTS (final tree, final production build)
+-----------------------------------------------------------
+- Unit tests: 902 / 902 (894 baseline, + 8 consents-core). The agent-core copy test was updated.
+- TypeScript (tsc --noEmit): PASS.
+- ESLint (src, tests/e2e/plus-consents): 0 errors. 1 pre-existing warning in src/app/operations/growth/tasks/page.tsx
+  (from V2-4; the file is unchanged here).
+- Production build (Next.js 16.3.3): PASS. The :3100 server runs this build; no source file is newer than BUILD_ID.
+- Consents browser E2E: 49 / 49 PASS on the final build.
+- QA2 strict: 199 / 199 (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79).
+- Quotes strict (each suite on a verified fresh reset): 272 / 272, every suite at its S4 baseline. s2 33, s3a 31, s3b 32,
+  s3c 54, o1 27, s4-integrated 69, s4-a11y 26. "no unexpected failures".
+- SQL: S6-B changes no database object. The S6-A suites (consents 78, privilege contract 0 / 29, contacts 85, quotes
+  lifecycle 41) were verified on the same 93-migration schema in S6-A.
+
+9. DIFFERENCES FROM THE APPROVED DESIGN (all within ZD-228 … ZD-242; recorded in design §5.9)
+--------------------------------------------------------------------------------------------
+- A header "Record revocation" lets staff record an opt-out for any channel / purpose, alongside the per-cell Revoke.
+- No stacked phone layout. Operations is tablet / desktop only, by the approved shell notice.
+- History pages are server-rendered through ?consentHistory=N (20 per page) rather than "Show more".
+- Corrections record the opposite state and are offered only where that write is itself allowed.
+- History labels "Granted" / "Revoked". All user-facing wording uses "revocation", never "withdrawal".
+
+10. OPEN ITEMS AND GATES
+------------------------
+- PD-10, PD-11, OD-Q13 and OD-Q14 remain OPEN. Real customer consent data stays unauthorized (ZD-241).
+- NP-P4 prerequisite: a subscription-independent opt-out (ZD-239). Not built; no read_only exception.
+- S6-C (production release) has not started:
+  - S6-A's migration is already merged;
+  - S6-B is application-only, so its release is a normal app deploy;
+  - then a synthetic-tenant smoke ("Nemryn Pilot Simulation") only.
+
+11. PR READINESS
+----------------
+READY FOR OWNER REVIEW AND PR.
+- Every gate passes on the final tree and build:
+  - consents E2E 49 / 49 (incl. axe and keyboard);
+  - QA2 strict 199 / 199;
+  - Quotes strict 272 / 272;
+  - unit tests 902 / 902; tsc; lint 0 errors; build.
+- No database, RLS, RPC, entitlement or Brand Lock change.
+- No approved decision reopened.
+- Nothing is sent.
+
+Files for the owner's PR:
+- New:
+  - src/lib/plus/consents-core.ts and consents-core.test.mjs, src/lib/plus/consents.ts;
+  - src/components/growth/ContactConsentsPanel.tsx and ConsentPreferences.tsx;
+  - tests/e2e/plus-consents/consents.e2e.mjs;
+  - docs/design/concept-b/reviews/s6b/;
+  - this report.
+- Modified:
+  - src/app/operations/growth/contacts/[contactId]/page.tsx and contacts/actions.ts;
+  - src/lib/supabase/database.types.ts;
+  - src/lib/plus/agent-core.ts and agent-core.test.mjs;
+  - package.json;
+  - docs/product/NP-P2-S6-consent-ledger-design.md, docs/product/plus-product-spec.md,
+    docs/security/plus-access-model.md.
+
+Environment left:
+- the isolated DB at 20261023100000 / 93 (after the last suite reset);
+- :3100 serving the final S6-B build;
+- the owner's :3000 server and the ZenWard stack untouched.
+
+STOP FOR OWNER REVIEW.

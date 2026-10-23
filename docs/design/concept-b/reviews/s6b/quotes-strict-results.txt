@@ -1,0 +1,8 @@
+s2             pass= 33 fail=0  (S4 baseline: 33 checks)  PASS
+s3a            pass= 31 fail=0  (S4 baseline: 31 checks)  PASS
+s3b            pass= 32 fail=0  (S4 baseline: 32 checks)  PASS
+s3c            pass= 54 fail=0  (S4 baseline: 54 checks)  PASS
+o1             pass= 27 fail=0  (S4 baseline: 27 checks)  PASS
+s4-integrated  pass= 69 fail=0  (S4 baseline: 69 checks)  PASS
+s4-a11y        pass= 26 fail=0  (S4 baseline: 26 checks)  PASS (U1 / U2 RESOLVED)
+RESULT: no unexpected failures

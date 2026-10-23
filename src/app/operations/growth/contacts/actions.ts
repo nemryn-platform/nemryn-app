@@ -16,7 +16,8 @@ import {
   type ContactFormValues,
   type PossibleDuplicate,
 } from "@/lib/plus/contacts-core";
-import { organizationLocalToUtc } from "@/lib/operations/local-time-core";
+import { localDateKeyOf, organizationLocalToUtc } from "@/lib/operations/local-time-core";
+import { consentErrorMessage, consentSuccessMessage, validateConsentForm } from "@/lib/plus/consents-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const LIST = "/operations/growth/contacts";
@@ -225,4 +226,65 @@ export async function logContactActivityAction(_prev: ContactActionState, formDa
   }
   revalidatePath(`${LIST}/${contactId}`);
   return { status: "success", message: data.changed ? "Added to the timeline." : "That entry was already recorded." };
+}
+
+/**
+ * NP-P2-S6-B: record a consent grant (plus_record_consent) or a revocation (plus_revoke_consent), optionally as a
+ * correction of the pair's latest entry. The form never sends an actor, a recorded time, an order, a digest or a
+ * status -- "mode" only selects which RPC is called. Organization and write capability come from the session (and the
+ * form must have been rendered for that workspace); the RPC re-checks Plus write, the contact, Do not contact, the
+ * archived rule, stale evidence and the correction target, and is the authority. Nothing is ever sent.
+ */
+export async function recordConsentAction(_prev: ContactActionState, formData: FormData): Promise<ContactActionState> {
+  const guard = await guardWrite(formData);
+  if ("error" in guard) return { status: "error", message: guard.error };
+  const { context } = guard;
+  const contactId = text(formData, "contactId");
+  if (!isUuid(contactId)) return { status: "error", message: "Reload the page and try again." };
+  const tz = context.organizationTimezone;
+  const parsed = validateConsentForm(
+    {
+      mode: text(formData, "mode"),
+      channel: text(formData, "channel"),
+      purpose: text(formData, "purpose"),
+      method: text(formData, "method"),
+      capturedDate: text(formData, "capturedDate"),
+      note: text(formData, "note").slice(0, 600),
+      correctsConsentId: text(formData, "correctsConsentId"),
+      idempotencyKey: text(formData, "idempotencyKey"),
+      confirmed: formData.get("confirmed") === "on" || formData.get("confirmed") === "true",
+    },
+    localDateKeyOf(Date.now(), tz),
+  );
+  if (!parsed.ok) return { status: "error", message: parsed.error };
+  const input = parsed.value;
+
+  // A past date is recorded at midday in the organization's timezone; today (or no date) is "now" on the server.
+  let capturedAt: string | null = null;
+  if (input.capturedDate) {
+    const resolved = organizationLocalToUtc({ date: input.capturedDate, time: "12:00" }, tz);
+    if (resolved.status !== "ok") return { status: "error", message: "Enter a valid date." };
+    capturedAt = resolved.utc.toISOString();
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const args = {
+    p_organization_id: context.organizationId,
+    p_contact_id: contactId,
+    p_channel: input.channel,
+    p_purpose: input.purpose,
+    p_captured_via: input.method,
+    p_captured_at: capturedAt as string,
+    p_evidence_note: input.note as string,
+    p_corrects_consent_id: input.correctsConsentId as string,
+    p_idempotency_key: input.idempotencyKey,
+  };
+  const { data, error } =
+    input.mode === "grant" ? await supabase.rpc("plus_record_consent", args) : await supabase.rpc("plus_revoke_consent", args);
+  if (error || !data) {
+    console.error("[plus] record consent failed", error?.code ?? "no_data");
+    return { status: "error", message: consentErrorMessage(error?.code, error?.message, input.mode) };
+  }
+  revalidatePath(`${LIST}/${contactId}`);
+  return { status: "success", message: consentSuccessMessage(input.mode, data.changed === true, input.correctsConsentId !== null) };
 }

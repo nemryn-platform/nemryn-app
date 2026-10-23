@@ -22,7 +22,7 @@ export const NOT_SENT_LABEL = "Draft — NOT SENT";
 export const AGENT_IS_ASSISTANT_NOTE =
   "The Growth Agent reviews your pipeline and suggests internal follow-ups. It never sends messages, places calls, changes stages or marks anything lost. Staff decide.";
 export const CONSENT_CAVEAT =
-  "Nemryn has no consent record for this person yet. Use this draft only if they agreed to be contacted this way.";
+  "Check this person's communication preferences before using this draft. A recorded consent isn't permission to send, and Nemryn sends nothing.";
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;

@@ -221,7 +221,7 @@ create policy <t>_select_plus on … for select to authenticated
     - It detects deterministically in the database and proposes internal follow-up tasks only.
     - Staff approve, dismiss or mark not relevant. Approval creates one `plus_tasks` row after revalidating the situation.
     - Optional drafts come from a local template, are labelled NOT SENT, and are never stored or sent.
-    - No draft is offered for `do_not_contact` contacts or without a usable preferred channel. No consent is claimed, because the P2-S6 ledger does not exist yet.
+    - No draft is offered for `do_not_contact` contacts or without a usable preferred channel. No consent is claimed: since NP-P2-S6-B the caveat points staff to the contact's communication preferences and states that a recorded consent isn't permission to send (ZD-237).
     - No external AI or model API is called, and no contact record leaves Nemryn.
     - There is no scheduler or background job; `generation_source` allows only `staff_review`.
     - It never sends, calls, changes a stage, marks lost, creates quotes or writes Core.
