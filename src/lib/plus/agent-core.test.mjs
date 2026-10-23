@@ -58,7 +58,9 @@ test("drafts: template-only, first name + workspace only, no consent / price / a
 test("labels: NOT SENT, the agent never sends, and the consent caveat makes no consent claim", () => {
   assert.match(a.NOT_SENT_LABEL, /NOT SENT/);
   assert.match(a.AGENT_IS_ASSISTANT_NOTE, /never sends messages, places calls, changes stages/);
-  assert.match(a.CONSENT_CAVEAT, /no consent record/i);
+  // ZD-237 (NP-P2-S6-B): neutral wording -- points to the recorded preferences, claims no consent and no permission
+  assert.equal(a.CONSENT_CAVEAT, "Check this person's communication preferences before using this draft. A recorded consent isn't permission to send, and Nemryn sends nothing.");
+  assert.doesNotMatch(a.CONSENT_CAVEAT, /allowed|approved to send|permitted|opted in/i);
   assert.match(a.recommendationReason("awaiting_response", 6), /doesn't mean the person ignored it/);
   assert.match(a.recommendationReason("no_recent_activity", 1), /1 day\./);
   // NP-P2-S3: a linked request is recorded activity, so "new inquiry waiting" names the interactions it means

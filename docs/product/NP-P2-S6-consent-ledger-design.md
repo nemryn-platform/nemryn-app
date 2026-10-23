@@ -5,8 +5,10 @@
 - OD-S6-1 … 14 → ZD-229 … ZD-242. Approved choices: A, A, A, A, B, A, A, B, B, A, A, A, A, A.
 - The three mandatory refinements R1 to R3 are incorporated (§2.6, §9, §4.1).
 - Slices:
-  - S6-A (database) is implemented locally (NP-P2-S6A-database-implementation.txt);
-  - S6-B (UI) and S6-C (release) are not started.
+  - S6-A (database) is merged (PR #30);
+  - S6-B (UI) is implemented locally (NP-P2-S6B-consent-preferences-ui-implementation.txt), with the implementation
+    notes in §5.9;
+  - S6-C (release) is not started.
 - The history of the proposal is preserved in [NP-P2-S6-decision-review.txt](../reports/NP-P2-S6-decision-review.txt); the lock is in [NP-P2-S6-decision-lock.txt](../reports/NP-P2-S6-decision-lock.txt).
 - Where this document says "[OD-S6-n]", the approved option applies. Text describing a rejected option is historical.
 
@@ -405,6 +407,27 @@ When no rows exist and Do not contact is off: the V2 `EmptyState` (mint icon).
 - No logic change: drafts still never claim consent and are still suppressed for DNC.
 
 ---
+
+### 5.9 S6-B implementation notes (differences from §5.1 – §5.8, all within the approved decisions)
+
+- **Header actions:** writers get **Record consent** (when a grant is possible) and **Record revocation** (Plus write; also
+  for archived and do-not-contact contacts). Both are outline, so the page header keeps its single teal action.
+  - A revocation can be recorded for any channel / purpose, not only for a cell that currently shows a grant. For
+    example: "never text me".
+  - The per-cell **Revoke** (text button, full accessible name) remains on granted cells.
+- **No stacked phone layout:** the Operations shell renders its approved "designed for tablet and desktop use" notice
+  below `md` (768), so no Contact page is shown at phone width. The semantic table is used at every width where the panel
+  renders, and it fits at 768 with no overflow. The §5.7 stacked lists were therefore not built.
+- **History:** a native `<details>` collapsed by default, with 20 entries per page. The pages are server-rendered from
+  `plus_list_contact_consent_events` through `?consentHistory=N` (which opens the disclosure). A page past the end
+  falls back to the newest page.
+- **Correction:** "This entry was recorded in error" appears only on the pair's latest entry, and never on a
+  `do_not_contact` system entry. It records the OPPOSITE state with `corrects_consent_id` and a required note.
+  - It is offered only when that opposite write is itself allowed: correcting a grant needs revoke rights; correcting a
+    revocation needs grant rights (active contact, Do not contact off).
+- **Idempotency:** one key per dialog (`consent-<uuid>`), reused by any retry of the same submit.
+- **Capture date:** organization-local. Today (or empty) is sent as NULL, so the server records now. A past date is
+  sent as midday local time.
 
 ## 6. Privacy and retention
 

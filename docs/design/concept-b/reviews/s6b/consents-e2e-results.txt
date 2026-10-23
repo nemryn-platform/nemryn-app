@@ -1,0 +1,49 @@
+PASS — A1 the panel sits directly after Details and before Open tasks; header actions, timeline and other pane
+PASS — A2 heading 'Communication preferences' (h2) with the not-permission description; empty state for a cont
+PASS — A3 writer sees Record consent + Record revocation (outline; the page's one teal action stays in the hea
+PASS — KEY Record consent: Enter opens with focus inside; arrow keys move within a radio group; Escape closes;
+PASS — A4 Record consent dialog: channel / purpose / method / date / note / confirmation; staff methods only; 
+PASS — A5 recording through the UI: still disabled without the confirmation, enabled with it; 'Consent recorde
+PASS — A6 the page never contains the address digest, the idempotency key or internal function names; no label
+PASS — A7 meta line shows method, date and the recording staff member :: Consent recorded
+PASS — A8 per-cell Revoke opens a dialog fixed to Email · Marketing; no confirmation checkbox for a revocation
+PASS — A9 revocation is a NEW row; the grant is untouched; the cell shows Revoked :: granted:verbal_phone:-:20
+PASS — A10 history is collapsed by default, shows the accurate count, newest first, with method / dates / acto
+PASS — A11 only the pair's latest entry offers a correction :: 1
+PASS — A12 correction: requires a note; records a NEW grant referencing the revocation; history keeps both, ma
+PASS — A13 a stale correction is refused by the database (ZW003) and explained in an alert; nothing written ::
+PASS — A14 a grant dated before the latest revocation is refused (stale evidence) with clear copy :: A revocat
+PASS — A15 consent writes created no Growth activity (separate from the timeline, ZD-236) :: 9 -> 9
+PASS — A16 without an email address the Email channel is disabled with the reason; SMS / calls are available
+PASS — B1 DNC contact: prominent warning; no Record consent; Record revocation remains; every cell 'Suppressed
+PASS — B2 a revocation can still be recorded while DNC is on :: revoked:verbal_phone:-:20000000-0000-0000-0000
+PASS — AXE contact detail with DNC warning (1440): 0 serious / critical violations :: []
+PASS — B3 after DNC is switched on: system revocations appear in the open history with the explanation and no 
+PASS — B4 after DNC is cleared: nothing revives -- the database's effective state shows Revoked (no Consent re
+PASS — C1 archived: no Record consent; Record revocation remains with an explanation; cells 'Contact archived'
+PASS — C2 a revocation is recorded for the archived contact :: granted:written:-:20000000-0000-0000-0000-00000
+PASS — D1 read-grant Dispatcher: reads the state and history, no write controls, a view-only note
+PASS — D2 write-grant Dispatcher records consent (recorded_by = the Dispatcher) :: granted:in_person:-:2000000
+PASS — D3 hidden buttons are not the control: a stale dialog submitted after the grant became read-only is ref
+PASS — D4 grant revoked: the Dispatcher can't open the contact (Growth refused) :: /operations
+PASS — E1 a dialog opened while active and submitted after Plus became read_only is refused server-side (no re
+PASS — E2 read_only Admin: state + history readable, no write controls, the 'recorded again when Nemryn Plus i
+PASS — E3 locked: no consent access (Growth route refused) :: /operations
+PASS — E4 no entitlement: no consent access :: /operations
+PASS — F1 Driver: refused :: /driver
+PASS — F2 another organization's Admin: Org A contact is not found; no consent data
+PASS — F3 signed out: sent to sign-in
+PASS — F4 redacted contact: not found; no consent exposure
+PASS — F5 Org B contact id under the Org A session: not found
+PASS — G1 history pages through the RPC: 20 newest on page 1, the remainder on page 2, accurate total, history
+PASS — G2 a page past the end falls back to the newest page
+PASS — H1 @1440: no page-level horizontal overflow; the consent table is visible and fits :: {"overflow":0,"ta
+PASS — AXE contact detail with consent panel @1440: 0 serious / critical violations :: []
+PASS — H1 @1024: no page-level horizontal overflow; the consent table is visible and fits :: {"overflow":0,"ta
+PASS — H1 @768: no page-level horizontal overflow; the consent table is visible and fits :: {"overflow":0,"tab
+PASS — AXE contact detail with consent panel @768: 0 serious / critical violations :: []
+PASS — H1 @390: no page-level horizontal overflow; the approved Operations tablet/desktop notice (no panel) ::
+PASS — KEY Record revocation: Enter opens with focus inside; arrow keys move within a radio group; Escape clos
+PASS — H2 table semantics: caption, column and row headers; badge text carries the state (never colour alone)
+PASS — H3 per-cell Revoke buttons have a full accessible name
+PASS — AXE Record consent dialog open (1440): 0 serious / critical violations :: []

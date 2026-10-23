@@ -10,6 +10,7 @@
     "test": "node --test 'src/**/*.test.mjs'",
     "test:e2e:quotes": "node tests/e2e/plus-quotes/run.mjs",
     "test:e2e:quotes:strict": "node tests/e2e/plus-quotes/run.mjs --strict",
+    "test:e2e:consents": "node tests/e2e/plus-consents/consents.e2e.mjs",
     "test:e2e:qa2": "node tests/e2e/qa2/run.mjs",
     "test:e2e:qa2:strict": "node tests/e2e/qa2/run.mjs --strict"
   },
