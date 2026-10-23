@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useCallback, useEffect, useState, useTransition } from "react";
-import { UserPlus } from "@phosphor-icons/react/dist/ssr";
+import { EnvelopeSimple, UserPlus, UsersThree } from "@phosphor-icons/react/dist/ssr";
 import {
   cancelStaffInviteAction,
   changeStaffRoleAction,
@@ -270,6 +270,8 @@ export function TeamSection({ members, invitations }: { members: TeamMemberView[
   return (
     <div className="flex max-w-3xl flex-col gap-zw-lg">
       <SectionHeader
+        icon={<UsersThree />}
+        tone="accent"
         title="Team members"
         description="The staff who can operate this organization in Nemryn. Drivers are managed under Drivers."
         actions={
@@ -294,7 +296,7 @@ export function TeamSection({ members, invitations }: { members: TeamMemberView[
       </Panel>
 
       <div className="flex flex-col gap-zw-md">
-        <SectionHeader title="Pending invitations" description="Invitations that haven't been accepted yet." />
+        <SectionHeader icon={<EnvelopeSimple />} title="Pending invitations" description="Invitations that haven't been accepted yet." />
         {invitations.length === 0 ? (
           <p className={cn(typography.bodySmall, "text-text-secondary")}>No pending invitations.</p>
         ) : (

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { ViewSwitch } from "@/components/ui/ViewSwitch";
 import { Select } from "@/components/ui/Select";
 import { TaskList } from "@/components/growth/TaskList";
 import { typography } from "@/design/typography";
@@ -86,20 +87,16 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
         <AttentionState level="info" title="Nemryn Plus is not active" description="Your tasks are kept and can be viewed. They can't be changed until Plus is active again." />
       )}
 
-      <nav aria-label="Task views" className="flex flex-wrap gap-1" data-testid="task-views">
-        {TASK_VIEW_OPTIONS.map((v) => (
-          <Link
-            key={v.value}
-            href={taskListHref(params, { view: v.value })}
-            aria-current={params.view === v.value ? "page" : undefined}
-            className={cn(typography.bodySmall, "rounded-sm px-2 py-1", params.view === v.value ? "bg-surface-hover font-medium text-text-primary" : "text-text-link hover:underline")}
-          >
-            {v.label}
-          </Link>
-        ))}
-      </nav>
+      {/* NP-UI-V2-3: the shared URL-driven ViewSwitch (D-5) -- same views, hrefs and aria-current as the hand-built links. */}
+      <ViewSwitch
+        label="Task views"
+        testId="task-views"
+        activeKey={params.view}
+        items={TASK_VIEW_OPTIONS.map((v) => ({ key: v.value, label: v.label, href: taskListHref(params, { view: v.value }) }))}
+        className="self-start"
+      />
 
-      <form method="get" action="/operations/growth/tasks" role="search" className="flex flex-col gap-zw-md md:flex-row md:items-end" data-testid="task-filters">
+      <form method="get" action="/operations/growth/tasks" role="search" className="flex flex-col gap-zw-md rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm md:flex-row md:items-end" data-testid="task-filters">
         {params.view !== "open" && <input type="hidden" name="view" value={params.view} />}
         <div className="min-w-0 flex-1">
           <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Task, contact or opportunity" maxLength={200} />

@@ -103,7 +103,7 @@ export function TestConnectionGuide({ kind, connected }: { kind: "connection" | 
         <li>
           Submit one request {kind === "form" ? "through your form" : "from your website"} with <span className="font-medium text-text-primary">TEST</span> in the requester name.
         </li>
-        <li>It appears in your Request Hub as Pending — you can decline it afterwards.</li>
+        <li>It appears in your Requests as Pending — you can decline it afterwards.</li>
       </ol>
       <p className={cn(typography.metadata, "text-text-muted")}>
         {connected

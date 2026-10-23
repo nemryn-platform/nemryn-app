@@ -1,3 +1,4 @@
+import { ShieldCheck, UserCircle } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
@@ -53,7 +54,7 @@ export default async function SecuritySettingsPage() {
       />
 
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="Your account" />
+        <SectionHeader title="Your account" icon={<UserCircle />} />
         <dl className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
           <div className="min-w-0">
             <dt className={cn(typography.label, "text-text-muted")}>Email</dt>
@@ -81,7 +82,7 @@ export default async function SecuritySettingsPage() {
       </Panel>
 
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="Who has access" description="Staff access to this organization." />
+        <SectionHeader title="Who has access" icon={<ShieldCheck />} tone="accent" description="Staff access to this organization." />
         <dl className="grid grid-cols-2 gap-zw-md md:grid-cols-4">
           {summary.map((item) => (
             <div key={item.label}>

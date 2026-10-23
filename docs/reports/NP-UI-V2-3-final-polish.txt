@@ -1,0 +1,170 @@
+NP-UI-V2-3 — FINAL POLISH: CLOSING THE REMAINING VISUAL GAPS
+============================================================
+Date: 2026-10-22.
+Scope: the owner-requested completion of V2-3 after its owner visual review. Not a restart of the overhaul.
+- No Git operations; the owner handles staging, commit, push, PR and merge.
+- Not deployed.
+- No production access in this step.
+- Brand Lock v2, the logos, backend / database logic: unchanged.
+- V2-4 not started.
+
+Branch / base: np-ui-v2-3-growth-supporting-parity on e3f6630, still uncommitted. The final polish builds on the V2-3
+working tree.
+
+Evidence: docs/design/concept-b/reviews/v2-3/final-polish/
+- before/ and after/: the five screens, 11 captures each, identical names;
+- final-polish-before-vs-after.png (1440) and final-polish-before-vs-after-768.png;
+- website-requests-preview/: 8 captures, plus website-requests-preview-sheet.png;
+- auth-390/: 7 full-page 390×667 captures, plus auth-390-sheet.png.
+
+1. THE FIVE REMAINING SCREENS (Brand Lock v2 parity)
+----------------------------------------------------
+Before = the V2-3 tree as reviewed. After = the final tree. Same fresh reset, Plus demo and fictional Growth fixture
+for both.
+
+a) Growth Agent (f01 1440 / 768)
+   - Before:
+     - a plain white explainer box;
+     - "Needs review (0)" and "Recently reviewed" as bare headings on the canvas.
+   - After:
+     - the explainer is a mint guidance panel ("How the Growth Agent works", Sparkle icon), text unchanged;
+     - each queue is a raised panel with an icon header;
+     - "Needs review" is attention-toned only when something is waiting;
+     - the empty lines use the calm compact treatment.
+   - agent-explainer, agent-queue, agent-empty, agent-notice, Review opportunities, Approve / Dismiss: unchanged.
+
+b) New opportunity: the contact chooser, step 1 (f02)
+   - One raised panel with a "Choose a contact" icon header.
+   - The search sits in the framed filter style.
+   - Same GET search, Choose links and opportunity-contact-step / choose-contact ids.
+
+c) New opportunity: the form, step 2 (f02c); and Edit opportunity (f03)
+   The single flat card becomes the established FormSection anatomy (raised card, 40px icon header, hairline, fields):
+   - "Opportunity": contact (or the contact select when editing), title, they asked about, service;
+   - "Source & ownership": how they found you, source detail, owner, campaign code;
+   - "Value": estimated value, plus payment reported by staff in edit mode.
+   At ≥1280 a side column holds a mint "Before you save" guidance panel. It carries the form's existing notice, with the
+   same text and data-testid="opportunity-privacy-notice".
+
+d) New contact (f04) and Edit contact (f05)
+   - "Contact details": name, phone / email with the "one is required" note, contact type, role or relationship.
+   - "Preferences": preferred channel, owner, and the do-not-contact choice (a calm bordered option).
+   - The same mint "Before you save" panel holds the existing notice (contact-privacy-notice).
+   - The duplicate-contact warning ("Create as a separate contact") is unchanged.
+
+Preserved, verified by the regression gates:
+- every field name, default value, required flag, help text and error binding;
+- the server actions and validation;
+- the duplicate check;
+- DNC handling;
+- the create / edit / cancel flows;
+- the Plus write permission;
+- every data-testid.
+
+The forms' order is unchanged below 1280px: the sections stack, then the actions, then the guidance.
+
+2. WEBSITE REQUESTS ON A NON-LOOPBACK PREVIEW
+---------------------------------------------
+- Blocker recap: a production build refuses to build application links from a loopback origin (src/lib/app-url.ts).
+  So Website Requests cannot render on http://localhost:3100. That guard is correct and was NOT changed.
+- Method: a separate local production build whose NEXT_PUBLIC_APP_URL is this Mac's own mDNS hostname,
+  http://vee-macbook-pro.local:3100.
+  - That is a genuine non-loopback origin under the guard's own rule (only localhost / 127.0.0.1 / ::1 are refused).
+  - It was served from the same isolated NemrynS1Iso stack, with fictional data only.
+  - Headless Chrome reached that hostname through a browser-only host mapping (--host-resolver-rules, in a scratch copy
+    of the CDP launcher). The app still received the non-loopback Host / origin.
+- No guard, configuration, repository file or production resource was changed.
+- Afterwards the normal localhost build was restored for every other gate. It has no preview hostname in its output.
+- Result: 8 / 8 PASS. Each of the following, at 1440 and 768:
+  - /operations/settings/website-requests
+  - /form
+  - /existing-form
+  - /developer
+  Each:
+  - renders (no "couldn't be loaded" state);
+  - has one h1;
+  - shows the Settings sub-navigation with "Website Requests" active;
+  - has 0 serious / critical axe findings and no horizontal overflow;
+  - uses the D-14 copy: "Nemryn Requests"; "Request Hub" is no longer present.
+- Limitation, stated plainly: this is a LOCAL non-loopback preview, not a Vercel preview deployment. A hosted preview
+  needs a pushed branch, which is the owner's Git step. The production pages should be checked again after the owner
+  deploys V2-3.
+
+3. MOBILE AUTHENTICATION AT 390px
+---------------------------------
+Checked:
+- sign-in;
+- forgot-password;
+- sign-up;
+- invalid driver invite;
+- invalid team invite;
+- expired link;
+- reset-password (no session).
+
+Each was checked at 390×844 and 390×667 (a short phone) for:
+- the card top never clipped, and its bottom reachable by scrolling;
+- no horizontal overflow;
+- every visible control in the card at least 40px tall (submits are 48px);
+- the lowest control fully in view after scrolling and keyboard-focusable.
+
+The two invalid-invite pages are informational by design (no action); they are checked for layout only.
+
+Findings fixed:
+- The standalone secondary links were 17–19px tall, too small as mobile tap targets: "Forgot password?", "Back to sign
+  in", "Create your account again", and the footer "Create an account" / "Sign in".
+  - They now have a 44px target: inline-flex min-h-11, with the same text, colour and position.
+  - Files: SignInForm, ForgotPasswordForm, sign-in / sign-up / forgot-password pages, auth-code-error, reset-password.
+- The first run's sign-up 390×667 "not in view" was a sub-pixel false negative: the link's bottom edge sat exactly on
+  the viewport edge. The check now uses the same 1px tolerance as the card check.
+
+Result: 14 / 14 PASS.
+
+4. GATES ON THE EXACT FINAL TREE
+--------------------------------
+All checks ran on the final tree:
+- 49 modified tracked files;
+- 3 new source files: settings/layout.tsx, SettingsSubNav.tsx, GuidancePanel.tsx;
+- production build (Next.js 16.3.3, Turbopack) against the isolated stack.
+
+Results:
+- TypeScript: PASS.
+- ESLint (`eslint .`): PASS.
+- Unit tests: 894 / 894.
+- Production build: PASS.
+- QA2 strict: 199 / 199 (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79).
+- P1a: 48 / 48 (fresh reset).
+- P1b: 52 / 52 (fresh reset).
+- Strict Quotes: 272 / 272, every suite at its S4 baseline (s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69,
+  s4-a11y 26).
+- SQL privilege / tenant suites: all 15 with psql exit 0, 0 failing checks, 0 errors (incl. privilege contract 0 of 29
+  violations, RLS adversarial 33 PASS, plus_access_helpers 0 of 170, plus_member_grants 0 of 76).
+- V2-3 accessibility / responsive sweep: 126 / 126.
+  - 31 staff routes × 1440 / 1024 / 768 (now including the New opportunity form step);
+  - 7 auth routes × 1440 / 1024 / 768 / 390;
+  - 5 dialogs.
+  - Each: 0 serious / critical axe, no page-level overflow, one visible h1; dialogs open with focus inside.
+- Growth navigation / entitlement: 21 / 21 (Org A admin with Plus sees Growth; Org B, the grant-less Dispatcher, the
+  Driver and signed-out visitors are refused).
+- Mobile auth at 390px: 14 / 14.
+- Website Requests on the non-loopback preview: 8 / 8.
+- Logo integrity: all 11 public/brand files match the recorded SHA-256 baseline.
+- git diff origin/main -- public/ supabase/: empty.
+
+Environment left:
+- isolated stack with a fresh seed and the local Plus demo enabled;
+- app :3100 = the final localhost build;
+- the owner's :3000 dev server untouched.
+
+Scratch tooling note:
+- The earlier session scratchpad was cleared between sessions.
+- The capture fixture, sheet builder, sweep and entitlement checks were recreated from their previous definitions
+  before these runs.
+- The repository evidence was unaffected.
+
+5. UNRESOLVED CONDITIONS
+------------------------
+- Hosted / production verification of the Website Requests pages remains to be done after the owner deploys (§2
+  limitation).
+- No other open visual condition from the V2-3 reports remains.
+
+STOP for review.

@@ -1,5 +1,6 @@
 "use client";
 
+import { ListChecks } from "@phosphor-icons/react/dist/ssr";
 import { useActionState } from "react";
 import { saveServiceOfferingsAction, type ServiceOfferingsActionState } from "@/app/operations/settings/services/actions";
 import { Button } from "@/components/ui/Button";
@@ -26,7 +27,7 @@ export function ServiceOfferingsForm({ enabled }: ServiceOfferingsFormProps) {
   return (
     <form action={action} className="flex max-w-3xl flex-col gap-zw-lg" noValidate>
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="Services we provide" />
+        <SectionHeader title="Services we provide" icon={<ListChecks />} tone="accent" />
         <p className={cn(typography.bodySmall, "rounded-sm bg-surface-secondary px-3 py-2 text-text-secondary")}>
           {configured
             ? "Website requests for a service you haven't selected will be declined. Requests already received are not affected."

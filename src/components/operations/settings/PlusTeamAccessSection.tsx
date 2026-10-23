@@ -1,5 +1,6 @@
 "use client";
 
+import { UsersThree } from "@phosphor-icons/react/dist/ssr";
 import { useActionState, useCallback, useEffect, useState } from "react";
 import { changePlusTeamAccessAction, type PlusTeamActionState } from "@/app/operations/settings/plus/actions";
 import { Button } from "@/components/ui/Button";
@@ -200,6 +201,7 @@ export function PlusTeamAccessSection({
   return (
     <div className="flex flex-col gap-zw-md" data-testid="plus-team-access">
       <SectionHeader
+        icon={<UsersThree />}
         title="Team access"
         description={
           plusWritable

@@ -25,7 +25,7 @@ export const WEBSITE_REQUESTS_STATUS_EXPLANATION: Record<WebsiteRequestsStatus, 
   NOT_CONFIGURED: "No website is connected yet. Connect your website to start receiving requests in Nemryn.",
   DISABLED: "Requests from your website are switched off. Turn it on when your website is ready.",
   READY_TO_TEST: "Your website is approved to send requests. Submit one test request through your website to confirm it works.",
-  CONNECTED: "Nemryn has received a real request from your website. New requests appear in your Request Hub.",
+  CONNECTED: "Nemryn has received a real request from your website. New requests appear in your Requests.",
 };
 
 // ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ export const FORM_CONNECTION_EXPLANATION: Record<WebsiteRequestsStatus, string> 
   NOT_CONFIGURED: "Publish your form to start receiving requests.",
   DISABLED: "The public form is turned off. New requests can't be sent through it.",
   READY_TO_TEST: "Your form is live. Send one test request through it to confirm everything works.",
-  CONNECTED: "Nemryn has received a real request through your form. New requests appear in your Request Hub.",
+  CONNECTED: "Nemryn has received a real request through your form. New requests appear in your Requests.",
 };
 
 export function buildHostedFormUrl(origin: string, publicKey: string): string {
@@ -779,7 +779,7 @@ export function buildDeveloperPackage(input: DeveloperPackageInput): string {
     "",
     "WHAT THIS DOES",
     "  When someone submits the transportation request form on your website, your website's SERVER sends that request to",
-    "  Nemryn, where it appears in the operator's Request Hub as a new Pending request. Visitors never need a Nemryn account.",
+    "  Nemryn, where it appears in the operator's Requests as a new Pending request. Visitors never need a Nemryn account.",
     "  Send requests from your website's server, not directly from the visitor's browser: this protects your connection",
     "  setup and gives you control over validation and retries.",
     "",
@@ -853,7 +853,7 @@ export function buildDeveloperPackage(input: DeveloperPackageInput): string {
     "TESTING",
     "  1. Make sure the connection is turned ON in Nemryn (Settings -> Website Requests).",
     "  2. Submit one request through your website with TEST in the requester name.",
-    "  3. It appears in the Nemryn Request Hub as Pending, and the connection status changes to Connected.",
+    "  3. It appears in the Nemryn Requests as Pending, and the connection status changes to Connected.",
     "",
     "COMMON ISSUES (each returns 400 -- the response does not say which)",
     "  - Connection not turned on in Nemryn.",

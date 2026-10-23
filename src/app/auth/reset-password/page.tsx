@@ -41,8 +41,8 @@ export default async function ResetPasswordPage() {
   const canReset = hasRecoveryMarker && Boolean(user);
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
           <Image
@@ -57,13 +57,13 @@ export default async function ResetPasswordPage() {
 
         {canReset ? (
           <>
-            <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Set a new password</h1>
+            <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Set a new password</h1>
             <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>Choose a new password for your account.</p>
             <ResetPasswordForm />
           </>
         ) : (
           <>
-            <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>This link has expired</h1>
+            <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>This link has expired</h1>
             <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
               This password reset link is no longer valid — it may have expired or already been used. Request a new
               one to continue.
@@ -73,12 +73,12 @@ export default async function ResetPasswordPage() {
                 href="/forgot-password"
                 className={cn(
                   typography.button,
-                  "flex h-12 w-full items-center justify-center rounded-md bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
+                  "flex h-12 w-full items-center justify-center rounded-sm border border-action-primary-hover bg-action-primary-background bg-action-primary-gradient font-semibold text-action-primary-foreground hover:bg-action-primary-hover hover:bg-none",
                 )}
               >
                 Request a new link
               </Link>
-              <Link href="/sign-in" className={cn(typography.bodySmall, "text-center font-medium text-text-link")}>
+              <Link href="/sign-in" className={cn(typography.bodySmall, "inline-flex min-h-11 items-center justify-center text-center font-medium text-text-link")}>
                 Back to sign in
               </Link>
             </div>

@@ -16,8 +16,8 @@ export const metadata = { title: "Link expired" };
  */
 export default function AuthCodeErrorPage() {
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
           <Image
@@ -30,7 +30,7 @@ export default function AuthCodeErrorPage() {
           />
         </div>
 
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>This link has expired</h1>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>This link has expired</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
           This confirmation link is no longer valid — it may have expired or already been used. If you already
           confirmed your account, just sign in. Otherwise, create your account again to get a fresh link.
@@ -41,14 +41,14 @@ export default function AuthCodeErrorPage() {
             href="/sign-in"
             className={cn(
               typography.button,
-              "flex h-12 w-full items-center justify-center rounded-md bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
+              "flex h-12 w-full items-center justify-center rounded-sm border border-action-primary-hover bg-action-primary-background bg-action-primary-gradient font-semibold text-action-primary-foreground hover:bg-action-primary-hover hover:bg-none",
             )}
           >
             Sign in
           </Link>
           <Link
             href="/sign-up"
-            className={cn(typography.bodySmall, "text-center font-medium text-text-link")}
+            className={cn(typography.bodySmall, "inline-flex min-h-11 items-center justify-center text-center font-medium text-text-link")}
           >
             Create your account again
           </Link>

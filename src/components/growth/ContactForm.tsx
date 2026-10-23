@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { Panel } from "@/components/ui/Panel";
+import { FormSection } from "@/components/operations/new-trip/FormSection";
+import { GuidancePanel } from "@/components/growth/GuidancePanel";
+import { AddressBook, ChatCircleText } from "@phosphor-icons/react/dist/ssr";
 import { Select } from "@/components/ui/Select";
 import {
   CONTACT_CHANNEL_OPTIONS,
@@ -68,7 +71,14 @@ export function ContactForm({
   }
 
   return (
-    <form action={formAction} onSubmit={() => setSubmissions((n) => n + 1)} className="flex max-w-3xl flex-col gap-zw-lg" noValidate data-testid="contact-form">
+    <form
+      action={formAction}
+      onSubmit={() => setSubmissions((n) => n + 1)}
+      className="grid grid-cols-1 items-start gap-zw-lg xl:grid-cols-[minmax(0,1fr)_360px]"
+      noValidate
+      data-testid="contact-form"
+    >
+      <div className="flex min-w-0 flex-col gap-zw-lg">
       <input type="hidden" name="organizationId" value={organizationId} />
       {contactId && <input type="hidden" name="contactId" value={contactId} />}
       {expectedVersion && <input type="hidden" name="expectedVersion" value={expectedVersion} />}
@@ -106,49 +116,55 @@ export function ContactForm({
         </Panel>
       )}
 
-      <Panel className="flex flex-col gap-zw-md" key={formKey}>
-        <Input
-          name="displayName"
-          label="Name"
-          required
-          maxLength={CONTACT_LIMITS.name}
-          defaultValue={values.displayName}
-          error={errors.displayName}
-          autoComplete="off"
-        />
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Input name="phone" label="Phone" type="tel" maxLength={CONTACT_LIMITS.phone} defaultValue={values.phone} error={errors.phone} autoComplete="off" />
-          <Input name="email" label="Email" type="email" maxLength={CONTACT_LIMITS.email} defaultValue={values.email} error={errors.email} autoComplete="off" />
-        </div>
-        <p className={cn(typography.metadata, errors.form ? "text-critical-text" : "text-text-secondary")}>
-          A phone number or an email address is required.
-        </p>
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Select name="contactKind" label="Contact type" required options={CONTACT_KIND_OPTIONS} defaultValue={values.contactKind} error={errors.contactKind} />
+      {/* NP-UI-V2-3 final polish: the established form anatomy (FormSection = a raised card with an icon header) --
+          the same fields, names, defaults and validation as before, grouped into two sections. */}
+      <div className="flex flex-col gap-zw-lg" key={formKey}>
+        <FormSection icon={<AddressBook className="size-5" aria-hidden />} title="Contact details">
           <Input
-            name="jobTitle"
-            label="Role or relationship (optional)"
-            maxLength={CONTACT_LIMITS.jobTitle}
-            defaultValue={values.jobTitle}
-            error={errors.jobTitle}
-            helpText="For example: discharge planner, daughter, office manager."
+            name="displayName"
+            label="Name"
+            required
+            maxLength={CONTACT_LIMITS.name}
+            defaultValue={values.displayName}
+            error={errors.displayName}
+            autoComplete="off"
           />
-        </div>
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Select name="preferredChannel" label="Preferred channel" required options={CONTACT_CHANNEL_OPTIONS} defaultValue={values.preferredChannel} error={errors.preferredChannel} />
-          <Select name="ownerHandle" label="Owner (optional)" options={ownerOptions} defaultValue={values.ownerHandle} error={errors.ownerHandle} helpText="Someone in your team with Nemryn Plus write access." />
-        </div>
-        <label className="flex cursor-pointer items-start gap-2 rounded-sm border border-border-subtle p-3">
-          <input type="checkbox" name="doNotContact" defaultChecked={values.doNotContact} className="mt-1 size-4" />
-          <span>
-            <span className={cn(typography.label, "block text-text-primary")}>Do not contact</span>
-            <span className={cn(typography.metadata, "block text-text-secondary")}>{DO_NOT_CONTACT_HELP}</span>
-          </span>
-        </label>
-        <p className={cn(typography.metadata, "text-text-secondary")} data-testid="contact-privacy-notice">
-          {NO_MEDICAL_DETAILS_NOTICE} Only use fictional test data until Nemryn confirms Plus is cleared for real customer records.
-        </p>
-      </Panel>
+          <div className="flex flex-col gap-zw-sm">
+            <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+              <Input name="phone" label="Phone" type="tel" maxLength={CONTACT_LIMITS.phone} defaultValue={values.phone} error={errors.phone} autoComplete="off" />
+              <Input name="email" label="Email" type="email" maxLength={CONTACT_LIMITS.email} defaultValue={values.email} error={errors.email} autoComplete="off" />
+            </div>
+            <p className={cn(typography.metadata, errors.form ? "text-critical-text" : "text-text-secondary")}>
+              A phone number or an email address is required.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+            <Select name="contactKind" label="Contact type" required options={CONTACT_KIND_OPTIONS} defaultValue={values.contactKind} error={errors.contactKind} />
+            <Input
+              name="jobTitle"
+              label="Role or relationship (optional)"
+              maxLength={CONTACT_LIMITS.jobTitle}
+              defaultValue={values.jobTitle}
+              error={errors.jobTitle}
+              helpText="For example: discharge planner, daughter, office manager."
+            />
+          </div>
+        </FormSection>
+
+        <FormSection icon={<ChatCircleText className="size-5" aria-hidden />} title="Preferences">
+          <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+            <Select name="preferredChannel" label="Preferred channel" required options={CONTACT_CHANNEL_OPTIONS} defaultValue={values.preferredChannel} error={errors.preferredChannel} />
+            <Select name="ownerHandle" label="Owner (optional)" options={ownerOptions} defaultValue={values.ownerHandle} error={errors.ownerHandle} helpText="Someone in your team with Nemryn Plus write access." />
+          </div>
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle bg-surface-app p-zw-md">
+            <input type="checkbox" name="doNotContact" defaultChecked={values.doNotContact} className="mt-1 size-4 accent-[var(--color-text-link)]" />
+            <span>
+              <span className={cn(typography.label, "block text-text-primary")}>Do not contact</span>
+              <span className={cn(typography.metadata, "mt-0.5 block text-text-secondary")}>{DO_NOT_CONTACT_HELP}</span>
+            </span>
+          </label>
+        </FormSection>
+      </div>
 
       <div className="flex flex-wrap justify-end gap-2">
         <LinkButton href={cancelHref} variant="outline">
@@ -158,6 +174,11 @@ export function ContactForm({
           {mode === "create" ? "Create contact" : "Save changes"}
         </Button>
       </div>
+      </div>
+
+      <GuidancePanel testId="contact-privacy-notice">
+        {NO_MEDICAL_DETAILS_NOTICE} Only use fictional test data until Nemryn confirms Plus is cleared for real customer records.
+      </GuidancePanel>
     </form>
   );
 }

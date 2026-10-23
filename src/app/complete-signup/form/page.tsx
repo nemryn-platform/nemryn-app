@@ -38,9 +38,9 @@ export default async function CompleteSignupFormPage() {
     typeof metadata.pending_business_name === "string" ? metadata.pending_business_name : "";
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Welcome to Nemryn</h1>
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
+        <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Welcome to Nemryn</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
           Set up your organization to get started. You&apos;re signed in as {user.email}.
         </p>

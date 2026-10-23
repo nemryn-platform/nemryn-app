@@ -6,7 +6,9 @@ import { AttentionState } from "@/components/ui/AttentionState";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
-import { Panel } from "@/components/ui/Panel";
+import { FormSection } from "@/components/operations/new-trip/FormSection";
+import { GuidancePanel } from "@/components/growth/GuidancePanel";
+import { CurrencyDollar, Funnel, Handshake } from "@phosphor-icons/react/dist/ssr";
 import { Select } from "@/components/ui/Select";
 import {
   ESTIMATE_NOTE,
@@ -65,7 +67,14 @@ export function OpportunityForm({
   }
 
   return (
-    <form action={formAction} onSubmit={() => setSubmissions((n) => n + 1)} className="flex max-w-3xl flex-col gap-zw-lg" noValidate data-testid="opportunity-form">
+    <form
+      action={formAction}
+      onSubmit={() => setSubmissions((n) => n + 1)}
+      className="grid grid-cols-1 items-start gap-zw-lg xl:grid-cols-[minmax(0,1fr)_360px]"
+      noValidate
+      data-testid="opportunity-form"
+    >
+      <div className="flex min-w-0 flex-col gap-zw-lg">
       <input type="hidden" name="organizationId" value={organizationId} />
       {opportunityId && <input type="hidden" name="opportunityId" value={opportunityId} />}
       {expectedVersion && <input type="hidden" name="expectedVersion" value={expectedVersion} />}
@@ -74,52 +83,59 @@ export function OpportunityForm({
         <AttentionState level="critical" title="Not saved" description={state.message ?? "Check the highlighted fields."} />
       )}
 
-      <Panel className="flex flex-col gap-zw-md" key={formKey}>
-        {mode === "create" ? (
-          <>
-            <input type="hidden" name="contactId" value={values.contactId} />
-            <div>
-              <p className={cn(typography.label, "text-text-primary")}>Contact</p>
-              <p className={cn(typography.body, "text-text-primary")} data-testid="opportunity-contact">
-                {contactOptions.find((c) => c.value === values.contactId)?.label ?? "—"}
-              </p>
-            </div>
-          </>
-        ) : (
-          <Select name="contactId" label="Contact" required options={contactOptions} defaultValue={values.contactId} error={errors.contactId} />
-        )}
-        <Input
-          name="title"
-          label="Title"
-          required
-          maxLength={OPPORTUNITY_LIMITS.title}
-          defaultValue={values.title}
-          error={errors.title}
-          helpText="A short label for this sales conversation, e.g. 'Weekly rides to dialysis'."
-          autoComplete="off"
-        />
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Select name="inquiryType" label="They asked about" required options={INQUIRY_OPTIONS} defaultValue={values.inquiryType} error={errors.inquiryType} />
-          <Select name="serviceType" label="Service (optional)" options={[{ value: "", label: "Not specified" }, ...SERVICE_OPTIONS]} defaultValue={values.serviceType} error={errors.serviceType} />
-        </div>
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Select name="source" label="How they found you" required options={SOURCE_OPTIONS} defaultValue={values.source} error={errors.source} />
-          <Input name="sourceDetail" label="Source detail (optional)" maxLength={OPPORTUNITY_LIMITS.sourceDetail} defaultValue={values.sourceDetail} error={errors.sourceDetail} helpText="For example: who referred them." />
-        </div>
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Select name="ownerHandle" label="Owner (optional)" options={ownerOptions} defaultValue={values.ownerHandle} error={errors.ownerHandle} />
-          <Input name="campaignCode" label="Campaign code (optional)" maxLength={OPPORTUNITY_LIMITS.campaign} defaultValue={values.campaignCode} error={errors.campaignCode} helpText="Lowercase, e.g. spring_2026." autoComplete="off" />
-        </div>
-        <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
-          <Input name="estimate" label="Estimated value, USD (optional)" inputMode="decimal" defaultValue={values.estimate} error={errors.estimate} helpText={ESTIMATE_NOTE} autoComplete="off" />
-          {mode === "edit" && (
-            <Select name="paymentReportedStatus" label="Payment (reported by staff)" options={PAYMENT_OPTIONS} defaultValue={values.paymentReportedStatus} error={errors.paymentReportedStatus} helpText={PAYMENT_REPORTED_NOTE} />
+      {/* NP-UI-V2-3 final polish: the established form anatomy (FormSection) -- the same fields, names, defaults and
+          validation as before, grouped into three sections. */}
+      <div className="flex flex-col gap-zw-lg" key={formKey}>
+        <FormSection icon={<Handshake className="size-5" aria-hidden />} title="Opportunity">
+          {mode === "create" ? (
+            <>
+              <input type="hidden" name="contactId" value={values.contactId} />
+              <div>
+                <p className={cn(typography.label, "text-text-primary")}>Contact</p>
+                <p className={cn(typography.body, "text-text-primary")} data-testid="opportunity-contact">
+                  {contactOptions.find((c) => c.value === values.contactId)?.label ?? "—"}
+                </p>
+              </div>
+            </>
+          ) : (
+            <Select name="contactId" label="Contact" required options={contactOptions} defaultValue={values.contactId} error={errors.contactId} />
           )}
-        </div>
-        <p className={cn(typography.metadata, "text-text-secondary")} data-testid="opportunity-privacy-notice">
-          {NO_MEDICAL_DETAILS_NOTICE} Saving an opportunity doesn&apos;t create a booking.
-        </p>
-      </Panel>
+          <Input
+            name="title"
+            label="Title"
+            required
+            maxLength={OPPORTUNITY_LIMITS.title}
+            defaultValue={values.title}
+            error={errors.title}
+            helpText="A short label for this sales conversation, e.g. 'Weekly rides to dialysis'."
+            autoComplete="off"
+          />
+          <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+            <Select name="inquiryType" label="They asked about" required options={INQUIRY_OPTIONS} defaultValue={values.inquiryType} error={errors.inquiryType} />
+            <Select name="serviceType" label="Service (optional)" options={[{ value: "", label: "Not specified" }, ...SERVICE_OPTIONS]} defaultValue={values.serviceType} error={errors.serviceType} />
+          </div>
+        </FormSection>
+
+        <FormSection icon={<Funnel className="size-5" aria-hidden />} title="Source & ownership">
+          <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+            <Select name="source" label="How they found you" required options={SOURCE_OPTIONS} defaultValue={values.source} error={errors.source} />
+            <Input name="sourceDetail" label="Source detail (optional)" maxLength={OPPORTUNITY_LIMITS.sourceDetail} defaultValue={values.sourceDetail} error={errors.sourceDetail} helpText="For example: who referred them." />
+          </div>
+          <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+            <Select name="ownerHandle" label="Owner (optional)" options={ownerOptions} defaultValue={values.ownerHandle} error={errors.ownerHandle} />
+            <Input name="campaignCode" label="Campaign code (optional)" maxLength={OPPORTUNITY_LIMITS.campaign} defaultValue={values.campaignCode} error={errors.campaignCode} helpText="Lowercase, e.g. spring_2026." autoComplete="off" />
+          </div>
+        </FormSection>
+
+        <FormSection icon={<CurrencyDollar className="size-5" aria-hidden />} title="Value">
+          <div className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
+            <Input name="estimate" label="Estimated value, USD (optional)" inputMode="decimal" defaultValue={values.estimate} error={errors.estimate} helpText={ESTIMATE_NOTE} autoComplete="off" />
+            {mode === "edit" && (
+              <Select name="paymentReportedStatus" label="Payment (reported by staff)" options={PAYMENT_OPTIONS} defaultValue={values.paymentReportedStatus} error={errors.paymentReportedStatus} helpText={PAYMENT_REPORTED_NOTE} />
+            )}
+          </div>
+        </FormSection>
+      </div>
 
       <div className="flex flex-wrap justify-end gap-2">
         <LinkButton href={cancelHref} variant="outline">
@@ -129,6 +145,11 @@ export function OpportunityForm({
           {mode === "create" ? "Create opportunity" : "Save changes"}
         </Button>
       </div>
+      </div>
+
+      <GuidancePanel testId="opportunity-privacy-notice">
+        {NO_MEDICAL_DETAILS_NOTICE} Saving an opportunity doesn&apos;t create a booking.
+      </GuidancePanel>
     </form>
   );
 }

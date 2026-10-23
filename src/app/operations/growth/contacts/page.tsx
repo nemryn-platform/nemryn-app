@@ -71,7 +71,7 @@ export default async function ContactsPage({
         <AttentionState level="info" title="Nemryn Plus is not active" description="Your contacts are kept and can be viewed. They can't be changed until Plus is active again." />
       )}
 
-      <form method="get" action="/operations/growth/contacts" className="flex flex-col gap-zw-md md:flex-row md:items-end" role="search" data-testid="contacts-filters">
+      <form method="get" action="/operations/growth/contacts" className="flex flex-col gap-zw-md rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm md:flex-row md:items-end" role="search" data-testid="contacts-filters">
         <div className="min-w-0 flex-1">
           <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Name, email or phone" maxLength={200} />
         </div>
@@ -114,7 +114,7 @@ export default async function ContactsPage({
           }
         />
       ) : page.rows.length === 0 ? (
-        <div className="rounded-md border border-border-subtle bg-surface-elevated">
+        <div className="rounded-md border border-border-subtle bg-surface-elevated shadow-sm">
           <EmptyState
             icon={<AddressBook className="size-6" aria-hidden />}
             title={filtered ? "No contacts match these filters." : "No contacts yet."}

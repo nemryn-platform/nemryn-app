@@ -1,5 +1,6 @@
 "use client";
 
+import { Buildings, Globe } from "@phosphor-icons/react/dist/ssr";
 import { useActionState } from "react";
 import {
   updateOrganizationSettingsAction,
@@ -42,7 +43,7 @@ export function OrganizationSettingsForm({ initialValues }: OrganizationSettings
   return (
     <form action={formAction} className="flex max-w-3xl flex-col gap-zw-lg" noValidate>
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="Business profile" />
+        <SectionHeader title="Business profile" icon={<Buildings />} tone="accent" />
         <Input
           label="Organization name"
           name="name"
@@ -98,7 +99,7 @@ export function OrganizationSettingsForm({ initialValues }: OrganizationSettings
       </Panel>
 
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="Operating timezone" />
+        <SectionHeader title="Operating timezone" icon={<Globe />} />
         <Select
           label="Timezone"
           name="timezone"

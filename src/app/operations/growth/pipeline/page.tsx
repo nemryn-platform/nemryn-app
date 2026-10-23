@@ -24,6 +24,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { ViewSwitch } from "@/components/ui/ViewSwitch";
 import { Select } from "@/components/ui/Select";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { typography } from "@/design/typography";
@@ -36,7 +37,7 @@ function Card({ row }: { row: OpportunityListRow }) {
     <li>
       <Link
         href={`/operations/growth/pipeline/${row.id}`}
-        className="block rounded-md border border-border-subtle bg-surface-elevated p-3 hover:bg-surface-hover focus-visible:bg-surface-hover"
+        className="block rounded-md border border-border-subtle bg-surface-elevated p-3 shadow-sm transition-colors duration-base hover:border-accent-hover-border focus-visible:border-accent-hover-border motion-reduce:transition-none"
         data-testid="pipeline-card"
         data-stage={row.stage}
       >
@@ -65,10 +66,10 @@ function Board({ rows }: { rows: OpportunityListRow[] }) {
         {OPEN_STAGES.map((stage) => {
           const cards = rows.filter((r) => r.stage === stage);
           return (
-            <section key={stage} aria-label={stageDisplayLabel(stage)} className="flex min-w-0 flex-col gap-2 rounded-md bg-surface-secondary p-2" data-testid="pipeline-column" data-stage={stage}>
-              <h2 className={cn(typography.label, "flex items-center justify-between px-1 text-text-primary")}>
+            <section key={stage} aria-label={stageDisplayLabel(stage)} className="flex min-w-0 flex-col gap-2 rounded-md border border-border-subtle bg-surface-secondary/60 p-2.5" data-testid="pipeline-column" data-stage={stage}>
+              <h2 className={cn(typography.label, "flex items-center justify-between gap-2 px-1 py-0.5 text-text-primary")}>
                 <span>{stageDisplayLabel(stage)}</span>
-                <span className={cn(typography.metadata, "text-text-muted")}>{cards.length}</span>
+                <span className={cn(typography.metadata, "min-w-6 rounded-full bg-surface-elevated px-2 py-0.5 text-center font-medium tabular-nums text-text-secondary ring-1 ring-border-subtle")}>{cards.length}</span>
               </h2>
               {cards.length === 0 ? (
                 <p className={cn(typography.metadata, "px-1 text-text-muted")}>None</p>
@@ -177,34 +178,34 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
         <AttentionState level="info" title="Nemryn Plus is not active" description="Your pipeline is kept and can be viewed. It can't be changed until Plus is active again." />
       )}
 
-      <nav aria-label="Pipeline views" className="flex flex-wrap items-center gap-2" data-testid="pipeline-views">
-        <span className={cn(typography.label, "text-text-primary")}>Private-pay</span>
-        <span className={cn(typography.metadata, "text-text-muted")}>· Facility pipeline arrives in a later release</span>
-        <span className="mx-2 hidden h-4 w-px bg-border-subtle md:block" aria-hidden />
-        {(["open", "lost", "all"] as const).map((v) => (
-          <Link
-            key={v}
-            href={pipelineHref(params, { view: v, stage: null, layout: v === "open" ? params.layout : "list" })}
-            aria-current={params.view === v ? "page" : undefined}
-            className={cn(typography.bodySmall, "rounded-sm px-2 py-1", params.view === v ? "bg-surface-hover font-medium text-text-primary" : "text-text-link hover:underline")}
-          >
-            {v === "open" ? "Open" : v === "lost" ? "Lost" : "All"}
-          </Link>
-        ))}
+      {/* NP-UI-V2-3: the shared URL-driven ViewSwitch (D-5) in place of the hand-built links -- same views, same hrefs,
+          aria-current on the active one; Board / List only for the open view, as before. */}
+      <div className="flex flex-wrap items-center gap-x-zw-md gap-y-zw-sm" data-testid="pipeline-views">
+        <ViewSwitch
+          label="Pipeline views"
+          activeKey={params.view}
+          items={(["open", "lost", "all"] as const).map((v) => ({
+            key: v,
+            label: v === "open" ? "Open" : v === "lost" ? "Lost" : "All",
+            href: pipelineHref(params, { view: v, stage: null, layout: v === "open" ? params.layout : "list" }),
+          }))}
+        />
         {params.view === "open" && (
-          <>
-            <span className="mx-2 hidden h-4 w-px bg-border-subtle md:block" aria-hidden />
-            <Link href={pipelineHref(params, { layout: "board" })} aria-current={params.layout === "board" ? "page" : undefined} className={cn(typography.bodySmall, "rounded-sm px-2 py-1", params.layout === "board" ? "bg-surface-hover font-medium text-text-primary" : "text-text-link hover:underline")} data-testid="layout-board">
-              Board
-            </Link>
-            <Link href={pipelineHref(params, { layout: "list" })} aria-current={params.layout === "list" ? "page" : undefined} className={cn(typography.bodySmall, "rounded-sm px-2 py-1", params.layout === "list" ? "bg-surface-hover font-medium text-text-primary" : "text-text-link hover:underline")} data-testid="layout-list">
-              List
-            </Link>
-          </>
+          <ViewSwitch
+            label="Pipeline layout"
+            activeKey={params.layout}
+            items={[
+              { key: "board", label: "Board", href: pipelineHref(params, { layout: "board" }), testId: "layout-board" },
+              { key: "list", label: "List", href: pipelineHref(params, { layout: "list" }), testId: "layout-list" },
+            ]}
+          />
         )}
-      </nav>
+        <p className={cn(typography.metadata, "text-text-muted")}>
+          <span className="font-medium text-text-secondary">Private-pay</span> · Facility pipeline arrives in a later release
+        </p>
+      </div>
 
-      <form method="get" action="/operations/growth/pipeline" role="search" className="flex flex-col gap-zw-md md:flex-row md:items-end" data-testid="pipeline-filters">
+      <form method="get" action="/operations/growth/pipeline" role="search" className="flex flex-col gap-zw-md rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm md:flex-row md:items-end" data-testid="pipeline-filters">
         {params.view !== "open" && <input type="hidden" name="view" value={params.view} />}
         {params.view === "open" && params.layout === "list" && <input type="hidden" name="layout" value="list" />}
         <div className="min-w-0 flex-1">
@@ -247,7 +248,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
           }
         />
       ) : rows.length === 0 ? (
-        <div className="rounded-md border border-border-subtle bg-surface-elevated">
+        <div className="rounded-md border border-border-subtle bg-surface-elevated shadow-sm">
           <EmptyState
             icon={<Kanban className="size-6" aria-hidden />}
             title={filtered ? "No opportunities match these filters." : params.view === "lost" ? "No lost opportunities." : "No private-pay inquiries yet."}

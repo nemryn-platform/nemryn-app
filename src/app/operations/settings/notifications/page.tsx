@@ -1,3 +1,4 @@
+import { Bell } from "@phosphor-icons/react/dist/ssr";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getEmailTransportStatus } from "@/lib/email/send";
@@ -75,7 +76,7 @@ export default async function NotificationsSettingsPage() {
       </section>
 
       <section aria-label="Recent notifications" className="flex max-w-3xl flex-col gap-zw-md">
-        <SectionHeader title="Recent notifications" description="The most recent notifications Nemryn tried to send for your organization." />
+        <SectionHeader title="Recent notifications" icon={<Bell />} description="The most recent notifications Nemryn tried to send for your organization." />
         {history.length === 0 ? (
           <p className={cn(typography.bodySmall, "text-text-secondary")}>Nothing has been sent yet.</p>
         ) : (

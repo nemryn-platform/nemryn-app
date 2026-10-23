@@ -45,7 +45,7 @@ test("request outcome line is derived from Core facts only (never from the oppor
   assert.equal(a.requestOutcomeLine(base), "Waiting for an Operations decision");
   assert.equal(a.requestOutcomeLine({ ...base, state: "declined" }), "No trips yet");
   assert.equal(a.requestOutcomeLine({ ...base, state: "accepted", tripsTotal: 3, tripsCompleted: 2, tripsCancelled: 1 }), "3 trips · 2 completed · 1 cancelled or no-show");
-  assert.equal(a.requestOutcomeLine({ ...base, state: "accepted", arrangementCount: 1, arrangementStatus: "active" }), "recurring care active");
+  assert.equal(a.requestOutcomeLine({ ...base, state: "accepted", arrangementCount: 1, arrangementStatus: "active" }), "standing order active");
   for (const s of ["pending", "accepted", "declined", "cancelled"]) {
     assert.doesNotMatch(a.requestOutcomeLine({ ...base, state: s }), /convert|won|sale/i);
   }
