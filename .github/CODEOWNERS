@@ -1,0 +1,7 @@
+# NP-RELEASE-01A -- ownership of release-safety files (D4).
+# Advisory while the repository has a single maintainer: do NOT enable "Require review from Code Owners" in branch
+# protection until a second eligible reviewer exists (GitHub does not let an author approve their own pull request, so
+# a required code-owner review would deadlock every change to these paths).
+/.github/                   @nemryn
+/scripts/release/           @nemryn
+/supabase/migrations/       @nemryn

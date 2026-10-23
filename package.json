@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test 'src/**/*.test.mjs'",
+    "test:release": "node --test scripts/release/db-compat.test.mjs",
     "test:e2e:quotes": "node tests/e2e/plus-quotes/run.mjs",
     "test:e2e:quotes:strict": "node tests/e2e/plus-quotes/run.mjs --strict",
     "test:e2e:consents": "node tests/e2e/plus-consents/consents.e2e.mjs",
