@@ -1,0 +1,91 @@
+NP-RELEASE-01B — FIX PR #34 GITHUB ACTIONS FAILURE (release-gate-tests / gate-tests)
+==================================================================================
+Date: 2026-10-23.
+Branch: np-release-01-deployment-gate. PR #34, head fa706639022043b1848ccea9c7e2ec2e1c543ee3.
+Failing run 40008812314, job "gate-tests".
+- No production change, deployment, migration, token, GitHub / Vercel setting change, or Git commit / push / merge.
+- Enforcement NOT activated.
+
+VERDICT: FIXED (test-environment defect). READY FOR OWNER REVIEW.
+
+1. FAILURE (from the actual job log; read with the existing "nemryn" GitHub authentication)
+-----------------------------------------------------------------------------------------
+- Step "Release-gate unit tests (simulated production states only)": tests 27, pass 26, fail 1.
+- Failing test: "T15 the checker cannot mutate: fixed read-only CLI argv; no write commands anywhere in the gate code"
+  (scripts/release/db-compat.test.mjs:190).
+- Assertion at db-compat.test.mjs:196:10: `assert.equal(r.ok, true)`. AssertionError, "Expected values to be strictly
+  equal", actual false, expected true.
+
+2. ROOT CAUSE
+-------------
+- T15 exercises the supabase-cli transport with a fake spawn, but it used the DEFAULT repository root.
+- That transport reads the linked project ref from supabase/.temp/project-ref. The file is git-IGNORED
+  (supabase/.gitignore:3 ".temp"), so it exists on a developer machine where the Supabase CLI is linked, but never on a
+  CI runner.
+- With no linked ref, validateProductionState correctly rejects the state ("production state has no valid project
+  ref"), so r.ok = false.
+Classification:
+- an ENVIRONMENT ASSUMPTION in the TEST (it depended on local, untracked state);
+- not platform-specific (Linux vs macOS);
+- not a workflow configuration problem;
+- not an implementation defect. The checker FAILED CLOSED exactly as designed when no linked project exists.
+Reproduced:
+- in a clean copy containing only tracked plus unignored files (CI's file set; no supabase/.temp) on macOS: 26 / 27;
+- in a Linux node:24 (Debian) container running the PR #34 version of the test file: 26 / 27, the same T15 failure.
+
+3. FIX (smallest correct; no assertion weakened; no test disabled)
+-----------------------------------------------------------------
+scripts/release/db-compat.test.mjs only (+22 / −1 vs the PR head):
+- new helper `linkedRoot(ref)`: a temporary repository root whose supabase/.temp/project-ref contains the given ref
+  (or none);
+- T15 now passes `root: linkedRoot(REF)`, so it no longer depends on the developer's machine. All of T15's assertions
+  are unchanged: the fixed argv ["supabase","migration","list","--linked"], `r.ok === true`, and the static no-mutation
+  scan.
+- NEW test "01B supabase-cli transport: no linked project or a wrong linked project fails closed (the CI-runner case)":
+  - no project-ref → not ok, "no valid project ref", and the deploy verdict is UNVERIFIABLE;
+  - a project-ref of another project → WRONG PROJECT.
+  This turns the behaviour CI exposed into an explicit, permanent fail-closed guarantee.
+- No change to the checker, the core, the Vercel wrapper, either workflow, package.json or any application code.
+- The trusted CI boundary (pull_request_target, base code, PR head as data), fail-closed behaviour, credential
+  isolation and the database-first policy are untouched.
+
+4. TEST RESULTS
+---------------
+- Release gate, local (macOS): 28 / 28 (27 previous + 1 new).
+- Release gate, CI-equivalent clean copy (no supabase/.temp), macOS: 28 / 28.
+- Release gate, Linux container node:24 (Debian, Node 24.22.1; node in /usr/local/bin; no supabase/.temp): 28 / 28.
+  - The PR #34 version of the file in the same container: 26 / 27 (T15), confirming the reproduction and the fix.
+- npm test 902 / 902.
+- npm run test:release 28 / 28.
+- tsc --noEmit PASS.
+- ESLint (scripts/release + src): 0 errors; 1 pre-existing, unrelated warning (growth/tasks/page.tsx).
+- next build PASS.
+- PR #34 checks (read-only):
+  - gate-tests FAIL (the old run; it will re-run on push);
+  - Vercel and Vercel Preview Comments PASS.
+  - The trusted release-db-compat (pull_request_target) correctly did NOT run, because that workflow only runs once it
+    exists on main.
+
+5. CHANGED FILES
+----------------
+- M scripts/release/db-compat.test.mjs
+- A docs/reports/NP-RELEASE-01B-ci-failure-fix.txt (this report)
+
+6. OWNER GIT COMMANDS (not run)
+-------------------------------
+  cd /Users/datamatics/Nemryn
+  git status                       # expect: M scripts/release/db-compat.test.mjs, ?? docs/reports/NP-RELEASE-01B-ci-failure-fix.txt
+  git add scripts/release/db-compat.test.mjs docs/reports/NP-RELEASE-01B-ci-failure-fix.txt
+  git commit -m "test(release): make gate tests independent of local Supabase link state"
+  git push                         # updates PR #34; release-gate-tests re-runs on the new head
+  gh pr checks 34                  # expect gate-tests: pass (28 tests)
+
+Push with the nemryn GitHub account (check both `gh api user --jq .login` and the osxkeychain git credential).
+
+7. REMAINING (unchanged from NP-RELEASE-01A)
+-------------------------------------------
+- Activation steps A1–A7 (merge, scoped PAT, report-only validation, Vercel Ignored Build Step, preview environment
+  audit, enforce + ruleset) remain owner actions.
+- Enforcement is not active.
+
+STOP for owner review.

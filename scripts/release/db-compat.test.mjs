@@ -187,11 +187,32 @@ test("T14 Vercel exit codes: production proceeds (1) ONLY on PASS; BLOCKED / UNV
   assert.equal(unknownEnv.status, 0, "VERCEL_ENV unset -> skip");
 });
 
+/** A minimal repository root whose supabase/.temp/project-ref contains `ref` (null = no linked project). */
+function linkedRoot(ref) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "nemryn-linked-root-"));
+  if (ref !== null) {
+    mkdirSync(path.join(root, "supabase", ".temp"), { recursive: true });
+    writeFileSync(path.join(root, "supabase", ".temp", "project-ref"), `${ref}\n`);
+  }
+  return root;
+}
+
+test("01B supabase-cli transport: no linked project or a wrong linked project fails closed (the CI-runner case)", async () => {
+  const fakeSpawn = () => ({ status: 0, stdout: JSON.stringify({ migrations: ALL.map((m) => ({ local: m.version, remote: m.version })) }) });
+  const none = await collectProductionState({ source: "supabase-cli", spawn: fakeSpawn, root: linkedRoot(null) });
+  assert.equal(none.ok, false); assert.match(none.errors.join(" "), /no valid project ref/);
+  const wrong = await collectProductionState({ source: "supabase-cli", spawn: fakeSpawn, root: linkedRoot("xqgzfpxlnqfcavgijsne") });
+  assert.equal(wrong.ok, false); assert.match(wrong.errors.join(" "), /WRONG PROJECT/);
+  assert.equal(evaluate({ mode: "deploy", repoMigrationPaths: PATHS, production: none }).verdict, VERDICT.UNVERIFIABLE);
+});
+
 test("T15 the checker cannot mutate: fixed read-only CLI argv; no write commands anywhere in the gate code", async () => {
   assert.deepEqual([...SUPABASE_CLI_ARGS], ["migration", "list", "--linked"]);
   let captured = null;
   const fakeSpawn = (cmd, args) => { captured = [cmd, ...args]; return { status: 0, stdout: JSON.stringify({ migrations: ALL.map((m) => ({ local: m.version, remote: m.version })) }) }; };
-  const r = await collectProductionState({ source: "supabase-cli", spawn: fakeSpawn });
+  // 01B: the linked project ref lives in the git-IGNORED supabase/.temp/project-ref, which exists on a developer's
+  // machine but never on a CI runner -- so the test supplies its own fixture root instead of relying on local state.
+  const r = await collectProductionState({ source: "supabase-cli", spawn: fakeSpawn, root: linkedRoot(REF) });
   assert.deepEqual(captured, ["supabase", "migration", "list", "--linked"]);
   assert.equal(r.ok, true);
   for (const f of ["db-compat-core.mjs", "check-db-compat.mjs", "vercel-ignore-build.sh"]) {
