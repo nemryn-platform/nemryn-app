@@ -60,7 +60,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ quo
   });
 
   return (
-    <main className="mx-auto max-w-[800px] bg-white px-6 py-8 text-black print:max-w-none print:px-0 print:py-0" data-testid="quote-print" data-status={q.status}>
+    <main className="mx-auto max-w-[800px] bg-white px-6 py-8 text-black md:my-zw-xl md:rounded-lg md:border md:border-border-subtle md:px-zw-xl md:shadow-panel print:my-0 print:max-w-none print:rounded-none print:border-0 print:px-0 print:py-0 print:shadow-none" data-testid="quote-print" data-status={q.status}>
       <QuotePrintToolbar backHref={`/operations/growth/pipeline/${q.opportunityId}#quotes`} />
 
       {m.banner && (

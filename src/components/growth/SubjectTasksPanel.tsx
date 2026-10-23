@@ -1,8 +1,10 @@
+import { ListChecks } from "@phosphor-icons/react/dist/ssr";
 import { listOwnerOptions, type OwnerOption } from "@/lib/plus/contacts";
 import { listTasks, type TaskRow } from "@/lib/plus/tasks";
 import { TASK_IS_INTERNAL_NOTE, toTaskListItem } from "@/lib/plus/tasks-core";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Panel } from "@/components/ui/Panel";
 import { TaskList } from "@/components/growth/TaskList";
 
 /**
@@ -41,8 +43,8 @@ export async function SubjectTasksPanel({
     }
   }
   return (
-    <div className="flex flex-col gap-zw-md" data-testid={`${subject.kind}-tasks`}>
-      <SectionHeader title="Open tasks" description={TASK_IS_INTERNAL_NOTE} />
+    <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid={`${subject.kind}-tasks`}>
+      <SectionHeader title="Open tasks" description={TASK_IS_INTERNAL_NOTE} icon={<ListChecks />} />
       {rows === null ? (
         <AttentionState level="critical" title="Tasks couldn't be loaded" description="Reload the page to try again." />
       ) : (
@@ -57,6 +59,6 @@ export async function SubjectTasksPanel({
           emptyText="No open tasks."
         />
       )}
-    </div>
+    </Panel>
   );
 }

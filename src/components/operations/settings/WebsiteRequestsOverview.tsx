@@ -159,7 +159,7 @@ function FormPublicationCard({ publication, formState }: { publication: NonNulla
 }
 
 function FlowStrip() {
-  const steps = ["Customer submits a request", "Your website", "Nemryn Request Hub"];
+  const steps = ["Customer submits a request", "Your website", "Nemryn Requests"];
   return (
     <ol className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface-secondary p-zw-md sm:flex-row sm:items-center sm:gap-3" aria-label="How website requests reach Nemryn">
       {steps.map((step, index) => (

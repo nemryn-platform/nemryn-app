@@ -97,7 +97,7 @@ export function requestOutcomeLine(s: {
     if (s.tripsCompleted > 0) parts.push(`${s.tripsCompleted} completed`);
     if (s.tripsCancelled > 0) parts.push(`${s.tripsCancelled} cancelled or no-show`);
   }
-  if (s.arrangementCount > 0) parts.push(`recurring care ${s.arrangementStatus ?? "linked"}`);
+  if (s.arrangementCount > 0) parts.push(`standing order ${s.arrangementStatus ?? "linked"}`); // D-14 (Brand Lock v2 §6): "standing order" terminology
   if (parts.length === 0) return s.state === "pending" ? "Waiting for an Operations decision" : "No trips yet";
   return parts.join(" · ");
 }

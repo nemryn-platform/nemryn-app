@@ -8,6 +8,8 @@ import { listOwnerOptions, type OwnerOption } from "@/lib/plus/contacts";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Sparkle } from "@phosphor-icons/react/dist/ssr";
 import { RecommendationQueue, RunReviewButton, type RecommendationView } from "@/components/growth/GrowthAgent";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -58,7 +60,9 @@ export default async function GrowthAgentPage() {
       {isPlusReadOnly(plus.state) && (
         <AttentionState level="info" title="Nemryn Plus is not active" description="Recommendations are kept and can be viewed, but no review or approval can run until Plus is active again." />
       )}
-      <Panel className="flex flex-col gap-1" data-testid="agent-explainer">
+      {/* NP-UI-V2-3 final polish: the explainer is guidance -- a Brand Lock v2 mint panel with an icon header; same text. */}
+      <Panel surface="mint" className="flex flex-col gap-zw-sm" data-testid="agent-explainer">
+        <SectionHeader as="h2" title="How the Growth Agent works" icon={<Sparkle />} tone="accent" />
         <p className={cn(typography.bodySmall, "text-text-primary")}>{AGENT_IS_ASSISTANT_NOTE}</p>
         <p className={cn(typography.metadata, "text-text-secondary")}>
           Internal-test rules: a new inquiry with nothing recorded after {AGENT_THRESHOLDS.newInquiryWaitingDays} days; no reply recorded{" "}

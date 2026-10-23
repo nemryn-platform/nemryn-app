@@ -1,0 +1,181 @@
+NP-UI-V2-3 — TEST RESULTS (EXACT FINAL WORKING TREE)
+====================================================
+Date: 2026-10-22.
+- Branch np-ui-v2-3-growth-supporting-parity, from origin/main e3f6630.
+- Uncommitted: 42 modified files plus 2 new source files.
+- Every gate below ran on the final tree, after the last source change (the quote Print-link underline).
+- Environment:
+  - isolated stack ~/NemrynS1Iso (API 54361);
+  - app :3100 from a production build, using only ~/NemrynS1Iso/.env.isolated.local;
+  - no email provider key.
+- Never run against production.
+  - The only production contact was the owner-authorized, navigation-only V2-2 check: 4 / 4 PASS (implementation
+    report §1).
+- No assertion was weakened.
+  - The single test-file change is the D-14 copy expectation in src/lib/plus/attribution-core.test.mjs: "recurring care
+    active" becomes "standing order active", the approved wording.
+  - git diff tests/: empty.
+
+1. STATIC, UNIT, BUILD
+----------------------
+- TypeScript (tsc --noEmit): PASS.
+- ESLint (`eslint .`): PASS, 0 errors.
+- Unit tests (npm test): 894 / 894 pass, 0 fail.
+- Production build (default `next build`, Next.js 16.3.3, Turbopack): PASS.
+
+2. BROWSER REGRESSION (isolated, fictional seed)
+------------------------------------------------
+QA2 strict (fresh reset per suite): RESULT all suites pass.
+
+| Suite | Pass |
+|---|---|
+| core-requests | 25 / 25 |
+| core-trips-dispatch | 44 / 44 |
+| core-records | 28 / 28 |
+| growth | 23 / 23 |
+| auth-access | 79 / 79 |
+| **Total** | **199 / 199** |
+
+P1a (fresh reset): 48 / 48, ALL PASS.
+P1b (fresh reset): 52 / 52, ALL PASS.
+- Includes G1–G3 entitlement gating, H-checks (one h1) and the R sweep: 15 routes × 3 widths.
+
+Strict Quotes (fresh reset per suite): RESULT no unexpected failures. Every suite is at its S4 baseline.
+
+| Suite | Pass |
+|---|---|
+| s2 | 33 / 33 |
+| s3a | 31 / 31 |
+| s3b | 32 / 32 |
+| s3c | 54 / 54 (print + follow-up) |
+| o1 | 27 / 27 (closed-opportunity notice incl. PDF text) |
+| s4-integrated | 69 / 69 |
+| s4-a11y | 26 / 26 |
+| **Total** | **272 / 272** |
+
+3. NAVIGATION AND ENTITLEMENT
+-----------------------------
+21 / 21 PASS (local Plus demo enabled):
+- the Org A admin with Plus sees the Growth group and its five children in order, and all five open;
+- Org B (Core), the grant-less Org A Dispatcher, the Driver and signed-out visitors are refused;
+- the sidebar does not offer Growth to anyone without access.
+
+Settings sub-navigation:
+- shown only to an Organization Admin;
+- a Dispatcher opening an admin Settings page is still redirected (capture s14; auth-access 79 / 79).
+
+4. SQL PRIVILEGE / TENANT SUITES (isolated database)
+----------------------------------------------------
+Every suite: psql exit 0, 0 failing checks, 0 errors. The only "FAIL" text is two suites' closing banners ("review
+PASS/FAIL lines above").
+
+| Suite | Result |
+|---|---|
+| privilege_contract_tests | violations = 0 of 29 |
+| client_privilege_surface_tests | 21 PASS |
+| function_privilege_tests | 7 PASS |
+| mutation_privilege_tests | 7 PASS |
+| request_mutation_privilege_tests | 23 PASS |
+| create_trip_privilege_tests | 5 PASS |
+| driver_read_privilege_tests | 8 PASS |
+| privilege_baseline_behavior_tests | 30 PASS |
+| rls_adversarial_tests | 33 PASS |
+| mutation_authorization_tests | 4 PASS |
+| mutation_idempotent_authorization_tests | 6 PASS |
+| driver_read_authorization_tests | 17 PASS |
+| tenant_settings_foundation_tests | 51 PASS |
+| plus_access_helpers_tests | failures = 0 of 170 |
+| plus_member_grants_tests | failures = 0 of 76 |
+
+No database object changed (git diff supabase/: empty).
+
+5. ACCESSIBILITY AND RESPONSIVE SWEEP (V2-3 scratch sweep: fresh reset, Plus demo, Growth fixture)
+-------------------------------------------------------------------------------------------------
+Result: 123 / 123 PASS, no retries.
+
+Each page was checked for:
+- 0 serious / critical axe;
+- no page-level horizontal overflow;
+- exactly one visible h1.
+
+Coverage:
+- 30 staff routes × 1440 / 1024 / 768:
+  - Growth Dashboard;
+  - Pipeline (board / list / lost);
+  - 4 opportunity details, New opportunity, edit opportunity;
+  - Contacts, 2 contact details (one DNC), New contact, edit contact;
+  - Tasks (all / overdue);
+  - Estimates & Quotes, Growth Agent, quote print;
+  - Settings home plus 9 section pages.
+- 7 auth routes × 1440 / 1024 / 768 / 390: sign-in, forgot-password, sign-up, invalid driver invite, invalid team
+  invite, auth-code-error, reset-password.
+- 5 dialogs, each open with focus inside and 0 serious / critical axe: Mark as lost, Edit draft quote, New estimate or
+  quote, New task, Add note.
+
+Finding fixed during the sweep:
+- axe link-in-text-block (serious) on the quote row's "Print" link (colour-only inside muted text).
+- It was present before V2-3: the s4-a11y suite audits only a draft row.
+- Fixed with an underline; the re-run is clean.
+
+Not swept: the four Website Requests routes. A local production build refuses loopback app links by design
+(src/lib/app-url.ts); see visual review §3.1.
+
+6. LOGO INTEGRITY
+-----------------
+- SHA-256 of all 11 public/brand files = the recorded baseline (docs/reports/n0-m2-a5-production-release.txt):
+  ALL MATCH.
+- git diff origin/main -- public/: empty.
+
+7. ENVIRONMENT AFTER TESTING
+----------------------------
+- Isolated database: fresh seed (after the last suite) with the local Plus demo re-enabled (Org A Plus, Org B Core, no
+  grants).
+- To repopulate the Growth review data, run the V2-3 capture tool.
+- App :3100: the final V2-3 build.
+- The owner's :3000 dev server was not touched.
+
+8. VERDICT
+----------
+ALL FUNCTIONAL GATES PASS on the exact final working tree.
+
+Overall V2-3 status: CONDITIONAL PASS, conditional only on the visual items in the visual review §3:
+- 3.1: verify the Website Requests pages on a non-loopback host;
+- 3.2: Growth Agent and the Growth create / edit forms noted for V2-4.
+
+Not committed, pushed, merged or deployed. STOP for owner / ChatGPT review.
+
+9. FINAL POLISH RE-RUN (exact final tree: 49 modified files plus 3 new source files)
+------------------------------------------------------------------------------------
+Every gate below was re-run after the last source change: the auth tap targets and the Growth forms / Agent
+recomposition.
+
+Static, unit, build:
+- TypeScript: PASS.
+- ESLint (`eslint .`): PASS.
+- Unit tests: 894 / 894.
+- Production build (Next.js 16.3.3, Turbopack): PASS.
+
+Browser regression:
+- QA2 strict: 199 / 199 (25 / 44 / 28 / 23 / 79).
+- P1a: 48 / 48 (fresh reset).
+- P1b: 52 / 52 (fresh reset).
+- Strict Quotes: 272 / 272 (33 / 31 / 32 / 54 / 27 / 69 / 26; all at the S4 baseline).
+
+SQL privilege / tenant suites:
+- All 15 with exit 0, 0 failing checks, 0 errors.
+- Privilege contract: 0 of 29 violations. RLS adversarial: 33 PASS. plus_access_helpers: 0 of 170. plus_member_grants:
+  0 of 76.
+- The other 11 match their earlier counts.
+
+Additional checks:
+- Accessibility / responsive sweep: 126 / 126 (31 staff routes × 3 widths, 7 auth routes × 4 widths, 5 dialogs).
+- Growth navigation / entitlement: 21 / 21.
+- Mobile auth at 390×844 and 390×667: 14 / 14.
+- Website Requests, local non-loopback preview (vee-macbook-pro.local; the app-url guard unchanged): 8 / 8.
+- Logo integrity: 11 / 11 SHA-256 match.
+- public/ and supabase/ unchanged vs origin/main.
+
+VERDICT (updated): ALL GATES PASS.
+- V2-3 overall: PASS, with one condition: re-check Website Requests on the hosted / production build after the owner
+  deploys.
+- No Git operations performed. STOP for review.

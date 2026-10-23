@@ -5,7 +5,9 @@ import { useActionState, useCallback, useEffect, useState, useTransition } from 
 import { approveRecommendationAction, dismissRecommendationAction, runAgentReviewAction, type AgentActionState } from "@/app/operations/growth/agent/actions";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { ClockCounterClockwise, Sparkle } from "@phosphor-icons/react/dist/ssr";
 import { Panel } from "@/components/ui/Panel";
+import { SectionHeader } from "@/components/ui/SectionHeader";
 import { Select } from "@/components/ui/Select";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Textarea } from "@/components/ui/Textarea";
@@ -238,36 +240,41 @@ export function RecommendationQueue({
           {notice.text}
         </p>
       )}
+      {/* NP-UI-V2-3 final polish: each queue is one raised panel with an icon header (the V2-2 / V2-3 anatomy). */}
+      <Panel surface="raised" className="flex flex-col gap-zw-md">
       <section aria-label="Needs review" className="flex flex-col gap-zw-md">
-        <h2 className={cn(typography.sectionHeading, "text-text-primary")}>Needs review ({pending.length})</h2>
+        <SectionHeader title={`Needs review (${pending.length})`} icon={<Sparkle />} tone={pending.length > 0 ? "attention" : "neutral"} />
         {pending.length === 0 ? (
-          <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="agent-empty">
+          <p className={cn(typography.bodySmall, "rounded-sm bg-surface-app px-zw-md py-zw-sm text-text-secondary")} data-testid="agent-empty">
             Nothing needs review right now.{canWrite ? " Use “Review opportunities” to check the pipeline again." : ""}
           </p>
         ) : (
-          <Panel>
+          <div>
             <ul aria-label="Recommendations needing review">
               {pending.map((r) => (
                 <RecommendationCard key={r.id} rec={r} canWrite={canWrite} organizationId={organizationId} owners={owners} selfHandle={selfHandle} onDone={onDone} />
               ))}
             </ul>
-          </Panel>
+          </div>
         )}
       </section>
+      </Panel>
+      <Panel surface="raised" className="flex flex-col gap-zw-md">
       <section aria-label="Reviewed" className="flex flex-col gap-zw-md">
-        <h2 className={cn(typography.sectionHeading, "text-text-primary")}>Recently reviewed</h2>
+        <SectionHeader title="Recently reviewed" icon={<ClockCounterClockwise />} />
         {reviewed.length === 0 ? (
-          <p className={cn(typography.bodySmall, "text-text-secondary")}>No reviewed recommendations yet.</p>
+          <p className={cn(typography.bodySmall, "rounded-sm bg-surface-app px-zw-md py-zw-sm text-text-secondary")}>No reviewed recommendations yet.</p>
         ) : (
-          <Panel>
+          <div>
             <ul aria-label="Reviewed recommendations">
               {reviewed.map((r) => (
                 <RecommendationCard key={r.id} rec={r} canWrite={false} organizationId={organizationId} owners={owners} selfHandle={selfHandle} onDone={onDone} />
               ))}
             </ul>
-          </Panel>
+          </div>
         )}
       </section>
+      </Panel>
     </div>
   );
 }

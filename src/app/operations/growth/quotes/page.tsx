@@ -29,7 +29,8 @@ import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
-import { SummaryStrip } from "@/components/ui/SummaryStrip";
+import { StatTile, StatTileGroup } from "@/components/ui/StatTile";
+import { CheckCircle, Hourglass, PaperPlaneTilt, PencilSimpleLine } from "@phosphor-icons/react/dist/ssr";
 import { QuotesDirectoryTable, type QuotesDirectoryRow } from "@/components/growth/QuotesDirectoryTable";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -108,16 +109,17 @@ export default async function QuotesDirectoryPage({ searchParams }: { searchPara
 
       {summary ? (
         <div data-testid="quotes-directory-summary">
-          <SummaryStrip
-            inline
-            items={[
-              { label: summary.drafts === 1 ? "draft" : "drafts", value: summary.drafts },
-              { label: "sent", value: summary.sent },
-              { label: "accepted", value: summary.accepted },
-              { label: "expired", value: summary.expired, tone: summary.expired > 0 ? "warning" : "default" },
+          {/* NP-UI-V2-3: the same four server counts in the Brand Lock v2 fact tiles (D-6); "expired" takes the attention
+              tone only when it is above zero. */}
+          <StatTileGroup label="Estimates and quotes at a glance">
+            {[
+              <StatTile key="drafts" label={summary.drafts === 1 ? "draft" : "drafts"} value={summary.drafts} icon={<PencilSimpleLine className="size-5" />} tone="neutral" />,
+              <StatTile key="sent" label="sent" value={summary.sent} icon={<PaperPlaneTilt className="size-5" />} tone="info" />,
+              <StatTile key="accepted" label="accepted" value={summary.accepted} icon={<CheckCircle className="size-5" />} tone={summary.accepted > 0 ? "positive" : "neutral"} />,
+              <StatTile key="expired" label="expired" value={summary.expired} icon={<Hourglass className="size-5" />} tone={summary.expired > 0 ? "attention" : "neutral"} />,
             ]}
-          />
-          <p className={cn(typography.metadata, "mt-1 text-text-muted")}>
+          </StatTileGroup>
+          <p className={cn(typography.metadata, "mt-2 text-text-muted")}>
             Sent counts every quote currently sent, including expired ones; expired means its valid-until date has passed in your workspace&apos;s timezone.
           </p>
         </div>
@@ -125,7 +127,7 @@ export default async function QuotesDirectoryPage({ searchParams }: { searchPara
         <AttentionState level="critical" title="Counts couldn't be loaded" description="The list below is unaffected. Reload the page to try again." />
       )}
 
-      <form method="get" action="/operations/growth/quotes" role="search" className="flex flex-col gap-zw-md md:flex-row md:items-end" data-testid="quotes-directory-filters">
+      <form method="get" action="/operations/growth/quotes" role="search" className="flex flex-col gap-zw-md rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm md:flex-row md:items-end" data-testid="quotes-directory-filters">
         <div className="min-w-0 flex-1">
           <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Number, estimate / quote, opportunity or contact" maxLength={DIRECTORY_SEARCH_MAX} data-testid="quotes-directory-search" />
         </div>

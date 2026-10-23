@@ -5,6 +5,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { SETTINGS_SECTIONS } from "@/lib/operations/settings-sections";
 import { settingsIcons } from "@/design/icons";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { iconCircleClasses, iconToneClasses } from "@/components/ui/Panel";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -30,16 +31,12 @@ export default async function SettingsHomePage() {
           const Icon = settingsIcons[section.slug];
           const body = (
             <>
-              <span
-                className={cn(
-                  "flex size-9 shrink-0 items-center justify-center rounded-sm",
-                  section.available ? "bg-surface-secondary text-text-primary" : "bg-surface-secondary text-text-muted",
-                )}
-              >
+              {/* NP-UI-V2-3: the Brand Lock v2 40px icon circle (mint for an available section). */}
+              <span className={cn(iconCircleClasses.md, section.available ? iconToneClasses.accent : iconToneClasses.neutral)}>
                 <Icon className="size-5" aria-hidden />
               </span>
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className={cn(typography.subsectionHeading, section.available ? "text-text-primary" : "text-text-secondary")}>
+                <span className={cn(typography.subsectionHeading, "pt-0.5", section.available ? "text-text-primary" : "text-text-secondary")}>
                   {section.title}
                 </span>
                 <span className={cn(typography.bodySmall, "text-text-secondary")}>{section.description}</span>
@@ -48,13 +45,13 @@ export default async function SettingsHomePage() {
               {section.available && <ArrowRight className="mt-1 size-4 shrink-0 text-text-muted" aria-hidden />}
             </>
           );
-          const shared = "flex items-start gap-3 rounded-md border border-border-subtle bg-surface-elevated p-zw-md";
+          const shared = "flex h-full items-start gap-3 rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm";
           return (
             <li key={section.slug}>
               {section.available ? (
                 <Link
                   href={`/operations/settings/${section.slug}`}
-                  className={cn(shared, "transition-colors duration-base hover:border-border-strong")}
+                  className={cn(shared, "transition-colors duration-base hover:border-accent-hover-border motion-reduce:transition-none")}
                 >
                   {body}
                 </Link>

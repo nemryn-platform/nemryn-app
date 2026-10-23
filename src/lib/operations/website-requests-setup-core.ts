@@ -169,7 +169,7 @@ export interface BuilderGuide {
   test: string;
 }
 
-const TEST_STEP = "Submit one request with TEST in the requester name, then check that it appears in your Request Hub.";
+const TEST_STEP = "Submit one request with TEST in the requester name, then check that it appears in your Requests.";
 
 export function builderGuide(builder: Builder): BuilderGuide {
   switch (builder) {

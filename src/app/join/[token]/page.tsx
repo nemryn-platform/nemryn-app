@@ -25,8 +25,8 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   const { data: preview, error } = await supabase.rpc("get_driver_invite_preview", { p_token: token });
 
   const shell = (children: React.ReactNode) => (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         {/*
           N0-M2-A2-R1: this is the PLATFORM frame — it must stay Nemryn-
           only, never co-branded with the inviting tenant. The invitation
@@ -49,7 +49,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   if (error || !preview || !preview.email || !preview.organization_name || !preview.display_name) {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>Invite not found</h1>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>Invite not found</h1>
         <p className={cn(typography.bodySmall, "text-text-secondary")}>
           This invite link isn&apos;t valid. Ask your dispatcher for a new one.
         </p>
@@ -63,7 +63,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   if (preview.status !== "pending") {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>
           {preview.status === "accepted" ? "Already joined" : "Invite no longer available"}
         </h1>
         <p className={cn(typography.bodySmall, "text-text-secondary")}>
@@ -85,7 +85,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   if (!user) {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Join {organizationName}</h1>
+        <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Join {organizationName}</h1>
         <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
           You&apos;ve been invited to drive for {organizationName} as {invitedDisplayName}. Create your
           account to get started.
@@ -105,7 +105,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
   if (signedInEmail !== inviteEmail.toLowerCase()) {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>Wrong account</h1>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>Wrong account</h1>
         <p className={cn(typography.bodySmall, "text-text-secondary")}>
           This invite is for <strong>{inviteEmail}</strong>, but you&apos;re signed in as <strong>{signedInEmail}</strong>.
           Sign out and sign back in with the invited email to continue.
@@ -116,7 +116,7 @@ export default async function JoinInvitePage({ params }: { params: Promise<{ tok
 
   return shell(
     <>
-      <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Join {organizationName}</h1>
+      <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Join {organizationName}</h1>
       <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
         You&apos;re signed in as {signedInEmail}. Accept this invite to start receiving trips as {invitedDisplayName}.
       </p>

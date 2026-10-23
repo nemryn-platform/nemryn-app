@@ -21,8 +21,8 @@ export default async function ForgotPasswordPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
           <Image
@@ -35,7 +35,7 @@ export default async function ForgotPasswordPage() {
           />
         </div>
 
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Reset your password</h1>
+        <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Reset your password</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
           Enter the email address on your account and we&apos;ll send you a link to reset your password.
         </p>
@@ -49,7 +49,7 @@ export default async function ForgotPasswordPage() {
           )}
         >
           Remembered your password?{" "}
-          <Link href="/sign-in" className="font-medium text-text-link">
+          <Link href="/sign-in" className="inline-flex min-h-11 items-center font-medium text-text-link">
             Sign in
           </Link>
         </p>

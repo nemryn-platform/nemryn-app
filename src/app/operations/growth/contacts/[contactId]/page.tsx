@@ -22,6 +22,7 @@ import { ContactWriteActions } from "@/components/growth/ContactActions";
 import { listOpportunities, type OpportunityListRow } from "@/lib/plus/opportunities";
 import { stageDisplayLabel, stageTone } from "@/lib/plus/opportunities-core";
 import Link from "next/link";
+import { AddressBook, ClockCounterClockwise, Handshake } from "@phosphor-icons/react/dist/ssr";
 import { isQuoteActivity, quoteActivityLine } from "@/lib/plus/quotes-core";
 import { SubjectTasksPanel } from "@/components/growth/SubjectTasksPanel";
 import { LinkedRequestsPanel } from "@/components/growth/LinkedRequestsPanel";
@@ -132,9 +133,11 @@ export default async function ContactDetailPage({
         <AttentionState level="info" title="Archived contact" description="Archived contacts are kept as history and can't be changed." />
       )}
 
-      <Panel className="flex flex-col gap-zw-md" data-testid="contact-details">
+      <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="contact-details">
         <SectionHeader
           title="Details"
+          icon={<AddressBook />}
+          tone="accent"
           actions={
             <div className="flex flex-wrap gap-1">
               {contact.doNotContact && <StatusBadge label="Do not contact" category="critical" />}
@@ -163,9 +166,10 @@ export default async function ContactDetailPage({
       <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "contact", id: contact.id, label: contact.displayName }} canWrite={canWrite} />
       <LinkedRequestsPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "contact", id: contact.id }} />
 
-      <div className="flex flex-col gap-zw-md" data-testid="contact-opportunities">
+      <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="contact-opportunities">
         <SectionHeader
           title="Opportunities"
+          icon={<Handshake />}
           description="Private-pay sales conversations with this contact."
           actions={
             canWrite ? (
@@ -180,7 +184,7 @@ export default async function ContactDetailPage({
         ) : opportunities.length === 0 ? (
           <p className={cn(typography.bodySmall, "text-text-secondary")}>No opportunities yet.</p>
         ) : (
-          <Panel>
+          <div>
             <ul aria-label="Opportunities" className="divide-y divide-border-subtle">
               {opportunities.map((o) => (
                 <li key={o.id} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0">
@@ -191,12 +195,12 @@ export default async function ContactDetailPage({
                 </li>
               ))}
             </ul>
-          </Panel>
+          </div>
         )}
-      </div>
+      </Panel>
 
-      <div className="flex flex-col gap-zw-md">
-        <SectionHeader title="Timeline" description="Notes and the calls, emails and meetings your team logged. Entries can't be edited or deleted." />
+      <Panel surface="raised" className="flex flex-col gap-zw-md">
+        <SectionHeader title="Timeline" description="Notes and the calls, emails and meetings your team logged. Entries can't be edited or deleted." icon={<ClockCounterClockwise />} />
         {canWrite && (
           <ContactWriteActions contactId={contact.id} contactName={contact.displayName} organizationId={context.organizationId} expectedVersion={contact.updatedAt} />
         )}
@@ -207,7 +211,7 @@ export default async function ContactDetailPage({
             Nothing recorded yet.
           </p>
         ) : (
-          <Panel>
+          <div>
             <ol aria-label="Timeline" data-testid="contact-timeline">
               {activities.map((a) => (
                 <li key={a.id} className="border-t border-border-subtle py-zw-md first:border-t-0 first:pt-0" data-testid="timeline-entry" data-type={a.type}>
@@ -230,9 +234,9 @@ export default async function ContactDetailPage({
                 </li>
               ))}
             </ol>
-          </Panel>
+          </div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }

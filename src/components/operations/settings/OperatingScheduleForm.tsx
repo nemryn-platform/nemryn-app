@@ -1,5 +1,6 @@
 "use client";
 
+import { Clock, Phone } from "@phosphor-icons/react/dist/ssr";
 import { useActionState } from "react";
 import Link from "next/link";
 import { saveOperatingScheduleAction, type OperatingScheduleActionState } from "@/app/operations/settings/operations/actions";
@@ -34,6 +35,8 @@ export function OperatingScheduleForm({ schedule, timezoneLabel, business }: Ope
     <form action={action} className="flex max-w-3xl flex-col gap-zw-lg" noValidate>
       <Panel className="flex flex-col gap-zw-md">
         <SectionHeader
+          icon={<Clock />}
+          tone="accent"
           title="Operating schedule"
           description="The days and hours your organization operates. This is shown to your team as information; it doesn't block or reject any request or trip."
         />
@@ -75,7 +78,7 @@ export function OperatingScheduleForm({ schedule, timezoneLabel, business }: Ope
       </Panel>
 
       <Panel className="flex flex-col gap-2">
-        <SectionHeader title="Contact" />
+        <SectionHeader title="Contact" icon={<Phone />} />
         {contactBits.length > 0 ? (
           <p className={cn(typography.bodySmall, "min-w-0 break-words text-text-secondary")}>{contactBits.join(" · ")}</p>
         ) : (

@@ -99,7 +99,7 @@ export function ConnectDialog({ open, onClose, onDone }: { open: boolean; onClos
       open={open}
       onClose={onClose}
       title="Connect your website"
-      description="Requests sent from this website will appear in your Nemryn Request Hub."
+      description="Requests sent from this website will appear in your Nemryn Requests."
     >
       <form action={action} className="flex flex-col gap-zw-md" noValidate>
         <Input
@@ -229,7 +229,7 @@ export function DisableDialog({
       open={open}
       onClose={onClose}
       title="Turn off website requests?"
-      description="New requests from your website will stop being accepted. Requests you already received stay in your Request Hub."
+      description="New requests from your website will stop being accepted. Requests you already received stay in your Requests."
     >
       <form action={action} className="flex flex-col gap-zw-md">
         <input type="hidden" name="integrationHandle" value={integration.handle} />

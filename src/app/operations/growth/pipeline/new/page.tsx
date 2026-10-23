@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AddressBook } from "@phosphor-icons/react/dist/ssr";
 import { redirect } from "next/navigation";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionHeader } from "@/components/ui/SectionHeader";
 import { Panel } from "@/components/ui/Panel";
 import { OpportunityForm } from "@/components/growth/OpportunityForm";
 import { typography } from "@/design/typography";
@@ -47,8 +49,11 @@ export default async function NewOpportunityPage({ searchParams }: { searchParam
         {contactId && (
           <AttentionState level="warning" title="That contact can't be used" description="It isn't an active contact in this workspace. Choose another one below." />
         )}
-        <Panel className="flex max-w-3xl flex-col gap-zw-md" data-testid="opportunity-contact-step">
-          <form method="get" action="/operations/growth/pipeline/new" role="search" className="flex flex-col gap-2 md:flex-row md:items-end">
+        {/* NP-UI-V2-3 final polish: step 1 as one raised panel with an icon header; the search sits in the framed filter
+            style. Same GET search, same Choose links and test ids. */}
+        <Panel surface="raised" className="flex max-w-3xl flex-col gap-zw-md" data-testid="opportunity-contact-step">
+          <SectionHeader as="h2" title="Choose a contact" description="Search your active contacts, then choose who this inquiry is from." icon={<AddressBook />} tone="accent" />
+          <form method="get" action="/operations/growth/pipeline/new" role="search" className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface-app p-zw-md md:flex-row md:items-end">
             <div className="min-w-0 flex-1">
               <Input name="q" label="Find a contact" type="search" defaultValue={q} placeholder="Name, email or phone" maxLength={200} />
             </div>
@@ -69,7 +74,7 @@ export default async function NewOpportunityPage({ searchParams }: { searchParam
           ) : (
             <ul className="flex flex-col divide-y divide-border-subtle" aria-label="Choose a contact">
               {results.map((c) => (
-                <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
                   <span className="min-w-0">
                     <span className={cn(typography.label, "block break-words text-text-primary")}>{c.displayName}</span>
                     <span className={cn(typography.metadata, "text-text-secondary")}>{contactKindLabel(c.contactKind)}</span>

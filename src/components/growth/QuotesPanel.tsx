@@ -1,3 +1,4 @@
+import { Receipt } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { listOwnerOptions } from "@/lib/plus/contacts";
 import { getQuote, listOpportunityQuotes, type QuoteDetail, type QuoteSummary } from "@/lib/plus/quotes";
@@ -93,7 +94,7 @@ function QuoteRow({ q, byId, timezone, emphasis }: { q: QuoteSummary; byId: Map<
         {predecessor ? ` · Revision of ${quoteReference(predecessor.kind, predecessor.quoteNumber)}` : ""}
         {successor ? ` · Replaced by ${quoteReference(successor.kind, successor.quoteNumber)}` : ""}
         {" · "}
-        <Link href={quotePrintHref(q.id)} target="_blank" rel="noopener" className="text-text-link hover:underline" data-testid="quote-print-link">
+        <Link href={quotePrintHref(q.id)} target="_blank" rel="noopener" className="text-text-link underline underline-offset-2 hover:no-underline" data-testid="quote-print-link">
           Print<span className="sr-only"> {quoteReference(q.kind, q.quoteNumber)} (opens in a new tab)</span>
         </Link>
       </p>
@@ -176,9 +177,12 @@ export async function QuotesPanel({
   const showControls = canWrite && groups !== null && !draftUnavailable && (groups.draft ? draft !== null : true);
 
   return (
-    <div id="quotes" className="flex scroll-mt-4 flex-col gap-zw-md" data-testid="opportunity-quotes">
+    // NP-UI-V2-3: one Brand Lock v2 panel (radius 14) with an icon header; the quote rows sit directly inside it.
+    <Panel surface="raised" id="quotes" className="flex scroll-mt-4 flex-col gap-zw-md" data-testid="opportunity-quotes">
       <SectionHeader
         title="Estimates & quotes"
+        icon={<Receipt />}
+        tone="accent"
         description={QUOTE_NOT_INVOICE_NOTE}
         actions={
           showControls && groups ? (
@@ -219,10 +223,10 @@ export async function QuotesPanel({
               No estimates or quotes yet.
             </p>
           ) : (
-            <Panel className="flex flex-col gap-zw-md">
+            <div className="flex flex-col gap-zw-md rounded-md border border-border-subtle px-zw-md py-zw-md">
               {(groups.draft || groups.sent) && (
                 <section aria-label="Current" data-testid="quotes-current">
-                  <h3 className={cn(typography.metadata, "mb-2 uppercase tracking-wide text-text-muted")}>Current</h3>
+                  <h3 className={cn(typography.label, "mb-1 text-text-secondary")}>Current</h3>
                   <ul>
                     {groups.draft && <QuoteRow q={groups.draft} byId={byId} timezone={timezone} emphasis="Active draft" />}
                     {groups.sent && <QuoteRow q={groups.sent} byId={byId} timezone={timezone} emphasis="Current sent" />}
@@ -231,7 +235,7 @@ export async function QuotesPanel({
               )}
               {groups.history.length > 0 && (
                 <section aria-label="History" data-testid="quotes-history">
-                  <h3 className={cn(typography.metadata, "mb-2 uppercase tracking-wide text-text-muted")}>History</h3>
+                  <h3 className={cn(typography.label, "mb-1 text-text-secondary")}>History</h3>
                   <ul>
                     {groups.history.map((q) => (
                       <QuoteRow key={q.id} q={q} byId={byId} timezone={timezone} />
@@ -240,10 +244,10 @@ export async function QuotesPanel({
                   <p className={cn(typography.metadata, "mt-2 text-text-muted")}>Earlier estimates and quotes are kept as they were. They can&apos;t be edited.</p>
                 </section>
               )}
-            </Panel>
+            </div>
           )}
         </>
       )}
-    </div>
+    </Panel>
   );
 }

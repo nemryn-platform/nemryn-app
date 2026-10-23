@@ -1,3 +1,4 @@
+import { Sparkle } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
@@ -48,7 +49,7 @@ export default async function PlusSettingsPage() {
         breadcrumb={[{ label: "Settings", href: "/operations/settings" }, { label: "Nemryn Plus" }]}
       />
       <Panel className="flex flex-col gap-zw-md" data-testid="plus-settings-status">
-        <SectionHeader title="Status" actions={<StatusBadge label={status.label} category={status.tone} />} />
+        <SectionHeader title="Status" icon={<Sparkle />} tone="accent" actions={<StatusBadge label={status.label} category={status.tone} />} />
         <p className={cn(typography.body, "text-text-primary")}>{status.message}</p>
         {canEnterGrowth(plus.state) && (
           <Link href="/operations/growth" className={cn(typography.bodySmall, "text-text-link hover:underline")}>

@@ -1,0 +1,194 @@
+NP-UI-V2-3 — VISUAL REVIEW (BROWSER EVIDENCE)
+=============================================
+Date: 2026-10-22.
+
+Every image is a real browser capture of the isolated app on :3100 (production build, Plus demo enabled). No generated
+mockups.
+- Before and after: an identical fresh reset, then empty-state captures, then the identical fictional Growth / Quotes
+  fixture written through the real Plus RPCs.
+- Before = origin/main e3f6630 (V2-2). After = the final V2-3 tree.
+
+Evidence (docs/design/concept-b/reviews/v2-3/):
+- before/ and after/: 77 captures each, identical names, listed in index.md;
+- v2-3-before-vs-after-growth.png: Dashboard, Pipeline board, Opportunity detail, Contact detail, Estimates & Quotes,
+  quote print;
+- v2-3-before-vs-after-settings-auth.png: Settings home, Team & Access, Nemryn Plus, Sign in 1440, Forgot password,
+  Sign in 390;
+- v2-3-contact-sheet.png: all 77 after captures.
+
+Widths:
+- 1440 for every screen;
+- 1024 / 768 for the Dashboard, Pipeline, Opportunity detail, Contacts, Contact detail, Tasks, Quotes, quote print,
+  Settings home, Organization and Team;
+- 390 for auth.
+
+References: the approved V2-1 Overview, the approved V2-2 Core screens, Brand Lock v2.
+
+1. SCREEN-BY-SCREEN
+-------------------
+Criteria: hierarchy, density, spacing, contrast, responsive.
+
+Growth Dashboard (g01 ×3, e20)
+- Before:
+  - five flat label-over-number boxes;
+  - grey stage chips;
+  - five plain white boxes with bare titles.
+- After:
+  - the Overview's D-6 fact tiles (number leading, label after it, icon circle, chevron);
+  - bordered stage cells;
+  - raised panels with icon headers;
+  - Needs attention attention-toned only when something needs it.
+- Responsive: five tiles across at 1440 (labels may wrap to two lines), three at 1024, two at 768. No overflow.
+- Verdict: parity reached.
+
+Pipeline (g02 board ×3, g02l list, g02x lost, e21)
+- Before: inline text links for the views and layouts; unframed filters; flat grey columns.
+- After:
+  - two ViewSwitches (the D-5 teal-underline active state) as on Requests / Dispatch;
+  - the filters in the white FilterBar frame;
+  - bordered columns with count pills;
+  - cards with the shared shadow and hover.
+- The list and lost views take the same frame.
+- Verdict: parity reached.
+
+Opportunity detail (g03 ×3, g03a–c, g03d dialog)
+- Before: two panels, then five sections as bare headings on the canvas with loose cards.
+- After:
+  - every section is a raised panel with an icon header in one rhythm: Details (mint), Stage, Estimates & quotes (mint),
+    Open tasks, Linked requests, History, Latest with this contact;
+  - quote rows in one bordered block;
+  - "Current" / "History" in sentence case;
+  - the lost / closed notice, accepted state and revision history all read clearly (g03a–c);
+  - the Mark as lost dialog is unchanged (v2 radius).
+- Verdict: parity reached. The display-face h1 is the opportunity title (an existing Growth decision; one h1 per
+  page).
+
+Contacts (g05 ×2, g06 ×2, g06a DNC, g06b dialog, g07 new, e22)
+- After:
+  - framed filters;
+  - detail sections as raised panels with icons;
+  - the DNC badge, warning and restrictions are unchanged and still prominent (g06a);
+  - the Add note dialog is unchanged.
+- Verdict: parity reached. The New contact form is unchanged; see §3.2.
+
+Tasks (g08 ×2, g08a dialog, e23)
+- After: the ViewSwitch for the task views; framed filters; task rows unchanged; the New task dialog is unchanged (v2).
+- Verdict: parity reached.
+
+Estimates & Quotes (g09 ×3, g10 / g10n editors, e24)
+- After:
+  - four D-6 fact tiles in place of the divided strip;
+  - framed filters;
+  - the directory table is unchanged.
+- The draft / new quote editors are the existing v2 dialogs. Their itemized layout, totals and DNC acknowledgement are
+  unchanged.
+- Verdict: parity reached.
+
+Quote print (g11 ×2, g11x)
+- On screen at 1440:
+  - the document sits in a v2 raised frame on the canvas;
+  - it is the same document, typography and itemization as before.
+- Printed / PDF and ≤768: identical to before (print: rules remove the frame).
+- The quote strict suites (o1 / s3c) confirm print text and structure.
+- Verdict: parity reached while staying print-neutral.
+
+Settings (s01 ×3, s02 ×2, s03 ×2, s04–s11, s13, s14)
+- Before: a card grid home, then pages with no way to move between sections except back to the home.
+- After:
+  - D-13 frame: an "All settings" link plus every section in a left column at ≥1024 (a scrolling row at 768), with the
+    active section in the D-5 / sidebar style;
+  - icon-circle section headers;
+  - home cards with mint icon circles.
+- s13: an unknown route still shows the RouteState not-found state.
+- s14: a Dispatcher opening an admin Settings page is still redirected (unchanged guard).
+- Verdict: parity reached, except §3.1.
+
+Auth (a01 ×4 incl. 390, a02 error, a03 ×2, a04 ×2, a05 ×2, a06, a07, a08 ×2, a09)
+- Before: a small white card on full-bleed navy; a 20px Geist title; hand-built 12px-radius buttons on three pages.
+- After:
+  - the cool canvas with the Concept B glow, matching the application canvas;
+  - the card as a v2 raised panel;
+  - a 29px Newsreader h1;
+  - the shared teal primary (9px radius, gradient) everywhere;
+  - the approved primary logo unchanged.
+- At 390 the card fills the width with a 16px gutter; no overflow.
+- The error and expired-link states use the same frame.
+- Verdict: parity reached.
+
+2. CROSS-APPLICATION CHECKS
+---------------------------
+- Sidebar: Growth (Dashboard, Pipeline, Contacts, Estimates & Quotes, Tasks) and Settings destinations are unchanged.
+  Active states are correct in every capture.
+- Cross-module links are unchanged:
+  - Growth → Operations requests;
+  - opportunity ↔ contact;
+  - quote → print;
+  - Settings ↔ home.
+- Growth visibility follows the entitlement:
+  - Org A admin (Plus) sees Growth;
+  - Org B (Core), the grant-less Dispatcher, the Driver and signed-out visitors do not (test report).
+- No fictional metric was added. Every tile is an existing server count.
+
+3. OUTSTANDING ITEMS
+--------------------
+3.1 Website Requests (s12, s12a–c) render "This page couldn't be loaded" on the LOCAL production build, before and
+    after V2-3.
+    - Cause: src/lib/app-url.ts deliberately refuses to build application links from a loopback origin
+      (http://localhost:3100) when NODE_ENV=production. This is a safety guard, not a defect.
+    - V2-3 changed only these pages' D-14 copy and the shared Settings frame.
+    - Their visual result could not be captured locally.
+    - Verify on a non-loopback host (preview / production read-only) before approval.
+3.2 Plainer screens, functionally unchanged:
+    - the Growth Agent page (g12);
+    - the Growth create / edit forms: New opportunity, New contact, and their edit pages.
+    They use v2 tokens and controls, but are not yet in the raised-panel / icon-header anatomy. They are candidates for
+    V2-4's integrated pass.
+3.3 No lapsed ("Expired") quote is in the fixture.
+    - The quote immutability trigger correctly refused moving a sent quote's valid-until date into the past.
+    - The Expired tone is covered by the Quotes strict suites, not by these captures.
+3.4 The five Growth Dashboard tiles wrap their labels to two lines at 1440. This is acceptable, but the Overview uses
+    four tiles.
+
+4. VERDICT
+----------
+- Growth, Estimates & Quotes, Settings and Auth now use the V2-1 / V2-2 anatomy and look like the same application:
+  - display h1 and actions;
+  - fact tiles from real counts;
+  - raised icon-header panels;
+  - ViewSwitch and framed filters;
+  - calm empty states;
+  - the teal primary;
+  - the cool canvas.
+- READY FOR OWNER / CHATGPT REVIEW as a CONDITIONAL PASS, with §3.1 to verify on a non-loopback host and §3.2 noted.
+
+5. FINAL POLISH UPDATE (supersedes §3.1 and §3.2; see NP-UI-V2-3-final-polish.txt)
+-----------------------------------------------------------------------------------
+§3.2 — Resolved. Evidence: final-polish/final-polish-before-vs-after.png (1440) and -768.png.
+- Growth Agent: the mint "How the Growth Agent works" guidance panel, and raised Needs review / Recently reviewed
+  panels with icon headers.
+- New opportunity: the chooser as a raised panel with an icon header.
+- New opportunity, Edit opportunity, New contact, Edit contact: FormSection groups with icon headers, plus a mint
+  "Before you save" guidance panel in a side column at ≥1280. This is the same anatomy as New Trip / Log Request.
+
+§3.1 — Verified on a local non-loopback preview: 8 / 8 PASS. Evidence:
+final-polish/website-requests-preview-sheet.png.
+- All four Website Requests routes at 1440 / 768:
+  - render;
+  - one h1;
+  - Settings frame with "Website Requests" active;
+  - 0 serious / critical axe;
+  - no overflow;
+  - "Nemryn Requests" copy.
+- Remaining condition: re-check on the hosted / production build after the owner deploys. This was a local preview,
+  not a Vercel preview.
+
+Mobile auth at 390px (844 and 667 tall): 14 / 14 PASS. Evidence: final-polish/auth-390-sheet.png.
+- The cards scroll fully and are never clipped.
+- Every control is ≥44px; the submits are 48px.
+- The small standalone links were enlarged to 44px targets.
+
+§3.3 (no lapsed quote in the fixture) and §3.4 (five tiles wrap their labels at 1440) stand as documented notes, not
+open conditions.
+
+VERDICT (updated): READY FOR OWNER APPROVAL. The only remaining condition is the hosted / production re-check of
+Website Requests after deployment.

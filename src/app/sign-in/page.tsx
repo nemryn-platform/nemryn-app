@@ -30,7 +30,7 @@ export default async function SignInPage({
   const next = isSafeRedirectPath(nextParam) ? nextParam : undefined;
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
       {/*
         P1-E3-S2A temporarily used max-w-[24rem] here because max-w-sm was
         silently hijacked by a project-defined --spacing-sm token (0.5rem)
@@ -40,7 +40,7 @@ export default async function SignInPage({
         restored max-w-sm to its correct, compiled 24rem value — confirmed
         directly from the compiled CSS before switching back to it here.
       */}
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         {/*
           N0-M2-A2-R1: approved Nemryn platform lockup (locked artwork —
           not modified here). width/height reflect the SVG's own
@@ -59,7 +59,7 @@ export default async function SignInPage({
           />
         </div>
 
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Welcome back</h1>
+        <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Welcome back</h1>
         <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
           Sign in to continue to Nemryn.
         </p>
@@ -79,7 +79,7 @@ export default async function SignInPage({
           )}
         >
           New to Nemryn?{" "}
-          <Link href="/sign-up" className="font-medium text-text-link">
+          <Link href="/sign-up" className="inline-flex min-h-11 items-center font-medium text-text-link">
             Create an account
           </Link>
         </p>

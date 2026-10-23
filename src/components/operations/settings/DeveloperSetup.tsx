@@ -39,7 +39,7 @@ export function DeveloperSetup({ connection, endpoint }: { connection: WebsiteRe
       <Panel className="flex flex-col gap-zw-sm">
         <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Developer connection</h2>
         <p className={cn(typography.body, "text-text-secondary")}>
-          Connect your website directly using Nemryn&apos;s website intake API. Your website&apos;s server sends each completed request to Nemryn; it appears in your Request Hub as Pending.
+          Connect your website directly using Nemryn&apos;s website intake API. Your website&apos;s server sends each completed request to Nemryn; it appears in your Requests as Pending.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <CopyValue value={pkg} label="setup instructions" buttonLabel="Copy setup instructions" size="md" />

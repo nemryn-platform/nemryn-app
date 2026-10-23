@@ -1,0 +1,254 @@
+NP-UI-V2-3 — GROWTH, QUOTES, SETTINGS & AUTH VISUAL PARITY: IMPLEMENTATION
+==========================================================================
+Date: 2026-10-22.
+Mode: controlled local implementation.
+- Nothing staged, committed, pushed, merged or deployed.
+- The owner handles Git.
+- V2-4 not started.
+Companion reports:
+- NP-UI-V2-3-visual-review.txt
+- NP-UI-V2-3-test-results.txt
+Evidence: docs/design/concept-b/reviews/v2-3/ (index.md).
+
+1. STARTING POINT AND RELEASE CHECK
+-----------------------------------
+- origin/main fetched: e3f6630, "Merge pull request #27 ... np-ui-v2-2-core-visual-parity".
+  - The V2-2 commit 92f632f is present.
+- V2-2 production verification: owner-authorized and read-only.
+  - Signed in to https://app.nemryn.com as the synthetic "Nemryn Pilot Simulation" admin. Credentials came from the
+    git-ignored .env.sim.local and were not printed.
+  - Navigation only: no action was clicked and no form was submitted. Screenshots were kept in the session
+    scratchpad.
+  - Results: 4 / 4 PASS.
+    - Overview: one h1 "Today's Operations", Newsreader, no error, no overflow.
+    - Requests: renders.
+    - Trip Detail: h1 "Trip Detail" plus the V2-2 record summary (data-testid trip-record-summary). This confirms V2-2
+      is deployed.
+    - Dispatch: the V2-2 fact tiles (dispatch-summary) and the grid region.
+  - No regression was found, so V2-3 proceeded.
+- Branch: np-ui-v2-3-growth-supporting-parity, created from origin/main e3f6630.
+  - The auto-set upstream was removed.
+- Working tree at start: 0 tracked changes.
+  - 386 untracked items preserved, including tests/e2e/fixtures/ (the Plus demo fixture) and its reports.
+- Environment:
+  - persistent ~/NemrynS1Iso;
+  - app :3100 from production builds using only ~/NemrynS1Iso/.env.isolated.local;
+  - Plus demo enabled for all captures.
+  - The owner's own `next dev` on :3000 was not touched.
+
+2. REFERENCES APPLIED
+---------------------
+- Brand Lock v2 (16-brand-lock-v2.md) §1–§6, including D-13 and D-14, which §6 schedules for V2-3.
+- V2 plan §4 (V2-3 scope).
+- The V2-1 / V2-2 screenshot sets and reports.
+- The V2-2 anatomy:
+  - display h1 with actions;
+  - D-6 fact tiles;
+  - raised panels (radius 14) with 40 / 45px icon circles;
+  - ViewSwitch (D-5) and the framed FilterBar;
+  - calm empty states.
+- Nothing new: no new token, font, colour, radius or brand direction.
+
+3. SHARED COMPONENT CHANGES
+---------------------------
+a) SectionHeader:
+   - Optional `icon` and `tone`: the same 40px icon circle as PanelHeader.
+   - Single-line titles are centred on the circle.
+   - Existing callers without an icon are unchanged.
+   - Used by Growth and Settings sections.
+b) ViewSwitch: optional per-item `testId`, kept from a hand-built switch it replaces (layout-board / layout-list).
+c) NEW src/components/operations/settings/SettingsSubNav.tsx and NEW src/app/operations/settings/layout.tsx.
+   - D-13, the Settings sub-navigation frame. Layout only.
+   - It lists the existing sections: the same slugs, titles and order as the Settings home.
+   - No route, guard or permission changed.
+   - A side column at ≥1024px; a scrolling row below that.
+   - Hidden on the Settings home, whose cards are the index.
+   - Rendered only for an Organization Admin (who can open every listed section). Any other role reaching a Settings
+     page they may open sees it exactly as before.
+
+4. SCREENS COMPLETED
+--------------------
+GROWTH
+- Dashboard:
+  - The five real counts become D-6 fact tiles: icon circle, the number leading, the label after it, a chevron.
+    - Links and data-testids (metric-*, metric-*-value) are unchanged.
+    - "Overdue tasks" turns critical only when above zero.
+  - Stage counts are bordered cells (stage-count unchanged).
+  - Pipeline, Needs attention, Growth Agent, Quick actions and Recent activity are raised panels with icon headers.
+  - Needs attention is attention-toned only when something is overdue or needs follow-up.
+- Pipeline:
+  - The hand-built Open / Lost / All and Board / List links become two ViewSwitches.
+    - Same hrefs and aria-current.
+    - pipeline-views, layout-board and layout-list kept.
+  - The GET filter form is framed like the Core FilterBar. Fields, names and the Apply / Clear behaviour are unchanged.
+  - Board: bordered columns with count pills; cards with the card shadow and accent hover.
+  - List: unchanged (DataTable).
+- Opportunity detail:
+  - Details, Stage, Estimates & quotes, Open tasks, Linked requests, History and "Latest with this contact" are each a
+    raised panel with an icon header, in the same order.
+  - Before, five of them were bare headings on the canvas with loose cards.
+- Contacts directory: framed filters; empty state with the card shadow.
+- Contact detail:
+  - Details, Open tasks, Linked requests, Opportunities and Timeline are raised panels with icon headers.
+  - The DNC badge, ContactWriteActions and the archive control are unchanged.
+- Tasks: the Task views ViewSwitch (task-views kept); framed filters.
+- Shared Growth panels (QuotesPanel, SubjectTasksPanel, LinkedRequestsPanel):
+  - each root is now the raised panel itself;
+  - the quote rows sit in one bordered block instead of a card inside a card;
+  - "Current" / "History" labels are sentence case (no uppercase eyebrow);
+  - every data-testid and the #quotes anchor are kept.
+- D-14: the linked-request outcome line reads "standing order active / paused / …" instead of "recurring care …".
+  - src/lib/plus/attribution-core.ts copy, plus its one unit-test expectation updated to the approved wording.
+
+ESTIMATES & QUOTES
+- Directory:
+  - The SummaryStrip becomes four D-6 fact tiles (drafts / sent / accepted / expired).
+    - Same server counts; "expired" attention-toned only when above zero.
+    - quotes-directory-summary kept; the "N drafts / N sent …" text is unchanged.
+  - Framed filters.
+- Quote panel: as above. No quote state, rule, calculation, reference, DNC handling, notice or event changed.
+- Print:
+  - On screens ≥768px the document sits in a v2 raised frame (border, radius 14, panel shadow, margin).
+  - print: classes remove all of it, so the printed / PDF output stays print-neutral and structurally identical.
+  - Below 768px it is unchanged.
+- The quote print link inside the muted row text is underlined (axe link-in-text-block; it was colour-only).
+
+SETTINGS
+- D-13 frame (above) on every Settings section page.
+- Home:
+  - section cards with the 40px mint icon circle, the card shadow and an accent hover;
+  - "Not yet available" sections keep a neutral circle.
+- Section headers get icon circles: Organization, Team & Access, My Access, Security, Notifications, Nemryn Plus,
+  Services, Operations (schedule / contact).
+- D-14: Settings copy "Request Hub" becomes "Requests" in the Website Requests pages and their status / setup messages.
+  - Files: website-requests-core.ts, website-requests-setup-core.ts, and the six settings components listed in §6.
+  - The notification EMAIL ("Open Request Hub") is outbound email content, not Settings UI. It is unchanged, as is its
+    test.
+
+AUTHENTICATION
+Pages:
+- sign-in;
+- sign-up;
+- forgot-password;
+- auth/reset-password;
+- auth/auth-code-error;
+- join/[token];
+- team-invite/[token];
+- complete-signup/form;
+- global-error.
+
+Changes:
+- The cool canvas with the faint Concept B glow, instead of full-bleed navy.
+- The card as a v2 raised panel: radius 14, hairline border, panel shadow.
+- The page's one h1 in the display face (Newsreader 29px, the displaySection role; ≥22px per §2).
+  - global-error keeps its plain h1: it renders without the root layout and its fonts.
+- The three hand-built submit buttons (ResetPasswordForm, reset-password, auth-code-error) take the shared primary
+  look: 9px radius, the teal gradient and the semibold label.
+- The approved primary logo is unchanged (same file, same size).
+- No redirect, session, token, validation or focus behaviour changed.
+
+5. NOT CHANGED (BOUNDARIES)
+---------------------------
+- No migration, RLS, RPC, server action, authorization or permission change.
+  - git diff supabase/: empty.
+  - No actions.ts touched.
+- No quote logic: states, the one-draft / one-sent rule, revisions, references, pricing, staff-only print, no public
+  links, no email, DNC, the closed notice, audit events.
+- Growth visibility is still decided by plus_access_state.
+  - Navigation and route guards are untouched.
+  - The entitlement checks pass (test report).
+- No new route or feature.
+- No production data access beyond the read-only V2-2 check in §1.
+- public/brand/** byte-identical (SHA-256 verified).
+
+6. CHANGED-FILE INVENTORY
+-------------------------
+Modified (42):
+  src/app/auth/auth-code-error/page.tsx
+  src/app/auth/reset-password/page.tsx
+  src/app/complete-signup/form/page.tsx
+  src/app/forgot-password/page.tsx
+  src/app/global-error.tsx
+  src/app/join/[token]/page.tsx
+  src/app/sign-in/page.tsx
+  src/app/sign-up/page.tsx
+  src/app/team-invite/[token]/page.tsx
+  src/app/quote-print/[quoteId]/page.tsx
+  src/app/operations/growth/page.tsx
+  src/app/operations/growth/pipeline/page.tsx
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx
+  src/app/operations/growth/contacts/page.tsx
+  src/app/operations/growth/contacts/[contactId]/page.tsx
+  src/app/operations/growth/tasks/page.tsx
+  src/app/operations/growth/quotes/page.tsx
+  src/app/operations/settings/page.tsx
+  src/app/operations/settings/my-access/page.tsx
+  src/app/operations/settings/notifications/page.tsx
+  src/app/operations/settings/plus/page.tsx
+  src/app/operations/settings/security/page.tsx
+  src/components/auth/ResetPasswordForm.tsx
+  src/components/growth/{LinkedRequestsPanel,QuotesPanel,SubjectTasksPanel}.tsx
+  src/components/operations/settings/{DeveloperSetup,FormPublishPanel,OperatingScheduleForm,OrganizationSettingsForm,
+    PlusTeamAccessSection,ServiceOfferingsForm,TeamSection,WebsiteConnectionControls,WebsiteRequestsOverview,
+    WebsiteRequestsSetup}.tsx
+  src/components/ui/{SectionHeader,ViewSwitch}.tsx
+  src/lib/operations/website-requests-core.ts            (D-14 copy strings only)
+  src/lib/operations/website-requests-setup-core.ts      (D-14 copy string only)
+  src/lib/plus/attribution-core.ts                       (D-14 copy string only)
+  src/lib/plus/attribution-core.test.mjs                 (the matching expectation: "standing order active")
+  (git diff --stat: 42 files changed, 279 insertions(+), 196 deletions(-))
+
+Added:
+  src/app/operations/settings/layout.tsx
+  src/components/operations/settings/SettingsSubNav.tsx
+  docs/design/concept-b/reviews/v2-3/ (index.md, before/ ×77, after/ ×77, 3 sheets)
+  docs/reports/NP-UI-V2-3-{implementation,visual-review,test-results}.txt
+
+7. RESULT
+---------
+CONDITIONAL PASS. All functional gates pass (test report). The conditions are two documented items for owner review:
+- the Website Requests screens could not be captured on the local production build (visual review §3.1);
+- the plainer Growth Agent page and the Growth create / edit forms (visual review §3.2).
+STOP for owner / ChatGPT review.
+
+8. FINAL POLISH UPDATE (owner-requested completion; details in NP-UI-V2-3-final-polish.txt)
+-------------------------------------------------------------------------------------------
+Additional changes on the same uncommitted tree:
+
+Growth Agent:
+- src/app/operations/growth/agent/page.tsx: the explainer becomes a mint guidance panel with an icon header; text
+  unchanged.
+- src/components/growth/GrowthAgent.tsx: "Needs review" and "Recently reviewed" become raised panels with icon headers,
+  with calm empty lines; ids unchanged.
+
+New opportunity:
+- src/app/operations/growth/pipeline/new/page.tsx: the contact chooser is a raised panel with an icon header and the
+  framed search.
+
+Forms:
+- src/components/growth/OpportunityForm.tsx: FormSection groups (Opportunity / Source & ownership / Value) plus the side
+  guidance panel.
+- src/components/growth/ContactForm.tsx: FormSection groups (Contact details / Preferences) plus the side guidance
+  panel.
+- NEW src/components/growth/GuidancePanel.tsx: a mint "Before you save" panel carrying each form's existing notice (same
+  text, same data-testid).
+
+Auth tap targets (44px, inline-flex min-h-11; same text and position):
+- src/components/auth/SignInForm.tsx and ForgotPasswordForm.tsx;
+- src/app/sign-in, sign-up and forgot-password page.tsx;
+- src/app/auth/auth-code-error and reset-password page.tsx.
+
+No field, validation, action, permission, route or business rule changed.
+
+Inventory now: 49 modified files plus 3 new source files (git diff --stat: 49 files changed, 445 insertions(+), 304
+deletions(-)).
+
+Website Requests:
+- Verified on a local NON-LOOPBACK preview (http://vee-macbook-pro.local:3100, a separate production build; guard
+  unchanged): 8 / 8 PASS.
+
+RESULT (updated): PASS.
+- Every V2-3 screen is at Brand Lock v2 parity.
+- Every functional gate passes on the exact final tree.
+- One remaining condition: the Website Requests pages should also be checked on a hosted preview or production after
+  the owner deploys, because the verification here used a local non-loopback preview.

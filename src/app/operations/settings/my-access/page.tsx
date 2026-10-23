@@ -1,3 +1,4 @@
+import { SteeringWheel, UserCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getMyAccessSummary } from "@/lib/operations/self-driver";
@@ -33,7 +34,7 @@ export default async function MyAccessPage() {
       />
 
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="My account" />
+        <SectionHeader title="My account" icon={<UserCircle />} />
         <dl className="grid grid-cols-1 gap-zw-md md:grid-cols-2">
           <div className="min-w-0">
             <dt className={cn(typography.label, "text-text-muted")}>Name</dt>
@@ -55,7 +56,7 @@ export default async function MyAccessPage() {
       </Panel>
 
       <Panel className="flex flex-col gap-zw-md">
-        <SectionHeader title="Driver access" />
+        <SectionHeader title="Driver access" icon={<SteeringWheel />} />
         <MyDriverAccessCard state={me.driverAccess} suggestedName={me.suggestedName} suggestedPhone={me.suggestedPhone} />
       </Panel>
     </div>

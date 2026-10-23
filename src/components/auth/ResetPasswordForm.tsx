@@ -40,7 +40,7 @@ export function ResetPasswordForm() {
           href="/"
           className={cn(
             typography.button,
-            "flex h-12 w-full items-center justify-center rounded-md bg-action-primary-background text-action-primary-foreground hover:bg-action-primary-hover",
+            "flex h-12 w-full items-center justify-center rounded-sm border border-action-primary-hover bg-action-primary-background bg-action-primary-gradient font-semibold text-action-primary-foreground hover:bg-action-primary-hover hover:bg-none",
           )}
         >
           Continue

@@ -202,7 +202,7 @@ export function FormPublishPanel({ savedForm, dirty, publication, origin, reques
           </div>
 
           <p className={cn(typography.bodySmall, "text-text-secondary")}>
-            To test it, open the hosted form and send a test request. It appears in your Request Hub, and the connection above changes to Connected.
+            To test it, open the hosted form and send a test request. It appears in your Requests, and the connection above changes to Connected.
           </p>
         </>
       )}

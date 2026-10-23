@@ -1,6 +1,8 @@
+import { Tray } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { listLinkedRequests, type LinkedRequest } from "@/lib/plus/attribution";
 import { decisionReasonLabel, linkMethodLabel, requestOutcomeLine } from "@/lib/plus/attribution-core";
@@ -32,9 +34,10 @@ export async function LinkedRequestsPanel({
     rows = null;
   }
   return (
-    <div className="flex flex-col gap-zw-md" data-testid={`${subject.kind}-requests`}>
+    <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid={`${subject.kind}-requests`}>
       <SectionHeader
         title="Linked requests"
+        icon={<Tray />}
         description="Operations requests linked to this record. Status comes from Operations; linking doesn't change it."
       />
       {rows === null ? (
@@ -69,6 +72,6 @@ export async function LinkedRequestsPanel({
           })}
         </ul>
       )}
-    </div>
+    </Panel>
   );
 }

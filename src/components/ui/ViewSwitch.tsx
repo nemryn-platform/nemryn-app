@@ -8,6 +8,8 @@ export interface ViewSwitchItem {
   href: string;
   /** Optional real count shown beside the label (e.g. pending requests). Never decorative or estimated. */
   count?: number | null;
+  /** NP-UI-V2-3: an optional per-option data-testid (kept from a hand-built switch this replaces). */
+  testId?: string;
 }
 
 export interface ViewSwitchProps {
@@ -36,6 +38,7 @@ export function ViewSwitch({ label, items, activeKey, className, testId }: ViewS
             key={item.key}
             href={item.href}
             aria-current={active ? "page" : undefined}
+            data-testid={item.testId}
             className={cn(
               typography.bodySmall,
               "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 font-medium transition-colors duration-base motion-reduce:transition-none",

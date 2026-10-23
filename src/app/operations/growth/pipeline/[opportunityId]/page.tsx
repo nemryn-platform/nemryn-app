@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ChatCircleText, ClockCounterClockwise, Funnel, Handshake } from "@phosphor-icons/react/dist/ssr";
 import { notFound } from "next/navigation";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
@@ -161,9 +162,11 @@ export default async function OpportunityDetailPage({
         <AttentionState level="info" title="The contact is archived" description="The opportunity is kept. Their contact record is now read-only history." />
       )}
 
-      <Panel className="flex flex-col gap-zw-md" data-testid="opportunity-details">
+      <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="opportunity-details">
         <SectionHeader
           title="Details"
+          icon={<Handshake />}
+          tone="accent"
           actions={
             <div className="flex flex-wrap gap-1">
               {o.contactDoNotContact && <StatusBadge label="Do not contact" category="critical" />}
@@ -206,8 +209,8 @@ export default async function OpportunityDetailPage({
       </Panel>
 
       {canWrite && (
-        <Panel className="flex flex-col gap-zw-md">
-          <SectionHeader title="Stage" />
+        <Panel surface="raised" className="flex flex-col gap-zw-md">
+          <SectionHeader title="Stage" icon={<Funnel />} />
           <OpportunityStageControls organizationId={context.organizationId} opportunityId={o.id} expectedVersion={o.updatedAt} stage={o.stage} />
         </Panel>
       )}
@@ -225,15 +228,16 @@ export default async function OpportunityDetailPage({
       <SubjectTasksPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id, label: o.title }} canWrite={canWrite && open} />
       <LinkedRequestsPanel organizationId={context.organizationId} timezone={tz} subject={{ kind: "opportunity", id: o.id }} />
 
-      <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
-        <div className="flex flex-col gap-zw-md">
-          <SectionHeader title="History" description="Stage, owner and quote changes, newest first. Entries can't be edited." />
+      {/* NP-UI-V2-3: History and the contact's latest interactions are each one raised panel (header inside). */}
+      <div className="grid grid-cols-1 items-start gap-zw-lg lg:grid-cols-2">
+        <Panel surface="raised" className="flex flex-col gap-zw-md">
+          <SectionHeader title="History" description="Stage, owner and quote changes, newest first. Entries can't be edited." icon={<ClockCounterClockwise />} />
           {history === null ? (
             <AttentionState level="critical" title="History couldn't be loaded" description="Reload the page to try again." />
           ) : history.length === 0 ? (
             <p className={cn(typography.bodySmall, "text-text-secondary")}>No stage changes yet. It started as a new inquiry.</p>
           ) : (
-            <Panel>
+            <div>
               <ol aria-label="Opportunity history" data-testid="opportunity-history">
                 {history.map((a) => (
                   <li key={a.id} className="border-t border-border-subtle py-zw-sm first:border-t-0 first:pt-0" data-testid="history-entry" data-type={a.type}>
@@ -248,12 +252,13 @@ export default async function OpportunityDetailPage({
                   </li>
                 ))}
               </ol>
-            </Panel>
+            </div>
           )}
-        </div>
-        <div className="flex flex-col gap-zw-md">
+        </Panel>
+        <Panel surface="raised" className="flex flex-col gap-zw-md">
           <SectionHeader
             title="Latest with this contact"
+            icon={<ChatCircleText />}
             description="The most recent notes, calls, emails and meetings logged on the contact."
             actions={
               <Link href={`/operations/growth/contacts/${o.contactId}`} className={cn(typography.bodySmall, "text-text-link hover:underline")}>
@@ -266,7 +271,7 @@ export default async function OpportunityDetailPage({
           ) : interactions.length === 0 ? (
             <p className={cn(typography.bodySmall, "text-text-secondary")}>Nothing logged with this contact yet.</p>
           ) : (
-            <Panel>
+            <div>
               <ol aria-label="Latest contact interactions" data-testid="opportunity-interactions">
                 {interactions.map((a) => (
                   <li key={a.id} className="border-t border-border-subtle py-zw-sm first:border-t-0 first:pt-0">
@@ -283,9 +288,9 @@ export default async function OpportunityDetailPage({
                   </li>
                 ))}
               </ol>
-            </Panel>
+            </div>
           )}
-        </div>
+        </Panel>
       </div>
     </div>
   );

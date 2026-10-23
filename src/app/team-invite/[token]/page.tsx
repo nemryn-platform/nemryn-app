@@ -28,8 +28,8 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
   const { data: preview, error } = await supabase.rpc("get_staff_invite_preview", { p_token: token });
 
   const shell = (children: React.ReactNode) => (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         <div className="mb-8 flex justify-center">
           <Image src="/brand/nemryn-logo-primary.svg" alt="Nemryn" width={434} height={127} priority className="h-auto w-60" />
         </div>
@@ -41,7 +41,7 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
   if (error || !preview || !preview.email || !preview.organization_name || !preview.role) {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>Invitation not found</h1>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>Invitation not found</h1>
         <p className={cn(typography.bodySmall, "text-text-secondary")}>This invitation link isn&apos;t valid. Ask your organization&apos;s administrator to send a new one.</p>
       </>,
     );
@@ -60,7 +60,7 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
     const message = copy[preview.status ?? ""] ?? copy.cancelled;
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>{message.title}</h1>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>{message.title}</h1>
         <p className={cn(typography.bodySmall, "text-text-secondary")}>{message.body}</p>
         {preview.status === "accepted" && (
           <Link href="/sign-in" className={cn(typography.bodySmall, "mt-4 inline-block font-medium text-text-link")}>
@@ -76,7 +76,7 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
   if (!user) {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Join {organizationName}</h1>
+        <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Join {organizationName}</h1>
         <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
           You&apos;ve been invited to join {organizationName} as {roleLabel}. Create your account to accept.
         </p>
@@ -95,7 +95,7 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
   if (signedInEmail !== inviteEmail.toLowerCase()) {
     return shell(
       <>
-        <h1 className={cn(typography.sectionHeading, "mb-2 text-text-primary")}>Wrong account</h1>
+        <h1 className={cn(typography.displaySection, "mb-2 text-text-primary")}>Wrong account</h1>
         <p className={cn(typography.bodySmall, "mb-4 text-text-secondary")}>
           This invitation is for <strong>{inviteEmail}</strong>, but you&apos;re signed in as <strong>{signedInEmail}</strong>. Sign out and
           sign back in with the invited email to continue.
@@ -111,7 +111,7 @@ export default async function TeamInvitePage({ params }: { params: Promise<{ tok
 
   return shell(
     <>
-      <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Join {organizationName}</h1>
+      <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Join {organizationName}</h1>
       <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
         You&apos;re signed in as {signedInEmail}. Accept this invitation to join {organizationName} as {roleLabel}.
       </p>

@@ -14,9 +14,9 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
         <title>Something went wrong | Nemryn</title>
         <meta name="robots" content="noindex, nofollow" />
       </head>
-      <body className="bg-brand-care-navy">
+      <body className="bg-surface-app bg-canvas-glow">
         <main className="flex min-h-dvh items-center justify-center px-4 py-12" data-testid="global-error">
-          <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 text-text-primary shadow-sm">
+          <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 text-text-primary shadow-panel">
             {/* eslint-disable-next-line @next/next/no-img-element -- next/image is unavailable when the root layout failed */}
             <img src="/brand/nemryn-logo-primary.svg" alt="Nemryn" width={434} height={127} className="mx-auto mb-8 h-auto w-60" />
             <h1 className="mb-2 text-lg font-semibold">Something went wrong</h1>

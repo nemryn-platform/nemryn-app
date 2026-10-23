@@ -1,4 +1,6 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
+import { AddressBook, CaretRight, ChatCircleText, ClockCounterClockwise, Funnel, Lightning, ListChecks, Sparkle, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
 import { canWriteGrowth, isPlusReadOnly, plusCapabilitySummary, plusStatusSummary } from "@/lib/plus/access-core";
@@ -21,24 +23,51 @@ import { AttentionState } from "@/components/ui/AttentionState";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { Panel } from "@/components/ui/Panel";
+import { Panel, iconToneClasses, type PanelTone } from "@/components/ui/Panel";
 import { RunReviewButton } from "@/components/growth/GrowthAgent";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 export const metadata = { title: "Growth" };
 
-function Metric({ label, value, href, tone = "default", testId }: { label: string; value: number; href: string; tone?: "default" | "critical"; testId: string }) {
+/**
+ * NP-UI-V2-3: the Brand Lock v2 fact tile (D-6, as StatTile): a 42px icon circle, the real count leading, its label
+ * after it, a chevron because each tile links to its filtered view. Same values, links and test ids as before.
+ */
+function Metric({
+  label,
+  value,
+  href,
+  tone = "default",
+  testId,
+  icon,
+  iconTone,
+}: {
+  label: string;
+  value: number;
+  href: string;
+  tone?: "default" | "critical";
+  testId: string;
+  icon: ReactNode;
+  iconTone: PanelTone;
+}) {
+  const alert = tone === "critical" && value > 0;
   return (
     <Link
       href={href}
-      className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-elevated p-zw-md hover:bg-surface-hover focus-visible:bg-surface-hover"
+      className="group flex min-h-[4.8125rem] min-w-0 items-center gap-[0.8125rem] rounded-md border border-border-subtle bg-surface-elevated px-zw-md py-3.5 shadow-sm transition-colors duration-base hover:border-accent-hover-border motion-reduce:transition-none"
       data-testid={testId}
     >
-      <span className={cn(typography.metadata, "text-text-secondary")}>{label}</span>
-      <span className={cn("text-2xl font-semibold tabular-nums", tone === "critical" && value > 0 ? "text-critical-text" : "text-text-primary")} data-testid={`${testId}-value`}>
-        {value}
+      <span className={cn("flex size-[2.625rem] shrink-0 items-center justify-center rounded-full [&>svg]:size-5", iconToneClasses[alert ? "critical" : iconTone])} aria-hidden>
+        {icon}
       </span>
+      <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
+        <span className={cn(typography.metricValue, "text-[1.375rem]", alert ? "text-critical-text" : "text-text-primary")} data-testid={`${testId}-value`}>
+          {value}
+        </span>
+        <span className={cn(typography.bodySmall, "font-semibold text-text-primary")}>{label}</span>
+      </span>
+      <CaretRight className="size-4 shrink-0 text-text-muted transition-transform duration-base group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden />
     </Link>
   );
 }
@@ -144,18 +173,20 @@ export default async function GrowthDashboardPage() {
       ) : (
         <>
           {/* A. summary */}
-          <section aria-label="Summary" className="grid grid-cols-2 gap-zw-md md:grid-cols-5" data-testid="growth-summary">
-            <Metric label="Active opportunities" value={dash.activeOpportunities} href="/operations/growth/pipeline" testId="metric-active" />
-            <Metric label="New inquiries" value={dash.stages.new_inquiry} href="/operations/growth/pipeline?stage=new_inquiry&layout=list" testId="metric-new" />
-            <Metric label="Contacts" value={dash.activeContacts} href="/operations/growth/contacts" testId="metric-contacts" />
-            <Metric label="Open tasks" value={dash.openTasks} href="/operations/growth/tasks" testId="metric-open-tasks" />
-            <Metric label="Overdue tasks" value={dash.overdueTasks} href="/operations/growth/tasks?view=overdue" tone="critical" testId="metric-overdue" />
+          <section aria-label="Summary" className="grid grid-cols-1 gap-[0.8125rem] sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="growth-summary">
+            <Metric label="active opportunities" value={dash.activeOpportunities} href="/operations/growth/pipeline" testId="metric-active" icon={<Funnel />} iconTone="accent" />
+            <Metric label="new inquiries" value={dash.stages.new_inquiry} href="/operations/growth/pipeline?stage=new_inquiry&layout=list" testId="metric-new" icon={<ChatCircleText />} iconTone="info" />
+            <Metric label="contacts" value={dash.activeContacts} href="/operations/growth/contacts" testId="metric-contacts" icon={<AddressBook />} iconTone="accent" />
+            <Metric label="open tasks" value={dash.openTasks} href="/operations/growth/tasks" testId="metric-open-tasks" icon={<ListChecks />} iconTone="neutral" />
+            <Metric label="overdue tasks" value={dash.overdueTasks} href="/operations/growth/tasks?view=overdue" tone="critical" testId="metric-overdue" icon={<WarningCircle />} iconTone="neutral" />
           </section>
 
           {/* B. pipeline overview */}
-          <Panel className="flex flex-col gap-zw-md" data-testid="growth-stage-overview">
+          <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="growth-stage-overview">
             <SectionHeader
               title="Private-pay pipeline"
+              icon={<Funnel />}
+              tone="accent"
               actions={
                 <Link href="/operations/growth/pipeline" className={cn(typography.bodySmall, "text-text-link hover:underline")}>
                   Open pipeline
@@ -165,9 +196,14 @@ export default async function GrowthDashboardPage() {
             <ol className="grid grid-cols-2 gap-2 md:grid-cols-5">
               {OPEN_STAGES.map((s) => (
                 <li key={s}>
-                  <Link href={`/operations/growth/pipeline?stage=${s}&layout=list`} className="flex flex-col rounded-sm bg-surface-secondary px-3 py-2 hover:bg-surface-hover" data-testid="stage-count" data-stage={s}>
-                    <span className={cn(typography.metadata, "text-text-secondary")}>{stageDisplayLabel(s)}</span>
-                    <span className="text-xl font-semibold tabular-nums text-text-primary">{dash!.stages[s]}</span>
+                  <Link
+                    href={`/operations/growth/pipeline?stage=${s}&layout=list`}
+                    className="flex h-full flex-col gap-0.5 rounded-md border border-border-subtle bg-surface-app px-3.5 py-2.5 transition-colors duration-base hover:border-accent-hover-border hover:bg-surface-elevated motion-reduce:transition-none"
+                    data-testid="stage-count"
+                    data-stage={s}
+                  >
+                    <span className={cn(typography.metadata, "font-medium text-text-secondary")}>{stageDisplayLabel(s)}</span>
+                    <span className={cn(typography.metricValue, "text-[1.375rem] text-text-primary")}>{dash!.stages[s]}</span>
                   </Link>
                 </li>
               ))}
@@ -177,8 +213,8 @@ export default async function GrowthDashboardPage() {
 
           <div className="grid grid-cols-1 gap-zw-lg lg:grid-cols-2">
             {/* C. needs attention */}
-            <Panel className="flex flex-col gap-zw-md" data-testid="growth-needs-attention">
-              <SectionHeader title="Needs attention" />
+            <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="growth-needs-attention">
+              <SectionHeader title="Needs attention" icon={<WarningCircle />} tone={dash.overdueTasks + dash.attentionOpportunities > 0 ? "attention" : "neutral"} />
               <div className="flex flex-col gap-1">
                 <p className={cn(typography.label, "text-text-primary")}>Overdue tasks ({dash.overdueTasks})</p>
                 <TaskLines rows={overdue} tz={tz} empty="Nothing is overdue." />
@@ -215,8 +251,8 @@ export default async function GrowthDashboardPage() {
 
             <div className="flex flex-col gap-zw-lg">
               {/* F. Growth Agent preview */}
-              <Panel className="flex flex-col gap-zw-md" data-testid="growth-agent-preview">
-                <SectionHeader title="Growth Agent" />
+              <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="growth-agent-preview">
+                <SectionHeader title="Growth Agent" icon={<Sparkle />} tone="accent" />
                 <p className={cn(typography.bodySmall, "text-text-primary")}>
                   <span className="font-semibold tabular-nums" data-testid="agent-pending-count">{dash.pendingRecommendations}</span>{" "}
                   {dash.pendingRecommendations === 1 ? "recommendation needs" : "recommendations need"} review.
@@ -231,8 +267,8 @@ export default async function GrowthDashboardPage() {
               </Panel>
 
               {/* E. quick actions */}
-              <Panel className="flex flex-col gap-zw-md" data-testid="growth-quick-actions">
-                <SectionHeader title="Quick actions" />
+              <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="growth-quick-actions">
+                <SectionHeader title="Quick actions" icon={<Lightning />} />
                 <div className="flex flex-wrap gap-2">
                   {canWrite && (
                     <>
@@ -257,8 +293,8 @@ export default async function GrowthDashboardPage() {
               </Panel>
 
               {/* D. recent activity */}
-              <Panel className="flex flex-col gap-zw-md" data-testid="growth-recent-activity">
-                <SectionHeader title="Recent activity" />
+              <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="growth-recent-activity">
+                <SectionHeader title="Recent activity" icon={<ClockCounterClockwise />} />
                 {recent.length === 0 ? (
                   <p className={cn(typography.bodySmall, "text-text-secondary")}>Nothing recorded yet.</p>
                 ) : (

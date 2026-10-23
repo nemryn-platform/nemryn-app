@@ -21,8 +21,8 @@ export default async function SignUpPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-brand-care-navy px-4 py-12">
-      <div className="w-full max-w-sm rounded-md bg-surface-elevated p-8 shadow-sm">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-app bg-canvas-glow px-4 py-12">
+      <div className="w-full max-w-sm rounded-lg border border-border-subtle bg-surface-elevated p-8 shadow-panel">
         {/* N0-M2-A2-R1: approved Nemryn platform lockup — see SignInPage's own comment for the ratio rationale. */}
         <div className="mb-8 flex justify-center">
           <Image
@@ -35,7 +35,7 @@ export default async function SignUpPage() {
           />
         </div>
 
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Create your account</h1>
+        <h1 className={cn(typography.displaySection, "mb-1.5 text-text-primary")}>Create your account</h1>
         <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
           Set up Nemryn for your transportation business.
         </p>
@@ -44,7 +44,7 @@ export default async function SignUpPage() {
 
         <p className={cn(typography.bodySmall, "mt-6 text-center text-text-secondary")}>
           Already have an account?{" "}
-          <Link href="/sign-in" className="font-medium text-text-link">
+          <Link href="/sign-in" className="inline-flex min-h-11 items-center font-medium text-text-link">
             Sign in
           </Link>
         </p>
