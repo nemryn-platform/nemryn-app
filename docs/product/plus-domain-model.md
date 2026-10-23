@@ -382,7 +382,7 @@ There is **no contact PII, no message text and no JSON** in this table. Drafts a
 
 ## 12. `plus_communication_consents` (P2-S6; moved from NP-P4) — append-only ledger
 
-> **APPROVED (ZD-228 … ZD-242, 2026-10-23).** The S6-A migration is `20261023100000_plus_communication_consents.sql`. The full specification is in [NP-P2-S6-consent-ledger-design.md](NP-P2-S6-consent-ledger-design.md). The table below replaces the earlier proposal; the differences are listed after it.
+> **APPROVED (ZD-228 … ZD-242, 2026-10-23); RELEASED to production 2026-10-23 for synthetic testing only (NP-P2-S6C4).** The S6-A migration is `20261023100000_plus_communication_consents.sql`. The full specification is in [NP-P2-S6-consent-ledger-design.md](NP-P2-S6-consent-ledger-design.md). The table below replaces the earlier proposal; the differences are listed after it.
 
 | Column | Rule |
 |---|---|

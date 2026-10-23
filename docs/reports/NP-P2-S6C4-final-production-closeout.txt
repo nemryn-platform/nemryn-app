@@ -1,0 +1,182 @@
+NP-P2-S6-C4 — COMMUNICATION CONSENT LEDGER: FINAL PRODUCTION RELEASE CLOSEOUT
+============================================================================
+Date: 2026-10-23.
+Mode: read-only verification and documentation. No production write, migration, deployment, entitlement / trial
+change, consent mutation or Git operation.
+
+RELEASE CLASSIFICATION:
+P2-S6 COMPLETE — PRODUCTION DEPLOYED, SYNTHETIC TESTING VERIFIED, REAL-CUSTOMER USE RESTRICTED.
+- This is NOT a commercial-readiness or compliance-readiness sign-off: PD-10, PD-11, OD-Q13 and OD-Q14 are open.
+- Real customer consent recording is NOT authorized (ZD-241).
+
+1. DEPLOYMENT AND MIGRATION IDENTITY (verified read-only for this closeout)
+-------------------------------------------------------------------------
+- origin/main 1413517, "Merge pull request #32 … np-ux-filter-01-pipeline". It contains:
+  - 6af7924 (#30, S6-A database);
+  - fa949eb (#31, S6-B UI);
+  - 1413517 (#32, the Pipeline responsive fix).
+- Production application: Vercel deployment 7283868214 = 1413517, status success.
+  - The live check confirms Communication preferences loads, and the Pipeline filter layout is present (Search 692px at
+    822px, no overflow).
+- Production database: Supabase wyocbivzgrbekuyqdfts "Nemryn" (the only project visible to the CLI).
+  - Migrations local 93 = remote 93; head 20261023100000; no differences.
+  - Migration 20261023100000_plus_communication_consents.sql, SHA-256 bbfde89ed5f523a4… (approved fingerprint).
+  - Privilege contract: violations = 0 of 29.
+- Drift: supabase/migrations is identical to origin/main. The tracked tree was clean before this closeout's
+  documentation edits.
+
+2. S6-A / S6-B / S6-C VERIFICATION SUMMARY
+-----------------------------------------
+- S6-A, database (NP-P2-S6A-database-implementation.txt; NP-P2-S6A-final-pre-pr-security-check.txt):
+  - consent SQL suite 78 / 78;
+  - consent concurrency suite 14 / 14 (isolation-guarded);
+  - all Plus SQL suites at 0 failures;
+  - no new failure across 69 SQL suites;
+  - QA2 199 / 199; Quotes 272 / 272.
+- S6-B, UI (NP-P2-S6B-consent-preferences-ui-implementation.txt):
+  - consents E2E 49 / 49 (including axe and keyboard checks);
+  - QA2 199 / 199; Quotes 272 / 272;
+  - unit tests 902 / 902; tsc; lint 0 errors; build.
+- S6-C1 preflight: found the inverted release order (UI live before migration); D1 = Option A.
+- S6-C2 readiness: state A, no drift, prerequisites present.
+- O1: encrypted backup, restore-verified.
+- O2: migration 93 applied; post-checks 11 / 11; contract 0 / 29.
+- S6-C3, synthetic production smoke: PASS (§3).
+
+3. SMOKE SIGN-OFF (NP-P2-S6C3-synthetic-production-smoke.txt)
+------------------------------------------------------------
+Tenant and contact: "Nemryn Pilot Simulation" (25e3a19b…), contact "SIM Smoke Pat Fictional" (6ab5730a…). Driven
+through the production UI as the synthetic Organization Admin.
+- Grant: 1 row (email / service follow-up, by phone, dated today, synthetic note) → "Consent recorded". The other 5
+  pairs were unchanged.
+- Revocation: a new row; the grant row unchanged → "Revoked". History newest first.
+- Correction: a new linked row (corrects the revocation, note required) → "Consent recorded". History shows "Corrects
+  an earlier entry" / "Corrected".
+- DNC ON: exactly 1 system revocation (captured_via do_not_contact). All 6 pairs suppressed; Record consent unavailable;
+  the system entry is labelled and not correctable.
+- DNC OFF: nothing written. NO revival: email / service follow-up stays "Revoked" (ZD-233 confirmed).
+- Append-only: rows 1–4 were never changed (compared field by field after each step); triggers remain enabled.
+- Audit: 6 minimised rows (consent metadata / changed-field names only).
+- Outbound: none. notification_events was unchanged; there is no sending path.
+- Every other record was unchanged (before / after hash snapshot).
+Explicitly recorded:
+- Harness false negative: one scripted predicate in the DNC-OFF check matched the substring "consent_on_record;" inside
+  the correct value "no_consent_on_record;". The actual state was correct. It was resolved by an exact-state, read-only
+  re-verification (PASS). No write was repeated or skipped.
+- NOT RUN: a browser test from a second synthetic tenant. No authorized second-tenant synthetic identity exists in
+  production (Zenward Mobility is a real internal organization and is excluded).
+- The original isolated tenant-isolation SQL tests PASSED: S6-A suite P1 / P2 cross-tenant read and write; the
+  composite-FK tests; 78 / 78.
+- The four synthetic consent events remain on the standing smoke contact. They are labelled "SYNTHETIC SMOKE TEST
+  NP-P2-S6C3", and the contact's DNC is back to off.
+- NO cleanup, archival or deletion is authorized. The ledger is append-only by design.
+
+4. SECURITY AND TENANT ISOLATION FINDINGS
+-----------------------------------------
+- RLS: one SELECT policy, plus_can_read(organization_id); no table-level client privilege.
+  - authenticated has column-SELECT on 14 columns; address_digest and idempotency_key are never granted (ZD-240);
+  - the append-only triggers are enabled;
+  - composite tenant FKs are present.
+- RPCs: SECURITY DEFINER, search_path = public, pg_temp, authenticated-only EXECUTE. The 5 internals have no client
+  EXECUTE.
+- plus_update_contact: one overload, unchanged signature, the approved body.
+- Contacts / Activities policies are unchanged.
+- Production pages expose no digest, idempotency key or internal function names (checked against the stored values in
+  memory).
+- Unauthorized synthetic readers are refused: Dispatcher without a grant, Driver, signed-out.
+- All production consent rows belong to the Pilot organization and its own contact.
+- Gap: the second-tenant browser test (NOT RUN, §3). Isolation evidence rests on RLS, composite FKs and the isolated
+  SQL suites.
+
+5. PRODUCTION DATA RESTRICTIONS
+-------------------------------
+- Real customer consent recording: NOT AUTHORIZED (ZD-241), until PD-10 (HIPAA / BAA) and PD-11 (retention / erasure)
+  are resolved.
+- Synthetic testing only, and only in "Nemryn Pilot Simulation".
+- Preserved:
+  - DNC suppression; read_only restrictions (no read_only revocation exception, ZD-239);
+  - consent event ordering; append-only history; address-change invalidation;
+  - no automatic outbound communication; no Plus activity-timeline events for consent (ZD-236).
+- NP-P4 prerequisite (ZD-239): a subscription-independent opt-out mechanism is MANDATORY before any outbound Plus
+  communication.
+
+6. ZENWARD MOBILITY TRIAL — DECISION STATUS
+-------------------------------------------
+- Its Plus entitlement is a trial, an owner-declared internal exception from NP-P1-S1-R3, scheduled to expire on
+  2026-10-27.
+- Recommendation: allow it to expire WITHOUT renewal.
+- This closeout made no entitlement change.
+- O3 owner decision: PENDING (not separately confirmed).
+- IMPORTANT: until the trial expires (or the compliance decisions are resolved), eligible Zenward Mobility staff (its
+  Organization Admins, plus any Dispatcher with a Plus grant) have a TECHNICALLY WORKING consent interface. Nothing in
+  the product prevents them recording consent for real contacts.
+- The real-data restriction must therefore be enforced OPERATIONALLY, by owner instruction, until the trial expires.
+
+7. BACKUP AND RECOVERY LIMITATIONS
+----------------------------------
+- An encrypted logical backup (AES-256 image, owner-held passphrase) was created and restore-verified (O1):
+  - catalog 27 / 27;
+  - contract 0 / 29, after the documented mandatory privilege normalization;
+  - 22 / 22 aggregate counts.
+- A pre-migration export proved data unchanged since O1 (O2).
+- It is a LOCAL, SINGLE-DEVICE copy. It is NOT an off-device backup and NOT PITR. Production has PITR disabled and no
+  managed backups.
+- The single-device exception applied ONLY to migration 93 (owner waiver recorded in O2).
+- Independent, off-device recovery protection is REQUIRED before the next production database release.
+- An appropriate paid backup arrangement (for example Supabase Pro with managed backups / PITR) is REQUIRED before
+  external customer onboarding.
+- A restore into a fresh Supabase project needs the documented privilege-normalization step. Without it the restored
+  database is over-privileged (12 / 29 contract violations).
+
+8. REMAINING PD / OD DECISIONS
+------------------------------
+- PD-10 HIPAA / BAA: OPEN.
+- PD-11 retention / erasure: OPEN. Covers consent-event retention after archive, which opt-out fields survive erasure,
+  and the procedure around the append-only triggers.
+- OD-Q13 (quote total → estimated value): OPEN.
+- OD-Q14 (pricing rules): OPEN.
+- O3 Zenward trial: PENDING (§6).
+- ZD-228 … ZD-242 remain in force, unchanged.
+
+9. FOLLOW-UP QUEUE (documented, NOT implemented)
+-----------------------------------------------
+- A. Deployment dependency gate:
+  - prevent an application deployment while its required production migrations are missing;
+  - a required read-only CI / Vercel check comparing repository migrations with production, plus the process rule
+    "migration PR released before the app PR that uses it";
+  - root cause of S6-C1.
+- B. Hide consent write actions ("Record revocation" / "Record consent") when the consent state fails to load (S6-C1
+  F5).
+- C. A separately authorized second synthetic tenant and identity in production, for cross-tenant browser smoke tests.
+- D. The Estimates & Quotes responsive search / filter collapse: Search 78px at 822px, 26px at 768px. The same
+  container-query fix as NP-UX-FILTER-01.
+- E. Core Requests full-row navigation (queued separately).
+- F. Continue the Plus roadmap (next: P2-S7 enquiry form) only after the compliance and release gates are appropriately
+  addressed: PD-10 / PD-11, backup protection, gate A.
+- Housekeeping: update the Supabase CLI (2.109 → current), which printed a non-impacting pg-delta cache warning during
+  O2.
+
+10. DOCUMENTATION UPDATED (status lines only; no decision text changed)
+----------------------------------------------------------------------
+- docs/product/plus-product-spec.md: the P2-S6 row now reads "RELEASED 2026-10-23: production-deployed, synthetic
+  testing verified, real-customer use restricted".
+- docs/product/NP-P2-S6-consent-ledger-design.md: the slice status (S6-A / S6-B / S6-C released) and the
+  classification.
+- docs/product/plus-domain-model.md §12: "RELEASED to production 2026-10-23 for synthetic testing only".
+- This report.
+
+Report chain:
+- NP-P2-S6-design-audit, NP-P2-S6-decision-review, NP-P2-S6-decision-lock;
+- NP-P2-S6A-database-implementation, NP-P2-S6A-final-pre-pr-security-check;
+- NP-P2-S6B-consent-preferences-ui-implementation;
+- NP-P2-S6C1-production-preflight, NP-P2-S6C2-production-readiness;
+- NP-P2-S6C2-O1-backup-verification, NP-P2-S6C2-O2-production-migration;
+- NP-P2-S6C3-synthetic-production-smoke;
+- this closeout.
+
+11. FINAL RELEASE CLASSIFICATION
+--------------------------------
+P2-S6 COMPLETE — PRODUCTION DEPLOYED, SYNTHETIC TESTING VERIFIED, REAL-CUSTOMER USE RESTRICTED.
+Not commercial-ready. Not compliance-ready.
+
+STOP for owner review.
