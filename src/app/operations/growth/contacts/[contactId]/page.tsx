@@ -104,6 +104,9 @@ export default async function ContactDetailPage({
         actions={
           canWrite ? (
             <div className="flex flex-wrap items-center gap-2">
+              <LinkButton href={`/operations/growth/contacts/${contact.id}/edit`} variant="outline" data-testid="contact-edit">
+                Edit contact
+              </LinkButton>
               {/* NP-P2-S4 rebooking: ONE new pending Operations request for this contact; no opportunity is created */}
               <BookingRequestDialog
                 mode="rebook"
@@ -113,9 +116,6 @@ export default async function ContactDetailPage({
                 serviceOptions={rebookServiceOptions}
                 serviceOptionsUnavailable={configuredServices === null}
               />
-              <LinkButton href={`/operations/growth/contacts/${contact.id}/edit`} variant="outline" data-testid="contact-edit">
-                Edit contact
-              </LinkButton>
             </div>
           ) : undefined
         }

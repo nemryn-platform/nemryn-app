@@ -158,7 +158,7 @@ export default async function RecurringCareListPage({
               title="No standing orders yet."
               description="Set up a standing order for a passenger who needs regular rides."
               action={
-                <LinkButton href="/operations/recurring-care/new" leadingIcon={<Plus className="size-4" aria-hidden />}>
+                <LinkButton href="/operations/recurring-care/new" variant="outline" leadingIcon={<Plus className="size-4" aria-hidden />}>
                   Create standing order
                 </LinkButton>
               }

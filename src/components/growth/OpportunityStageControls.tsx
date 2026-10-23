@@ -57,7 +57,7 @@ function StageForm(props: { organizationId: string; opportunityId: string; expec
         <div className="min-w-0 flex-1">
           <Textarea name="note" label="Note (optional)" rows={1} maxLength={500} disabled={pending} />
         </div>
-        <Button type="submit" loading={pending} disabled={pending} data-testid="stage-save">
+        <Button type="submit" variant="outline" loading={pending} disabled={pending} data-testid="stage-save">
           Move
         </Button>
       </div>

@@ -55,7 +55,7 @@ export function BookingRequestDialog(props: {
   const label = props.mode === "convert" ? "Create transportation request" : "Create another transportation request";
   return (
     <>
-      <Button type="button" size="sm" onClick={() => { setInstance((n) => n + 1); setOpen(true); }} data-testid={props.mode === "convert" ? "convert-open" : "rebook-open"}>
+      <Button type="button" onClick={() => { setInstance((n) => n + 1); setOpen(true); }} data-testid={props.mode === "convert" ? "convert-open" : "rebook-open"}>
         {label}
       </Button>
       {open && (

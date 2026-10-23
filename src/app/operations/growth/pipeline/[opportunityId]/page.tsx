@@ -121,6 +121,9 @@ export default async function OpportunityDetailPage({
         actions={
           canWrite && open ? (
             <div className="flex flex-wrap items-center gap-2">
+              <LinkButton href={`/operations/growth/pipeline/${o.id}/edit`} variant="outline" data-testid="opportunity-edit">
+                Edit opportunity
+              </LinkButton>
               {canConvert && customer && (
                 <BookingRequestDialog
                   mode="convert"
@@ -133,9 +136,6 @@ export default async function OpportunityDetailPage({
                   opportunityServiceLabel={o.serviceType ? (SERVICE_TYPE_LABELS[o.serviceType as ServiceType] ?? null) : null}
                 />
               )}
-              <LinkButton href={`/operations/growth/pipeline/${o.id}/edit`} variant="outline" data-testid="opportunity-edit">
-                Edit opportunity
-              </LinkButton>
             </div>
           ) : undefined
         }

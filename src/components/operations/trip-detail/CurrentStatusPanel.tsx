@@ -90,7 +90,7 @@ export function CurrentStatusPanel({
       {eligibleForAssignmentAction && assignmentControl && <div className="mt-zw-lg">{assignmentControl}</div>}
       {eligibleForAssignmentAction && !assignmentControl && (
         <div className="mt-zw-lg">
-          <LinkButton href="/operations/dispatch" variant="outline" size="sm" className="w-full">
+          <LinkButton href="/operations/dispatch" variant="outline" size="sm">
             {hasActiveAssignment ? "Manage Assignment" : "Assign Driver"}
           </LinkButton>
         </div>

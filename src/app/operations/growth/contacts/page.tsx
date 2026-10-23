@@ -127,7 +127,7 @@ export default async function ContactsPage({
             }
             action={
               !filtered && canWrite ? (
-                <LinkButton href="/operations/growth/contacts/new" size="sm">
+                <LinkButton href="/operations/growth/contacts/new" size="sm" variant="outline">
                   New contact
                 </LinkButton>
               ) : undefined

@@ -10,7 +10,10 @@ import { AttentionState } from "@/components/ui/AttentionState";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LinkButton } from "@/components/ui/LinkButton";
+import { ListChecks } from "@phosphor-icons/react/dist/ssr";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Panel } from "@/components/ui/Panel";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { ViewSwitch } from "@/components/ui/ViewSwitch";
 import { Select } from "@/components/ui/Select";
 import { TaskList } from "@/components/growth/TaskList";
@@ -20,7 +23,7 @@ import { cn } from "@/lib/cn";
 export const metadata = { title: "Tasks" };
 
 const EMPTY: Record<string, string> = {
-  open: "No follow-ups. Add a task from any contact or opportunity.",
+  open: "No follow-ups yet.",
   mine: "Nothing is assigned to you right now.",
   overdue: "Nothing is overdue.",
   today: "Nothing else is due today.",
@@ -138,6 +141,39 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
           selfHandle={selfHandle}
           subjectOptions={subjectOptions}
           emptyText={params.search || params.assignee ? "No tasks match these filters." : EMPTY[params.view]}
+          emptyState={
+            // NP-UI-V2-4: the V2 EmptyState anatomy. Follow-ups belong to a contact or an opportunity, so the guidance
+            // points to those existing routes; the filtered case offers to clear the filters. Same test id and wording.
+            <Panel surface="raised" padding="none" data-testid="task-empty">
+              <EmptyState
+                icon={<ListChecks className="size-6" aria-hidden />}
+                title={params.search || params.assignee ? "No tasks match these filters." : EMPTY[params.view]}
+                description={
+                  params.search || params.assignee
+                    ? "Try a different search or assignee, or clear the filters."
+                    : canWrite
+                      ? "Tasks are internal follow-ups on a contact or an opportunity. Open one and add a follow-up from its Open tasks panel."
+                      : "Tasks are internal follow-ups on a contact or an opportunity. Follow-ups your team adds appear here."
+                }
+                action={
+                  params.search || params.assignee ? (
+                    <LinkButton href={taskListHref(params, { search: "", assignee: "" })} size="sm" variant="outline">
+                      Clear filters
+                    </LinkButton>
+                  ) : params.view === "open" ? (
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <LinkButton href="/operations/growth/contacts" size="sm" variant="outline">
+                        Open Contacts
+                      </LinkButton>
+                      <LinkButton href="/operations/growth/pipeline" size="sm" variant="outline">
+                        Open the Pipeline
+                      </LinkButton>
+                    </div>
+                  ) : undefined
+                }
+              />
+            </Panel>
+          }
         />
       )}
       <p className={cn(typography.metadata, "text-text-muted")}>

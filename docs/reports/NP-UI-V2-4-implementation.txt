@@ -1,0 +1,192 @@
+NP-UI-V2-4 — FINAL UI POLISH, BUTTON HARMONIZATION AND INTEGRATED ACCEPTANCE: IMPLEMENTATION
+=========================================================================================
+Date: 2026-10-23.
+Mode: controlled implementation plus final QA. No Git operations; the owner handles staging, commit, push, PR and merge.
+- Not deployed.
+- No production writes.
+Companion reports:
+- NP-UI-V2-4-visual-review.txt
+- NP-UI-V2-4-test-results.txt
+Evidence: docs/design/concept-b/reviews/v2-4/ (index.md).
+
+1. STARTING POINT AND RELEASE CHECK
+-----------------------------------
+- origin/main fetched: d14fbf5, "Merge pull request #28 ... np-ui-v2-3-growth-supporting-parity". V2-3 is present.
+- Production read-only verification of the V2-3 deployment: 19 / 19 PASS.
+  - Signed in as the synthetic "Nemryn Pilot Simulation" admin (credentials from .env.sim.local, never printed).
+  - Navigation only: no action clicked, no form submitted.
+  - Verified:
+    - signed-out sign-in;
+    - Overview, Requests, Trips, a Trip Detail, Dispatch;
+    - Settings home and Organization (with the V2-3 Settings frame);
+    - Growth Dashboard, Pipeline, Estimates & Quotes (this tenant has Plus).
+  - Each checked for: correct path (no unexpected redirect), exactly one h1, no error state, the sidebar present, and
+    no page overflow.
+- The outstanding V2-3 condition is closed: the HOSTED Website Requests pages render correctly.
+  - Overview / Form configuration / Existing form / Developer setup, each at 1440 and 768 (8 / 8).
+  - Each with the Settings sub-navigation and "Website Requests" active.
+- No critical production regression, so V2-4 proceeded.
+- Branch: np-ui-v2-4-final-visual-acceptance, created from origin/main d14fbf5.
+  - Upstream unset.
+  - Tracked tree clean at start.
+  - 386 untracked items preserved, including tests/e2e/fixtures/ (the Plus demo fixture).
+- Environment: the persistent isolated stack ~/NemrynS1Iso; the app on :3100 from production builds using
+  ~/NemrynS1Iso/.env.isolated.local; fictional data only. The owner's :3000 dev server was not touched.
+
+2. INVENTORY AND METHOD
+-----------------------
+- Every implemented staff and auth surface was audited before any change: 46 staff routes plus 7 auth routes, and
+  their dialogs.
+- Audit methods:
+  a) A static scan of every button. Only 14 raw <button> elements exist outside the UI kit. All are specialised and
+     correct: navigation toggles, Dispatch grid trip blocks, the weekday selector, option cards, the public form,
+     password reveal.
+  b) A browser audit of every rendered action control at 1440 on the populated fictional workspace: 235 controls
+     measured for height, radius, inferred variant, width vs its container, position against the page h1, weight,
+     icon size and disabled state.
+- Baseline result: the kit is used almost everywhere and is consistent.
+  - Page actions 42px; in-panel / row actions 32px; auth submits 48px.
+  - A 9px control radius throughout.
+  - Button labels at 600.
+  - Focus rings from the shared styles.
+  - Every destructive CONFIRMATION in a dialog is the solid red destructive variant beside an outline Cancel / Keep.
+  The findings are in §3.
+
+3. BUTTON AUDIT: FINDINGS AND RESOLUTIONS
+-----------------------------------------
+F1 More than one teal primary in a view (8 pages). Resolved to one per view.
+   - Opportunity detail:
+     - Stage "Move" → outline;
+     - "New estimate or quote" in the quotes panel → outline (the Estimates & Quotes directory already uses outline
+       for the same action);
+     - the header keeps the one teal "Create transportation request".
+   - Contact detail: "Add note" → outline, matching its siblings (Log call, Log email, Log meeting). The header keeps
+     the teal "Create another transportation request".
+   - Dispatch: the queue cards' "Assign" → outline (see F3). The header keeps "New Trip".
+   - Standing Orders, Pipeline, Contacts, Requests: an empty-state action that repeats the header's primary → outline.
+     The same destination is kept.
+   - Intentionally unchanged, three cases:
+     - the Overview "Review requests" (the approved Concept B D-8 requests panel);
+     - Settings › Operations and Settings › Notifications, which each contain two independent forms with their own
+       Save.
+F2 Header action order and height on the Growth detail pages.
+   - Before: "Create transportation request" (primary, 32px) came BEFORE "Edit" (outline, 42px).
+   - Now: secondary first, primary last, both 42px. This matches every other page header.
+   - The BookingRequestDialog trigger now uses the standard size. Its only callers are these two headers.
+F3 "Assign / Manage Assignment" inconsistent.
+   - Before:
+     - Overview and Tomorrow: outline, small;
+     - Dispatch queue: teal and full-width;
+     - Trip Detail side panel: outline and full-width.
+   - Now: outline, small and auto-width everywhere.
+     - TripAssignmentButton's default width is now auto. Tomorrow already passed fullWidth={false}.
+     - The CurrentStatusPanel Dispatch-link fallback is no longer w-full.
+   - Same handlers, dialog, data-trip-id and focus behaviour.
+F4 Destructive TRIGGERS without distinction.
+   - Before:
+     - "Cancel Trip" and "Cancel Request" were plain outline, identical to "Edit";
+     - "End" (standing order) was the solid red destructive, the heaviest control on its page;
+     - "Withdraw sent quote" and "Archive contact" were plain text links;
+     - "Withdraw draft" was outline.
+   - Now: a new shared variant, "destructive-outline", in buttonStyles.ts.
+     - White surface, critical border and critical text, with a critical-bg hover.
+     - Existing tokens only; no new colour.
+     - Applied to those six triggers.
+   - The confirmations inside their dialogs stay the solid red destructive. The safeguards (reason fields, Keep /
+     Cancel, disabled-until-valid) are unchanged.
+F5 Full-width actions outside auth.
+   - Before: only Trip Detail's assignment control. Now: none (F3).
+   - Kept as designed:
+     - the auth submits (48px, full width, the standard auth pattern);
+     - the Overview "Review requests" (approved).
+F6 No other material inconsistency was found.
+   - Heights: 32 / 42 / 48 only.
+   - Radius: 9px only.
+   - Icon sizes: 14–16px in sm / md.
+   - Gaps: the kit's gap-1.5 / gap-2.
+   - Disabled: the kit's opacity-50 plus cursor-not-allowed; e.g. Decline Request until a reason is chosen, Import
+     request details.
+   - Loading: the kit's spinner with aria-busy.
+   - Passive status badges are never buttons.
+   - Not changed (correct as they are):
+     - sr-only form submits;
+     - DataTable row-name edit buttons (19px);
+     - password reveal toggles.
+
+Before → after (browser audit, identical routes and data):
+- pages with >1 teal primary: 8 → 3 (the documented exceptions);
+- full-width 32 / 42px actions: 1 → 0;
+- page-header height mismatches: 3 → 0.
+
+4. EMPTY STATES
+---------------
+All use the V2 EmptyState anatomy: a mint icon circle, a heading, a practical line, a real next action, and a raised
+panel where it sits alone.
+- Growth Tasks:
+  - Before: a plain floating sentence. Now: a raised EmptyState.
+  - "No follow-ups yet." Writers read "Tasks are internal follow-ups on a contact or an opportunity. Open one and add a
+    follow-up from its Open tasks panel." Read-only users get wording without an action they cannot take.
+  - "Open Contacts" / "Open the Pipeline" (existing routes).
+  - Each task view keeps its own wording ("Nothing is overdue.", …).
+  - With a search or assignee filter: "No tasks match these filters." plus "Clear filters".
+  - Shared TaskList: an optional `emptyState` prop. The Opportunity / Contact panels keep their compact line.
+- Estimates & Quotes:
+  - Before: two plain lines. Now: a raised EmptyState.
+  - "No estimates or quotes yet." — "Estimates and quotes start from an opportunity. Open one in the Pipeline and use
+    its Estimates & quotes panel."
+  - The only action is "Open the Pipeline". No standalone quote is ever offered; the ownership rule is untouched.
+  - Filtered: "No estimates or quotes match these filters." plus "Clear filters" and the Pipeline.
+  - The same test id, wording and Pipeline link the s3a suite checks.
+- Pipeline, Contacts, Requests, Standing Orders: already EmptyState (V2-2 / V2-3). Their repeated header action is now
+  outline (F1).
+- Growth Agent, Trips, Dispatch: already V2 (compact queue lines, EmptyState, "No active drivers"). Unchanged.
+- No-records, filtered, no-access and error states stay distinct:
+  - errors keep their critical AttentionState with Retry;
+  - no-access keeps the route guards (Growth redirects; Settings admin pages redirect);
+  - no fake data or counts.
+
+5. CHANGED-FILE INVENTORY (20 files; git diff --stat: 102 insertions(+), 43 deletions(-))
+------------------------------------------------------------------------------------------
+Shared:
+  src/components/ui/buttonStyles.ts                       (+ "destructive-outline" variant)
+Core:
+  src/components/operations/trip-detail/TripDetailActionBar.tsx       (Cancel Trip → destructive-outline)
+  src/components/operations/trip-detail/TripAssignmentButton.tsx      (auto width by default)
+  src/components/operations/trip-detail/CurrentStatusPanel.tsx        (fallback link not full width)
+  src/components/operations/dispatch/NeedsAssignmentQueue.tsx         (Assign → outline, auto width)
+  src/components/operations/requests/RequestActionBar.tsx             (Cancel Request → destructive-outline)
+  src/components/operations/requests/RequestsTable.tsx                (empty action → outline)
+  src/components/operations/recurring-care/ArrangementLifecycleControls.tsx (End → destructive-outline)
+  src/app/operations/recurring-care/page.tsx                          (empty action → outline)
+Growth / Quotes:
+  src/app/operations/growth/pipeline/[opportunityId]/page.tsx         (header order)
+  src/app/operations/growth/contacts/[contactId]/page.tsx             (header order)
+  src/app/operations/growth/pipeline/page.tsx                         (empty action → outline)
+  src/app/operations/growth/contacts/page.tsx                         (empty action → outline)
+  src/app/operations/growth/tasks/page.tsx                            (EmptyState)
+  src/app/operations/growth/quotes/page.tsx                           (EmptyState)
+  src/components/growth/TaskList.tsx                                  (optional emptyState)
+  src/components/growth/BookingRequestDialog.tsx                      (trigger at the standard size)
+  src/components/growth/OpportunityStageControls.tsx                  (Move → outline)
+  src/components/growth/QuoteDraftControls.tsx                        (New → outline; Withdraw draft / sent → destructive-outline)
+  src/components/growth/ContactActions.tsx                            (Add note → outline; Archive contact → destructive-outline)
+Docs (added): docs/design/concept-b/reviews/v2-4/ and the three V2-4 reports.
+
+Not touched:
+- src/lib/**, server actions, supabase/** (git diff empty), tests/**, package.json;
+- tokens (globals.css), fonts, typography roles, public/brand/** (SHA-256 verified).
+
+6. BOUNDARIES
+-------------
+- No new functionality.
+- No schema / RLS / RPC / auth / authorization change.
+- No quote-rule or workflow change.
+- No production record change.
+- No outbound communication.
+- No Git operation.
+- Every changed control keeps its handler, destination, permission gating, confirmation dialog and data-testid.
+- Brand Lock v2 and the logos are unchanged. The new button variant uses only the existing critical tokens.
+
+7. VERDICT
+----------
+See NP-UI-V2-4-test-results.txt §9.

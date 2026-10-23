@@ -1,0 +1,174 @@
+NP-UI-V2-4 — TEST RESULTS (EXACT FINAL WORKING TREE)
+====================================================
+Date: 2026-10-23.
+- Branch np-ui-v2-4-final-visual-acceptance from origin/main d14fbf5. Uncommitted: 20 modified files (102 insertions,
+  43 deletions).
+- The production build used by every browser gate is the final tree. No source file is newer than .next/BUILD_ID.
+- Environment:
+  - isolated ~/NemrynS1Iso;
+  - app :3100, using only ~/NemrynS1Iso/.env.isolated.local;
+  - fictional data;
+  - no email provider.
+- Production: read-only only (§1).
+- No test file changed (git diff tests/: empty). No assertion weakened.
+
+1. PRODUCTION READ-ONLY (V2-3 deployment)
+-----------------------------------------
+19 / 19 PASS. Synthetic Pilot Simulation admin; navigation only, no clicks on actions, no submits.
+Pages:
+- sign-in;
+- Overview, Requests, Trips, Trip Detail, Dispatch;
+- Settings home and Organization (Settings frame);
+- HOSTED Website Requests (Overview, Form configuration, Existing form, Developer setup) at 1440 and 768: 8 / 8. This
+  closes the V2-3 condition.
+- Growth Dashboard, Pipeline, Estimates & Quotes.
+Each with the correct path, one h1, no error state, the sidebar, and no overflow.
+
+2. STATIC, UNIT, BUILD
+----------------------
+- TypeScript (tsc --noEmit): PASS.
+- ESLint (`eslint .`): PASS.
+- Unit tests: 894 / 894.
+- Default production build (Next.js 16.3.3, Turbopack): PASS.
+
+3. BROWSER REGRESSION
+---------------------
+QA2 strict: 199 / 199.
+
+| Suite | Pass |
+|---|---|
+| core-requests | 25 |
+| core-trips-dispatch | 44 |
+| core-records | 28 |
+| growth | 23 |
+| auth-access | 79 |
+
+P1a: 48 / 48 (fresh reset).
+P1b: 52 / 52 (fresh reset).
+
+Strict Quotes: 272 / 272, every suite at its S4 baseline (each suite runs after the runner's verified fresh reset).
+
+| Suite | Pass |
+|---|---|
+| s2 | 33 |
+| s3a | 31 |
+| s3b | 32 |
+| s3c | 54 (staff print + follow-up) |
+| o1 | 27 (closed notice incl. PDF text) |
+| s4-integrated | 69 |
+| s4-a11y | 26 |
+
+Incidents, reported in full:
+- First full run: s4-integrated stopped after 55 checks (0 failed) at a Dispatcher navigation to the quote print page.
+  The shared CDP harness has no navigation timeout, and the browser session stalled. The suite's later checks and
+  s4-a11y did not run.
+- Second attempt (both suites together): s4-integrated recorded ONE failure, d5 "dashboard recent activity shows the
+  latest quote events", and then stalled at A5e. s4-a11y stalled in its axe step.
+- Third attempt (each suite on its own, with a verified fresh reset, same build): s4-integrated 69 / 69, including d5,
+  the print navigation and A5e. s4-a11y 26 / 26.
+- Assessment:
+  - V2-4 changed no Dashboard, activity, quote-print or DNC code.
+  - d5 depends on which 8 events are the most recent at that moment. The suite writes several stage / conversion
+    events with near-identical timestamps just before it, so ordering can push every quote event out of the list.
+  - The app server stayed healthy throughout (15ms responses, about 245MB RSS, no crash). The logged errors match
+    expected test behaviour and reset windows.
+  - These are recorded as harness / timing incidents, not product failures. Recommendation: add per-step timeouts to
+    tests/shared/cdp.mjs, and make d5 wait for its data. That is a separate, test-tooling change, not made here.
+
+4. SQL SECURITY / TENANT SUITES
+-------------------------------
+All 15: psql exit 0, 0 failing checks, 0 errors. Run on a verified migrated database: 3 seed organizations, head
+20261021100000.
+
+| Suite | Result |
+|---|---|
+| privilege_contract_tests | violations = 0 of 29 |
+| client_privilege_surface_tests | 21 PASS |
+| function_privilege_tests | 7 PASS |
+| mutation_privilege_tests | 7 PASS |
+| request_mutation_privilege_tests | 23 PASS |
+| create_trip_privilege_tests | 5 PASS |
+| driver_read_privilege_tests | 8 PASS |
+| privilege_baseline_behavior_tests | 30 PASS |
+| rls_adversarial_tests | 33 PASS |
+| mutation_authorization_tests | 4 PASS |
+| mutation_idempotent_authorization_tests | 6 PASS |
+| driver_read_authorization_tests | 17 PASS |
+| tenant_settings_foundation_tests | 51 PASS |
+| plus_access_helpers_tests | failures = 0 of 170 |
+| plus_member_grants_tests | failures = 0 of 76 |
+
+Incident: the first full run executed these right after the stalled Quotes run, against a database left mid-reset
+with no schema. Every suite errored ("relation does not exist"). Those results were discarded. The database was
+reset and verified, and the suites re-run with the results above.
+
+5. ACCESSIBILITY AND RESPONSIVE
+-------------------------------
+Full sweep: 180 / 180 PASS.
+- 49 staff routes (Core, Growth, Quotes incl. print, Settings) × 1440 / 1024 / 768;
+- 7 auth routes × 1440 / 1024 / 768 / 390;
+- 5 dialogs.
+Each: 0 serious / critical axe violations, no page-level horizontal overflow, exactly one visible h1. Dialogs open
+with focus inside.
+The Dispatch grid keeps its focusable scroll region (QA2 F-1 checks and the sweep).
+
+Mobile auth at 390×844 and 390×667: 14 / 14.
+- Cards are never clipped and scroll fully.
+- Every control is ≥44px; submits are 48px.
+- The lowest control is reachable and focusable.
+
+The approved 390 Operations notice is unchanged (P1b).
+
+6. INTERACTION / WORKFLOW VERIFICATION
+--------------------------------------
+- Keyboard dialogs: 16 / 16. For each, the trigger was focused, Enter opened the dialog with focus inside, Escape
+  closed it, and focus returned to the trigger. Dialogs covered:
+  - Cancel Trip, Edit Trip, Report Issue, Add Note;
+  - Decline Request, Assign (Dispatch), Add Passenger;
+  - Mark as lost, Record accepted, Withdraw sent quote, Edit draft, Withdraw draft;
+  - Create transportation request, New task, Add note (contact), Archive contact.
+- Workflows (click, validation, destinations, permissions, disabled / loading): the QA2 / P1a / P1b / Quotes suites
+  above exercise every changed control end to end with database-verified outcomes:
+  - assign / reassign;
+  - cancel trip;
+  - request decline / cancel;
+  - stage moves;
+  - quote create / edit / mark sent / respond / revise / withdraw / print;
+  - task create / complete;
+  - contact notes / archive.
+- Growth navigation / entitlement / roles: 21 / 21. Org A admin with Plus sees and opens all five Growth pages; Org
+  B (Core), the grant-less Dispatcher, the Driver and signed-out visitors are refused.
+- Auth navigation / forms: QA2 auth-access 79 / 79 plus the 390 checks.
+
+7. BUTTON AUDIT (automated, before → after, same routes and data)
+-----------------------------------------------------------------
+- Pages with more than one teal primary: 8 → 3. The 3 are documented exceptions: the Overview D-8, and the two-form
+  Settings pages.
+- Full-width 32 / 42px actions: 1 → 0.
+- Page-header height mismatches: 3 → 0.
+- Destructive triggers: all six now use the destructive-outline variant.
+
+8. LOGO INTEGRITY AND BOUNDARIES
+--------------------------------
+- All 11 public/brand files match the recorded SHA-256 baseline (n0-m2-a5).
+- git diff origin/main -- public/ supabase/: empty.
+- No schema / RLS / RPC / auth / business-logic change.
+- No production write.
+- No outbound communication.
+- No Git operation.
+
+9. FINAL READINESS VERDICT
+--------------------------
+PASS. Every established gate passes on the exact final tree.
+
+The only notes are the harness incidents in §3 / §4, which were resolved by verified re-runs. Recommended follow-up:
+CDP step timeouts and a d5 wait, as a separate test-tooling change.
+
+The complete Nemryn Concept B UI overhaul (V2-1 to V2-4) is READY FOR FINAL OWNER ACCEPTANCE.
+
+Environment left:
+- isolated database with the Plus demo enabled;
+- app :3100 = the final V2-4 build;
+- the owner's :3000 dev server untouched.
+
+STOP for owner / ChatGPT visual review.
