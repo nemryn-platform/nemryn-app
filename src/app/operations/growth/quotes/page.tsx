@@ -129,25 +129,31 @@ export default async function QuotesDirectoryPage({ searchParams }: { searchPara
         <AttentionState level="critical" title="Counts couldn't be loaded" description="The list below is unaffected. Reload the page to try again." />
       )}
 
-      <form method="get" action="/operations/growth/quotes" role="search" className="flex flex-col gap-zw-md rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm md:flex-row md:items-end" data-testid="quotes-directory-filters">
-        <div className="min-w-0 flex-1">
-          <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Number, estimate / quote, opportunity or contact" maxLength={DIRECTORY_SEARCH_MAX} data-testid="quotes-directory-search" />
-        </div>
-        <div className="md:w-60">
-          <Select name="status" label="Status" options={DIRECTORY_STATUS_OPTIONS} defaultValue={params.status} data-testid="quotes-directory-status" />
-        </div>
-        <div className="md:w-56">
-          <Select name="sort" label="Sort" options={DIRECTORY_SORT_OPTIONS} defaultValue={params.sort} data-testid="quotes-directory-sort" />
-        </div>
-        <div className="flex gap-2">
-          <Button type="submit" variant="outline" data-testid="quotes-directory-apply">
-            Apply
-          </Button>
-          {filtered && (
-            <LinkButton href={directoryHref(params, { search: "", status: "all", page: 1 })} variant="text">
-              Clear
-            </LinkButton>
-          )}
+      {/* NP-UX-FILTER-02 (same pattern as the Pipeline, NP-UX-FILTER-01): the layout follows the FORM's own width
+          (container query), not the viewport -- the sidebar expands / collapses independently. One row only when the
+          form is at least 64rem wide (Search keeps >= 15rem and can never collapse); otherwise Search takes a full row
+          and Status / Sort share the next row (each >= 10rem), with Apply / Clear wrapping rather than shrinking. */}
+      <form method="get" action="/operations/growth/quotes" role="search" className="@container rounded-md border border-border-subtle bg-surface-elevated p-zw-md shadow-sm" data-testid="quotes-directory-filters">
+        <div className="flex flex-wrap items-end gap-zw-md">
+          <div className="min-w-0 basis-full @5xl:min-w-60 @5xl:flex-1 @5xl:basis-60">
+            <Input name="q" label="Search" type="search" defaultValue={params.search} placeholder="Number, estimate / quote, opportunity or contact" maxLength={DIRECTORY_SEARCH_MAX} data-testid="quotes-directory-search" />
+          </div>
+          <div className="min-w-40 flex-1 @5xl:w-60 @5xl:flex-none">
+            <Select name="status" label="Status" options={DIRECTORY_STATUS_OPTIONS} defaultValue={params.status} data-testid="quotes-directory-status" />
+          </div>
+          <div className="min-w-40 flex-1 @5xl:w-56 @5xl:flex-none">
+            <Select name="sort" label="Sort" options={DIRECTORY_SORT_OPTIONS} defaultValue={params.sort} data-testid="quotes-directory-sort" />
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button type="submit" variant="outline" data-testid="quotes-directory-apply">
+              Apply
+            </Button>
+            {filtered && (
+              <LinkButton href={directoryHref(params, { search: "", status: "all", page: 1 })} variant="text">
+                Clear
+              </LinkButton>
+            )}
+          </div>
         </div>
       </form>
 

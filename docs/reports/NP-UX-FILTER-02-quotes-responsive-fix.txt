@@ -1,0 +1,203 @@
+NP-UX-FILTER-02 — ESTIMATES & QUOTES: RESPONSIVE SEARCH AND FILTERS FIX
+=========================================================================
+Date: 2026-10-23.
+Branch: np-ux-filter-02-quotes (from origin/main 25e6fbd: PR #34 merged; the NP-UX-FILTER-01 Pipeline fix (PR #32) present;
+P2-S6 code unchanged).
+Page: Growth → Estimates & Quotes (/operations/growth/quotes).
+Environment: isolated stack ~/NemrynS1Iso only (DB container supabase_db_NemrynS1Iso; app :3100, production build),
+with fictional data only.
+Not done (per the brief):
+- no production database change; no migration; no RLS / entitlement change;
+- no deployment-gate activation; no GitHub / Vercel configuration change;
+- no Requests full-row navigation; no P2-S7 change; no redesign;
+- no Git staging, commit, push or merge.
+Brand Lock v2 and the logos are untouched.
+
+VERDICT: PASS. Ready for owner review.
+
+1. ROOT CAUSE
+-------------
+The filter form was a single viewport-driven flex row:
+  form: "flex flex-col gap-zw-md ... md:flex-row md:items-end"
+  Search: "min-w-0 flex-1"   Status: "md:w-60" (240px fixed)   Sort: "md:w-56" (224px fixed)
+  Apply / Clear: "flex gap-2"
+Above the md breakpoint (768px VIEWPORT) every control sat on one row:
+- Status, Sort and Apply / Clear had fixed or intrinsic widths;
+- Search was the only shrinkable item, with min-w-0 (no floor).
+The Operations content column is much narrower than the viewport, because of the sidebar and page padding. So at
+tablet and laptop widths Search absorbed all the shortage and collapsed:
+- down to 26px, the input's padding only;
+- its "Search" label then overflowed onto the "Status" label (measured as label-text overlap = 1; visible in
+  before-noresult-822.png).
+Clear (shown whenever a search or status is active) took a further ~60px from Search, so filtered states collapsed at
+wider widths than unfiltered ones.
+This is the same defect class as the Pipeline (NP-UX-FILTER-01): the layout responded to the viewport, not to the space
+the form actually has.
+
+2. SOURCE CHANGES
+-----------------
+One file: src/app/operations/growth/quotes/page.tsx (+25 / −19; class names and one wrapper div only). This is the same
+pattern as the approved Pipeline fix.
+- The form becomes a CONTAINER (`@container`). The layout follows the form's own width, not the viewport, so the
+  sidebar expanding or collapsing is handled correctly.
+- Inner wrapper: "flex flex-wrap items-end gap-zw-md".
+- Search: "min-w-0 basis-full @5xl:min-w-60 @5xl:flex-1 @5xl:basis-60".
+  - Below a 64rem (1024px) form width it takes a full first row.
+  - At or above that width it shares the single row with a 15rem (240px) floor, so it can never collapse.
+- Status: "min-w-40 flex-1 @5xl:w-60 @5xl:flex-none". Sort: "min-w-40 flex-1 @5xl:w-56 @5xl:flex-none".
+  - On the second row they share the width equally, with a 10rem (160px) floor each.
+  - On the single row they keep the previous 240 / 224px widths.
+- Apply / Clear: "flex shrink-0 gap-2". They never shrink; if there is no room they wrap rather than squeeze.
+Unchanged:
+- the form's method, action, role="search", field names (q, status, sort), test ids, labels, placeholder and maxLength;
+- the Clear href (directoryHref with search "" and status "all", page 1);
+- all filter / sort / pagination logic and query parameters;
+- the panel styling (border, surface, padding, shadow);
+- the components (Input, Select, Button, LinkButton) and Brand Lock v2 tokens.
+DOM order equals visual order, so Tab order is unchanged.
+
+3. BEFORE / AFTER MEASUREMENTS (Search input width in px; Org A admin; production builds)
+-----------------------------------------------------------------------------------------
+Populated (30 fictional quotes: 15 draft, 12 sent, 3 accepted), viewport width →
+
+  variant (URL)                 1440   1280   1100   1024    900    822    800    768
+  base (/quotes)       before    472    312    148     72    156     78     56     26*
+                       after     472    896    732    656    740    662    640    608
+  noresult (?q=zzz-…)  before    427    267    103     26*   111     26*    26*    26*
+                       after     427    926    747    671    755    677    655    623
+  search (?q=…)        before    397    237     73     26*    81     26*    26*    26*
+                       after     397    896    732    656    740    662    640    608
+  draft (?status=draft) before   397    237     73     26*    81     26*    26*    26*
+                       after     397    896    732    656    740    662    640    608
+  page2 (?page=2)      before    502    327    148     72    156     78     56     26*
+                       after     502    896    732    656    740    662    640    608
+  * = label-text overlap (the "Search" label runs into "Status").
+
+Notes:
+- 1440 keeps the single-row layout, with the same widths as before.
+- Narrower widths stack, with Search full-width.
+- 1024 is narrower than 900 because the sidebar expands at the lg breakpoint.
+
+Empty Quotes page (0 quotes; after = fixed build on the freshly reset DB):
+
+  variant                       1440   1280   1100   1024    900    822    800    768
+  base                 before    502    342    178     87    186     93     71     39
+                       after     502    926    747    671    755    677    655    623
+  filtered (?q=zzz-no-match&status=sent, Clear shown)
+                       after     427    926    747    671    755    677    655    623
+
+The "before-empty-filtered" capture accidentally used an unfiltered URL (a bug in my measurement script, fixed later),
+so it shows the base layout. The populated noresult / search / draft rows above are the filtered "before" evidence.
+
+After the fix, in every measured state (5 populated variants plus empty, × 8 widths):
+- label-text overlap 0;
+- page horizontal overflow 0; form overflow 0;
+- Apply inside the panel; Clear present exactly when filtered; one h1.
+- Smallest select:
+  - 252px (unfiltered, 768);
+  - 214px (filtered at 768, when Clear shares the row); the floor is 160px;
+  - no select's text is clipped (scrollWidth ≤ clientWidth).
+At 390 the approved Operations "designed for tablet and desktop use" notice is shown and the form is not rendered, as
+before (preserved).
+
+4. SCREENSHOTS AND PATHS
+------------------------
+docs/design/concept-b/reviews/ux-filter-02/
+- Before / after pairs at 822 and 768:
+  - before-base-{822,768}.png / after-base-{822,768}.png (populated, unfiltered);
+  - before-noresult-* / after-noresult-* (search without results, Clear shown);
+  - before-search-* / after-search-* (search with results);
+  - before-draft-* / after-draft-* (status filter);
+  - before-page2-* / after-page2-* (pagination page 2).
+- Empty Quotes page:
+  - before-empty-base-{822,768}.png and before-empty-filtered-{822,768}.png (the latter is unfiltered; see section 3);
+  - after-empty-base-{822,768}.png and after-empty-filtered-{822,768}.png.
+- Data: before-populated-measure.json, after-populated-measure.json, before-empty-measure.json,
+  after-empty-measure.json, behaviour-after.log.
+
+5. BROWSER VERIFICATION (NemrynS1Iso :3100, production build of the fix, Chrome via CDP, Org A administrator)
+--------------------------------------------------------------------------------------------------------------
+Measurement sweep: widths 1440, 1280, 1100, 1024, 900, 822, 800, 768 and 390, across the empty and populated states.
+All pass (section 3).
+Behaviour / keyboard / accessibility script: 45 / 45 PASS (behaviour-after.log).
+- Every status filter at 1440 / 822 / 768: correct option selected; rows or the filtered empty state; layout OK.
+  - Statuses: all, draft, sent, accepted, declined, withdrawn, superseded, expired.
+  - The long option labels "Expired (sent, past valid until)" and "Replaced by a revision" are not clipped.
+- Every sort at 822: newest, oldest, valid_until, number. The option is selected and rows render in the expected
+  order.
+- Search with results: Enter from Search submits q and status ("F02 Fictional Client 07" + Draft gives 1 matching
+  row).
+- Search without results: the filtered empty state, plus Clear filters.
+- Apply: submits q, status and sort together.
+- Clear: resets q and status, keeps sort, returns to page 1; the Clear button then disappears.
+- Pagination: 30 quotes → "page 1 of 2"; Next → page 2 with 5 rows; Previous is shown.
+  - Apply from page 2 returns to page 1 (unchanged behaviour: the GET form carries no page).
+
+6. ACCESSIBILITY
+----------------
+- Keyboard Tab order at 822 (the two-row layout): Search → Status → Sort → Apply, then → Clear when filtered.
+  Shift+Tab reverses it. The order matches the visual order.
+- Focus indicator: visible on Apply, and not clipped by the panel (overflow visible).
+- Screen reader: the form keeps role="search", and every control keeps its visible label (Search, Status, Sort).
+  No ARIA was changed.
+- axe-core results:
+  - filter panel at 822 (unfiltered) and 768 (filtered, no results): 0 violations;
+  - full page at 1440, 822 and 768 (filtered): 0 serious / critical.
+
+7. QUOTES REGRESSION
+--------------------
+QUOTES_E2E_SUPABASE_WORKDIR=/Users/datamatics/NemrynS1Iso npm run test:e2e:quotes:strict, run on a fresh reset against
+the fixed build. Result: 272 / 272, 0 failures, "RESULT: no unexpected failures" (rc 0). Equal to baseline.
+  s2 33/33 · s3a 31/31 (the quotes-directory suite) · s3b 32/32 · s3c 54/54 · o1 27/27 · s4-integrated 69/69
+  · s4-a11y 26/26
+
+8. QA2 REGRESSION
+-----------------
+QA2_E2E_SUPABASE_WORKDIR=/Users/datamatics/NemrynS1Iso npm run test:e2e:qa2:strict, run on a fresh reset against the
+fixed build. Result: 199 / 199, 0 failures, "RESULT: all suites pass" (rc 0). Equal to baseline.
+  core-requests 25/25 · core-trips-dispatch 44/44 · core-records 28/28 · growth 23/23 · auth-access 79/79
+
+9. UNIT / TSC / LINT / BUILD
+----------------------------
+- npm test: 902 / 902 pass.
+- tsc --noEmit: PASS.
+- ESLint (src): 0 errors; 1 warning, pre-existing and unrelated (src/app/operations/growth/tasks/page.tsx: unused
+  Link). It is a baseline warning, not introduced here.
+- next build (production): PASS (rc 0). It was used for all "after" verification.
+
+10. REMAINING ISSUES
+--------------------
+- None blocking.
+- At 768 with Clear shown, Status / Sort are 214px each: smaller than unfiltered (252px), but above the 160px floor and
+  with no text clipping.
+- Other Operations pages with the same viewport-driven filter row (if any) are outside this brief and were not
+  changed.
+- Fictional test data: the 30 F02 quotes seeded for verification were removed by the regression suites' DB reset. The
+  isolated DB is in its standard seeded state, with Org A Plus active as the QA2 suite leaves it.
+
+11. GIT HANDOFF (owner; not run)
+--------------------------------
+  cd /Users/datamatics/Nemryn
+  git status    # expect: M src/app/operations/growth/quotes/page.tsx,
+                #         ?? docs/reports/NP-UX-FILTER-02-quotes-responsive-fix.txt,
+                #         ?? docs/design/concept-b/reviews/ux-filter-02/
+  git add src/app/operations/growth/quotes/page.tsx docs/reports/NP-UX-FILTER-02-quotes-responsive-fix.txt docs/design/concept-b/reviews/ux-filter-02/
+  git commit -m "fix(growth): prevent quotes search filter collapse"
+  git push -u origin np-ux-filter-02-quotes
+Push with the nemryn GitHub account (check both `gh api user --jq .login` and the osxkeychain git credential).
+Leave the untracked .tmp-qa/ files unstaged, as before.
+
+12. VERDICT
+-----------
+PASS.
+- Search can no longer collapse at any measured width. It went from 26–93px before to 608px or more after, at every
+  width from 1280 down to 768.
+- 1440 keeps the single-row layout, unchanged.
+- No label overlap and no horizontal overflow.
+- Apply / Clear are always inside the panel.
+- Filter logic and query parameters are unchanged.
+- Keyboard order, focus and labels are preserved; axe reports 0 serious / critical.
+- All regressions are at baseline, with no failures: Quotes 272 / 272, QA2 199 / 199, unit 902 / 902; tsc, ESLint and
+  build pass.
+
+STOP for owner review.
