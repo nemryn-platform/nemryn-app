@@ -1,0 +1,252 @@
+NC-UX-01 — CORE → REQUESTS: FULL-ROW NAVIGATION
+================================================
+Date: 2026-10-24.
+Branch: nc-ux-01-requests-row-navigation, at origin/main e416e0d. That base includes:
+- PR #35, the NP-UX-FILTER-02 Quotes fix (merged);
+- the NP-UX-FILTER-01 Pipeline container-query fix (present);
+- P2-S6 unchanged: no diff under supabase/migrations or src/lib/plus since the S6 closeout 141605e.
+The working tree had no tracked changes before this work, so nothing was overwritten.
+Environment: isolated stack ~/NemrynS1Iso only (supabase_db_NemrynS1Iso; app :3100, production build), with fictional
+data only.
+Not done (per the brief):
+- no production database change; no migration; no RLS / entitlement change;
+- no request workflow or business-logic change;
+- no deployment-gate activation; no GitHub / Vercel configuration change;
+- no Quotes / Pipeline redesign; no P2-S7 work;
+- no Git staging, commit, push or merge.
+
+VERDICT: PASS. Ready for owner review.
+
+1. ORIGINAL INTERACTION AND ROOT CAUSE
+--------------------------------------
+- The Requests queue (src/components/operations/requests/RequestsTable.tsx) rendered the passenger (or requester)
+  name as the only link to Request Detail.
+- The table used the shared DataTable WITHOUT its existing `navigableRows` mode, which Contacts and the Estimates &
+  Quotes directory already use (NP-UI-P1a).
+- Measured on the baseline build, Org A dispatcher (browser-before.log):
+  - a click on the name opened Request Detail;
+  - a click on Route, Service, Waiting, Readiness, the Status badge or empty row space did nothing;
+  - rows had no hover tint and an "auto" cursor.
+
+2. SOURCE FILES CHANGED (3 files, +29 / −19)
+--------------------------------------------
+- M src/components/operations/requests/RequestsTable.tsx
+- M src/components/ui/DataTable.tsx (the shared navigation-row handler; see 3b)
+- M src/app/operations/requests/page.tsx (comment only: it removes the stale "deliberately does NOT link queue rows"
+  note)
+
+3. EXACT IMPLEMENTATION APPROACH
+--------------------------------
+a) RequestsTable adopts the existing DataTable `navigableRows` convention (same as ContactsTable /
+   QuotesDirectoryTable):
+   - "use client". The row click handler runs in the browser. Rendering, columns, copy, classes and Brand Lock
+     tokens are unchanged.
+     - Its props (rows, `now`) are serialisable.
+     - formatRequestAge / formatRequestServiceDate are deterministic (server-supplied `now`, UTC calendar
+       formatting), so there is no hydration drift.
+   - The existing name link (both the passenger and the requester variants) is now marked `data-row-link`,
+     data-testid "request-row-link", with `onClick={e => e.stopPropagation()}`, exactly as Contacts / Quotes do.
+     The href is unchanged: /operations/requests/{row.id}, the server-supplied id of that row.
+   - `navigableRows` is passed to DataTable. DataTable then:
+     - adds "cursor-pointer hover:bg-surface-hover focus-within:bg-surface-hover" to rows (the approved subtle
+       tint, already used by Contacts / Quotes);
+     - follows the row's own link when anything else in the row is clicked.
+   - No new buttons, icons, columns or routes. Filters, search, tabs, sorting and pagination are untouched.
+b) DataTable's navigation-row handler gets two small safety fixes, for Requests and for the existing Contacts /
+   Quotes rows:
+   - The row now dispatches a click to its link carrying the original click's modifier keys, instead of a bare
+     `a.click()`.
+     - Cmd-click on any part of the row opens the request in a new tab, and Shift-click opens a new window, exactly
+       as on the link itself.
+     - A plain click is unchanged: the Next.js Link performs normal client navigation.
+     - Clicks on the link itself were never intercepted, and still are not (the handler ignores clicks whose target
+       is inside a real control).
+   - The row does not navigate when the click ends a text selection that touches the row
+     (`selection.containsNode(row, true)`). Drag-selecting a route or phone, or Shift-extending a selection into a
+     row, selects text instead of opening the request.
+   - The existing guard is unchanged: a click on any real control inside a row (a, button, input, select,
+     textarea, label, summary, role=button/link/checkbox/switch) is left to that control.
+   - The Requests rows contain no controls other than the name link; there are no row action buttons in this
+     table.
+
+4. ACCESSIBILITY STRATEGY
+-------------------------
+- One real <a href> per row, the passenger / requester name. It is:
+  - the only tab stop in the row, named by its text (no "View" / "Open");
+  - opened with Enter natively (no tabIndex, onKeyDown or role on the <tr>);
+  - without duplicate focus targets: one Tab moves from row N's link to row N+1's.
+- The mouse-only whole-row click is a convenience that duplicates that link. Nothing is reachable only by mouse.
+- The table semantics are unchanged: thead with th[scope=col] × 6, tbody rows of td, no nested interactive content.
+- Focus: the global 2px :focus-visible outline on the link, and the focused row is tinted (focus-within).
+- Native link behaviour is preserved: modified clicks, open in new tab, the context menu, middle-click on the link.
+
+5. BEFORE / AFTER EVIDENCE
+--------------------------
+docs/design/concept-b/reviews/nc-ux-01/
+- before-{default,hover}-{1440,822,768}.png, before-focus-1440.png, before-default-390.png
+- after-{default,hover,focus}-{1440,822,768}.png, after-default-390.png
+- browser-before.log, browser-after.log
+
+Behaviour on the ORIGINAL build:
+- 1 of 7 click targets opened the request (the name only);
+- rows: cursor "auto", no hover tint (rgba(0,0,0,0)).
+
+After the change:
+- 7 of 7 click targets open that request;
+- rows: cursor "pointer"; the hovered row is tinted rgb(238,245,247), the surface-hover token, while other rows stay
+  transparent;
+- the focused row is tinted the same way.
+
+6. BROWSER TEST RESULTS (Phases 2–4; NemrynS1Iso :3100, production build, Org A dispatcher)
+-------------------------------------------------------------------------------------------
+Fictional data seeded for this run:
+- 37 Org A requests "NCUX01 Fictional <state> NN": 28 pending including the existing seed (2 pages), 4 accepted,
+  3 declined, 3 cancelled;
+- 2 of them linked to the seed passenger;
+- 1 Org B request.
+This data was later removed by the regression suites' DB reset.
+
+Script result: 47 / 47 PASS (browser-after.log).
+
+Clicks — every target opens THAT row's request: the exact href id, Request Detail shows the same requester, and
+history grows by exactly 1:
+- 1 passenger name;
+- 2 empty row space;
+- 3 route;
+- 4 service;
+- 5 waiting time;
+- 6 readiness;
+- 7 status badge.
+
+Keyboard:
+- focus reaches the first row link; one Tab per row; Enter opens the correct request.
+
+States:
+- pending / accepted / declined / cancelled: a row click opens that request; its database state matches; the detail
+  shows its status.
+
+Filters:
+- a search narrows to 1 row, and its click opens that request;
+- on pagination page 2, a row click opens that row's request.
+
+IDs:
+- page 1 links to 25 distinct ids, all in Org A;
+- clicking row 7 opens row 7 only.
+
+Independent controls:
+- a status tab switches the view with no detail navigation;
+- the search field plus Enter searches and keeps the state view;
+- a name-link click navigates once, not twice.
+
+Native link behaviour:
+- Cmd-click on the link, and on the route cell, opens a new tab and the page stays;
+- Shift-click on a cell opens a new window, identical to Shift-click on the link;
+- Shift-click that extends a text selection selects text and does not navigate.
+- Ctrl-click was not tested. On macOS it is the secondary click (context menu) and fires no click event, on links
+  either.
+
+Text selection and scrolling:
+- drag-selecting route text selects it and does not navigate;
+- at 768 the table's horizontal scroll works (scrollLeft 0 → 200) with no navigation.
+
+Responsive — 1440, 1280, 1024, 822 and 768:
+- page overflow 0; 6 columns; rows render; pointer cursor; hover and focus tints.
+- The table's own horizontal scroll at 1024 / 822 / 768 (194 / 188 / 242px) is identical to baseline.
+- 390: the approved Operations tablet / desktop notice, unchanged.
+
+Authorization:
+- the Org A dispatcher opening the Org B request id: "Request unavailable", with no data;
+- Org B's request never appears in Org A's list.
+- Row navigation only follows the server-rendered link of the viewer's own rows; Request Detail's existing server
+  checks are untouched.
+- QA2 core-requests P1 (a Driver cannot open Request Detail) and P2 / P3 (tenant isolation) also pass (section 7).
+
+axe-core:
+- the full Requests page at 1440, 822 and 768: 0 serious / critical.
+
+Shared-component regression (DataTable is also used by Contacts, Quotes and Passengers):
+- tests/e2e/ui-foundations/p1a.e2e.mjs: 48 / 48, ALL PASS. That includes:
+  - T6.1 Contacts rows are not tab stops;
+  - T6.2 a Contacts row click follows the link;
+  - T6.3 a Quotes directory row click opens the same destination;
+  - U2.8 the Passengers action-row button is unchanged.
+- tests/e2e/ui-foundations/p1b.e2e.mjs: 52 / 52, ALL PASS.
+
+7. QA2 STRICT RESULTS (run on a fresh reset against this build)
+---------------------------------------------------------------
+QA2_E2E_SUPABASE_WORKDIR=/Users/datamatics/NemrynS1Iso npm run test:e2e:qa2:strict
+Result: 199 / 199, "RESULT: all suites pass" (rc 0). Equal to baseline.
+- core-requests 25 / 25 (the Core Requests browser suite)
+- core-trips-dispatch 44 / 44
+- core-records 28 / 28
+- growth 23 / 23
+- auth-access 79 / 79
+
+Cross-module, Quotes strict (QUOTES_E2E_SUPABASE_WORKDIR=... npm run test:e2e:quotes:strict):
+Result: 272 / 272, "RESULT: no unexpected failures" (rc 0). Equal to baseline.
+- s2 33
+- s3a 31
+- s3b 32
+- s3c 54
+- o1 27
+- s4-integrated 69
+- s4-a11y 26
+
+8. UNIT, TYPESCRIPT, LINT AND BUILD
+-----------------------------------
+- Relevant Core unit tests: 82 / 82 pass. Files: src/lib/operations/request-*.test.mjs,
+  log-request-options.test.mjs and website-requests*.test.mjs.
+- npm test: 902 / 902.
+- npm run test:release: 28 / 28.
+- tsc --noEmit: PASS.
+- ESLint (src): 0 errors; 1 warning, pre-existing and unrelated (src/app/operations/growth/tasks/page.tsx: unused
+  Link). It is a baseline warning, not introduced here.
+- next build (production): PASS (rc 0). That build served every "after" check and regression above.
+
+Classification: no failures were introduced, and no baseline failures were present.
+- During development, 4 checks in my own verification script initially failed. All were resolved before the final
+  47 / 47 run:
+  - three were harness issues:
+    - a synthetic drag without a pressed button;
+    - a wheel event aimed off-screen;
+    - Ctrl-click, which on macOS is a context-menu gesture;
+  - one was a real gap in my first selection guard, which only looked at where the selection started. A selection
+    Shift-extended into a row from outside still navigated. It was fixed with `containsNode(row, true)` and
+    re-verified.
+
+9. REMAINING RISKS
+------------------
+- Double-click to select a word in a non-link cell opens the request on the first click, before any selection
+  exists. This is inherent to any click-to-open row and is the same as Contacts / Quotes. Drag-select and
+  Shift-extend work.
+- Middle-click on non-link row space does nothing (no auxclick handling); middle-click on the name link opens a new
+  tab natively. This is deliberately not emulated, to avoid overriding browser behaviour.
+- The DataTable handler change also applies to Contacts and the Quotes directory, with the same benefits there.
+  p1a T6 and Quotes strict s3a confirm their destinations are unchanged.
+- Screen-reader users hear each row's single link, named by the passenger / requester. No row-level label was added.
+
+10. GIT HANDOFF (owner; not run)
+--------------------------------
+  cd /Users/datamatics/Nemryn
+  git status   # expect: M src/app/operations/requests/page.tsx,
+               #         M src/components/operations/requests/RequestsTable.tsx,
+               #         M src/components/ui/DataTable.tsx,
+               #         ?? docs/reports/NC-UX-01-requests-full-row-navigation.txt,
+               #         ?? docs/design/concept-b/reviews/nc-ux-01/
+  git add src/app/operations/requests/page.tsx src/components/operations/requests/RequestsTable.tsx src/components/ui/DataTable.tsx docs/reports/NC-UX-01-requests-full-row-navigation.txt docs/design/concept-b/reviews/nc-ux-01/
+  git commit -m "feat(requests): open request detail from the whole queue row"
+  git push -u origin nc-ux-01-requests-row-navigation
+Push with the nemryn GitHub account (check both `gh api user --jq .login` and the osxkeychain git credential).
+Leave the untracked .tmp-qa/ files and the older untracked docs unstaged, as before.
+
+11. VERDICT
+-----------
+PASS.
+- The whole Requests row opens that request's Request Detail.
+- The name link, keyboard Enter, native modified clicks, text selection and horizontal scroll are preserved.
+- No authorization, workflow or layout change.
+- 0 serious / critical axe issues.
+- Every regression is at baseline: QA2 199 / 199, Quotes 272 / 272, UI-foundations 48 / 48 and 52 / 52, unit 902 /
+  902, Core request units 82 / 82; tsc, ESLint and the build pass.
+
+STOP for owner review.

@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { Tray, Plus } from "@phosphor-icons/react/dist/ssr";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
@@ -28,17 +30,17 @@ export interface RequestsTableProps {
 
 /**
  * The Request Hub queue table (P1-E1-S2D, row navigation added P1-E1-
- * S2E). A plain server component — no "use client" — since Request
- * Detail row navigation needs nothing more than a real `<a>` tag.
+ * S2E). `DataTable` is used WITHOUT its optional `onRowClick`: that prop
+ * opens dialogs (`PassengersTable.tsx`), a different purpose entirely.
  *
- * `DataTable` is used WITHOUT its optional `onRowClick`: that prop's
- * only existing usage elsewhere in this codebase
- * (`PassengersTable.tsx`) opens an edit dialog, a different purpose
- * entirely — row → Detail-PAGE navigation instead mirrors Trips list's
- * own established pattern (`src/app/operations/trips/page.tsx`): a
- * plain `<Link>` wrapping the primary column's rendered value. Fully
- * keyboard-accessible natively (a real link, no `tabIndex`/`onKeyDown`
- * needed), no redundant "View" button, no click-only/inaccessible row.
+ * NC-UX-01: the whole row opens Request Detail, through DataTable's
+ * existing `navigableRows` (the Contacts / Estimates & Quotes pattern).
+ * The passenger (or requester) name stays the row's one real link, marked
+ * `data-row-link` — the only tab stop, opened with Enter, named by its
+ * text; a click anywhere else on the row follows that same link. No
+ * `tabIndex`/`onKeyDown` on the row, no redundant "View" button. A
+ * client component only because the row's click handler lives in the
+ * browser; rendering is unchanged.
  *
  * Status and Readiness are deliberately rendered with two visually
  * distinct treatments (§18) — Status as a `StatusBadge` pill (the
@@ -56,14 +58,14 @@ export function RequestsTable({ rows, hasActiveFilters, organizationHasAnyReques
       render: (row) => {
         if (row.passengerName) {
           return (
-            <Link href={`/operations/requests/${row.id}`} className="hover:text-text-link hover:underline">
+            <Link href={`/operations/requests/${row.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-text-link hover:underline" data-testid="request-row-link" data-row-link>
               {row.passengerName}
             </Link>
           );
         }
         return (
           <span className="flex flex-col">
-            <Link href={`/operations/requests/${row.id}`} className="hover:text-text-link hover:underline">
+            <Link href={`/operations/requests/${row.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-text-link hover:underline" data-testid="request-row-link" data-row-link>
               {row.requesterName}
             </Link>
             <span className={cn(typography.metadata, "text-text-muted")}>Passenger not linked</span>
@@ -121,6 +123,7 @@ export function RequestsTable({ rows, hasActiveFilters, organizationHasAnyReques
       columns={columns}
       rows={rows}
       getRowId={(row) => row.id}
+      navigableRows
       emptyState={
         hasActiveFilters ? (
           // Empty state C (P1-E1-S2D §21): a search term and/or a
