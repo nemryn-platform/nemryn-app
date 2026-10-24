@@ -24,8 +24,8 @@ export interface DataTableProps<T> {
   rowActionLabel?: (row: T) => string;
   /**
    * NAVIGATION rows (NP-UI-P1a): each row renders its own real link marked `data-row-link` (usually in the primary
-   * cell). That link is the only tab stop; a click anywhere else on the row follows the same link. Destinations come
-   * from the caller's link -- the table never invents one.
+   * cell). That link is the only tab stop; a click anywhere else on the row follows the same link (with the click's
+   * modifier keys; not after a text selection). Destinations come from the caller's link -- the table never invents one.
    */
   navigableRows?: boolean;
   selectedRowId?: string;
@@ -100,8 +100,16 @@ export function DataTable<T>({
                         // a real control inside the row handles its own click
                         const hit = target.closest(INTERACTIVE);
                         if (hit && hit !== event.currentTarget && event.currentTarget.contains(hit)) return;
-                        if (navigableRows) event.currentTarget.querySelector<HTMLAnchorElement>("a[data-row-link]")?.click();
-                        else onRowClick?.(row);
+                        if (navigableRows) {
+                          // NC-UX-01: finishing a text selection in the row is not a click to open it
+                          const selection = window.getSelection();
+                          if (selection && !selection.isCollapsed && selection.containsNode(event.currentTarget, true)) return;
+                          // the same click on the row's link, modifier keys included, so Cmd / Ctrl / Shift-click
+                          // opens a new tab or window exactly as it would on the link itself
+                          event.currentTarget.querySelector<HTMLAnchorElement>("a[data-row-link]")?.dispatchEvent(
+                            new MouseEvent("click", { bubbles: true, cancelable: true, view: window, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey }),
+                          );
+                        } else onRowClick?.(row);
                       }
                     : undefined
                 }

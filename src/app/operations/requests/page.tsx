@@ -23,9 +23,8 @@ import { cn } from "@/lib/cn";
  * already proved out for this codebase, rather than inventing a second
  * list-page architecture.
  *
- * Request Detail does not exist until S2E — this page deliberately does
- * NOT link queue rows anywhere (§17); the one real action here is Log
- * Request, already fully built (S2C).
+ * Each queue row opens Request Detail (S2E; whole row since NC-UX-01 —
+ * see RequestsTable); the page's one action is Log Request (S2C).
  */
 export default async function RequestHubPage({
   searchParams,
