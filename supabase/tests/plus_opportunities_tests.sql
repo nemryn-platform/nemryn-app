@@ -186,17 +186,17 @@ begin
                          'plus_update_opportunity', 'plus_change_opportunity_stage', 'plus_mark_opportunity_lost', 'plus_reopen_opportunity',
                          '_plus_require_active_contact')
        and p.prosecdef and exists (select 1 from unnest(p.proconfig) c where c like 'search_path=%')) = 9);
-  perform pg_temp.t('Q4 canonical columns only: no account_id / referral_account_id / inquiry_id, no health, trip or passenger field, no JSON',
+  perform pg_temp.t('Q4 canonical columns only (NP-P2-S7-A added inquiry_id): no account_id / referral_account_id, no health, trip or passenger field, no JSON',
     (select string_agg(column_name, ',' order by ordinal_position) from information_schema.columns where table_schema = 'public' and table_name = 'plus_opportunities')
-    = 'id,organization_id,channel,title,stage,primary_contact_id,inquiry_type,service_type,source,source_detail,campaign_code,estimated_value_cents,payment_reported_status,lost_reason,lost_note,owner_user_id,converted_at,closed_at,created_by,created_at,updated_at'
+    = 'id,organization_id,channel,title,stage,primary_contact_id,inquiry_type,service_type,source,source_detail,campaign_code,estimated_value_cents,payment_reported_status,lost_reason,lost_note,owner_user_id,converted_at,closed_at,created_by,created_at,updated_at,inquiry_id'
     and not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'plus_opportunities' and data_type in ('json', 'jsonb')));
-  perform pg_temp.t('Q5 no dependency on future tables; every FK targets organizations, auth.users or plus_contacts',
-    (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts'))
+  perform pg_temp.t('Q5 no dependency on future tables; every FK targets organizations, auth.users, plus_contacts or (NP-P2-S7-A) plus_inquiries',
+    (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts',
+                                                   'plus_inquiries', 'public.plus_inquiries'))
        from pg_constraint where contype = 'f' and conrelid = 'public.plus_opportunities'::regclass)
     -- (plus_tasks ships in NP-P2-S2; plus_request_attributions in NP-P2-S3; plus_quotes in NP-P2-S5-S1 and references
-    -- plus_opportunities, never the reverse; accounts / inquiries remain future)
-    and to_regclass('public.plus_accounts') is null
-    and to_regclass('public.plus_inquiries') is null);
+    -- plus_opportunities, never the reverse; plus_inquiries ships in NP-P2-S7-A (inquiry_id, ZD-251); accounts remain future)
+    and to_regclass('public.plus_accounts') is null);
   begin
     insert into public.plus_opportunities (organization_id, title, primary_contact_id, source, created_by) values (c_a, 'X', ct_b, 'phone', c_a1);
     perform pg_temp.t('Q6 composite FK: an Org A opportunity can never reference an Org B contact', false);

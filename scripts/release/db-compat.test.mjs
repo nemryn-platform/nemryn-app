@@ -13,14 +13,21 @@ const REF = CONFIG.expectedProjectRef;
 const EXPECTED = { projectRef: REF, projectName: CONFIG.expectedProjectName };
 const PATHS = repoMigrationPaths();
 const ALL = PATHS.map((p) => { const m = /(\d{14})_([a-z0-9_]+)\.sql$/.exec(p); return { version: m[1], name: m[2] }; });
+// The newest migration in the repository: tests about "the next migration to release" follow the repository, so a new
+// slice's migration never breaks them (NP-P2-S7-A). S6_RELEASE is the fixed historical set at the S6-B merge commit.
+const LATEST = ALL.at(-1);
+const LATEST_FILE = `supabase/migrations/${LATEST.version}_${LATEST.name}.sql`;
+const S6_RELEASE = ALL.slice(0, 93);
 const state = (migrations, over = {}) => validateProductionState({ projectRef: REF, projectName: "Nemryn", source: "simulated", migrations, ...over }, EXPECTED);
 const APP_CHANGE = ["src/app/operations/growth/contacts/[contactId]/page.tsx"];
 const tmp = mkdtempSync(path.join(os.tmpdir(), "nemryn-release-gate-"));
 const stateFile = (obj) => { const f = path.join(tmp, `s-${Math.random().toString(36).slice(2)}.json`); writeFileSync(f, JSON.stringify(obj)); return f; };
 
-test("baseline: the repository has 93 conforming, ordered migrations", () => {
-  assert.equal(ALL.length, 93);
-  assert.equal(ALL.at(-1).version, "20261023100000");
+test("baseline: the repository keeps the 93 released migrations (S6 = the 93rd) and every migration is conforming and strictly ordered", () => {
+  assert.ok(ALL.length >= 93);
+  assert.equal(S6_RELEASE.at(-1).version, "20261023100000");
+  assert.equal(PATHS.length, ALL.length, "every repository migration matches <14 digits>_<snake_name>.sql");
+  assert.ok(ALL.every((m, i) => i === 0 || m.version > ALL[i - 1].version), "strictly increasing versions");
 });
 
 test("T1 application change, production compatible -> PASS (exit 0)", () => {
@@ -32,7 +39,7 @@ test("T1 application change, production compatible -> PASS (exit 0)", () => {
 test("T2 application change, one required migration missing -> BLOCKED, names the version", () => {
   const r = evaluate({ mode: "pr", repoMigrationPaths: PATHS, changedFiles: APP_CHANGE, production: state(ALL.slice(0, -1)) });
   assert.equal(r.verdict, VERDICT.BLOCKED); assert.equal(r.exitCode, 1);
-  assert.match(r.reasons.join(" "), /20261023100000_plus_communication_consents/);
+  assert.match(r.reasons.join(" "), new RegExp(`${LATEST.version}_${LATEST.name}`));
 });
 
 test("INCIDENT REPLAY NP-P2-S6C1: S6-B merge commit fa949eb against production as it was (92 migrations) -> BLOCKED", () => {
@@ -52,13 +59,13 @@ test("T3 several required migrations missing -> BLOCKED, lists all", () => {
 });
 
 test("T4 migration-only PR awaiting the owner-run release -> PASS as DATABASE-FIRST (never applies anything)", () => {
-  const r = evaluate({ mode: "pr", repoMigrationPaths: PATHS, changedFiles: ["supabase/migrations/20261023100000_plus_communication_consents.sql", "docs/x.md"], production: state(ALL.slice(0, -1)) });
+  const r = evaluate({ mode: "pr", repoMigrationPaths: PATHS, changedFiles: [LATEST_FILE, "docs/x.md"], production: state(ALL.slice(0, -1)) });
   assert.equal(r.verdict, VERDICT.PASS);
-  assert.match(r.notices.join(" "), /DATABASE-FIRST: 1 migration\(s\) awaiting the owner-run production release: 20261023100000/);
+  assert.match(r.notices.join(" "), new RegExp(`DATABASE-FIRST: 1 migration\\(s\\) awaiting the owner-run production release: ${LATEST.version}`));
   // ... and the production build of that commit is SKIPPED until the owner releases the migration
   assert.equal(evaluate({ mode: "deploy", repoMigrationPaths: PATHS, production: state(ALL.slice(0, -1)) }).verdict, VERDICT.BLOCKED);
   // ... the migration-only PR still blocks on drift
-  assert.equal(evaluate({ mode: "pr", repoMigrationPaths: PATHS, changedFiles: ["supabase/migrations/20261023100000_plus_communication_consents.sql"], production: state([...ALL, { version: "20261030100000", name: "unknown" }]) }).verdict, VERDICT.BLOCKED);
+  assert.equal(evaluate({ mode: "pr", repoMigrationPaths: PATHS, changedFiles: [LATEST_FILE], production: state([...ALL, { version: "29991230100000", name: "unknown" }]) }).verdict, VERDICT.BLOCKED);
 });
 
 test("T5 documentation-only PR -> PASS even with pending migrations or an unreachable production", () => {
@@ -147,7 +154,7 @@ test("management-api transport: read-only GETs only, validated response, project
     return { ok: false, status: 404, json: async () => ({}) };
   };
   const r = await collectProductionState({ source: "management-api", env: { SUPABASE_ACCESS_TOKEN: "t" }, fetchImpl: fakeFetch });
-  assert.equal(r.ok, true); assert.equal(r.state.migrations.length, 93);
+  assert.equal(r.ok, true); assert.equal(r.state.migrations.length, ALL.length);
   assert.deepEqual(calls.map((c) => c.method), ["GET", "GET"]);
   assert.ok(calls.every((c) => c.url.startsWith("https://api.supabase.com/v1/projects/") && !/query|push|reset|repair/.test(c.url)));
   const wrong = async (url) => (url.endsWith(REF) ? { ok: true, status: 200, json: async () => ({ ref: REF, name: "chelth-Project" }) } : { ok: true, status: 200, json: async () => ALL });
@@ -236,7 +243,7 @@ test("CLI end to end (PR mode, simulated state, injected change set): exit codes
 
 test("comparison details", () => {
   const c = compareMigrations(ALL, ALL.slice(0, -1));
-  assert.equal(c.prodHead, "20261021100000"); assert.equal(c.pendingNew.length, 1); assert.equal(c.missingHistorical.length, 0);
+  assert.equal(c.prodHead, ALL.at(-2).version); assert.equal(c.pendingNew.length, 1); assert.equal(c.missingHistorical.length, 0);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -267,7 +274,7 @@ test("01A candidate-as-data: the PR head is read from git objects (real S6-B com
   const log = () => {};
   const sf92 = stateFile({ projectRef: REF, projectName: "Nemryn", source: "sim", migrations: ALL.slice(0, 92) });
   assert.equal(await main(["--mode", "pr", "--base", base, "--candidate", full, "--source", "state-file", "--state-file", sf92], {}, { log }), EXIT.BLOCKED, "S6-B against 92 -> BLOCKED");
-  const sf93 = stateFile({ projectRef: REF, projectName: "Nemryn", source: "sim", migrations: ALL });
+  const sf93 = stateFile({ projectRef: REF, projectName: "Nemryn", source: "sim", migrations: S6_RELEASE });
   assert.equal(await main(["--mode", "pr", "--base", base, "--candidate", full, "--source", "state-file", "--state-file", sf93], {}, { log }), EXIT.PASS);
   assert.equal(await main(["--mode", "pr", "--base", base, "--candidate", "fa949eb", "--source", "state-file", "--state-file", sf93], {}, { log }), EXIT.UNVERIFIABLE, "short / malformed SHA refused");
   assert.equal(candidateMigrationPaths("0".repeat(40)).ok, false, "unknown commit fails closed");

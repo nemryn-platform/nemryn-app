@@ -4,6 +4,15 @@
 **Status:** All tests below were actually executed against a running local Supabase/Postgres instance and passed. This is not a syntax-only claim.
 **Last updated:** 2026-08-31
 
+**NP-P2-S7-A note (public inquiry intake, 2026-10-24, isolated stack):**
+- New tables:
+  - `plus_inquiry_forms`: RLS `plus_can_read`; authenticated SELECT only.
+  - `plus_inquiries`: RLS `plus_can_read`; column-level SELECT, never `idempotency_key`.
+  - `plus_inquiry_public_access` and `plus_inquiry_rate_limit_events`: class A, with no privilege for anon / authenticated / service_role.
+- Results: `supabase/tests/plus_inquiries_tests.sql` 65 / 65 and `plus_inquiries_concurrency_test.sh` (14 scenarios) (see the NP-P2-S7A report). They cover the role / tenant / grant / entitlement matrix, direct DML denial, service_role-only public RPCs, a Platform Admin without membership seeing no tenant rows, and the activation allowlist.
+- `privilege_contract_tests.sql` lists every new table, column grant and function: 0 violations.
+- Details: [plus-access-model.md](./plus-access-model.md) §6b and T34; the report `docs/reports/NP-P2-S7A-data-foundation-implementation.txt`.
+
 **P1-E3-S0A note:** `create_trip`'s own test results (27 SQL assertions across 3 new suites, plus 6 real-HTTP cross-validation checks) are documented in [mutation-api.md](../data/mutation-api.md) "Testing" and the P1-E3-S0A completion report, not duplicated here.
 
 **P1-E2-S2 note:** the mutation RPC layer's own test results (131 SQL assertions across 6 suites, a genuine two-process concurrency test, and 15 real-HTTP cross-validation checks — including the P1-E2-S2A idempotent-authorization audit) are documented in [mutation-api.md](../data/mutation-api.md) "Testing" and the P1-E2-S2/P1-E2-S2A completion reports, not duplicated here.

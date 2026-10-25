@@ -1,0 +1,621 @@
+NP-P2-S7 — PUBLIC ENQUIRY INTAKE: ARCHITECTURE AND DECISION REVIEW
+=====================================================================
+Date: 2026-10-24.
+Mode: read-only discovery and planning.
+- No source code, migration, database write, form publication, Git operation or deployment-gate change was made.
+- The only files written are this report and docs/specs/NP-P2-S7-public-enquiry-intake-design.md (the technical
+  design, "the spec").
+
+VERDICT: READY FOR OWNER DECISION REVIEW. S7-A must not start until OD-S7-1 … OD-S7-18 are decided.
+Real customer submissions stay blocked by PD-10 and PD-11.
+
+EXECUTIVE SUMMARY
+-----------------
+- P2-S7 has been designed before: product spec §4.2, domain model §13, access model §6b, tests T23–T26, PD-12 and
+  PD-16. The design is sound in shape and remains the right foundation:
+  - a separate Plus public boundary, three new tables and service-role-only public RPCs;
+  - a staff triage inbox;
+  - staff-reviewed conversion into the existing Contact + private-pay Opportunity;
+  - Core intake untouched.
+- It predates the RELEASED S6 consent ledger and several later precedents. Eight corrections are needed (spec §9).
+  The important ones:
+  1. Consent. The old design required a "follow-up" checkbox to submit and "copied the booleans" to the ledger. The
+     deployed ledger is per (channel, purpose), bound to an address digest, and DNC-first.
+     Recommended: both boxes optional and unticked. Conversion writes ledger rows only for ticked purposes, only for
+     channels whose address matches the contact, voice (never SMS) for phone, and nothing at all for a do-not-contact
+     contact.
+  2. Spam controls. Core's form deliberately rejected a honeypot. The old S7 design used honeypot + fill time.
+     Recommended: Core's proven controls (closed schema, publication, durable rate limit, uniform responses) plus a
+     new server-side kill switch that defaults OFF.
+  3. Navigation. The brief wants Growth → Enquiries; the old design hid the inbox inside the Pipeline.
+  4. Enum alignment: `booking_interest` → `booking`, the same set as opportunities. `spam` becomes a dismiss reason.
+- Everything else is reused:
+  - entitlement helpers (`_plus_entitlement_state`, `_require_plus_write`, `_require_plus_admin_write`, `plus_can_read`);
+  - contact matching (`_plus_contact_matches`);
+  - contact / opportunity creation rules;
+  - the consent ledger internals;
+  - Core's public-form architecture (key format, hosted + iframe embed + loader, Origin rule, body cap, rate-limit
+    hashing, uniform 404s, headers);
+  - the DataTable navigable-row pattern;
+  - Brand Lock v2 components.
+- Four reviewable slices: S7-A (data + RLS), S7-B (public form + submission API), S7-C (inbox + conversion),
+  S7-D (integrated verification + closeout). Each S7-A migration follows the owner's manual migration-before-merge
+  workflow. The NP-RELEASE-01C gate stays paused.
+
+---------------------------------------------------------------------------------------------------------------------
+PHASE 0 — REPOSITORY BASELINE
+---------------------------------------------------------------------------------------------------------------------
+- Local branch: nc-ux-01-requests-row-navigation.
+- origin/main = e416e0d (Merge PR #35, NP-UX-FILTER-02). The latest merged PRs are #35, #34 (deployment-safety gate
+  workflows), #33 (S6 closeout), #32, #31 (S6-B UI) and #30 (S6-A ledger).
+- NC-UX-01 is NOT MERGED. Its three files are uncommitted changes on the local branch:
+  - src/app/operations/requests/page.tsx
+  - src/components/operations/requests/RequestsTable.tsx
+  - src/components/ui/DataTable.tsx
+  There is no remote branch and no PR. Its report and evidence are untracked. Nothing in this review depends on it,
+  except that the S7 inbox proposes the same navigable-row behaviour.
+- P2-S6 ledger: migration 20261023100000_plus_communication_consents.sql. RELEASED 2026-10-23 (NP-P2-S6C4);
+  synthetic only (ZD-241). No change under supabase/migrations or src/lib/plus since 141605e.
+- 93 migrations; head 20261023100000.
+- Growth functionality present: Dashboard, Agent, Pipeline (+ booking conversion / rebooking), Contacts (+ activities,
+  Communication preferences), Estimates & Quotes, Tasks, Request attribution, Settings → Nemryn Plus (status + Team
+  access).
+- No S7 code or schema exists: no plus_inquir* objects, no inquiry_id, no /inquiry route. The post-UI audit agrees.
+- Canonical specifications read:
+  - docs/product/plus-product-spec.md (§4.1–4.2, §7, roadmap);
+  - docs/product/plus-domain-model.md (§12–13);
+  - docs/security/plus-access-model.md (§3.1a, §6, §6b, §8, §9);
+  - docs/product/plus-decisions-proposed.md (PD-01 … PD-20);
+  - docs/product/decision-register.md (ZD-228 … ZD-242);
+  - docs/reports/NP-P0-A02R-nemryn-plus-blueprint-refinement.txt (C3, C7, A3, A4, A6);
+  - NP-POST-UI-product-completion-audit.txt;
+  - docs/product/website-request-form-publication.md (Core D2).
+- Note: there is no docs/specs/ directory in the repository. Product designs so far live in docs/product (e.g.
+  NP-P2-S6-consent-ledger-design.md). The spec was saved at the path the brief named; the owner may prefer to move
+  it to docs/product/.
+
+Prior P2-S7 decisions and their status:
+- PD-12, a separate Plus inquiry boundary: PROPOSED (OWNER-APPROVED DIRECTION). It has no ZD number.
+- PD-16 (a) challenge provider, (b) email alerts: PROPOSED, needs an owner decision.
+- PD-10 HIPAA/BAA: gate OPEN.
+- PD-11 retention / erasure, including the inquiry purge: OPEN.
+- PD-15 no ad pixels, PD-18 growth-only members: PROPOSED.
+- PD-19 → ZD-228 (ledger before the form): CONFIRMED.
+- ZD-238: `web_form` is to be added by P2-S7. ZD-232 (address binding), ZD-233 (DNC precedence), ZD-236 (no consent
+  timeline rows) and ZD-239 (read_only refuses consent writes) all bind S7.
+- Unresolved IDs that touch S7: PD-10, PD-11, PD-12 (unrecorded), PD-15, PD-16, PD-18.
+
+---------------------------------------------------------------------------------------------------------------------
+PHASE 1 — EXISTING FUNCTIONALITY AUDIT: WHAT S7 REUSES
+---------------------------------------------------------------------------------------------------------------------
+Each area below gives what exists today and how S7 treats it.
+
+Core hosted / embedded request form (D2: website_request_form_publications, submit_public_form_request,
+/request/<form_key>, /embed/request/<key>, /embed/request-form.js):
+- Exists: an Org-Admin-published form; a 128-bit `form_` key; a hosted page that is not frameable and an embed page
+  that is; a loader using a hardened postMessage protocol; a same-origin submit; a 16 KB cap; uniform 404s.
+- S7 REUSES THE PATTERN, NOT THE CODE PATH. It gets its own key namespace (`inq_`), pages, a loader copy and RPCs.
+  submit_public_form_request and _create_public_request always create a transportation_request, so they must not be
+  called (PD-12).
+
+Core website-intake API (/api/public-intake/website, request_intake_integrations; used by Zenward):
+- Exists: an integration id, allowed origins, CORS, idempotency, and a rate limit of 8 / client / h and 120 /
+  integration / h.
+- S7 does NOT touch it. A developer API for inquiries (a Zenward-style integration) is deferred (OD-S7-14). Zenward
+  keeps its own form.
+
+Rate limiter (public_intake_rate_limit_events, src/lib/public-intake/rate-limit*.ts):
+- Exists: an atomic per-key + per-client ledger; the IP hashed with a fixed salt; no purge.
+- S7 builds its own table and function (domain model §13.3). It imports the pure hashing helper and does not edit it.
+
+Request Hub / Requests:
+- Exists: the Core triage of booking requests.
+- No change. An inquiry never appears in the Request Hub.
+
+Plus Contacts + activities (plus_contacts, _plus_contact_matches, plus_create_contact / plus_update_contact):
+- Exists: possible-duplicate matching (email lower-case, phone digits, name; up to 5, never merges); do_not_contact;
+  preferred_channel; contact_kind.
+- Reused for the inbox's duplicate hints and for contact create / link at conversion.
+
+Private-pay opportunities (plus_create_opportunity):
+- Exists: `source` already allows `web_inquiry`; `inquiry_type` = quote / availability / service_question / booking
+  / other; stage new_inquiry; the lost reason "Duplicate inquiry".
+- Reused. Add `inquiry_id` only.
+
+Opportunity → Request conversion (plus_convert_opportunity_to_request; P2-S4):
+- Exists: the only Plus path into Core (one pending Request; no Passenger or Trip).
+- Unchanged. An inquiry reaches Core only through it, later, by a staff decision.
+
+Consent ledger (P2-S6: _plus_effective_consent, address digest, DNC switch-on revocations, `seq`, ZW codes):
+- Reused internally by conversion. It needs:
+  - `web_form` in captured_via;
+  - consent_text_version required for web_form;
+  - an `inquiry_id` column.
+
+Entitlements (none / write / read_only / locked; _plus_entitlement_state):
+- `_plus_entitlement_state(org)` is caller-independent, so the anonymous service-role RPC can gate on "write" without
+  a membership.
+- read_only: Admin reads the inbox; writes give ZW001; the public form returns 404. locked / none: hidden, and 404.
+
+Named-staff grants (P1-S3; plus_can_read / _require_plus_write / _require_plus_admin_write):
+- READ grant: view the inbox (it holds the same class of PII as Contacts). WRITE grant: convert / dismiss / reopen.
+- Publishing the form: Organization Admin only (`_require_plus_admin_write` exists).
+
+Growth navigation (src/lib/plus/growth-nav-core.ts):
+- Exists: Dashboard, Pipeline, Contacts, Estimates & Quotes, Tasks.
+- Add "Inquiries" after Dashboard, with a new-count badge.
+
+Proxy + headers (src/proxy.ts NO_SESSION_PATH already contains `embed\/`; next.config.ts has the /request,
+/embed/request and loader rules):
+- Add `inquiry\/` and `api\/plus-inquiries\/`, plus matching header rules.
+- No request-form-host allowlist change in S7.
+
+Service-role client (src/lib/supabase/service-role-server.ts):
+- Its comment still says website-intake.ts is the ONLY caller. public-form.ts, rate-limit.ts and
+  notifications/dispatch.ts also use it (the A01 / A02R A6 finding).
+- S7 adds a caller, so it must correct the comment (comment-only edit).
+
+audit_events:
+- `action` is free text (no CHECK), so S7 audit actions need no Core schema change.
+
+Notifications (notification_events, a Core CHECK on the event type):
+- Unchanged. In-app count only (PD-16b, OD-S7-17).
+
+Brand Lock v2 (PageHeader, FilterBar, DataTable navigableRows, StatusBadge, Dialog, EmptyState; the @container filter
+pattern of NP-UX-FILTER-01 / 02):
+- Reused unchanged.
+
+---------------------------------------------------------------------------------------------------------------------
+PHASE 2 — PRODUCT DESIGN (detail: spec §2–§6)
+---------------------------------------------------------------------------------------------------------------------
+A. Form configuration
+   - Settings → Nemryn Plus → Inquiry form, Organization Admin only, effective `write`, active organization.
+   - One form per organization.
+   - Fields: headline (≤ 120), intro (≤ 500), offered services (a subset of the organization's Core service
+     offerings; may be empty).
+   - Draft → Published → Disabled. The key is stable across edits and re-publishes.
+   - Edits to a published form apply live after a confirmation. `config_version` is recorded on every inquiry.
+   - Outputs: the hosted link, the embed snippet, an iframe fallback, and builder guidance reused from Core D2.
+
+B. Public submission experience
+   - Hosted /inquiry/<key> and embed /embed/inquiry/<key> (loader /embed/inquiry-form.js).
+   - The same design system as the Core form: organization name shown, "Powered by Nemryn".
+   - Required fields: name; phone and/or email; question type; question (≤ 500).
+   - Optional fields: preferred reply method, who is asking, service (from the offered list), coarse timeframe.
+   - Two unticked, optional consent boxes.
+   - A "Please don't include medical details" notice.
+   - The success message promises a reply only: no booking, no reference number.
+   - An unavailable form shows the neutral "This form isn't available".
+
+C. Growth → Inquiries inbox
+   - Tabs New / Converted / Dismissed / All, plus search, bounded pages and full-row navigation.
+   - A "new" count on the nav item and on the Dashboard.
+
+D. Inquiry detail and lifecycle
+   - new → converted (final), new → dismissed (with a reason), dismissed → new (reopen).
+   - Every transition uses a version token, re-checks Plus write, and is audited.
+   - Read-only viewers see no actions.
+
+E. Duplicates
+   - An idempotency key per form render makes a replay return the same row.
+   - Other duplicates are only HINTED on the detail page: matching contacts (`_plus_contact_matches`) and other open
+     inquiries with the same email or phone digits.
+   - Nothing auto-merges or auto-dismisses. Staff choose "Dismiss → duplicate" or "Convert → link existing contact".
+
+F. Conversion
+   - One transaction: create or link a Contact.
+     - Linking never overwrites contact fields; it optionally fills blank phone / email.
+   - Create one private-pay Opportunity: stage new_inquiry, source web_inquiry, inquiry_id, owner = the converter by
+     default.
+   - Never a Core Request, Passenger or Trip.
+
+G. Dismissal and history
+   - Dismiss reasons: spam / duplicate / not relevant / out of area / other (a note is required for "other").
+   - The inquiry row keeps triaged_by / triaged_at.
+   - audit_events: plus_inquiry_received is NOT written, to avoid an audit row per anonymous submission; the inquiry
+     row is the evidence. These ARE written: plus_inquiry_converted, _dismissed, _reopened and the form
+     publish / disable / save actions.
+   - Conversion adds one `inquiry_converted` activity on the new opportunity.
+
+H. Consent and DNC
+   - The ticks are stored on the inquiry as "what the person ticked". They become ledger rows only at conversion,
+     per the rules in the executive summary: ticked purposes only, matching addresses only, voice never SMS, nothing
+     for a DNC contact.
+   - captured_via web_form, captured_at = received_at, text version, inquiry_id.
+   - Converting to a do-not-contact contact needs a server-enforced acknowledgement, and then writes no consent.
+   - A submission never changes DNC.
+
+I. Access and tenancy
+   - Tenant comes from the published key only.
+   - Every staff read is plus_can_read; every write is _require_plus_write; publishing is _require_plus_admin_write.
+   - Composite foreign keys everywhere. Platform Admin without a membership sees nothing.
+
+J. Agencies without repository access
+   - The hosted link: paste it into a menu, button, email signature or ad.
+   - The embed snippet for WordPress / Wix / Squarespace / Webflow / custom HTML, with an iframe fallback where
+     scripts are stripped. Copy is reused from Core D2.
+   - No plugin, app or API key to manage.
+   - The vanity host (request.nemryn.com) and a developer API are later options (OD-S7-13 / OD-S7-14).
+
+Data foundation assessment (the previously proposed tables):
+- plus_inquiry_forms — APPROPRIATE. Changes:
+  - `id` PK + unique(organization_id), as Core D2 does;
+  - add config_version and a version token;
+  - the key is `inq_` + 32 hex.
+- plus_inquiries — APPROPRIATE. Changes:
+  - inquiry_type aligned to the opportunity set;
+  - `spam` → dismiss reason;
+  - postal_code removed;
+  - preferred_reply added;
+  - both consent booleans default false and optional;
+  - form_id + form_config_version added;
+  - a version token added;
+  - idempotency key hidden by column privilege.
+- plus_inquiry_rate_limit_events — APPROPRIATE as proposed (it mirrors Core).
+- Additive columns: plus_opportunities.inquiry_id and plus_communication_consents.inquiry_id (as proposed). Plus the
+  named-constraint replacements: captured_via += web_form, the text-version rule, and activity_type +=
+  inquiry_converted.
+- Rejected alternatives:
+  - reusing website_request_forms or publications (Core-owned, booking-shaped);
+  - writing submissions straight into plus_contacts (PD-12: an inbox first);
+  - a generic "public forms" table shared with Core (it would couple a Core hardened path to Plus).
+
+---------------------------------------------------------------------------------------------------------------------
+PHASE 3 — SECURITY AND PRIVACY DESIGN
+---------------------------------------------------------------------------------------------------------------------
+1. Deny-by-default RLS
+   - Every new table has RLS on.
+   - The forms and inquiries tables: a select policy via plus_can_read and SELECT for authenticated only (column
+     privileges hide idempotency_key).
+   - The rate-limit table: no policy and no grants at all.
+   - No INSERT / UPDATE / DELETE for any client role (T9).
+2. Tenant isolation
+   - The public org comes only from a published key inside the service-role RPC; the body cannot name an
+     organization, form, contact or status (closed key set).
+   - Staff RPCs use the org parameter and has_org_role.
+   - Composite FKs make a cross-tenant link a FK violation (T12 pattern).
+3. Anonymous submission
+   - Route handler → service-role RPCs only. Direct anon / authenticated EXECUTE gives 42501 (T23).
+   - Uniform 404 for unknown / draft / disabled keys, a suspended organization, a non-write Plus state, and the kill
+     switch off.
+4. No service-role exposure
+   - The client is only in `server-only` modules (a bundler build error otherwise); no NEXT_PUBLIC variable.
+   - The client's caller-list comment is corrected.
+5. Rate limiting, spam and replay
+   - Durable atomic limits: 5 / client / h and 60 / form / h, proposed.
+   - 8 KB cap; Origin limited to Nemryn's own origins; closed schema; idempotency key unique per org.
+   - Minimal responses.
+   - No honeypot (Core D2 precedent) and no challenge vendor in v1 (PD-16a). Revisit before real data, using
+     synthetic and early abuse data.
+   - The kill switch PLUS_INQUIRY_SUBMISSIONS defaults "off".
+6. Validation and errors
+   - Pure core validation mirrors the SQL CHECKs; the database is authoritative.
+   - Public responses: {"ok":true}, generic 400 / 429, or uniform 404 (no ids, reasons or limits).
+   - Staff RPCs use ZW001–ZW006.
+7. Deduplication
+   - Idempotent replay; hint-only matching; no automatic merge. Conversion is unique per inquiry (status guard + a
+     unique inquiry_id on opportunities) and concurrency-tested.
+8. Least privilege
+   - READ grant: view. WRITE grant: triage. Admin: publish.
+   - No Driver, no inactive member, no Platform Admin without a membership.
+9. Entitlements
+   - write: full. read_only: Admin read, no writes (ZW001), form 404. locked / none: no access, form 404.
+   - Core is unaffected in every state (T8).
+10. No implicit consent
+   - Submission creates no ledger row. Ticks are optional and unticked.
+   - Consent is recorded only by a named staff member at conversion, as web_form evidence with a text version.
+   - A follow-up tick never implies marketing.
+11. DNC precedence
+   - A DNC contact gets no consent rows; conversion needs an acknowledgement; DNC is never changed by an inquiry.
+   - The ledger's own ZW004 refusal still guards it.
+12. Data minimisation
+   - No address, postal code, date of birth, diagnosis, insurance, appointment date or attachments.
+   - Coarse timeframe only; ≤ 500-character question with a no-medical-details notice.
+   - No tracking scripts on /inquiry or /embed (PD-15). No raw IP stored.
+13. Retention, deletion and audit
+   - No purge until PD-11. Proposals: rate-limit rows 30 days; dismissed inquiries 90 days; converted inquiries with
+     the contact.
+   - Contact erasure must also redact linked inquiries and digests (ZD-232).
+   - Audit logs ids only, never question text.
+   - Real data stays blocked by PD-10 / PD-11 (OD-S7-16).
+
+---------------------------------------------------------------------------------------------------------------------
+PHASE 4 — DECISION TABLE (OD-S7-n; recorded as ZD numbers after approval)
+---------------------------------------------------------------------------------------------------------------------
+Every OD-S7 decision requires owner approval. Counsel (C) also reviews OD-S7-9 and OD-S7-16.
+
+OD-S7-1 — Public surface: hosting vs embedding
+- Option A: hosted page + iframe embed + loader, on Nemryn's app host.
+- Option B: hosted page only in S7; the embed later.
+- Recommended: A.
+- Reason: agencies without repository access need both. The Core D2 pattern is proven; copying the loader protocol
+  is low risk.
+- Dependency: next.config / proxy edits.
+
+OD-S7-2 — Naming (schema / route / UI)
+- Option A: schema `inquiry`; route /inquiry; UI "Inquiries".
+- Option B: UI "Enquiries" (the brief's wording); schema unchanged.
+- Recommended: A, unless the owner prefers B.
+- Reason: existing UI strings and enums say "inquiry" (New inquiry, Web inquiry) and the market is the US. One S6
+  string says "enquiry" and should be aligned either way.
+- Dependency: copy.
+
+OD-S7-3 — Minimum public fields
+- Option A: the earlier spec (+ postal code, required relationship and timeframe).
+- Option B: required name, phone or email, question type, question; optional reply method, relationship, service,
+  timeframe; no postal code.
+- Recommended: B.
+- Reason: data minimisation with enough for triage. Staff ask about the service area on reply.
+- Dependency: PD-10.
+
+OD-S7-4 — Form creation and activation
+- Option A: one form per org; Draft / Published / Disabled; Org Admin + effective write; live edits after
+  confirmation, with config_version.
+- Option B: a Core-style snapshot (edit draft → "Publish update").
+- Recommended: A.
+- Reason: smallest. The form has few fields and the version is recorded per inquiry. B can come later without a
+  schema break.
+- Dependency: none.
+
+OD-S7-5 — Inquiry status lifecycle
+- Option A: new → converted (final) | dismissed (reason incl. spam) → reopen to new.
+- Option B: add in_review / contacted states.
+- Recommended: A.
+- Reason: follow-up work belongs on the opportunity (its stages); the inbox only triages.
+- Dependency: none.
+
+OD-S7-6 — Staff assignment
+- Option A: no assignee on inquiries; a shared inbox; the owner is set on the opportunity at conversion.
+- Option B: an `assigned_membership_id` on inquiries.
+- Recommended: A.
+- Reason: smallest. Assignment already exists on opportunities and tasks. Add B if volume demands it.
+- Dependency: none.
+
+OD-S7-7 — Duplicate inquiries
+- Option A: idempotent replay + hint-only matching; staff dismiss as duplicate or link the existing contact.
+- Option B: auto-dismiss or auto-merge same-address inquiries.
+- Recommended: A.
+- Reason: never act on unverified public input; matches the contacts "never merges" rule.
+- Dependency: none.
+
+OD-S7-8 — Conversion rules
+- Option A: create or link a contact (no overwrite; optionally fill blanks) + always one NEW private-pay opportunity.
+- Option B: also allow attaching to an existing open opportunity.
+- Recommended: A.
+- Reason: a 1:1 inquiry→opportunity link keeps attribution simple (unique inquiry_id). An unwanted extra opportunity
+  can be marked Lost: Duplicate inquiry.
+- Dependency: none.
+
+OD-S7-9 — Consent capture boundary
+- Option A: a REQUIRED follow-up box + optional marketing box, copied as given.
+- Option B: both optional and unticked. Replying to the question needs no ledger grant. Ledger rows only at
+  conversion, per ticked purpose × matching address (email → email, phone → voice, never SMS); none for DNC.
+- Recommended: B.
+- Reason: no implicit or forced consent (the brief); it fits the S6 per-channel, address-bound ledger; it avoids a
+  TCPA SMS claim.
+- Dependency: S6 ledger; PD-10; counsel review of the wording. Owner + C.
+
+OD-S7-10 — Growth navigation placement
+- Option A: a new Growth child "Inquiries" after Dashboard, with a new-count badge.
+- Option B: a tab inside Pipeline ("Inquiries to review", the old spec).
+- Recommended: A.
+- Reason: the brief names Growth → Enquiries; triage is a distinct queue from opportunity stages.
+- Dependency: growth-nav-core.
+
+OD-S7-11 — Rate limiting and abuse controls
+- Option A: Core's controls (closed schema, publication, durable rate limit 5 / client / h and 60 / form / h, 8 KB,
+  Origin, idempotency, uniform responses) + a kill switch; no honeypot or challenge.
+- Option B: add a server-signed fill-time token (needs a new secret) and / or Turnstile (a new vendor, PD-16a).
+- Recommended: A for the synthetic phase; re-decide B before real data.
+- Reason: consistent with Core D2 (which rejected a honeypot); no new vendor or secret yet.
+- Dependency: PD-16a.
+
+OD-S7-12 — Activity history
+- Option A: one `inquiry_converted` activity on the new opportunity + audit_events for all triage and form actions;
+  consent writes no activity (ZD-236).
+- Option B: no plus_activities change.
+- Recommended: A.
+- Reason: the timeline shows where an opportunity came from; dismissals stay off contact timelines (no contact
+  exists).
+- Dependency: an activity_type CHECK replacement.
+
+OD-S7-13 — Vanity host request.nemryn.com
+- Option A: app host only in S7.
+- Option B: also allow-list /inquiry on the request-form host now.
+- Recommended: A.
+- Reason: avoids editing the hardened request-host allowlist; it can be added later as an isolated change.
+- Dependency: none.
+
+OD-S7-14 — Developer / API intake (a Zenward-style integration)
+- Option A: none in S7.
+- Option B: an inquiry API with integration ids and CORS.
+- Recommended: A.
+- Reason: a second public write surface; no current need. Zenward keeps its own form.
+- Dependency: none.
+
+OD-S7-15 — Who may see and act
+- Option A: READ grant views; WRITE grant triages; Org Admin publishes; read_only Admin reads only.
+- Option B: Admin-only inbox.
+- Recommended: A.
+- Reason: consistent with ZD-210 and the Contacts exposure.
+- Dependency: P1-S3 grants.
+
+OD-S7-16 — Production release and the real-data gate
+- Option A: S7 may be released to production with the kill switch OFF; synthetic tenants only, by explicit owner
+  enablement; real submissions only after PD-10 + PD-11 close.
+- Option B: hold the S7 release until PD-10 / PD-11 close.
+- Recommended: A.
+- Reason: mirrors ZD-241; the code ships inert and is verifiable.
+- Dependency: PD-10, PD-11. Owner + C.
+
+OD-S7-17 — New-inquiry staff alert
+- Option A: an in-app count only (nav badge + Dashboard).
+- Option B: an email alert (a Core notification_events CHECK change).
+- Recommended: A.
+- Reason: PD-16b proposal; no Core change; sending stays NP-P4.
+- Dependency: PD-16b.
+
+OD-S7-18 — Retention values to put to PD-11
+- Option A: the proposed rate-limit 30 d / dismissed 90 d / converted with the contact.
+- Option B: other periods.
+- Recommended: decide within PD-11; no purge code ships before.
+- Reason: retention is a legal decision.
+- Dependency: PD-11. Owner + C.
+
+Also to record: PD-12 → a ZD number (direction already approved) and PD-16 (a) / (b), via OD-S7-11 and OD-S7-17.
+
+---------------------------------------------------------------------------------------------------------------------
+PHASE 5 — IMPLEMENTATION PLAN
+---------------------------------------------------------------------------------------------------------------------
+General:
+- One branch and one PR per slice. The owner applies each migration to production BEFORE merging its PR (the manual
+  migration-before-merge workflow, with the S6 O1 / O2 backup → apply → read-only verification pattern).
+- NP-RELEASE-01C stays paused. No slice changes deployment-gate settings.
+- Before every merge, the isolated stack (NemrynS1Iso) runs Quotes strict, QA2 strict, the consents E2E, P1a / P1b,
+  npm test, tsc, eslint and build.
+
+S7-A — Data foundation and RLS
+- Files:
+  - supabase/migrations/2026MMDD100000_plus_inquiries_foundation.sql: the 3 tables; RLS / grants; the
+    inquiry_id columns; the 4 named-constraint replacements; helper functions.
+  - supabase/migrations/2026MMDD110000_plus_inquiries_rpcs.sql: the form, public, list / detail, convert, dismiss,
+    reopen and count RPCs.
+  - supabase/tests/plus_inquiries_tests.sql;
+  - supabase/tests/plus_inquiries_concurrency_test.sh;
+  - privilege_contract_tests.sql / function_privilege_tests.sql updates;
+  - src/lib/supabase/database.types.ts (regenerated);
+  - docs/data/schema.md, read-api.md, mutation-api.md, docs/security/rls-test-matrix.md and the plus-access-model §6b
+    updates.
+- DB changes: as above. No Core table or function is changed. Existing CHECKs are widened only (EXPAND).
+- API contracts: spec §3.
+- Security tests:
+  - T9: client DML denied.
+  - T19: privilege contract, 0 violations.
+  - T23 (database half): anon / authenticated EXECUTE on the public RPCs → 42501; unknown / draft / disabled /
+    suspended / read_only / locked → the identical refusal; closed sets; lengths; phone-or-email; service subset;
+    rate limit trips; replay gives one row.
+  - T24: submission creates only an inquiry; conversion creates a contact + opportunity only. Request / Passenger /
+    Trip / notification counts are unchanged.
+  - T25: no ledger row on submit; conversion writes web_form rows per ticked purpose × matching address; voice not
+    SMS; none on DNC; a missing acknowledgement on DNC is refused.
+  - Version tokens; converted is final; reopen applies to dismissed only.
+- Tenant tests:
+  - Org B Admin / grant holder → ZW002 / 0 rows.
+  - Cross-tenant contact_id on convert → refused.
+  - Platform Admin without a membership → nothing.
+  - Driver / inactive member → nothing.
+- Concurrency: concurrent replays → 1 row; concurrent convert vs dismiss, or convert vs convert → exactly one wins,
+  and one opportunity.
+- Regression: T18 / T26 (Core intake SQL suites, no diff); all existing plus_* SQL suites (they cover the replaced
+  CHECKs).
+- Prerequisites: OD-S7-3, -4, -5, -8, -9, -12 and -15 decided.
+- Definition of Done:
+  - fresh reset passes;
+  - every existing Plus and Core SQL suite passes;
+  - the new suites pass;
+  - privilege contract 0 violations;
+  - T27 (the migration applies on top of S6 alone).
+- Production: the owner applies both migrations before merging S7-A. A backup comes first; the read-only
+  verification checks object presence, grants and constraints. The UI does not use them yet, so the release is inert.
+
+S7-B — Public form and submission API
+- Files:
+  - src/lib/plus-inquiry/inquiry-core.ts (+ .test.mjs), inquiry-public.ts (server-only), inquiry-copy.ts;
+  - src/app/inquiry/[publicKey]/page.tsx + not-found.tsx;
+  - src/app/embed/inquiry/[publicKey]/page.tsx + not-found.tsx;
+  - public/embed/inquiry-form.js, or a route serving it, following the Core loader's mechanism;
+  - src/app/api/plus-inquiries/[publicKey]/route.ts (config) and .../submit/route.ts;
+  - src/components/plus-inquiry/PublicInquiryForm.tsx;
+  - src/proxy.ts (NO_SESSION_PATH, 1 line);
+  - next.config.ts (4 header rules);
+  - src/lib/supabase/service-role-server.ts (comment only);
+  - .env example documentation for PLUS_INQUIRY_SUBMISSIONS.
+- DB changes: none.
+- API contracts: spec §4. GET config: 200 with the public fields, or a uniform 404. POST submit: 200 {"ok":true} /
+  400 generic / 429 generic / 404 uniform.
+- Security tests:
+  - Origin refused; oversize; malformed JSON; extra or forbidden keys;
+  - kill switch off → 404 everywhere;
+  - headers (frame-ancestors, X-Frame-Options, noindex, no-store);
+  - no session refresh on public paths;
+  - the loader's postMessage origin checks;
+  - no browser storage of input.
+- Tenant tests: an Org A key never reveals Org B; key-shape fuzzing; a Core `form_` key on the inquiry routes → 404,
+  and the reverse.
+- Browser:
+  - hosted + embed on a fictional page; keyboard and labels; axe 0 serious / critical;
+  - widths 1440–390 (public pages ARE mobile; unlike Operations there is no tablet notice);
+  - success and unavailable states.
+- Regression: the Core request form + embed E2E, the request-form-host checks, QA2 strict, Quotes strict.
+- Prerequisites: S7-A released; OD-S7-1, -2, -11, -13, -16 decided; consent wording approved (OD-S7-9).
+- Definition of Done: all of the above pass; Core public-intake files are byte-identical (diff check).
+- Production: code only. Merge with the kill switch OFF (the default). No migration.
+
+S7-C — Staff inbox and conversion
+- Files:
+  - src/lib/plus/inquiries-core.ts (+ .test.mjs) and inquiries.ts;
+  - src/app/operations/growth/inquiries/page.tsx, [id]/page.tsx, actions.ts;
+  - src/components/growth/InquiriesTable.tsx, InquiryDetail.tsx, ConvertInquiryDialog.tsx,
+    DismissInquiryDialog.tsx;
+  - src/lib/plus/growth-nav-core.ts (+ test): the "Inquiries" child + badge;
+  - src/app/operations/settings/plus/inquiry-form section (page + actions + component);
+  - the Growth Dashboard count tile / link.
+- DB changes: none.
+- API contracts: server actions re-check the organization binding and Plus capability, then call the S7-A RPCs; the
+  RPC is the authority.
+- Security tests:
+  - READ grant: no actions, and a server action called directly → refused.
+  - read_only Admin: read only.
+  - locked / none: hidden, 404.
+  - DNC acknowledgement enforced server-side.
+  - A stale version → a "changed by someone else" message.
+- Tenant tests: an Org B session on an Org A inquiry URL → the same not-found as an unknown id.
+- Browser — tests/e2e/plus-inquiries/inquiries.e2e.mjs:
+  - submit (S7-B) → inbox → detail → convert (create; link with duplicate hints; DNC acknowledgement);
+  - consent rows as expected;
+  - dismiss / reopen;
+  - publish / disable from Settings;
+  - row navigation; keyboard; axe;
+  - widths 1440 / 1280 / 1024 / 822 / 768 / 390;
+  - the NP-UX-FILTER @container filter pattern.
+- Regression: QA2 strict (growth + auth-access), Quotes strict, the consents E2E, P1a / P1b, unit, tsc, lint, build.
+- Prerequisites: S7-B merged; OD-S7-6, -7, -10, -12, -15, -17 decided.
+- Definition of Done: all of the above pass; no Core UI change except the shared sidebar group (Growth only).
+- Production: code only.
+
+S7-D — Integrated verification and closeout
+- Files:
+  - docs/reports/NP-P2-S7D-integrated-verification.txt;
+  - the final updates to the spec / domain model / access model / decision register (ZD numbers);
+  - the QA2 runner extension, if adopted.
+- Work:
+  - the full isolated regression;
+  - a synthetic production smoke on "Nemryn Pilot Simulation". The owner enables the kill switch for that tenant
+    only, or for a short window. Submit → convert → consent rows → dismiss, then cleanup.
+  - Re-verify: Core intake untouched; privilege contract; headers on production.
+- Production: the kill switch returns OFF after the smoke. Real use stays blocked until PD-10 / PD-11 are closed and
+  a separate owner authorization is given.
+
+---------------------------------------------------------------------------------------------------------------------
+BLOCKERS
+---------------------------------------------------------------------------------------------------------------------
+B1. PD-10 (HIPAA / BAA) OPEN. Blocks real submissions and real-tenant enablement. Not S7 development.
+B2. PD-11 (retention / erasure / inquiry purge) OPEN. Same scope as B1. No purge code until decided.
+B3. OD-S7-1 … OD-S7-18 not yet decided. They block S7-A, mainly OD-S7-3 / -5 / -8 / -9 / -12.
+B4. The consent wording needs owner (and counsel) approval before S7-B.
+B5. PD-16 (a) / (b) are undecided; OD-S7-11 / -17 propose answers.
+Not a blocker: NC-UX-01 is unmerged. S7-C's navigable rows only need DataTable's existing navigableRows. If NC-UX-01
+merges first, the inbox also gains its modifier-click and text-selection fixes.
+
+---------------------------------------------------------------------------------------------------------------------
+RECOMMENDATIONS
+---------------------------------------------------------------------------------------------------------------------
+1. Approve the recommended options above; record PD-12 and the OD-S7 set as ZD numbers. Then start S7-A.
+2. Approve the corrections to the earlier P2-S7 text (spec §9). Update plus-domain-model §13 and access-model §6b in
+   S7-A, so that the docs match the schema.
+3. Treat the public form as the highest-risk Plus surface. Ship it inert (kill switch OFF), test it only on synthetic
+   tenants, and re-decide abuse controls (PD-16a) with measured data before any real tenant.
+4. Merge or close NC-UX-01 independently. It is not on the S7 critical path.
+5. Decide whether design documents belong in docs/specs (new) or docs/product (current convention).
+
+STOP — owner decision review required before S7-A implementation.

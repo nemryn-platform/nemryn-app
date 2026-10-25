@@ -418,6 +418,25 @@ There is **no contact PII, no message text and no JSON** in this table. Drafts a
 
 ## 13. Plus public inquiry (P2-S7) — separate from Core public intake
 
+> **Implementation status (NP-P2-S7-A, migrations `20261024100000` / `20261024110000`, local only).**
+> - The canonical design is [NP-P2-S7-public-inquiry-intake-design.md](./NP-P2-S7-public-inquiry-intake-design.md) (APPROVED; ZD-243 … ZD-263). Where this section differs, **that document wins**.
+> - What changed from the text below:
+>   - The form has an `id` PK + `unique (organization_id)`, plus `config_version` and `version`. The key is `inq_` + 32 hex and is generated at creation.
+>   - `plus_inquiries`:
+>     - `inquiry_type` uses `booking` (the opportunity set; not `booking_interest`);
+>     - `status` is new / converted / dismissed, and `spam` is a dismiss reason;
+>     - there is **no** `postal_code`; `preferred_reply` was added;
+>     - both consent booleans are optional and default false;
+>     - `form_id` and `form_config_version` were added; `triaged_*` is NULL iff new;
+>     - phone and email use the `plus_contacts` CHECKs.
+>   - New class-A **activation allowlist** `plus_inquiry_public_access` (ZD-262), required for publishing and for every public call.
+>   - Service types are the eight Plus types ∩ the organization's offerings, never `airport_transportation` (ZD-263).
+>   - Consent at conversion is per ticked purpose × address-matched channel: email → email, phone → voice, never SMS; none for do-not-contact (ZD-252). `plus_communication_consents.inquiry_id` FKs `(inquiry_id, organization_id, contact_id)`.
+>   - `plus_activities` + `inquiry_converted`.
+>   - The rate limit is 5 / client / h and 60 / form / h.
+>   - No honeypot or fill-time check (ZD-254).
+> - S7-B (route, pages, `src/proxy.ts`, `next.config.ts`, the `PLUS_INQUIRY_SUBMISSIONS` kill switch) and S7-C (UI) are not implemented.
+
 ### 13.1 `plus_inquiry_forms` — publication
 
 | Column | Rule |
