@@ -1,0 +1,179 @@
+NP-P2-S7-A — FINAL SQL SECURITY REVIEW (owner follow-up before the production migration)
+=======================================================================================
+Date: 2026-10-25.
+Branch: np-p2-s7a-inquiry-foundation. HEAD 08f5887 (PR #37, OPEN); base origin/main efae4c2.
+Environment: isolated NemrynS1Iso only (fresh reset: 95 migrations, head 20261024110000); fictional data only.
+- NOT done: no production migration or query; no commit / push / merge / deploy; public submissions not activated.
+
+VERDICT: PASS. No migration change is required. Regression tests were added. Ready for owner review.
+
+1. FINDINGS
+-----------
+A. plus_convert_inquiry link path: direct UPDATE vs the RELEASED plus_update_contact contract
+
+Evidence source: the deployed definitions (pg_get_functiondef / pg_get_triggerdef on the isolated database), not the
+migration text:
+- plus_update_contact: the 20261023100000 body.
+- Triggers on plus_contacts: plus_contacts_set_updated_at (BEFORE UPDATE → set_updated_at: new.updated_at = now())
+  and plus_contacts_prevent_org_change.
+- Every function that writes plus_contacts: plus_archive_contact, plus_update_contact, plus_convert_inquiry.
+
+  Invariant of plus_update_contact             | plus_convert_inquiry (link + fill_blank_contact_fields)      | Result
+  ---------------------------------------------|--------------------------------------------------------------|---------
+  Authorization: _require_plus_write           | the same guard, first statement                              | kept
+  Tenant + lock: SELECT … WHERE id AND         | the identical org-scoped SELECT … FOR UPDATE; not found /    | kept
+  organization_id FOR UPDATE; redacted ZW002;  | redacted ZW002; archived ZW004                               |
+  archived ZW004                               |                                                              |
+  Optimistic version (p_expected_updated_at    | not taken; the rule is instead "fill ONLY a field that is    | kept (no
+  → ZW003): prevents a stale UI from           | NULL under the FOR UPDATE lock". The update cannot overwrite | lost update)
+  overwriting                                  | anything: a concurrent writer that set the field first is    |
+                                               | seen after the lock wait and the field is not touched        |
+                                               | (concurrency S8)                                             |
+  Version tracking (updated_at moves on every  | the same table UPDATE fires set_updated_at: updated_at moves,| kept
+  write)                                       | so a stale plus_update_contact afterwards is ZW003 (U2)      |
+  Validation (table CHECKs; ZW006 on           | the same table CHECKs (check_violation → ZW006); the values  | kept
+  check_violation; phone or email required)    | come from plus_inquiries, whose phone / email CHECKs are     |
+                                               | identical to plus_contacts'; filling only ADDS an address,   |
+                                               | so "phone or email" stays true                               |
+  Fields written                               | only phone and / or email, and only when NULL; name, kind,   | kept
+                                               | title, preferred channel, DNC, owner, status and org are     |
+                                               | never written (U1)                                           |
+  DNC: false → true calls                      | do_not_contact is never written, so the revocation step      | not
+  _plus_consents_revoke_for_dnc; clearing      | cannot apply; DNC stays on when filling a DNC contact, and   | applicable /
+  revives nothing                              | no grant or revocation is written (U5)                       | kept
+  Address-bound consent: the ledger stores     | identical: the fill changes the address exactly as           | kept
+  address digests and _plus_effective_consent  | plus_update_contact would; restoring a removed address gives |
+  resolves at read time; an address change     | the SAME effective state either way (U4, twin contacts)      |
+  writes no ledger row                         |                                                              |
+  Owner change → owner_changed activity        | the owner is never written                                   | not
+                                               |                                                              | applicable
+  Audit: audit_events plus_contact_updated     | the same action, entity and field-name list (e.g. ["email"]),| kept
+  with {fields}                                | plus source = inquiry_conversion and inquiry_id; exactly one |
+                                               | row per fill; none without a fill (U3, U6)                   |
+  Concurrency: serializes with consent writes  | the same FOR UPDATE row lock, taken BEFORE DNC is read;      | kept
+  (FOR NO KEY UPDATE) and archive / DNC        | concurrency S5 / S6 / S8                                     |
+  (FOR UPDATE)                                 |                                                              |
+
+Conclusion: the direct UPDATE bypasses no applicable invariant.
+- The only intentional difference is the version token. A token protects a human edit from overwriting newer data;
+  the fill path is a server rule that can only set NULL fields under the lock, which gives the same guarantee without
+  a token.
+- Note (identical in both paths): updated_at = the writing transaction's now(), so it can be earlier than the
+  committed value it replaces. It never repeats a value any client could hold, so a stale client always gets ZW003
+  (no ABA).
+
+B. In-flight public submission vs form disable / allowlist removal
+
+Design facts (deployed):
+- submit_plus_inquiry is VOLATILE. Availability is evaluated once, by _plus_inquiry_public_form (STABLE; plain reads
+  with NO row lock). It requires: published form, active organization, Plus write, allowlist row.
+- The insert's foreign-key check takes FOR KEY SHARE on the plus_inquiry_forms row.
+  - plus_disable_inquiry_form takes SELECT … FOR UPDATE on the same row, so the two serialize on that row.
+  - The allowlist removal (DELETE plus_inquiry_public_access) shares no lock with submissions.
+
+Measured behaviour (concurrency S9–S12):
+- S12: after a disable or an allowlist removal COMMITS, every new submission is unavailable — 6 parallel attempts
+  each, nothing stored.
+  ⇒ Immediate revocation for NEW submissions is GUARANTEED.
+- S9 / S10: a submission whose availability check ran BEFORE the revocation committed is still stored.
+  - S9: the insert waited on the disable's row lock and committed just after the disable.
+  - S10: no shared lock with the allowlist removal.
+  The window is bounded to requests already executing at the instant of revocation, and is further limited by the
+  rate limit (5 / client / h, 60 / form / h).
+- S11: a submission already in flight when a disable starts is stored with received_at before disabled_at, and the
+  disable completes normally.
+
+Assessment against the approved requirement (ZD-259 / ZD-262: removing the switch or the allowlist row stops the
+form at once):
+- NOT violated. "Stops the form" means no new submission is accepted, and S12 proves this for the database rule.
+- The S7-B kill switch is read per request, so it is immediate for every new request.
+- What the in-flight request does:
+  - it creates only one row in the organization's own private inbox;
+  - it creates nothing else: no contact, opportunity, Core row, notification or consent;
+  - it is visible to staff, who can dismiss it.
+- No code change was made, per the instruction "fix only if violated".
+- Optional hardening (owner choice, not required): submit_plus_inquiry could re-check the form row with
+  SELECT … FOR SHARE (status = 'published') and the allowlist row with FOR SHARE just before inserting. That makes a
+  racing submission wait for the revocation and then refuse. Cost: public submissions would briefly block a disable
+  / removal. Recommended only if strict "no row after revocation commits" semantics are wanted.
+
+2. WHETHER CODE CHANGED
+-----------------------
+- Migrations: NO change. Both S7-A migration files are byte-for-byte as reviewed.
+- Tests added or extended:
+  - supabase/tests/plus_inquiries_tests.sql: + section U (U1–U6). The suite is now 65 tests.
+  - supabase/tests/plus_inquiries_concurrency_test.sh: + S8 (staff edit vs conversion fill) and S9–S12 (activation
+    revocation races). The script is now 14 scenarios.
+- Docs: test-count references updated in docs/security/plus-access-model.md (T34), docs/security/rls-test-matrix.md
+  and docs/data/mutation-api.md. This report is new.
+
+3. EXACT TESTS AND RESULTS (isolated; final run on a fresh `supabase db reset --local`, 95 migrations)
+---------------------------------------------------------------------------------------------------
+New, for this review:
+- U1 the fill sets ONLY the blank email; every other contact field is unchanged ................ PASS
+- U2 the version token moves; a stale plus_update_contact afterwards → ZW003 ................... PASS
+- U3 exactly one plus_contact_updated (fields ["email"], source inquiry_conversion); no owner
+  activity .................................................................................... PASS
+- U4 restoring a removed address via the fill == via plus_update_contact (effective state and
+  row counts) .................................................................................. PASS
+- U5 DNC contact + fill: email filled; DNC still on; zero consent rows ......................... PASS
+- U6 without fill the contact is not written (no update, no audit, version unchanged) .......... PASS
+- S8 staff edit commits first; the waiting fill does NOT overwrite; the email grant is skipped
+  (address_mismatch) ........................................................................... PASS
+- S9 disable in flight → the racing submission (availability read earlier) is stored; the next
+  is unavailable ............................................................................... PASS
+- S10 allowlist removal in flight → the racing submission is stored; the next is unavailable .. PASS
+- S11 submission in flight, then disable → both complete; received_at < disabled_at ............ PASS
+- S12 after a committed disable and a committed removal → 6 + 6 parallel submissions are all
+  unavailable; none stored ...................................................................... PASS
+
+Suites:
+- plus_inquiries_tests.sql: 65 / 65 (SUMMARY failures = 0 of 65).
+- plus_inquiries_concurrency_test.sh: 14 / 14, RESULT: ALL PASS (S1–S12 + invariant).
+- P2-S6 consent regression:
+  - plus_communication_consents_tests.sql: 78 / 78;
+  - plus_communication_consents_concurrency_test.sh: 14 PASS, exit 0.
+- Impacted contact / opportunity contracts:
+  - plus_contacts_activities_tests.sql: 85 / 85;
+  - plus_contacts_concurrency_test.sh: TOTAL FAILURES 0;
+  - plus_opportunities_tests.sql: 75 / 75;
+  - plus_opportunities_concurrency_test.sh: TOTAL FAILURES 0;
+  - plus_conversion_rebooking_tests.sql: 44 / 44.
+- Other: platform_admin_foundation_tests.sql 58 / 58; public_request_intake_tests.sql 42 / 42;
+  public_intake_rate_limit_tests.sql 8 / 8 (Core intake unchanged).
+- privilege_contract_tests.sql: 0 violations of 29 checks.
+- Note: one intermediate run of plus_opportunities_tests.sql on the NON-reset database showed F1 / F2 failing. Those
+  are Org A list-count tests, and the database still held data committed by the earlier all-suites batch run. On the
+  fresh reset they pass 75 / 75. Not related to this review.
+- Not re-run, because no application, migration or release-gate code changed in this review:
+  - the browser suites (QA2 199/199, Quotes 272/272, consents E2E 49/49, P1a 48/48, P1b 52/52);
+  - unit 902/902, release 28/28, tsc, ESLint, build.
+  Their results are in NP-P2-S7A-data-foundation-implementation.txt.
+
+4. REMAINING PRODUCTION BLOCKERS
+--------------------------------
+For the S7-A database migration itself: none from this review. The owner-run procedure in
+NP-P2-S7A-data-foundation-implementation.txt §10 applies:
+- a fresh owner-run backup plus an external copy or waiver (Free plan: no PITR);
+- the read-only pre-checks;
+- apply the two files database-first, before merging PR #37;
+- the read-only post-checks;
+- a prepared reversal script.
+
+Before ANY real public use (unchanged; not blockers for the inert migration):
+- PD-10 (HIPAA / BAA) and PD-11 (retention / erasure) OPEN;
+- legal review of the consent wording;
+- S7-B kill switch (default OFF);
+- no organization on the allowlist.
+
+Owner choice (optional): the strict FOR SHARE re-check described in §1B.
+
+5. VERDICT
+----------
+PASS.
+- The fill path preserves every applicable invariant of the released plus_update_contact, proven by U1–U6 and S8.
+- Immediate revocation for new submissions holds for both a form disable and an allowlist removal (S12); the bounded
+  in-flight window is documented (S9–S11) and does not violate the approved activation safety.
+- No migration change. All affected suites pass.
+
+STOP for owner review.

@@ -529,6 +529,85 @@ select pg_temp.t('E10 removing the allowlist entry makes a PUBLISHED form unavai
   and pg_temp.sub(pg_temp.kv('keyA'), 'e10-key-0001', 'After Removal', '404 555 0231', null) = 'unavailable:false'
   and pg_temp.x('service_role', null, format('select count(*)::text from public.get_public_plus_inquiry_form(%L)', pg_temp.kv('keyA'))) = '0');
 
+-- ================================================================= U. fill-blank path == the released plus_update_contact contract
+-- (NP-P2-S7A final SQL review). The conversion fills ONLY NULL phone / email under the contact FOR UPDATE lock with a direct
+-- UPDATE; these tests prove it keeps every invariant plus_update_contact keeps.
+select pg_temp.set_state('10000000-0000-0000-0000-0000000000a1', 'active');
+insert into public.plus_inquiry_public_access (organization_id, reason, enabled_by)
+values ('10000000-0000-0000-0000-0000000000a1', 'U section', '20000000-0000-0000-0000-0000000000d1') on conflict do nothing;
+insert into k values ('cU1', pg_temp.mkc('10000000-0000-0000-0000-0000000000a1', 'Fictional Fill Version', '404 555 0301', null)::text);
+-- backdate the version token with the set_updated_at trigger bypassed (test fixture only; owner session; restored at once),
+-- because inside this one transaction now() is constant and the trigger would otherwise reset it to now()
+set session_replication_role = replica;
+update public.plus_contacts set job_title = 'Fictional coordinator', contact_kind = 'facility_staff', preferred_channel = 'phone',
+       owner_user_id = '20000000-0000-0000-0000-0000000000a1', updated_at = now() - interval '1 hour'
+where id = pg_temp.kv('cU1')::uuid;
+set session_replication_role = origin;
+insert into k select 'cU1_before', row(display_name, contact_kind, job_title, preferred_channel, do_not_contact, owner_user_id, status, organization_id, phone)::text
+  || '|' || updated_at::text from public.plus_contacts where id = pg_temp.kv('cU1')::uuid;
+insert into k values ('aud_u1', (select count(*)::text from public.audit_events where entity_id = pg_temp.kv('cU1')::uuid));
+select pg_temp.sub(pg_temp.kv('keyA'), 'u1-key-0001', 'Fictional Fill Version', '404 555 0301', 'u1@example.test', p_cf => true, p_ver => pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', 'select config_version::text from public.plus_get_inquiry_form(''10000000-0000-0000-0000-0000000000a1'')')::integer);
+insert into k values ('U1w', pg_temp.conv('20000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', pg_temp.inq('u1-key-0001'), 'link', pg_temp.kv('cU1')::uuid, p_fill => true));
+select pg_temp.t('U1 fill sets ONLY the blank email; every other field (name, kind, title, channel, DNC, owner, status, org, phone) is unchanged',
+  pg_temp.kv('U1w') = 'converted|2|'
+  and (select row(display_name, contact_kind, job_title, preferred_channel, do_not_contact, owner_user_id, status, organization_id, phone)::text
+       from public.plus_contacts where id = pg_temp.kv('cU1')::uuid) = split_part(pg_temp.kv('cU1_before'), '|', 1)
+  and (select email from public.plus_contacts where id = pg_temp.kv('cU1')::uuid) = 'u1@example.test', pg_temp.kv('U1w'));
+select pg_temp.t('U2 version tracking: the set_updated_at trigger moved updated_at; a stale plus_update_contact (old token) is ZW003',
+  (select updated_at::text from public.plus_contacts where id = pg_temp.kv('cU1')::uuid) <> split_part(pg_temp.kv('cU1_before'), '|', 2)
+  and pg_temp.code(pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', format(
+        'select r.changed::text from public.plus_update_contact(''10000000-0000-0000-0000-0000000000a1'', %L, %L::timestamptz, ''X'', ''404 555 0301'', null, ''individual'', null, ''phone'', false, null) r',
+        pg_temp.kv('cU1'), split_part(pg_temp.kv('cU1_before'), '|', 2)))) = 'ZW003');
+select pg_temp.t('U3 audit obligation: exactly one plus_contact_updated (fields ["email"], source inquiry_conversion); no owner_changed activity',
+  (select count(*) from public.audit_events where entity_id = pg_temp.kv('cU1')::uuid and action = 'plus_contact_updated'
+     and after_data -> 'fields' = '["email"]'::jsonb and after_data ->> 'source' = 'inquiry_conversion') = 1
+  and not exists (select 1 from public.plus_activities where contact_id = pg_temp.kv('cU1')::uuid and activity_type = 'owner_changed'));
+
+-- U4 address-bound consent equivalence: twin contacts, each with an email grant, email removed by plus_update_contact;
+-- then the SAME address is restored -- on A by the conversion fill, on B by plus_update_contact. Effective state must match.
+insert into k values ('cTA', pg_temp.mkc('10000000-0000-0000-0000-0000000000a1', 'Fictional Twin A', '404 555 0311', 'twin@example.test')::text);
+insert into k values ('cTB', pg_temp.mkc('10000000-0000-0000-0000-0000000000a1', 'Fictional Twin B', '404 555 0312', 'twin@example.test')::text);
+select pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select r.changed::text from public.plus_record_consent(''10000000-0000-0000-0000-0000000000a1'', %L, ''email'', ''marketing'', ''written'', now() - interval ''2 days'', null, null, ''u4-grant-a'') r', pg_temp.kv('cTA')));
+select pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select r.changed::text from public.plus_record_consent(''10000000-0000-0000-0000-0000000000a1'', %L, ''email'', ''marketing'', ''written'', now() - interval ''2 days'', null, null, ''u4-grant-b'') r', pg_temp.kv('cTB')));
+select pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select ''ok:'' || r.changed from public.plus_contacts c, lateral public.plus_update_contact(c.organization_id, c.id, c.updated_at, c.display_name, c.phone, null, c.contact_kind, c.job_title, c.preferred_channel, false, null) r where c.id = %L', pg_temp.kv('cTA')));
+select pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select ''ok:'' || r.changed from public.plus_contacts c, lateral public.plus_update_contact(c.organization_id, c.id, c.updated_at, c.display_name, c.phone, null, c.contact_kind, c.job_title, c.preferred_channel, false, null) r where c.id = %L', pg_temp.kv('cTB')));
+insert into k values ('U4mid', public._plus_effective_consent('10000000-0000-0000-0000-0000000000a1', pg_temp.kv('cTA')::uuid, 'email', 'marketing')
+                              || '/' || public._plus_effective_consent('10000000-0000-0000-0000-0000000000a1', pg_temp.kv('cTB')::uuid, 'email', 'marketing'));
+select pg_temp.sub(pg_temp.kv('keyA'), 'u4-key-0001', 'Fictional Twin A', '404 555 0311', 'twin@example.test', p_ver => pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', 'select config_version::text from public.plus_get_inquiry_form(''10000000-0000-0000-0000-0000000000a1'')')::integer);
+insert into k values ('U4a', pg_temp.conv('20000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', pg_temp.inq('u4-key-0001'), 'link', pg_temp.kv('cTA')::uuid, p_fill => true));
+select pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', format('select ''ok:'' || r.changed from public.plus_contacts c, lateral public.plus_update_contact(c.organization_id, c.id, c.updated_at, c.display_name, c.phone, ''twin@example.test'', c.contact_kind, c.job_title, c.preferred_channel, false, null) r where c.id = %L', pg_temp.kv('cTB')));
+select pg_temp.t('U4 address-bound consent: restoring a removed address by the conversion fill resolves EXACTLY like plus_update_contact (no extra revival, no lost grant; no consent rows written by the fill itself)',
+  pg_temp.kv('U4mid') = 'address_changed/address_changed'
+  and pg_temp.kv('U4a') = 'converted|0|'
+  and public._plus_effective_consent('10000000-0000-0000-0000-0000000000a1', pg_temp.kv('cTA')::uuid, 'email', 'marketing')
+      = public._plus_effective_consent('10000000-0000-0000-0000-0000000000a1', pg_temp.kv('cTB')::uuid, 'email', 'marketing')
+  and (select count(*) from public.plus_communication_consents where contact_id = pg_temp.kv('cTA')::uuid)
+      = (select count(*) from public.plus_communication_consents where contact_id = pg_temp.kv('cTB')::uuid),
+  pg_temp.kv('U4mid') || ' ' || pg_temp.kv('U4a') || ' A=' || public._plus_effective_consent('10000000-0000-0000-0000-0000000000a1', pg_temp.kv('cTA')::uuid, 'email', 'marketing')
+  || ' B=' || public._plus_effective_consent('10000000-0000-0000-0000-0000000000a1', pg_temp.kv('cTB')::uuid, 'email', 'marketing'));
+
+-- U5 DNC: filling a blank address on a do-not-contact contact never clears DNC, writes no grant and no revocation
+insert into k values ('cU5', pg_temp.mkc('10000000-0000-0000-0000-0000000000a1', 'Fictional Fill DNC', '404 555 0321', null, true)::text);
+select pg_temp.sub(pg_temp.kv('keyA'), 'u5-key-0001', 'Fictional Fill DNC', '404 555 0321', 'u5@example.test', p_cf => true, p_cm => true, p_ver => pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', 'select config_version::text from public.plus_get_inquiry_form(''10000000-0000-0000-0000-0000000000a1'')')::integer);
+insert into k values ('U5w', pg_temp.conv('20000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', pg_temp.inq('u5-key-0001'), 'link', pg_temp.kv('cU5')::uuid, p_fill => true, p_ack => true));
+select pg_temp.t('U5 DNC contact + fill: email filled, DNC still on, zero consent rows (no grant, no system revocation)',
+  pg_temp.kv('U5w') like 'converted|0|%do_not_contact%'
+  and (select do_not_contact and email = 'u5@example.test' from public.plus_contacts where id = pg_temp.kv('cU5')::uuid)
+  and not exists (select 1 from public.plus_communication_consents where contact_id = pg_temp.kv('cU5')::uuid), pg_temp.kv('U5w'));
+
+-- U6 fill=false never writes the contact (no update, no audit, updated_at unchanged)
+insert into k values ('cU6', pg_temp.mkc('10000000-0000-0000-0000-0000000000a1', 'Fictional No Fill', '404 555 0331', null)::text);
+set session_replication_role = replica;
+update public.plus_contacts set updated_at = now() - interval '1 hour' where id = pg_temp.kv('cU6')::uuid;
+set session_replication_role = origin;
+insert into k select 'cU6_v', updated_at::text from public.plus_contacts where id = pg_temp.kv('cU6')::uuid;
+select pg_temp.sub(pg_temp.kv('keyA'), 'u6-key-0001', 'Fictional No Fill', '404 555 0331', 'u6@example.test', p_ver => pg_temp.x('authenticated', '20000000-0000-0000-0000-0000000000a1', 'select config_version::text from public.plus_get_inquiry_form(''10000000-0000-0000-0000-0000000000a1'')')::integer);
+insert into k values ('U6w', pg_temp.conv('20000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', pg_temp.inq('u6-key-0001'), 'link', pg_temp.kv('cU6')::uuid));
+select pg_temp.t('U6 without fill the linked contact is not written at all (email still NULL, updated_at unchanged, no contact audit)',
+  pg_temp.kv('U6w') like 'converted|%'
+  and (select email is null and updated_at::text = pg_temp.kv('cU6_v') from public.plus_contacts where id = pg_temp.kv('cU6')::uuid)
+  and not exists (select 1 from public.audit_events where entity_id = pg_temp.kv('cU6')::uuid and action = 'plus_contact_updated'));
+
 -- ================================================================= O. no Core side effects across the whole run
 select pg_temp.t('O2 across every submission and conversion above: no Core Request, Passenger, Trip or notification was created',
   pg_temp.core_counts() = pg_temp.kv('core0'));

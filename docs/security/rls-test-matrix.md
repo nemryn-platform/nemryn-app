@@ -9,7 +9,7 @@
   - `plus_inquiry_forms`: RLS `plus_can_read`; authenticated SELECT only.
   - `plus_inquiries`: RLS `plus_can_read`; column-level SELECT, never `idempotency_key`.
   - `plus_inquiry_public_access` and `plus_inquiry_rate_limit_events`: class A, with no privilege for anon / authenticated / service_role.
-- Results: `supabase/tests/plus_inquiries_tests.sql` 59 / 59 and `plus_inquiries_concurrency_test.sh` (see the NP-P2-S7A report). They cover the role / tenant / grant / entitlement matrix, direct DML denial, service_role-only public RPCs, a Platform Admin without membership seeing no tenant rows, and the activation allowlist.
+- Results: `supabase/tests/plus_inquiries_tests.sql` 65 / 65 and `plus_inquiries_concurrency_test.sh` (14 scenarios) (see the NP-P2-S7A report). They cover the role / tenant / grant / entitlement matrix, direct DML denial, service_role-only public RPCs, a Platform Admin without membership seeing no tenant rows, and the activation allowlist.
 - `privilege_contract_tests.sql` lists every new table, column grant and function: 0 violations.
 - Details: [plus-access-model.md](./plus-access-model.md) §6b and T34; the report `docs/reports/NP-P2-S7A-data-foundation-implementation.txt`.
 

@@ -181,6 +181,71 @@ if [ "$RA" = "true" ] && [ "$RB" = "converted|1" ] && [ "$EFF" = "no_consent_on_
   pass "S7 revocation committed first: the older web evidence is NOT granted for email (stale), voice is; email stays revoked"
 else fail "S7" "a=$RA b=$RB email_effective=$EFF"; fi
 
+# ---------------------------------------------------------------- Scenario 8 (final SQL review): staff edit vs conversion fill
+# A staff plus_update_contact sets the blank email FIRST and holds its lock; the waiting link-conversion with
+# fill_blank_contact_fields re-reads the committed row and must NOT overwrite the populated email.
+C=$(new_contact 'Conc Eight' "'404 555 0308'" null)
+I=$(mk_inquiry s8-key-0001 'Conc Eight' "'404 555 0308'" "'s8-inquiry@example.test'" true)
+CC="select r.outcome || '|' || r.consent_granted || '|' || array_to_string(r.consent_skipped, ',') from public.plus_convert_inquiry('$ORG', '$I', $(ver "$I"), 'link', '$C', true, true, null, null, false) r"
+UPD="select 'upd:' || r.changed from public.plus_contacts c, lateral public.plus_update_contact('$ORG', c.id, c.updated_at, c.display_name, c.phone, 's8-staff@example.test', c.contact_kind, c.job_title, c.preferred_channel, false, null) r where c.id = '$C'"
+run_as "$OUT/s8a" authenticated "$AD1" "$UPD" & sleep 0.3
+run_as "$OUT/s8b" authenticated "$AD2" "$CC" & wait
+RA=$(res "$OUT/s8a"); RB=$(res "$OUT/s8b"); EM=$($PSQL -c "select email from public.plus_contacts where id = '$C'")
+if [ "$RA" = "upd:true" ] && [ "$RB" = "converted|1|email/service_followup:address_mismatch" ] && [ "$EM" = "s8-staff@example.test" ]; then
+  pass "S8 staff edit first, conversion fill waits: the populated email is NOT overwritten; the email grant is skipped (address_mismatch), voice granted"
+else fail "S8" "a=$RA b=$RB email=$EM"; fi
+
+# ---------------------------------------------------------------- Scenarios 9-12 (final SQL review): activation revocation races
+fver() { $PSQL -c "select version from public.plus_inquiry_forms where organization_id = '$ORG'"; }
+publish() { $PSQL -c "begin; set local role authenticated; set local request.jwt.claim.sub = '$AD1'; select r.status from public.plus_publish_inquiry_form('$ORG', $(fver)) r; commit;" | grep -E '^(published|ERROR)'; }
+dis_call_now() { echo "select r.status from public.plus_disable_inquiry_form('$ORG', $(fver)) r"; }   # version read at call time
+sub_now() { $PSQL -c "set role service_role" -c "$1" | grep -E '^(accepted|unavailable|invalid|form_changed):'; }
+# S9: a disable is IN FLIGHT (uncommitted, holding ~1s) when a submission arrives
+run_as "$OUT/s9a" authenticated "$AD1" "$(dis_call_now)" & sleep 0.3
+run_as "$OUT/s9b" service_role '' "$(submit s9-key-0001 'Conc Nine' "'404 555 0309'" null false)" & wait
+RA=$(res "$OUT/s9a"); RB=$(res "$OUT/s9b")
+AFTER=$(sub_now "$(submit s9-key-0002 'Conc Nine After' "'404 555 0319'" null false)")
+ORD9=$($PSQL -c "select case when i.received_at > f.disabled_at then 'started-after-disable-began' else 'started-before' end from public.plus_inquiries i, public.plus_inquiry_forms f where i.idempotency_key = 's9-key-0001' and f.organization_id = '$ORG' and i.organization_id = f.organization_id")
+if [ "$RA" = "disabled" ] && [ "$RB" = "accepted:true" ] && [ "$AFTER" = "unavailable:false" ]; then
+  pass "S9 disable in flight: a submission whose availability check ran BEFORE the disable committed is still stored ($ORD9; its insert waits on the disable's row lock and commits just after it) -- bounded to requests already in flight; the first submission STARTING after the commit is unavailable"
+else fail "S9" "disable=$RA inflight=$RB after=$AFTER"; fi
+[ "$(publish)" = "published" ] || fail "S9 republish" "could not republish"
+# S10: an allowlist removal is IN FLIGHT when a submission arrives (owner-level delete, as the Platform Admin RPC does)
+$PSQL > "$OUT/s10a.out" 2> "$OUT/s10a.err" <<SQL &
+begin;
+delete from public.plus_inquiry_public_access where organization_id = '$ORG';
+select pg_sleep(1.0);
+commit;
+SQL
+sleep 0.3
+run_as "$OUT/s10b" service_role '' "$(submit s10-key-0001 'Conc Ten' "'404 555 0310'" null false)" & wait
+RB=$(res "$OUT/s10b")
+AFTER=$(sub_now "$(submit s10-key-0002 'Conc Ten After' "'404 555 0320'" null false)")
+if [ "$RB" = "accepted:true" ] && [ "$AFTER" = "unavailable:false" ] && [ "$($PSQL -c "select count(*) from public.plus_inquiry_public_access where organization_id = '$ORG'")" = 0 ]; then
+  pass "S10 allowlist removal in flight: the racing submission that read the still-committed allowlist row is stored (no lock is shared with the removal); the first submission STARTING after the removal commits is unavailable"
+else fail "S10" "inflight=$RB after=$AFTER"; fi
+$PSQL -c "insert into public.plus_inquiry_public_access (organization_id, reason, enabled_by) values ('$ORG', 'S7 concurrency fixture', '$AD1')" >/dev/null
+# S11: a SUBMISSION is in flight (holding its transaction ~1s) when a disable runs: the disable must not be blocked by it
+run_as "$OUT/s11a" service_role '' "$(submit s11-key-0001 'Conc Eleven' "'404 555 0311'" null false)" & sleep 0.3
+DISC=$(dis_call_now); T0=$(date +%s%N); run_as "$OUT/s11b" authenticated "$AD1" "$DISC" ; T1=$(date +%s%N); wait
+RA=$(res "$OUT/s11a"); RB=$(res "$OUT/s11b")
+ORDER=$($PSQL -c "select (i.received_at < f.disabled_at)::text from public.plus_inquiries i, public.plus_inquiry_forms f where i.idempotency_key = 's11-key-0001' and f.organization_id = '$ORG' and i.organization_id = f.organization_id")
+WAIT_MS=$(( (T1 - T0) / 1000000 ))
+if [ "$RA" = "accepted:true" ] && [ "$RB" = "disabled" ] && [ "$ORDER" = "true" ]; then
+  pass "S11 submission in flight, then disable: the disable completes (${WAIT_MS} ms incl. its own 1 s hold); the in-flight inquiry is stored with received_at before disabled_at"
+else fail "S11" "inflight=$RA disable=$RB received_before_disabled=$ORDER"; fi
+# S12: after a COMMITTED disable / removal, every new submission is unavailable, including 6 at once
+for i in 1 2 3 4 5 6; do sub_now "$(submit "s12-key-000$i" "Conc Twelve $i" "'404 555 03$((40 + i))'" null false)" > "$OUT/s12-$i.out" 2>&1 & done; wait
+U=$(cat "$OUT"/s12-*.out | grep -c '^unavailable:false$')
+[ "$(publish)" = "published" ] || fail "S12 republish" "could not republish"
+$PSQL -c "delete from public.plus_inquiry_public_access where organization_id = '$ORG'" >/dev/null
+for i in 1 2 3 4 5 6; do sub_now "$(submit "s12b-key-00$i" "Conc Twelve B $i" "'404 555 03$((50 + i))'" null false)" > "$OUT/s12b-$i.out" 2>&1 & done; wait
+U2=$(cat "$OUT"/s12b-*.out | grep -c '^unavailable:false$')
+N=$($PSQL -c "select count(*) from public.plus_inquiries where organization_id = '$ORG' and idempotency_key like 's12%'")
+if [ "$U" = 6 ] && [ "$U2" = 6 ] && [ "$N" = 0 ]; then
+  pass "S12 after a committed disable (6 parallel) and after a committed allowlist removal (6 parallel): every submission unavailable; nothing stored"
+else fail "S12" "after_disable_unavailable=$U after_removal_unavailable=$U2 stored=$N"; fi
+
 # ---------------------------------------------------------------- invariants
 DUP=$($PSQL -c "select count(*) from (select inquiry_id from public.plus_opportunities where organization_id = '$ORG' and inquiry_id is not null group by 1 having count(*) > 1) d")
 CORE1=$($PSQL -c "select (select count(*) from transportation_requests) || '/' || (select count(*) from passengers) || '/' || (select count(*) from trips) || '/' || (select count(*) from notification_events)")

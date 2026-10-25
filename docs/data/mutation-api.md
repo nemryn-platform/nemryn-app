@@ -800,6 +800,6 @@ Codes:
 - **ZW006:** invalid input.
 
 Tests:
-- `supabase/tests/plus_inquiries_tests.sql` (59 checks);
+- `supabase/tests/plus_inquiries_tests.sql` (65 checks);
 - `plus_inquiries_concurrency_test.sh`;
 - `privilege_contract_tests.sql`.
