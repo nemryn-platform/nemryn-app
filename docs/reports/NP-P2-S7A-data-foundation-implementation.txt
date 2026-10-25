@@ -1,0 +1,434 @@
+NP-P2-S7-A — PUBLIC INQUIRY INTAKE: DATABASE FOUNDATION, RLS AND SECURITY — IMPLEMENTATION REPORT
+=====================================================================================================
+Dates: 2026-10-24 to 2026-10-25.
+Branch: np-p2-s7a-inquiry-foundation, at origin/main efae4c2 (PR #36 NC-UX-01 merged 2026-10-24T03:22Z; preserved).
+Mode: local implementation + isolated verification (NemrynS1Iso only; fictional data only).
+- NOT done: no production migration, query or write; no public form publication; no S7-B / S7-C code; no external
+  integration or sending; no deployment-gate activation; no GitHub / Vercel change; no Git staging / commit / push /
+  merge.
+
+VERDICT: PASS. Ready for owner review. Production migration is a separate owner decision (section 10).
+
+1. EXECUTIVE SUMMARY
+--------------------
+- S7-A delivers the database half of the approved P2-S7 design (OD-S7-1 … OD-S7-17 + refinements A–D; OD-S7-18
+  deferred to PD-11).
+- Two additive migrations:
+  - 3 new tables plus the activation allowlist table;
+  - additive constraint changes to 3 existing Plus tables;
+  - 23 functions: 7 internal, 2 Platform Admin, 3 service_role-only public, 11 Plus staff.
+- No Core table, function, policy or grant changed. No S6 function was replaced.
+- Public availability is OFF by construction. It requires ALL of:
+  - the S7-B global kill switch (default OFF);
+  - a Platform-Admin allowlist row (default EMPTY);
+  - a published form;
+  - an active organization;
+  - Plus effective state write.
+  Publishing itself requires the allowlist.
+- A public submission writes exactly one inquiry row: no contact, opportunity, Core Request, Passenger, Trip,
+  notification, consent row or audit row.
+- Conversion is one transaction. It reuses the released contact and opportunity creation functions unchanged, and
+  writes channel- and address-bound web_form consent only for ticked purposes (email → email, phone → voice, never
+  SMS), never for a do-not-contact contact.
+- Verified on the isolated stack:
+  - new SQL suite 59/59;
+  - new concurrency test 9/9;
+  - privilege contract 0 violations;
+  - every existing SQL suite and concurrency script;
+  - QA2, Quotes, consents E2E, UI foundations;
+  - unit, release, tsc, ESLint and build.
+  Exact counts are in sections 8–9.
+
+2. DECISION ID MAPPINGS (recorded in docs/product/decision-register.md; no collision: the previous last was ZD-242)
+------------------------------------------------------------------------------------------------------------------
+  PD-12 separate Plus boundary .......... ZD-243        OD-S7-10 A Growth → Inquiries ......... ZD-253
+  OD-S7-1  A hosted + embed + loader .... ZD-244        OD-S7-11 A abuse controls ............. ZD-254
+  OD-S7-2  A "inquiry" naming ........... ZD-245        OD-S7-12 A history / activity ......... ZD-255
+  OD-S7-3  B minimum fields, no ZIP ..... ZD-246        OD-S7-13 A app host only .............. ZD-256
+  OD-S7-4  A form lifecycle ............. ZD-247        OD-S7-14 A no inquiry API ............. ZD-257
+  OD-S7-5  A inquiry lifecycle .......... ZD-248        OD-S7-15 A access by role / grant ..... ZD-258
+  OD-S7-6  A no assignee ................ ZD-249        OD-S7-16 A (amended) inert release .... ZD-259
+  OD-S7-7  A hint-only duplicates ....... ZD-250        OD-S7-17 A in-app alerts only ......... ZD-260
+  OD-S7-8  A conversion (+ refinement D)  ZD-251        PD-16 synthetic-phase answer .......... ZD-261
+  OD-S7-9  B consent (+ refinement B) ... ZD-252        Refinement A activation allowlist ..... ZD-262
+                                                        Refinement C service types ............ ZD-263
+  OD-S7-18: DEFERRED to PD-11 (no ZD; no purge code).
+- PD-12 → ZD-243 and PD-16 → ZD-261 are marked recorded in docs/product/plus-decisions-proposed.md.
+- PD-10 (HIPAA / BAA) and PD-11 (retention / erasure) remain OPEN and are not recorded as resolved.
+
+3. SCHEMA CHANGES
+-----------------
+Migration 1: supabase/migrations/20261024100000_plus_inquiries_foundation.sql (357 lines).
+
+New tables:
+- plus_inquiry_public_access: the activation allowlist.
+  - organization_id PK; reason 1–500; enabled_by; enabled_at.
+  - Class A: RLS on, no policy, no privilege for anon / authenticated / service_role.
+- plus_inquiry_forms:
+  - unique(organization_id) (one per organization in v1);
+  - server key 'inq_' + 32 hex (gen_random_bytes(16); unique; stable);
+  - status draft / published / disabled;
+  - headline 1–120; intro ≤ 500;
+  - offered_service_types validated by _plus_inquiry_service_types_valid;
+  - config_version; version (optimistic token);
+  - consent_text_version in the server format;
+  - published / disabled actor + time CHECKs;
+  - triggers set_updated_at and prevent_organization_id_change;
+  - RLS plus_can_read; authenticated SELECT only.
+- plus_inquiries:
+  - composite FKs to form and contact;
+  - unique(organization_id, idempotency_key), key format ^[A-Za-z0-9._:-]{8,100}$;
+  - name 1–120; phone and email use EXACTLY the plus_contacts CHECKs; reachable (phone or email);
+  - preferred_reply (needs its channel); optional relationship;
+  - inquiry_type identical to opportunities (… 'booking' …); service_type ∈ the 8 Plus types; coarse timeframe;
+  - question 1–500;
+  - consent_followup and consent_marketing default false;
+  - consent_text_version;
+  - acquisition columns with the Core attribution CHECKs;
+  - status new / converted / dismissed, with a consistent dismiss reason and note, contact_id and triage columns;
+  - version;
+  - 3 indexes;
+  - RLS plus_can_read; column-level SELECT for authenticated on every column EXCEPT idempotency_key.
+- plus_inquiry_rate_limit_events: class A; form-key and 64-hex client-key CHECKs; 2 indexes.
+
+Additive changes to existing tables (named-constraint replacements; every existing row validated):
+- plus_opportunities: + inquiry_id; composite FK; unique index where not null; set-once trigger
+  plus_opportunities_inquiry_immutable.
+- plus_communication_consents:
+  - + inquiry_id, with a composite FK (inquiry_id, organization_id, contact_id) → plus_inquiries;
+  - captured_via + 'web_form';
+  - consent_text_version required iff web_form;
+  - new plus_consents_web_form_check;
+  - + inquiry_id in the authenticated column SELECT.
+- plus_activities: activity_type + 'inquiry_converted'; new plus_activities_inquiry_subject_check.
+
+4. FUNCTIONS AND PERMISSIONS
+----------------------------
+Migration 2: supabase/migrations/20261024110000_plus_inquiries_rpcs.sql (1,122 lines).
+- Every function is SECURITY DEFINER with search_path pinned (except the 3 immutable / trigger helpers), and has
+  `revoke … from public, anon`.
+- Verified in the catalog (has_function_privilege) and by the privilege contract.
+
+  service_role ONLY (anon / authenticated → 42501):
+    get_public_plus_inquiry_form(text)
+    check_and_record_plus_inquiry_rate_limit(text, text)
+    submit_plus_inquiry(text, text, integer, text×9, boolean, boolean, jsonb)
+  authenticated, checked inside by _require_platform_admin (an Organization Admin gets ZW002):
+    platform_set_plus_inquiry_public_access(uuid, boolean, text)
+    platform_get_plus_inquiry_public_access(uuid)
+  authenticated, Organization Admin + Plus write (_require_plus_admin_write):
+    plus_save_inquiry_form · plus_publish_inquiry_form · plus_disable_inquiry_form
+  authenticated, Plus read (plus_can_read):
+    plus_get_inquiry_form · plus_list_inquiries · plus_get_inquiry · plus_list_inquiry_duplicate_hints ·
+    plus_count_new_inquiries
+  authenticated, Plus write (_require_plus_write):
+    plus_convert_inquiry · plus_dismiss_inquiry · plus_reopen_inquiry
+  internal, no EXECUTE for any role:
+    _plus_inquiry_service_type_list · _plus_inquiry_service_types_valid · _plus_inquiry_service_options ·
+    _plus_inquiry_public_access_enabled · _plus_inquiry_public_form · _plus_inquiry_append_web_form_consent ·
+    _plus_opportunity_inquiry_immutable
+
+Refinement A (activation safety; ZD-259 / ZD-262):
+- The single availability rule is _plus_inquiry_public_form. It requires: a key in the right format, a published form,
+  an active organization, Plus write, and an allowlist row.
+- Both the hosted-form config (get_public_plus_inquiry_form) and submission (submit_plus_inquiry) use it.
+- plus_publish_inquiry_form refuses without the allowlist (ZW004 public_access_not_enabled), so staff configuration
+  cannot bypass activation.
+- Removing the allowlist row stops a published form immediately (test E10).
+- No migration or seed adds an allowlist row.
+- The global kill switch PLUS_INQUIRY_SUBMISSIONS (default OFF) is RESERVED for S7-B's server-only route, checked
+  before any database call. It is documented in the canonical design §3; there is no database part, by design.
+- Enabling synthetic testing for one organization cannot expose another: the allowlist is per organization and is
+  checked inside the same function that resolves the key.
+
+5. TENANT-ISOLATION APPROACH
+----------------------------
+- The public organization comes only from a published key, inside the service_role function. No parameter can name an
+  organization, form, contact, status or owner.
+- Staff functions take the organization from the server session and check plus_can_read / _require_plus_write /
+  _require_plus_admin_write (has_org_role: an active membership in an active organization).
+- Composite foreign keys everywhere: form ↔ inquiry; inquiry ↔ contact; opportunity ↔ inquiry; consent ↔
+  (inquiry, organization, contact). A cross-tenant link is a foreign-key violation, never a link.
+- Unknown and foreign ids return the identical ZW002 (no existence oracle).
+- A Platform Admin without a membership sees nothing: RLS returns 0 rows and the functions return ZW002.
+- Tests: D3, D4, D5, M3 (Org B contact), and the RLS row counts.
+
+6. CONSENT COMPATIBILITY FINDINGS (refinement B)
+------------------------------------------------
+Inspected deployed S6 (20261023100000):
+- plus_consents_captured_via_check was already designed for replacement ("P2-S7 replaces this").
+- plus_consents_text_version_check was "consent_text_version is null" (reserved).
+- Every S6 row uses a staff method or do_not_contact, with a NULL text version, so every replacement validates.
+- _plus_append_consent hard-limits captured_via to the 4 staff methods.
+
+Decisions:
+- No S6 function is replaced. The S6 staff path still refuses 'web_form' (test S1). web_form rows come only from
+  plus_convert_inquiry, through the new internal _plus_inquiry_append_web_form_consent, which applies the same guards
+  under the conversion's contact lock:
+  - active contact; not do-not-contact;
+  - address digest required and equal to the inquiry's;
+  - ≤ 366 days;
+  - not older than the pair's latest revocation (ZD-231).
+- Not tightened: S6's staff methods, DNC rules, corrections, append-only triggers, column privileges and the effective
+  resolver are unchanged.
+- Added rules apply to web_form rows only: they are grants; they are never corrections; they carry no note, a text
+  version and an inquiry_id; the consent FK binds them to the same contact.
+
+Evidence:
+- Incremental application on S6-era data (8 ledger rows covering every capture method, a correction and 2 DNC system
+  revocations, written through the released S6 RPCs):
+  - ledger fingerprint before = after: md5 c9571668b2e7c7e8927232e7be6d1868, rows=8;
+  - opportunities identical: md5 19b668f09e0468a6900a9623310d6503, 7 rows;
+  - every new constraint validated;
+  - effective states unchanged.
+- SQL: S1–S5 and N1 / J5 / M1 / M2 / P2 / Q1 / Q2:
+  - both boxes optional, default false;
+  - submission writes no ledger row;
+  - only ticked purposes are recorded;
+  - email → email and phone → voice, with sms never written;
+  - address mismatch and missing contact address are skipped;
+  - stale and too-old evidence is skipped;
+  - DNC: zero rows plus a server-enforced, audited acknowledgement; DNC is never cleared;
+  - the exact text version and captured_at = the submission time are kept;
+  - a later DNC switch-on revokes web_form grants;
+  - web_form rows are append-only.
+- Concurrency S5 / S6 / S7 (section 8). The S6 consent suites still pass (section 9).
+- The final public consent wording still needs legal review before real submissions (not part of S7-A).
+
+7. SERVICE-TYPE COMPATIBILITY FINDINGS (refinement C)
+-----------------------------------------------------
+  Core organization_service_offerings / transportation_requests: 9 (incl. airport_transportation, NC-INTAKE-AIRPORT-S1)
+  Core hosted request form (_public_form_service_types):        8 (airport deliberately excluded)
+  Plus opportunities (plus_opportunities_service_type_check):   8 (airport deferred; unchanged)
+  Plus contacts:                                                none
+  plus_convert_opportunity_to_request:                          passes the opportunity's value (8 ⊂ 9)
+- Implemented: the smallest valid intersection. Inquiries carry only the 8 Plus opportunity types, intersected with
+  the organization's current offerings (none configured = all 8).
+- A Plus-owned list (_plus_inquiry_service_type_list) is used, NOT Core's _public_form_service_types, so a future Core
+  change cannot widen inquiries into a value conversion would reject.
+- No Plus enum is widened, and no new product decision was needed.
+- Tests:
+  - E2: airport refused;
+  - E7 / N2: airport offered by the organization is still never an option;
+  - N3: a service no longer offered is refused at submission and hidden from the public config;
+  - N4: saving an unoffered service is refused.
+
+8. CONCURRENCY TEST RESULTS (supabase/tests/plus_inquiries_concurrency_test.sh — real parallel psql sessions)
+-------------------------------------------------------------------------------------------------------------
+  S1 same idempotency key at once → one inquiry; accepted changed true then false ........................ PASS
+  S2 12 parallel rate-limit attempts, one client → exactly 5 allowed, 5 recorded ......................... PASS
+  S3 convert vs convert → one converts, the other ZW003; one opportunity ................................ PASS
+  S4 convert-first / dismiss-first → the first transition wins, the other ZW003 ......................... PASS ×2
+  S5 DNC switched on first → the waiting conversion is refused (acknowledgement); no grant, no opportunity  PASS
+  S6 conversion first (2 grants) → the waiting DNC switch-on revokes both ................................ PASS
+  S7 staff revocation first → the older web evidence is NOT granted (stale); the other channel granted ... PASS
+  INV one opportunity per inquiry; no Core Request / Passenger / Trip / notification ................... PASS
+  RESULT: ALL PASS (9/9). Run twice (before and after the fresh reset): both ALL PASS.
+- The script uses the same fail-closed isolation guard as the S6 concurrency script (NemrynS1Iso container + label +
+  local socket + fictional fingerprint) and a throwaway organization, removed on exit.
+
+9. REGRESSION RESULTS (isolated NemrynS1Iso; fresh `supabase db reset --local`: 95 migrations, head 20261024110000)
+------------------------------------------------------------------------------------------------------------------
+Before the reset, the target was verified: project_id NemrynS1Iso; no linked remote project; container label
+NemrynS1Iso; fictional seed fingerprint 2/1/0; the 95 migrations byte-identical to the repository. Production was
+never touched.
+
+New:
+- plus_inquiries_tests.sql: 59/59.
+- plus_inquiries_concurrency_test.sh: 9/9.
+- privilege_contract_tests.sql: 0 violations of 29 checks (every new table, column grant and function listed).
+
+Existing SQL suites (all 71 files run). Every suite passes, with these explanations:
+- Updated to the approved S7 contract. These are forward-compatibility snapshots that S7 is meant to change; each
+  stays as strict as before and names the new S7 object explicitly:
+  - plus_opportunities_tests.sql Q4 / Q5 ("no inquiry_id"; FK targets): 75/75 after the update;
+  - plus_communication_consents_tests.sql S3 / S5 (exact column grant; FK targets): 78/78 after the update;
+  - platform_admin_foundation_tests.sql EX-1 (inventory 12 → 14 platform_* functions; the authenticated-only rule
+    holds): 58/58 after the update.
+- Order-dependent artefacts of the single batch run, NOT introduced. Each passes on its own fresh reset:
+  - notifications_activity_tests.sql: 42/42;
+  - website_request_form_publication_tests.sql: 50/50;
+  - website_requests_form_tests.sql: 37/37.
+- Baseline, NOT introduced: request_decision_expand_compat_tests.sql. By its own header it is "ONLY meaningful on a
+  database migrated through the EXPAND migration and NOT through the CONTRACT migration (2026-09-24)", so it fails its
+  PRE check on any fully migrated database, main included.
+- Core public-intake suites with no diff to any Core intake object (T18 / T26):
+  - public_request_intake_tests.sql;
+  - public_intake_rate_limit_tests.sql;
+  - website_intake_acquisition_tests.sql;
+  - core_intake_airport_tests.sql;
+  - website_connection_lifecycle_tests.sql;
+  - website_integration_self_service_tests.sql.
+  All PASS.
+- All other Plus suites: unchanged PASS. They include access helpers, entitlement (+ versioned), member grants,
+  contacts, opportunities, tasks, growth agent, request attributions, conversion / rebooking, booking service type,
+  quotes (+ directory, lifecycle).
+
+Concurrency scripts (fresh schema): exit 0 and 0 failures each.
+- plus_communication_consents_concurrency_test.sh: 14 PASS (S6 regression);
+- public_request_intake_concurrency_test.sh;
+- public_intake_rate_limit_concurrency_test.sh (exactly 8 of 15 allowed; unchanged Core limiter);
+- plus_opportunities_concurrency_test.sh;
+- plus_contacts_concurrency_test.sh;
+- plus_inquiries_concurrency_test.sh (9/9).
+
+Application and browser (production build of this tree served on :3100):
+- QA2 strict: 199 / 199 (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79); "RESULT: all suites pass"; equal to baseline.
+- Quotes strict: 272 / 272 (s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26); "RESULT: no unexpected failures"; equal to baseline.
+- P2-S6 consents E2E (npm run test:e2e:consents): 49 / 49, ALL PASS (Communication preferences through the real UI on the S7-A schema, which now includes the web_form / inquiry_id additions).
+- UI foundations P1a: 48 / 48, ALL PASS.
+- UI foundations P1b: 52 / 52, ALL PASS.
+- npm test: 902 / 902.
+- npm run test:release: 28 / 28. It was 22 / 28 before the fix described below.
+- tsc --noEmit: PASS.
+- ESLint (src + scripts): 0 errors; 1 pre-existing warning (growth/tasks/page.tsx unused Link; baseline).
+- next build: PASS (rc 0).
+
+Release-gate test fix (test-only; scripts/release/db-compat.test.mjs):
+- 6 tests hard-coded the repository as it was at S6: "93 migrations", the newest being 20261023100000, plus the
+  S6-B-commit production state built from the CURRENT list.
+- Any new migration broke them. The gate itself reported correctly: "required migration NOT applied in production:
+  20261024110000_plus_inquiries_rpcs", "DATABASE-FIRST … 20261024110000".
+- The fix:
+  - "newest migration" tests now follow the repository (LATEST);
+  - the S6-B commit tests use that commit's own 93-migration set (S6_RELEASE);
+  - the baseline test now asserts the 93 released migrations are kept (S6 the 93rd), every file conforms and versions
+    strictly increase.
+- No assertion was removed or weakened, and the gate code and workflows are unchanged.
+- Without this fix, CI's release-gate-tests job would fail on every PR that adds a migration, S7-A's included.
+
+10. PRODUCTION MIGRATION RISKS AND HANDOFF (owner-run only; nothing was executed)
+--------------------------------------------------------------------------------
+Risks:
+- Both migrations are additive.
+- The only operations on existing tables:
+  - ADD COLUMN (nullable, no default) on plus_opportunities and plus_communication_consents;
+  - the replacement of 4 named CHECKs, which take ACCESS EXCLUSIVE locks briefly and validate every row;
+  - one new composite FK on each of those two tables, validated;
+  - a GRANT of one column;
+  - one trigger.
+  The tables are small (synthetic data only). The existing synthetic S6 rows satisfy the new constraints, as verified
+  on the equivalent state.
+- The append-only ledger triggers do not fire on ADD COLUMN or ADD CONSTRAINT.
+- No data backfill. No Core object changes.
+- Order: the application has no S7 code yet, so migration-only is inert. S7-B and S7-C must not be released before
+  these migrations.
+
+Exact order:
+- 20261024100000_plus_inquiries_foundation.sql
+- 20261024110000_plus_inquiries_rpcs.sql
+They are separate files; each is applied in one transaction by the Supabase CLI.
+
+Pre-flight (Free plan: no managed backups / PITR):
+- (a) A fresh owner-run logical backup (the NP-P2-S6C2-O1 procedure: pg_dump of schema + data to the encrypted
+  ~/NemrynBackups DMG, with a restore listing verified), plus an independent external copy (or an explicit waiver as
+  in O2).
+- (b) Read-only checks:
+  - production head = 20261023100000 (supabase migration list --linked);
+  - privilege_contract_tests.sql shows 0 violations BEFORE;
+  - SELECT count(*) of plus_communication_consents and plus_opportunities;
+  - confirm no captured_via outside the 5 S6 values and no non-NULL consent_text_version (the new CHECKs need this);
+  - confirm the 4 constraint names exist (plus_consents_captured_via_check, plus_consents_text_version_check,
+    plus_activities_activity_type_check; and plus_opportunities has no inquiry_id yet).
+
+Apply: the owner applies the two files (supabase db push --linked, or the SQL editor package) — database-first, BEFORE
+merging the S7-A PR.
+
+Post-application read-only verification:
+- the migration list shows both versions;
+- privilege_contract_tests.sql shows 0 violations;
+- the 4 tables exist with RLS on;
+- plus_inquiry_public_access count = 0;
+- has_function_privilege matrix as in section 4;
+- the consent / opportunity row counts are unchanged;
+- no NOT VALID constraint was added.
+
+Merge sequence: verify → merge PR → the Vercel build (no runtime change in S7-A).
+
+Failure / rollback:
+- If either file fails, the CLI rolls back that file's transaction, so nothing partial is applied.
+- If a post-check fails after success, the S7 objects are unused by the application and can stay inert while it is
+  investigated.
+- A reversal script (drop the 23 functions, 5 types and 4 tables; drop the 2 columns, 2 FKs, the index and the
+  trigger; restore the 4 original CHECK definitions from 20261023100000 / 20261021100000) should be prepared with the
+  release package and run only on owner decision. It is safe only while no web_form consent row exists, because those
+  rows are append-only and reference inquiries. No real data may exist before PD-10 / PD-11.
+- NP-RELEASE-01C deployment-gate activation remains paused (unchanged).
+
+11. EXACT CHANGED FILES (working tree; nothing staged)
+-----------------------------------------------------
+New:
+  supabase/migrations/20261024100000_plus_inquiries_foundation.sql
+  supabase/migrations/20261024110000_plus_inquiries_rpcs.sql
+  supabase/tests/plus_inquiries_tests.sql
+  supabase/tests/plus_inquiries_concurrency_test.sh
+  docs/product/NP-P2-S7-public-inquiry-intake-design.md          (canonical approved design)
+  docs/reports/NP-P2-S7A-data-foundation-implementation.txt       (this report)
+  docs/reports/NP-P2-S7-architecture-decision-review.txt          (the earlier review, still untracked)
+  docs/specs/NP-P2-S7-public-enquiry-intake-design.md             (the earlier proposal, now marked SUPERSEDED)
+Modified:
+  supabase/tests/privilege_contract_tests.sql                     (contract: the new tables / columns / functions)
+  supabase/tests/plus_opportunities_tests.sql                     (Q4 / Q5 → S7 contract)
+  supabase/tests/plus_communication_consents_tests.sql            (S3 / S5 → S7 contract)
+  supabase/tests/platform_admin_foundation_tests.sql              (EX-1 inventory 12 → 14)
+  scripts/release/db-compat.test.mjs                              (repository-relative fixtures; section 9)
+  docs/product/decision-register.md                               (ZD-243 … ZD-263)
+  docs/product/plus-decisions-proposed.md                         (PD-12 → ZD-243, PD-16 → ZD-261)
+  docs/product/plus-domain-model.md                               (§13 implementation status)
+  docs/security/plus-access-model.md                              (§6b status; T34)
+  docs/security/rls-test-matrix.md                                (S7-A note)
+  docs/data/schema.md, docs/data/read-api.md, docs/data/mutation-api.md
+No application (src/) file changed.
+
+12. REMAINING UNRESOLVED ISSUES
+-------------------------------
+- PD-10 (HIPAA / BAA) and PD-11 (retention / erasure, incl. the purge periods of OD-S7-18) are OPEN. No real
+  submission and no real organization may be enabled.
+- The public consent wording needs legal review before real submissions.
+- S7-B must implement the kill switch (default OFF) in front of every public path, the Origin check, the 8 KB cap, the
+  salted client hash, the headers and NO_SESSION_PATH, and correct the service-role client's caller-list comment
+  (A01 / A6).
+- S7-C must label captured_via 'web_form' in Communication preferences (the S6-B UI has no label for it yet) and align
+  the one S6 "enquiry" string (ZD-245).
+- The allowlist has database functions but no Platform Admin UI yet. Enabling the synthetic tenant for the S7-D smoke
+  test can use the RPC as a Platform Admin; adding UI is optional.
+- A production reversal script should be prepared with the release package (section 10).
+- request_decision_expand_compat_tests.sql is not runnable on a fully migrated database (baseline; documented by its
+  own header).
+
+13. OWNER GIT HANDOFF (not run)
+-------------------------------
+  cd /Users/datamatics/Nemryn
+  git status
+  git add supabase/migrations/20261024100000_plus_inquiries_foundation.sql \
+          supabase/migrations/20261024110000_plus_inquiries_rpcs.sql \
+          supabase/tests/plus_inquiries_tests.sql supabase/tests/plus_inquiries_concurrency_test.sh \
+          supabase/tests/privilege_contract_tests.sql supabase/tests/plus_opportunities_tests.sql \
+          supabase/tests/plus_communication_consents_tests.sql supabase/tests/platform_admin_foundation_tests.sql \
+          scripts/release/db-compat.test.mjs \
+          docs/product/NP-P2-S7-public-inquiry-intake-design.md docs/product/decision-register.md \
+          docs/product/plus-decisions-proposed.md docs/product/plus-domain-model.md \
+          docs/security/plus-access-model.md docs/security/rls-test-matrix.md \
+          docs/data/schema.md docs/data/read-api.md docs/data/mutation-api.md \
+          docs/reports/NP-P2-S7A-data-foundation-implementation.txt \
+          docs/reports/NP-P2-S7-architecture-decision-review.txt docs/specs/NP-P2-S7-public-enquiry-intake-design.md
+  git commit -m "feat(plus): add public inquiry intake database foundation"
+  git push -u origin np-p2-s7a-inquiry-foundation
+- Push with the nemryn account.
+- Production migrations are applied by the owner BEFORE merging (section 10).
+- Leave the untracked .tmp-qa/ files unstaged.
+
+14. VERDICT
+-----------
+PASS.
+- S7-A is implemented as approved: OD-S7-1 … OD-S7-17; refinements A–D intact; OD-S7-18 deferred to PD-11.
+- Public inquiries are unavailable by construction: the kill switch (S7-B) and the empty allowlist.
+- No Core change. S6 data and behaviour are preserved.
+- Every new test passes: SQL 59/59, concurrency 9/9, privilege contract 0 violations.
+- Every existing suite passes, with the forward-compatibility snapshots updated to the S7 contract, and with
+  order-dependent and expand-window results classified as not introduced.
+- QA2 199/199, Quotes 272/272, consents E2E 49/49, P1a 48/48, P1b 52/52.
+- unit 902/902, release 28/28; tsc, ESLint (0 errors) and build pass.
+- PD-10 and PD-11 remain OPEN: synthetic data only.
+
+STOP for owner review.

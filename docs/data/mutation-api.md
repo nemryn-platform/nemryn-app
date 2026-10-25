@@ -775,3 +775,31 @@ No migration and no RPC change.
 - `plus_mark_quote_sent`, `plus_record_quote_response`, `plus_revise_quote` and `plus_withdraw_quote` are unchanged and never touch `plus_tasks`.
 
 Tests: `src/lib/plus/quotes-print-followup.test.mjs`; the existing quote and task SQL suites.
+
+## Nemryn Plus public inquiry mutations (NP-P2-S7-A)
+
+Canonical contract: [NP-P2-S7-public-inquiry-intake-design.md](../product/NP-P2-S7-public-inquiry-intake-design.md) §5–§6; decisions ZD-243 … ZD-263.
+
+| Function | Caller / guard | Effect |
+|---|---|---|
+| `submit_plus_inquiry(key, idem, config_version, …, acquisition)` | **service_role only** | `unavailable` / `form_changed` / `invalid` / `accepted` (+`changed`); inserts exactly one `plus_inquiries` row and nothing else; a replay of the same key → changed=false |
+| `check_and_record_plus_inquiry_rate_limit(form_key, client_key)` | **service_role only** | atomic; 5 / client / h, 60 / form / h; malformed → false |
+| `platform_set_plus_inquiry_public_access(org, enabled, reason)` | Platform Admin | allowlist add / remove; reason required; audited `platform_plus_inquiry_public_access_changed` |
+| `plus_save_inquiry_form(org, headline, intro, services[], expected_version)` | Org Admin + Plus write | create (NULL version) / live edit (`config_version` +1); audited `plus_inquiry_form_saved` |
+| `plus_publish_inquiry_form(org, v)` | Org Admin + Plus write | requires the allowlist (ZW004); audited |
+| `plus_disable_inquiry_form(org, v)` | Org Admin + Plus write | published → disabled (draft ZW004); audited |
+| `plus_convert_inquiry(org, id, v, mode, contact, confirm_duplicate, fill_blanks, title, owner_membership, dnc_ack)` | Plus write | create or link a contact + exactly one private-pay opportunity (`web_inquiry`); address-bound web_form consent; `inquiry_converted` activity; audited `plus_inquiry_converted`; never Core |
+| `plus_dismiss_inquiry(org, id, v, reason, note)` | Plus write | new → dismissed; audited (reason only) |
+| `plus_reopen_inquiry(org, id, v)` | Plus write | dismissed → new; audited |
+
+Codes:
+- **ZW001:** no uid, read_only, or READ grant.
+- **ZW002:** no access, foreign, or unknown.
+- **ZW003:** stale version.
+- **ZW004:** illegal transition, `public_access_not_enabled`, or a missing DNC acknowledgement.
+- **ZW006:** invalid input.
+
+Tests:
+- `supabase/tests/plus_inquiries_tests.sql` (59 checks);
+- `plus_inquiries_concurrency_test.sh`;
+- `privilege_contract_tests.sql`.

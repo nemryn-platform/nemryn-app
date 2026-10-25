@@ -2,7 +2,7 @@
 
 **Work item:** NP-P0-A02 · **Date:** 2026-10-13
 **Revised:** NP-P0-A02R (2026-10-13). PD-02, PD-03, PD-04, PD-08 and PD-12 were changed; PD-16 to PD-20 were added.
-**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14); PD-08 Q1 → ZD-212 to ZD-220 (NP-P2-S5-S1, 2026-10-18; Q2 and Q3 still proposed); PD-19 → ZD-228 (NP-P2-S6-A, 2026-10-23). All others have no ZD number yet. PD-10 and PD-11 remain OPEN.
+**Status of every entry:** PROPOSED unless marked OWNER-APPROVED or RECORDED. Recorded in [decision-register.md](./decision-register.md): PD-04 → ZD-206, PD-02 → ZD-207, PD-17 → ZD-208 (NP-P1-S1 / R2B); PD-20 → ZD-209, PD-03 → ZD-210 (NP-P1-S3 owner ratification, 2026-10-14); PD-08 Q1 → ZD-212 to ZD-220 (NP-P2-S5-S1, 2026-10-18; Q2 and Q3 still proposed); PD-19 → ZD-228 (NP-P2-S6-A, 2026-10-23); PD-12 → ZD-243 and PD-16 → ZD-261 (NP-P2-S7-A, 2026-10-24; the P2-S7 design decisions OD-S7-1 to OD-S7-17 and refinements A / C are ZD-244 to ZD-263). All others have no ZD number yet. PD-10 and PD-11 remain OPEN.
 On approval, each accepted entry is copied into the register as the next ZD number, with `Status: CONFIRMED`.
 
 Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in the NP-P0-A02 brief. They still need formal recording.
@@ -129,7 +129,7 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
   - `_create_public_request`, `submit_public_form_request`, `submit_public_transportation_request`, the Core rate-limit function and table, and `src/lib/public-intake/*` are not modified.
   - The only shared files touched are `src/proxy.ts` and `next.config.ts`, for path and header rules, with review.
   - Real submissions are accepted only after PD-10 and PD-11 close.
-- **Status:** PROPOSED (OWNER-APPROVED DIRECTION)
+- **Status:** **OWNER-APPROVED — RECORDED AS ZD-243** (NP-P2-S7-A, 2026-10-24). The approved design is [NP-P2-S7-public-inquiry-intake-design.md](./NP-P2-S7-public-inquiry-intake-design.md); public use additionally needs the kill switch and the activation allowlist (ZD-259, ZD-262). History: PROPOSED (OWNER-APPROVED DIRECTION).
 - **Changed from A02:** the inquiry form moved from "later candidate / NP-P4" into NP-P2. Submissions go to an inbox rather than directly into contacts.
 
 ### PD-13 — Marketplace scope status
@@ -158,7 +158,10 @@ Entries marked **OWNER-APPROVED DIRECTION** restate direction already given in t
   - **(a)** Whether to add a challenge provider (e.g. Cloudflare Turnstile, a new vendor) on top of honeypot + fill time + rate limits for the Plus inquiry form.
   - **(b)** Whether new-inquiry staff email alerts are needed in the MVP. That requires adding an event type to Core `notification_events` (a Core CHECK change); otherwise the MVP shows an in-app count only.
 - **Proposal:** v1 without a challenge provider (measure spam on synthetic and early tenants); alerts deferred to NP-P4.
-- **Status:** PROPOSED — needs owner decision
+- **Status:** **OWNER-APPROVED FOR THE SYNTHETIC PHASE — RECORDED AS ZD-261** (NP-P2-S7-A, 2026-10-24):
+  - (a) no challenge provider, and no honeypot or fill-time token either (ZD-254, the Core D2 precedent), while only synthetic tenants are enabled; re-decided with measured data before any real tenant;
+  - (b) in-app count only (ZD-260).
+  History: PROPOSED — needs owner decision.
 
 ### PD-17 — Trial duration
 

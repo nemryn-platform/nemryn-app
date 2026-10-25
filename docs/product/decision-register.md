@@ -3125,6 +3125,293 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** PD-11 / PD-10 review of free-text evidence
 
+### ZD-243 — Public inquiries use a separate Plus boundary; nothing is auto-created (PD-12)
+
+- **Date:** 2026-10-24
+- **Category:** Product / Security
+- **Decision:**
+  - Non-booking website questions use a separate Plus inquiry boundary: its own tables, rate-limit ledger, service-role RPCs, route and pages.
+  - A submission creates exactly one `plus_inquiries` row. No contact, opportunity, Core Request, Passenger, Trip, notification or consent row is created.
+  - Core public intake (`_create_public_request`, `submit_public_form_request`, `submit_public_transportation_request`, the Core rate limiter, `src/lib/public-intake/*`) is not modified. Pure Core helpers may be called or imported read-only (`_sanitize_acquisition`).
+- **Status:** CONFIRMED — OWNER-APPROVED (PD-12 direction recorded at NP-P2-S7-A, 2026-10-24)
+- **Affected Product Areas:** `plus_inquiries`, `submit_plus_inquiry`; S7-B route
+- **Dependencies:** PD-10, PD-11
+- **Owner:** Product / Engineering
+- **Review Trigger:** Any proposal to route inquiries through Core intake
+
+### ZD-244 — Hosted page + iframe embed + loader on the app host (OD-S7-1 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:** `/inquiry/<key>` (not frameable), `/embed/inquiry/<key>` (frameable) and a new loader `/embed/inquiry-form.js` following the Core D2 protocol. The Core loader is not edited.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-1 = A, 2026-10-24)
+- **Affected Product Areas:** S7-B
+- **Dependencies:** ZD-243
+- **Owner:** Product
+- **Review Trigger:** A request for native builder plugins
+
+### ZD-245 — Naming: "inquiry" in the schema, routes and UI; nav label "Inquiries" (OD-S7-2 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:**
+  - The schema, routes and UI copy use "inquiry", matching `new_inquiry`, `web_inquiry` and `inquiry_type`.
+  - The staff navigation label is "Inquiries". The one S6 string saying "enquiry" is aligned in S7-C.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-2 = A, 2026-10-24)
+- **Affected Product Areas:** S7-A objects; S7-B / S7-C copy
+- **Dependencies:** none
+- **Owner:** Product
+- **Review Trigger:** A UK / international launch
+
+### ZD-246 — Minimum public fields; no postal code (OD-S7-3 Option B)
+
+- **Date:** 2026-10-24
+- **Category:** Privacy / Product
+- **Decision:**
+  - Required: name, phone and/or email, inquiry type, question (≤ 500).
+  - Optional: preferred reply, relationship, service, coarse timeframe.
+  - Never collected: postal code, address, date of birth, diagnosis, insurance, exact date or time, attachments.
+  - Phone and email follow the `plus_contacts` rules exactly.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-3 = B, 2026-10-24)
+- **Affected Product Areas:** `plus_inquiries` CHECKs; `submit_plus_inquiry`
+- **Dependencies:** PD-10
+- **Owner:** Product / Compliance
+- **Review Trigger:** PD-10 outcome; a service-area requirement
+
+### ZD-247 — One form per organization; draft / published / disabled; live edits (OD-S7-4 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:**
+  - One form per organization (v1). An Organization Admin with Plus write saves, publishes and disables it.
+  - The key is server-generated (`inq_` + 128 random bits) and stable.
+  - Edits to a published form apply live (after a UI confirmation) and increment `config_version`. Each inquiry records the version, and a submission against an older version is `form_changed`.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-4 = A, 2026-10-24)
+- **Affected Product Areas:** `plus_inquiry_forms`; `plus_save` / `publish` / `disable_inquiry_form`
+- **Dependencies:** ZD-262
+- **Owner:** Product
+- **Review Trigger:** A need for draft / live snapshots or multiple forms
+
+### ZD-248 — Inquiry lifecycle (OD-S7-5 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:**
+  - new → converted (final).
+  - new → dismissed (reason spam / duplicate / not_relevant / out_of_area / other; a note is required for other).
+  - dismissed → new (reopen). Only dismissed inquiries reopen.
+  - Every transition uses a version token and is audited.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-5 = A, 2026-10-24)
+- **Affected Product Areas:** `plus_inquiries`; convert / dismiss / reopen RPCs
+- **Dependencies:** none
+- **Owner:** Product
+- **Review Trigger:** A request for intermediate inbox states
+
+### ZD-249 — No assignee on inquiries (OD-S7-6 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:** The inbox is shared. Ownership is set on the opportunity at conversion, through the existing owner rules (no owner given → unowned).
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-6 = A, 2026-10-24)
+- **Affected Product Areas:** `plus_convert_inquiry`
+- **Dependencies:** none
+- **Owner:** Product
+- **Review Trigger:** Inquiry volume needing assignment
+
+### ZD-250 — Duplicates are hinted, never merged or dismissed automatically (OD-S7-7 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product / Data
+- **Decision:**
+  - An idempotency-key replay stores nothing new.
+  - `plus_list_inquiry_duplicate_hints` lists up to 5 matching contacts (`_plus_contact_matches`) and up to 5 other new inquiries with the same email or phone digits.
+  - Nothing is merged or dismissed automatically.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-7 = A, 2026-10-24)
+- **Affected Product Areas:** `submit_plus_inquiry`; `plus_list_inquiry_duplicate_hints`
+- **Dependencies:** none
+- **Owner:** Product
+- **Review Trigger:** A deduplication proposal
+
+### ZD-251 — Conversion: create or link a contact + exactly one new private-pay opportunity (OD-S7-8 Option A; refinement D)
+
+- **Date:** 2026-10-24
+- **Category:** Product / Security
+- **Decision:**
+  - One transaction. It reuses `plus_create_contact` (duplicate warning: nothing written without confirmation) and `plus_create_opportunity` unchanged.
+  - Linking requires an active contact of the organization: archived → ZW004, redacted / foreign → ZW002.
+  - A populated contact field is never overwritten. Blank phone / email are filled only when asked, and the fill is audited.
+  - A do-not-contact contact requires an acknowledgement, which is server-enforced and audited.
+  - One opportunity per inquiry (unique, set-once `inquiry_id`). The 30-second duplicate guard is refused.
+  - One `inquiry_converted` activity with ids only. Never a Core Request.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-8 = A + refinement D, 2026-10-24)
+- **Affected Product Areas:** `plus_convert_inquiry`; `plus_opportunities.inquiry_id`
+- **Dependencies:** ZD-233, ZD-252
+- **Owner:** Product / Engineering
+- **Review Trigger:** A request to attach inquiries to existing opportunities
+
+### ZD-252 — Web-form consent: optional boxes; ledger rows only at conversion, channel- and address-bound (OD-S7-9 Option B; refinement B)
+
+- **Date:** 2026-10-24
+- **Category:** Privacy
+- **Decision:**
+  - Both public consent boxes (follow-up, marketing) are optional and unticked. A submission writes no ledger row.
+  - At conversion, a granted `web_form` row is written only when all of these hold:
+    - the purpose was ticked;
+    - email maps to email and phone to voice — never SMS;
+    - the inquiry address equals the contact's (digest);
+    - the contact is active and not do-not-contact;
+    - the evidence is within 366 days and not older than the pair's latest revocation.
+  - Each row records `captured_at` = the submission time, `consent_text_version` and `inquiry_id` (bound to the same contact).
+  - S6 constraints are replaced additively (every S6 row stays valid); `web_form` rows are append-only grants, never corrections. No S6 function is replaced.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-9 = B + refinement B, 2026-10-24)
+- **Affected Product Areas:** `plus_communication_consents`; `_plus_inquiry_append_web_form_consent`
+- **Dependencies:** ZD-229 … ZD-233, PD-10; legal review of the wording before real submissions
+- **Owner:** Product / Compliance
+- **Review Trigger:** Counsel review of the consent wording; NP-P4 sending
+
+### ZD-253 — Growth → Inquiries navigation (OD-S7-10 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:** A new Growth child "Inquiries" after Dashboard, with a new-count badge (S7-C).
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-10 = A, 2026-10-24)
+- **Affected Product Areas:** `growth-nav-core`; S7-C
+- **Dependencies:** ZD-245
+- **Owner:** Product
+- **Review Trigger:** A Growth navigation redesign
+
+### ZD-254 — Abuse controls for the synthetic phase (OD-S7-11 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Security
+- **Decision:**
+  - Closed schema, publication, the activation rules (ZD-262), uniform responses, an 8 KB body cap, an Origin check and idempotency.
+  - An own durable rate limit (5 per client and 60 per form per rolling hour; atomic; salted client hash).
+  - No honeypot (the Core D2 precedent), challenge provider or fill-time token in the synthetic phase. Re-decided before real data.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-11 = A, 2026-10-24)
+- **Affected Product Areas:** `check_and_record_plus_inquiry_rate_limit`; S7-B route
+- **Dependencies:** ZD-261
+- **Owner:** Engineering
+- **Review Trigger:** Before any real tenant; measured abuse
+
+### ZD-255 — Inquiry history (OD-S7-12 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:**
+  - Conversion writes one `inquiry_converted` activity (opportunity + contact, no body).
+  - Form, triage and allowlist actions write audit rows with ids and reasons only — never question text or notes.
+  - Consent writes no activity (ZD-236 unchanged).
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-12 = A, 2026-10-24)
+- **Affected Product Areas:** `plus_activities_activity_type_check`; audit actions `plus_inquiry_*`
+- **Dependencies:** ZD-236
+- **Owner:** Product
+- **Review Trigger:** A request to show inquiries on contact timelines
+
+### ZD-256 — App host only; no request-form-host change in S7 (OD-S7-13 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Security
+- **Decision:** The inquiry pages are served on the app host only. The request-form host allowlist in `src/proxy.ts` is not changed.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-13 = A, 2026-10-24)
+- **Affected Product Areas:** S7-B
+- **Dependencies:** none
+- **Owner:** Engineering
+- **Review Trigger:** A vanity-host request
+
+### ZD-257 — No developer / API intake for inquiries (OD-S7-14 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Security
+- **Decision:** No inquiry integration API in S7. Zenward and Core website intake are unchanged.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-14 = A, 2026-10-24)
+- **Affected Product Areas:** none
+- **Dependencies:** ZD-243
+- **Owner:** Product
+- **Review Trigger:** A partner integration request
+
+### ZD-258 — Who may see and act (OD-S7-15 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Security
+- **Decision:**
+  - A READ grant views the inbox and form.
+  - A WRITE grant converts, dismisses and reopens.
+  - Only an Organization Admin with Plus write configures, publishes and disables the form.
+  - In read_only the Admin reads (writes ZW001). Locked / none get no access.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-15 = A, 2026-10-24)
+- **Affected Product Areas:** every S7-A staff RPC
+- **Dependencies:** ZD-210
+- **Owner:** Product / Security
+- **Review Trigger:** PD-18 (growth-only members)
+
+### ZD-259 — Release inert; public use needs the kill switch AND the allowlist; synthetic only (OD-S7-16 Option A, amended)
+
+- **Date:** 2026-10-24
+- **Category:** Release / Security
+- **Decision:**
+  - S7 may be released through the owner-run procedure with public inquiries unavailable.
+  - Public availability requires the global `PLUS_INQUIRY_SUBMISSIONS` switch (default OFF; S7-B) AND the organization on the Platform-Admin allowlist (default EMPTY; ZD-262).
+  - Only synthetic tenants, enabled explicitly and temporarily, until PD-10 and PD-11 close. No production organization is approved for real submissions.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-16 = A amended by refinement A, 2026-10-24)
+- **Affected Product Areas:** S7-B route; `plus_inquiry_public_access`
+- **Dependencies:** PD-10, PD-11, ZD-262
+- **Owner:** Owner
+- **Review Trigger:** PD-10 / PD-11 resolution
+
+### ZD-260 — New-inquiry alerts are in-app only (OD-S7-17 Option A)
+
+- **Date:** 2026-10-24
+- **Category:** Product
+- **Decision:** `plus_count_new_inquiries` powers a badge and a Dashboard count. No email, push or Core `notification_events` change.
+- **Status:** CONFIRMED — OWNER-APPROVED (OD-S7-17 = A, 2026-10-24)
+- **Affected Product Areas:** S7-C
+- **Dependencies:** ZD-261
+- **Owner:** Product
+- **Review Trigger:** NP-P4 sending
+
+### ZD-261 — PD-16 answered for the synthetic phase
+
+- **Date:** 2026-10-24
+- **Category:** Security / Product
+- **Decision:**
+  - (a) No challenge provider (e.g. Turnstile) while only synthetic tenants are enabled. Re-decided, with measured data, before any real tenant.
+  - (b) New-inquiry staff alerts are in-app only (ZD-260).
+- **Status:** CONFIRMED — OWNER-APPROVED (2026-10-24; PD-16 updated)
+- **Affected Product Areas:** S7-B, S7-C
+- **Dependencies:** ZD-254, ZD-260
+- **Owner:** Product / Engineering
+- **Review Trigger:** Before real data
+
+### ZD-262 — Public activation allowlist, empty by default (refinement A)
+
+- **Date:** 2026-10-24
+- **Category:** Security
+- **Decision:**
+  - `plus_inquiry_public_access`: a class-A table, written only by `platform_set_plus_inquiry_public_access` (Platform Admin, reason required, audited). An Organization Admin cannot enable their own organization.
+  - The one database rule (`_plus_inquiry_public_form`) requires: allowlisted + published + active organization + Plus write.
+  - Publishing also requires the allowlist (ZW004), so staff configuration cannot bypass activation.
+  - Removing the row stops the form at once. No migration or seed adds a row.
+- **Status:** CONFIRMED — OWNER-APPROVED (refinement A, 2026-10-24)
+- **Affected Product Areas:** `plus_inquiry_public_access`; public and publish RPCs
+- **Dependencies:** ZD-259
+- **Owner:** Security / Owner
+- **Review Trigger:** Any production enablement
+
+### ZD-263 — Inquiry service types: the eight Plus types ∩ the organization's offerings (refinement C)
+
+- **Date:** 2026-10-24
+- **Category:** Data
+- **Decision:**
+  - Inquiries carry only the eight `plus_opportunities` service types, intersected with the organization's current Core offerings (none configured = all eight).
+  - `airport_transportation` (Core's ninth value) is never offered, because it is deferred for Plus opportunities.
+  - No Plus enum is widened. Every inquiry service converts unchanged.
+- **Status:** CONFIRMED — OWNER-APPROVED (refinement C, 2026-10-24)
+- **Affected Product Areas:** `_plus_inquiry_service_type_list`, `_plus_inquiry_service_options`
+- **Dependencies:** none
+- **Owner:** Product
+- **Review Trigger:** A decision to add airport transportation to Plus opportunities
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

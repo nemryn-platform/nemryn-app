@@ -72,7 +72,13 @@ c_tables(tbl) as (values
   ('plus_quotes'),
   ('plus_quote_counters'),
   -- NP-P2-S6-A consent ledger (append-only; column-level SELECT via RLS plus_can_read; writes through RPCs only)
-  ('plus_communication_consents')
+  ('plus_communication_consents'),
+  -- NP-P2-S7-A public inquiry intake: form + inbox (SELECT via RLS plus_can_read; writes through RPCs only);
+  -- activation allowlist and rate-limit ledger (class A: no privilege for any role)
+  ('plus_inquiry_forms'),
+  ('plus_inquiries'),
+  ('plus_inquiry_public_access'),
+  ('plus_inquiry_rate_limit_events')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -111,7 +117,8 @@ c_auth_tbl(tbl, priv) as (values
   ('plus_tasks', 'SELECT'),
   ('plus_agent_recommendations', 'SELECT'),
   ('plus_request_attributions', 'SELECT'),
-  ('plus_quotes', 'SELECT')
+  ('plus_quotes', 'SELECT'),
+  ('plus_inquiry_forms', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -145,7 +152,41 @@ c_auth_col(tbl, priv, col) as (values
   ('plus_communication_consents', 'SELECT', 'recorded_at'),
   ('plus_communication_consents', 'SELECT', 'recorded_by'),
   ('plus_communication_consents', 'SELECT', 'seq'),
-  ('plus_communication_consents', 'SELECT', 'status')
+  ('plus_communication_consents', 'SELECT', 'status'),
+  -- NP-P2-S7-A: web_form evidence link on the ledger; the inbox's column-level SELECT (never idempotency_key)
+  ('plus_communication_consents', 'SELECT', 'inquiry_id'),
+  ('plus_inquiries', 'SELECT', 'consent_followup'),
+  ('plus_inquiries', 'SELECT', 'consent_marketing'),
+  ('plus_inquiries', 'SELECT', 'consent_text_version'),
+  ('plus_inquiries', 'SELECT', 'contact_id'),
+  ('plus_inquiries', 'SELECT', 'dismiss_note'),
+  ('plus_inquiries', 'SELECT', 'dismiss_reason'),
+  ('plus_inquiries', 'SELECT', 'email'),
+  ('plus_inquiries', 'SELECT', 'form_config_version'),
+  ('plus_inquiries', 'SELECT', 'form_id'),
+  ('plus_inquiries', 'SELECT', 'id'),
+  ('plus_inquiries', 'SELECT', 'inquiry_type'),
+  ('plus_inquiries', 'SELECT', 'landing_path'),
+  ('plus_inquiries', 'SELECT', 'name'),
+  ('plus_inquiries', 'SELECT', 'organization_id'),
+  ('plus_inquiries', 'SELECT', 'phone'),
+  ('plus_inquiries', 'SELECT', 'preferred_reply'),
+  ('plus_inquiries', 'SELECT', 'question'),
+  ('plus_inquiries', 'SELECT', 'received_at'),
+  ('plus_inquiries', 'SELECT', 'referrer_host'),
+  ('plus_inquiries', 'SELECT', 'relationship'),
+  ('plus_inquiries', 'SELECT', 'service_type'),
+  ('plus_inquiries', 'SELECT', 'status'),
+  ('plus_inquiries', 'SELECT', 'timeframe'),
+  ('plus_inquiries', 'SELECT', 'triaged_at'),
+  ('plus_inquiries', 'SELECT', 'triaged_by'),
+  ('plus_inquiries', 'SELECT', 'updated_at'),
+  ('plus_inquiries', 'SELECT', 'utm_campaign'),
+  ('plus_inquiries', 'SELECT', 'utm_content'),
+  ('plus_inquiries', 'SELECT', 'utm_medium'),
+  ('plus_inquiries', 'SELECT', 'utm_source'),
+  ('plus_inquiries', 'SELECT', 'utm_term'),
+  ('plus_inquiries', 'SELECT', 'version')
 ),
 -- service_role: the only direct table privilege the server needs (website-intake CORS lookup)
 c_service_tbl(tbl, priv) as (values ('request_intake_integrations', 'SELECT')),
@@ -389,7 +430,32 @@ c_fn(sig, roles) as (values
   ('plus_get_contact_consents(uuid,uuid)', 'u'),
   ('plus_list_contact_consent_events(uuid,uuid,integer,integer)', 'u'),
   ('plus_record_consent(uuid,uuid,text,text,text,timestamp with time zone,text,uuid,text)', 'u'),
-  ('plus_revoke_consent(uuid,uuid,text,text,text,timestamp with time zone,text,uuid,text)', 'u')
+  ('plus_revoke_consent(uuid,uuid,text,text,text,timestamp with time zone,text,uuid,text)', 'u'),
+  -- NP-P2-S7-A public inquiry intake: internals (no EXECUTE), Platform Admin allowlist + Plus RPCs (authenticated),
+  -- the public boundary (service_role only; called by the S7-B server-only route)
+  ('_plus_inquiry_service_type_list()', ''),
+  ('_plus_inquiry_service_types_valid(text[])', ''),
+  ('_plus_opportunity_inquiry_immutable()', ''),
+  ('_plus_inquiry_public_access_enabled(uuid)', ''),
+  ('_plus_inquiry_service_options(uuid)', ''),
+  ('_plus_inquiry_public_form(text)', ''),
+  ('_plus_inquiry_append_web_form_consent(uuid,uuid,plus_inquiries,text,text)', ''),
+  ('platform_set_plus_inquiry_public_access(uuid,boolean,text)', 'u'),
+  ('platform_get_plus_inquiry_public_access(uuid)', 'u'),
+  ('get_public_plus_inquiry_form(text)', 's'),
+  ('check_and_record_plus_inquiry_rate_limit(text,text)', 's'),
+  ('submit_plus_inquiry(text,text,integer,text,text,text,text,text,text,text,text,text,boolean,boolean,jsonb)', 's'),
+  ('plus_get_inquiry_form(uuid)', 'u'),
+  ('plus_save_inquiry_form(uuid,text,text,text[],integer)', 'u'),
+  ('plus_publish_inquiry_form(uuid,integer)', 'u'),
+  ('plus_disable_inquiry_form(uuid,integer)', 'u'),
+  ('plus_list_inquiries(uuid,text,text,integer,integer)', 'u'),
+  ('plus_get_inquiry(uuid,uuid)', 'u'),
+  ('plus_list_inquiry_duplicate_hints(uuid,uuid)', 'u'),
+  ('plus_count_new_inquiries(uuid)', 'u'),
+  ('plus_convert_inquiry(uuid,uuid,integer,text,uuid,boolean,boolean,text,uuid,boolean)', 'u'),
+  ('plus_dismiss_inquiry(uuid,uuid,integer,text,text)', 'u'),
+  ('plus_reopen_inquiry(uuid,uuid,integer)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

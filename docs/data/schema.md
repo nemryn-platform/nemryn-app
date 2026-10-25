@@ -133,3 +133,24 @@ supabase stop        # stops the local stack
 - RLS on, no policy, no client or service_role privilege (privilege-contract class A).
 - RPCs: [mutation-api.md](./mutation-api.md#nemryn-plus-entitlement-rpcs-np-p1-s1).
 
+## Nemryn Plus public inquiry intake (NP-P2-S7-A)
+
+Migrations: `20261024100000_plus_inquiries_foundation.sql` (tables, constraints) and `20261024110000_plus_inquiries_rpcs.sql` (functions). Canonical column rules: [NP-P2-S7-public-inquiry-intake-design.md](../product/NP-P2-S7-public-inquiry-intake-design.md) §4.
+
+| Table | Ownership / access | Key rules |
+|---|---|---|
+| `plus_inquiry_public_access` | platform-owned **activation allowlist**; class A (RLS on, no policy, no privilege for any role) | one row per organization; reason 1–500; written only by `platform_set_plus_inquiry_public_access` (ZD-262) |
+| `plus_inquiry_forms` | tenant-owned; RLS `plus_can_read`; authenticated SELECT | `unique (organization_id)`; server key `inq_` + 32 hex (unique, stable); status draft / published / disabled; eight-type service subset; `config_version`, `version`; triggers `set_updated_at`, `prevent_organization_id_change` |
+| `plus_inquiries` | tenant-owned; RLS `plus_can_read`; column SELECT (never `idempotency_key`) | composite FKs to form and contact; `unique (organization_id, idempotency_key)`; phone / email = the `plus_contacts` CHECKs; closed sets; status new / converted / dismissed with consistent reason, contact and triage columns; `version`; indexes `(organization_id, status, received_at desc, id)`, email, phone digits |
+| `plus_inquiry_rate_limit_events` | class A | `inq_` form key, 64-hex client hash, `occurred_at`; no purge (PD-11) |
+
+Additive changes to existing tables:
+- `plus_opportunities.inquiry_id`: composite FK, unique where not null, set-once trigger `plus_opportunities_inquiry_immutable`.
+- `plus_communication_consents`:
+  - `inquiry_id` with a composite FK `(inquiry_id, organization_id, contact_id)`;
+  - `captured_via` + `web_form`;
+  - `consent_text_version` required iff `web_form`;
+  - `plus_consents_web_form_check`;
+  - the client column SELECT + `inquiry_id`.
+- `plus_activities`: `activity_type` + `inquiry_converted`, with `plus_activities_inquiry_subject_check`.
+

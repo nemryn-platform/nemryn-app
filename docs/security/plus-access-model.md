@@ -231,6 +231,22 @@ create policy <t>_select_plus on … for select to authenticated
 
 ## 6b. Plus public inquiry boundary (P2-S7) — security requirements
 
+> **Implementation status (NP-P2-S7-A, local only; canonical design [NP-P2-S7-public-inquiry-intake-design.md](../product/NP-P2-S7-public-inquiry-intake-design.md), ZD-243 … ZD-263).**
+> - The database half of this table is implemented:
+>   - **service_role only:** `get_public_plus_inquiry_form`, `check_and_record_plus_inquiry_rate_limit`, `submit_plus_inquiry`;
+>   - tenant resolution only through `_plus_inquiry_public_form`;
+>   - column privileges hide `plus_inquiries.idempotency_key`;
+>   - the activation allowlist `plus_inquiry_public_access` (class A).
+> - **Activation (ZD-259, ZD-262)** — public availability requires all of:
+>   - the S7-B kill switch `PLUS_INQUIRY_SUBMISSIONS` (default OFF);
+>   - a Platform-Admin allowlist row (default EMPTY; an Organization Admin cannot add one);
+>   - a published form, an active organization and Plus `write`.
+>   Publishing also requires the allowlist.
+> - **Consent (ZD-252):** both boxes are optional (not "follow-up required" as written below).
+> - **Minimisation (ZD-246):** no postal code.
+> - **Abuse (ZD-254):** no honeypot or fill-time check; 5 / client / h and 60 / form / h.
+> - The HTTP half (route, Origin, body cap, headers, proxy) is S7-B. Tests: T23–T26 and T34 below.
+
 | Control | Requirement |
 |---|---|
 | Separation | New route handler, pages, RPCs, rate-limit ledger and tables (domain model §13). **No change** to Core public-intake functions, tables or `src/lib/public-intake/*` (importing pure helpers is allowed) |
@@ -287,6 +303,7 @@ Harness: the existing `pg_temp.try_as(role, uid, stmt)` pattern (`supabase/tests
 | T24 | Inquiry never creates a contact, opportunity, Request, Passenger or Trip on submission; conversion creates a contact + opportunity only | counts |
 | T25 | Inquiry consent: missing follow-up consent → refused; marketing defaults false; conversion writes ledger rows with `captured_via = 'web_form'` and the text version | as stated |
 | T26 | Core public intake regression (T18) re-run after P2-S7 with no diff to any Core intake function | pass |
+| T34 | Public inquiry intake (NP-P2-S7-A; `plus_inquiries_tests.sql`, 59 checks; `plus_inquiries_concurrency_test.sh`): T23 / T24 / T25 at the database level. Also: RLS and grants on the four tables; the activation allowlist (Platform Admin only, audited, required for publishing and every public call); availability for unknown / draft / disabled / suspended / read_only / locked / none / not-allowlisted (all `unavailable`); closed schema; `form_changed`; idempotent replay; atomic rate limit; tenant / role / grant / entitlement matrix; conversion (create with the duplicate warning, link, no overwrite, blanks on request, archived / foreign / redacted refused, DNC acknowledgement, one opportunity, set-once `inquiry_id`); consent mapping (email → email, phone → voice, never sms; address mismatch, stale and too-old evidence skipped; DNC precedence under concurrency); S6 ledger compatibility; service types (8 Plus ∩ offerings, never airport); no Core row | as stated |
 | T27 | Forward-FK safety: each Plus migration applies on top of the previous slice alone (fresh reset to that point), and later additive migrations validate every existing row | apply cleanly |
 | T28 | Quotes (NP-P2-S5-S1 / S2 / S3A / S3B; `plus_quotes_lifecycle_tests.sql` for the timeline events (tenant-scoped composite FK, no amounts, exactly one event per transition) and the server-enforced do-not-contact acknowledgment (no 3-argument or named-call bypass; audited; contact unchanged); `plus_quotes_directory_tests.sql` for the read-only directory: role / state / tenant matrix, LIKE-escaped search, derived expiry, bounded pages; `plus_quotes_tests.sql`, `plus_quotes_concurrency_test.sh`, `quotes-core.test.mjs`): OD-Q12 (ZD-221) one draft + one sent per opportunity, enforced by the database and checked under concurrency; draft UI server actions re-check access, organization and Plus write, and send no client total; totals computed server-side and CHECK-enforced; a `sent` quote is immutable (guard trigger, every writer); no quote state changes `payment_reported_status`, `estimated_value_cents`, a Request or any Core row; READ grant / expired → ZW001 on writes; driver, no grant, inactive, platform admin, foreign → ZW002; locked → ZW002; anon → 42501; concurrent creates, edits, sends, revisions and Lost serialize | as stated |
 | T28b | Printable quotes + optional follow-up (NP-P2-S5-S3C, ZD-224 / ZD-225; `quotes-print-followup.test.mjs` and the browser E2E): `/quote-print/[id]` is staff-only (requirePlusAccess: Plus READ or above; no grant, driver and signed-out are refused), force-dynamic and noindex, with no public, token, email or share surface. A foreign, unknown or malformed id is the same 404, and an Org B session never sees Org A data. It shows the customer display name only and the stored amounts. The follow-up task is created only by an explicit save through `plus_create_task` (Plus write re-checked), and the quote lifecycle never writes tasks | as stated |

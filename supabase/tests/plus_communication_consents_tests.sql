@@ -195,7 +195,8 @@ begin
   v_cols := (select string_agg(a.attname, ',' order by a.attname) from pg_attribute a
              where a.attrelid = t_tbl and a.attnum > 0 and not a.attisdropped and has_column_privilege('authenticated', t_tbl, a.attname, 'SELECT'));
   perform pg_temp.t('S3 authenticated column SELECT = every column EXCEPT address_digest / idempotency_key; no column INSERT / UPDATE; anon / service_role none (ZD-240)',
-    v_cols = 'captured_at,captured_via,channel,consent_text_version,contact_id,corrects_consent_id,evidence_note,id,organization_id,purpose,recorded_at,recorded_by,seq,status'
+    -- NP-P2-S7-A (ZD-252) added the readable inquiry_id column
+    v_cols = 'captured_at,captured_via,channel,consent_text_version,contact_id,corrects_consent_id,evidence_note,id,inquiry_id,organization_id,purpose,recorded_at,recorded_by,seq,status'
     and not exists (select 1 from pg_attribute a where a.attrelid = t_tbl and a.attnum > 0 and not a.attisdropped
                     and (has_column_privilege('authenticated', t_tbl, a.attname, 'INSERT') or has_column_privilege('authenticated', t_tbl, a.attname, 'UPDATE')
                          or has_column_privilege('anon', t_tbl, a.attname, 'SELECT') or has_column_privilege('service_role', t_tbl, a.attname, 'SELECT'))), v_cols);
@@ -204,9 +205,10 @@ begin
             and pg_get_constraintdef(oid) ~ 'FOREIGN KEY \(contact_id, organization_id\) REFERENCES plus_contacts\(id, organization_id\)')
     and exists (select 1 from pg_constraint where conrelid = t_tbl and conname = 'plus_consents_corrects_fkey' and confrelid = t_tbl
             and pg_get_constraintdef(oid) ~ 'FOREIGN KEY \(corrects_consent_id, organization_id, contact_id\) REFERENCES plus_communication_consents\(id, organization_id, contact_id\)'));
-  perform pg_temp.t('S5 P22 every FK targets organizations / auth.users / plus_contacts / this table only (no Core, no future table); no json / jsonb column',
+  perform pg_temp.t('S5 P22 every FK targets organizations / auth.users / plus_contacts / this table / (NP-P2-S7-A) plus_inquiries only (no Core); no json / jsonb column',
     (select bool_and(confrelid::regclass::text in ('organizations', 'public.organizations', 'auth.users', 'plus_contacts', 'public.plus_contacts',
-                                                   'plus_communication_consents', 'public.plus_communication_consents'))
+                                                   'plus_communication_consents', 'public.plus_communication_consents',
+                                                   'plus_inquiries', 'public.plus_inquiries'))
        from pg_constraint where contype = 'f' and conrelid = t_tbl)
     and not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'plus_communication_consents' and data_type in ('json', 'jsonb')));
   perform pg_temp.t('S6 named constraints for additive replacement exist (channel, purpose, status, captured_via, text_version, dnc, granted_address)',

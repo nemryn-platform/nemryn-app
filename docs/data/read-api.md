@@ -87,3 +87,21 @@ All 4 functions return an explicit composite type — never a canonical table ro
 | Real HTTP (`driver_read_probe.js` pattern) | 15 | PostgREST/GoTrue cross-validation of every function, including the exact JSON key-set match and reassignment revocation over real HTTP |
 
 All run against `supabase db reset` fresh-seeded data; see each file's header for exact run instructions.
+
+---
+
+## Nemryn Plus public inquiry reads (NP-P2-S7-A)
+
+Contract details: [NP-P2-S7-public-inquiry-intake-design.md](../product/NP-P2-S7-public-inquiry-intake-design.md) §5.
+
+| Function | Caller | Returns |
+|---|---|---|
+| `get_public_plus_inquiry_form(key)` | **service_role only** (S7-B route) | zero rows unless available (allowlisted + published + active org + Plus write); else org name, headline, intro, still-offered services, `config_version`, `consent_text_version`. No ids |
+| `plus_get_inquiry_form(org)` | Plus read | one row: the form (NULLs if none), `public_access_enabled`, `service_options` |
+| `plus_list_inquiries(org, status, search, limit, offset)` | Plus read | a bounded page (1–100), newest first, LIKE-escaped search over name / email / phone digits; no question, consent ticks or key; `total_count` |
+| `plus_get_inquiry(org, id)` | Plus read | full detail incl. question, consent ticks (not consent on record), acquisition, triage, converted contact / opportunity, `version`; ZW002 for unknown / foreign |
+| `plus_list_inquiry_duplicate_hints(org, id)` | Plus read | ≤ 5 contacts + ≤ 5 other new inquiries; hints only |
+| `plus_count_new_inquiries(org)` | Plus read | integer |
+| `platform_get_plus_inquiry_public_access(org)` | Platform Admin | enabled, since, by whom, reason |
+
+Tests: `supabase/tests/plus_inquiries_tests.sql`.
