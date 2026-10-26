@@ -21,6 +21,7 @@ export type OperationsNavItemKey =
   | "drivers"
   | "fleet"
   | "drive"
+  | "billing"
   | "settings";
 
 export type OperationsNavSectionKey = "today" | "planning" | "records" | "growth" | "administration";
@@ -41,7 +42,7 @@ export interface OperationsNavSection {
 export interface OperationsNavAccess {
   /** A live `current_driver_id()` fact (owner-operator) -- gates "Drive". requireDriverAccess re-checks. */
   hasLinkedDriverProfile?: boolean;
-  /** Organization Admin of the active workspace -- gates "Settings". Every settings route re-checks. */
+  /** Organization Admin of the active workspace -- gates "Billing" and "Settings". Every billing / settings route re-checks. */
   canManageSettings?: boolean;
   /** Server-resolved Nemryn Plus entry -- gates the Growth section. Every Growth route re-checks requirePlusAccess. */
   canAccessGrowth?: boolean;
@@ -65,13 +66,15 @@ const RECORDS: OperationsNavItem[] = [
 ];
 
 /**
- * The visible sections, in order. Billing / Reports stay unlinked (their routes are placeholders). Proof of Service
+ * The visible sections, in order. Billing (NP-BILL-P1) is an Organization Admin item like Settings; Reports stays
+ * unlinked (its route is a placeholder). Proof of Service
  * and the Growth Agent keep their existing entry points (the Operations Brief and the Growth dashboard). An
  * Administration section with nothing visible is omitted, never rendered empty.
  */
 export function operationsNavSections(access: OperationsNavAccess): OperationsNavSection[] {
   const administration: OperationsNavItem[] = [
     ...(access.hasLinkedDriverProfile ? [{ key: "drive" as const, label: "Drive", href: "/driver" }] : []),
+    ...(access.canManageSettings ? [{ key: "billing" as const, label: "Billing", href: "/operations/billing" }] : []),
     ...(access.canManageSettings ? [{ key: "settings" as const, label: "Settings", href: "/operations/settings" }] : []),
   ];
   return [
@@ -99,7 +102,6 @@ const OTHER_CONTEXT: { prefix: string; section: string; label: string }[] = [
   { prefix: "/operations/growth/quotes", section: "Growth", label: "Estimates & Quotes" },
   { prefix: "/operations/growth/tasks", section: "Growth", label: "Tasks" },
   { prefix: "/operations/growth", section: "Growth", label: "Dashboard" },
-  { prefix: "/operations/billing", section: "Administration", label: "Billing" },
   { prefix: "/operations/reports", section: "Administration", label: "Reports" },
 ];
 

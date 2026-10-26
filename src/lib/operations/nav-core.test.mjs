@@ -16,7 +16,7 @@ test("sections in canonical order; every destination is an existing route", () =
     ["planning", ["Standing Orders=/operations/recurring-care"]],
     ["records", ["Passengers=/operations/passengers", "Facilities=/operations/facilities", "Drivers=/operations/drivers", "Vehicles=/operations/fleet"]],
     ["growth", []],
-    ["administration", ["Drive=/driver", "Settings=/operations/settings"]],
+    ["administration", ["Drive=/driver", "Billing=/operations/billing", "Settings=/operations/settings"]],
   ]);
   assert.deepEqual(all.map((s) => s.label), ["Today", "Planning", "Records", "Growth", "Administration"]);
 });
@@ -28,12 +28,12 @@ test("gating: Growth only with canAccessGrowth; Drive only with a linked driver;
   assert.deepEqual(driverOnly.at(-1).items.map((i) => i.key), ["drive"]);
   const adminNoPlus = n.operationsNavSections({ canManageSettings: true });
   assert.deepEqual(adminNoPlus.map((s) => s.key), ["today", "planning", "records", "administration"]);
-  assert.deepEqual(adminNoPlus.at(-1).items.map((i) => i.key), ["settings"]);
+  assert.deepEqual(adminNoPlus.at(-1).items.map((i) => i.key), ["billing", "settings"]);
 });
 
-test("no unfinished Billing / Reports entry and no duplicate destinations", () => {
+test("no unfinished Reports entry and no duplicate destinations", () => {
   const hrefs = n.operationsNavSections({ hasLinkedDriverProfile: true, canManageSettings: true, canAccessGrowth: true }).flatMap((s) => s.items.map((i) => i.href));
-  assert.equal(hrefs.some((h) => /billing|reports/.test(h)), false);
+  assert.equal(hrefs.some((h) => /reports/.test(h)), false);
   assert.equal(new Set(hrefs).size, hrefs.length);
 });
 
@@ -50,6 +50,7 @@ test("operationsContext: section + label for the header's location line", () => 
   assert.deepEqual(n.operationsContext("/operations/fleet"), { section: "Records", label: "Vehicles" });
   assert.deepEqual(n.operationsContext("/operations/recurring-care/abc"), { section: "Planning", label: "Standing Orders" });
   assert.deepEqual(n.operationsContext("/operations/settings/team"), { section: "Administration", label: "Settings" });
+  assert.deepEqual(n.operationsContext("/operations/billing/invoices/abc"), { section: "Administration", label: "Billing" });
   assert.deepEqual(n.operationsContext("/operations/growth/quotes"), { section: "Growth", label: "Estimates & Quotes" });
   assert.deepEqual(n.operationsContext("/operations/growth/inquiries/abc"), { section: "Growth", label: "Inquiries" });
   assert.deepEqual(n.operationsContext("/operations/growth/agent"), { section: "Growth", label: "Growth Agent" });

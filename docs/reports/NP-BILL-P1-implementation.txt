@@ -1,0 +1,174 @@
+NEMRYN — NP-BILL-P1 IMPLEMENTATION — Core private-pay billing MVP
+Date: 2026-10-26
+Branch: np-bill-p1 (from main c078f40, PR #40 merged). Uncommitted. Nothing deployed; no production migration.
+Contract: docs/reports/NP-BILL-P1-contract-and-decisions.txt (D1–D6 approved, refinements R1–R4).
+
+VERDICT: PASS — Core billing MVP implemented end to end with database-enforced safeguards; all tests green; awaiting owner review
+
+======================================================================================================================
+1. WHAT WAS BUILT
+======================================================================================================================
+Workflow: Completed Trip -> Create invoice (draft) -> edit charges -> Issue -> Record payment -> Print receipt / invoice.
+
+- Sidebar: Administration -> Billing (Organization Admins only, like Settings). The placeholder page is replaced.
+- Billing page (/operations/billing): tiles (outstanding, overdue, collected this month, trips ready to invoice);
+  "Ready to invoice" (completed, uninvoiced trips, Create invoice per row); "Invoices" (All / Open / Overdue / Drafts /
+  Paid / Void, search by number / bill-to / passenger, pagination). Derived state + Overdue badge.
+- Create invoice (/operations/billing/new?trip=…): the passenger's other uninvoiced completed trips (checkboxes, the
+  trip pre-selected); bill-to = passenger / the trip's requester (default when present) / a facility on the trips /
+  someone else (typed); optional Plus quote (only when Plus is readable and a sent / accepted quote is linked to the
+  trip's request). Creates a DRAFT only. An already-invoiced trip explains and links its invoice.
+- Invoice page (/operations/billing/invoices/[id]):
+    draft  — edit bill-to contact, charges (description, quantity, price; add / remove; live totals with the database's
+             rounding), discount, terms; Save; Issue (issue date <= today, due date default +15 days, confirmation);
+             Discard draft (trips freed, no number used).
+    issued — frozen charges and bill-to; Record payment (cash / check / card on an outside terminal / bank transfer /
+             other; date, reference, note; overpayment refused); payment history with Reversed badges; Reverse
+             (reason required, explains it is a correction, not a refund); Void (reason required; only while nothing
+             is paid net of reversals); Print invoice; Receipt per payment.
+    void   — read-only history with reason; trips can be invoiced again.
+- Trip Detail: Billing panel on completed trips for Organization Admins ("Create invoice" or "INV-000001 · Paid ·
+  balance"). Nothing else on Trip Detail changes.
+- Print views (authenticated, organization-scoped, no public links): /invoice-print/[id] (org header, number, issue /
+  due, bill-to snapshot, passenger, lines, subtotal / discount / total / paid / balance, payments with reversals marked;
+  VOID banner) and /receipt-print/[paymentId] (receipt INV-000001-R1, amount, date, method, reference; a reversed
+  payment shows "PAYMENT REVERSED … not proof of payment or of a refund"). Drafts are not printable.
+- Numbering format: INV-000123 (per organization); receipts INV-000123-R1, -R2 …
+
+======================================================================================================================
+2. DATABASE (two additive migrations; isolated stack only)
+======================================================================================================================
+20261027100000_core_billing_foundation.sql
+  billing_invoice_counters, billing_invoices, billing_invoice_trips, billing_invoice_lines, billing_payments.
+  Composite (id, organization_id) FKs to passengers / requests / facilities / trips / plus_quotes (optional);
+  partial unique index: a trip on at most ONE non-void invoice; lines may reference only trips on their invoice (FK);
+  money as bigint cents, USD only, total = subtotal − discount checked; shape checks for draft / issued / void.
+  Triggers (also against direct owner edits — R4):
+    invoices: identity fixed; only draft→issued and issued→void; frozen after issue except void columns; only drafts
+              deletable;
+    lines / trip links: change only while the invoice is a draft (links may only be released on void);
+    payments: append-only — UPDATE / DELETE / TRUNCATE refused; entries only on issued invoices; a reversal mirrors
+              exactly one payment of the same invoice (FK + unique: once).
+  RLS on every table: SELECT for Organization Admins of the same organization; no write grants (RPC only).
+20261027110000_core_billing_rpcs.sql
+  billing_create_invoice_draft · billing_update_invoice_draft · billing_discard_invoice_draft · billing_issue_invoice ·
+  billing_void_invoice · billing_record_payment · billing_reverse_payment · billing_list_billable_trips ·
+  billing_list_invoices · billing_get_invoice · billing_trip_status · billing_summary (+ internal helpers).
+  SECURITY DEFINER, search_path pinned, auth + Organization Admin re-checked (ZW001 / ZW002), invoice row locked,
+  expected_version (ZW003), idempotency keys (create / payment / reversal), counter row lock for numbers, audit_events
+  row per action (ids / amounts / statuses only — no names, references or notes).
+R1 multi-trip: same organization, completed, ONE passenger, not on another active invoice; bill-to linked to EVERY trip
+   (passenger = their passenger; requester = a request of the trips AND every trip requested by that same requester; facility = pickup / destination of every trip;
+   other = typed name).
+R2: reversal = correction entry with reason, once; payment / reversal / void serialize on the invoice lock; void
+   only at net zero; balances derived (never stored); receipts mark reversed payments.
+R3: quote import optional; needs Plus read + sent / accepted quote attributed to every trip's request; its components
+   become per-trip draft lines INSTEAD of the trip line (never both); quote number + kind snapshotted, so the invoice
+   keeps working without Plus.
+R4: print routes behind requireOrganizationAdminAccess + RLS / RPC; no public links; server actions log only error
+   codes; database-level immutability as above.
+Trips, assignments, Proof of Service, Core intake and Plus tables are not modified.
+
+======================================================================================================================
+3. FILES
+======================================================================================================================
+New
+  supabase/migrations/20261027100000_core_billing_foundation.sql, 20261027110000_core_billing_rpcs.sql
+  supabase/tests/billing_tests.sql (67 tests), billing_concurrency_test.sh (isolation-guarded)
+  src/lib/billing/billing-core.ts (+ billing-core.test.mjs, 8 tests), src/lib/billing/billing.ts
+  src/app/operations/billing/actions.ts, new/page.tsx, invoices/[invoiceId]/page.tsx
+  src/app/invoice-print/[invoiceId]/page.tsx, src/app/receipt-print/[paymentId]/page.tsx
+  src/components/billing/BillingTables.tsx, NewInvoiceForm.tsx, InvoiceDraftEditor.tsx, InvoiceActions.tsx,
+    TripBillingPanel.tsx, BillingPrintToolbar.tsx
+  tests/e2e/billing/billing.e2e.mjs (50 checks)
+  docs/design/concept-b/reviews/bill-p1/*.png (13 screenshots, fictional data)
+Modified
+  src/app/operations/billing/page.tsx (placeholder replaced)
+  src/app/operations/trips/[tripId]/page.tsx (Billing panel for admins on completed trips)
+  src/lib/operations/nav-core.ts (+test) (Administration → Billing for admins)
+  src/lib/supabase/database.types.ts (regenerated; additive only)
+  src/lib/plus/quotes-print-followup.test.mjs (guard narrowed: billing migrations may READ plus_quotes, never change
+    the quote schema / rows / RPCs)
+  tests/e2e/ui-foundations/p1b.e2e.mjs (sidebar expectation now includes Billing)
+Size: ~1,250 lines SQL migrations, ~2,300 lines app code, ~1,150 lines tests.
+
+======================================================================================================================
+4. TESTS (isolated NemrynS1Iso stack, fictional data; public inquiry switch OFF)
+======================================================================================================================
+Database
+  supabase/tests/billing_tests.sql                       PASS 67 / 67 (rollback-only; 61 + 6 added at PR review, check A)
+    access (anon / dispatcher / driver / other tenant / unauthenticated refused; no direct table writes), R1 rules
+    (completed only, one passenger, one active invoice per trip, bill-to linked), draft edit / discard, issue +
+    numbering + default due date, frozen issued invoices (incl. direct owner UPDATE / DELETE refused), payments
+    (idempotency, stale version, overpayment, dates, methods), void rules, reversals (once, reason, not reversible),
+    append-only ledger (owner UPDATE / DELETE / TRUNCATE refused), audit without names / references, bill-to kinds,
+    quote import (linked only, sent / accepted only, components replace trip lines, works after Plus lapses, new
+    import needs Plus), cross-tenant RLS, trips untouched.
+    (First full-chain run showed 3 failures caused by the test counting audit rows GLOBALLY after the E2E had left
+    audit history; counts are now scoped to each test's own invoice / payment. Re-run: 61 / 61.)
+    PR review check A added F10-F15: requester bill-to only when EVERY trip comes from a request by that same
+    requester (name + phone); trip without a request, another requester, or another organization's request -> refused.
+  supabase/tests/billing_concurrency_test.sh             PASS (ALL PASS)
+    two drafts for one trip -> one; same draft key -> one; five parallel issues -> 1..5 no gaps; two payments from
+    equal forms -> one + ZW003; same payment key -> one row; payment vs void both orders -> exactly one wins; two
+    reversals -> one; S8 (check A) multi-trip requester invoice vs passenger invoice on a shared trip -> one; invariants 0 <= paid <= total, void => 0, one reversal per payment, trips untouched.
+Unit
+  npm test                                               PASS 941 / 941 (incl. billing-core 8, nav-core)
+  npm run test:release                                   PASS 28 / 28
+Browser E2E
+  tests/e2e/billing/billing.e2e.mjs                      PASS 50 / 50
+    sidebar; Ready to invoice; Trip Detail -> Create invoice; trip / bill-to / quote choices; draft edit with
+    half-up rounding preview = server; issue (INV-000001, +15 days); partial payment; double-click recorded once;
+    overpayment refused; Void hidden while paid; reversal + reversed receipt; receipt; pay in full; printable invoice
+    (desktop + 390px); Trip Detail invoice link; duplicate invoicing explained; quote import + discard; "someone
+    else" invoice issued + voided + VOID print; lists / filters / search; 820px layouts; dispatcher and driver
+    denied (sidebar, pages, print, Trip Detail panel); Org B admin gets 404 for Org A invoice / print / receipt;
+    Core-only workspace (no Plus) invoices its own trip (own INV-000001); trips unchanged; audit without PII;
+    axe 0 serious / critical on billing, create, draft, issued, payment dialog, receipt, invoice print, invoices list.
+Regression
+  QA2 strict (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79)   PASS 199
+  Quotes strict (s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26)               PASS 272
+  Inquiries SQL 65 / 65 · Inquiries staff E2E 74 / 74 · public inquiry E2E (switch OFF) 5 / 5
+  Consents E2E PASS · UI foundations p1b 52 / 52 (sidebar expectation updated for Billing)
+Static
+  npx tsc --noEmit PASS · npm run lint 0 errors (113 pre-existing warnings, none from billing) · next build PASS
+
+======================================================================================================================
+5. SCREENSHOTS (docs/design/concept-b/reviews/bill-p1/)
+======================================================================================================================
+  b01 billing ready-to-invoice · b02 create invoice · b03 draft editor · b04 issued invoice · b05 payment dialog
+  (overpayment message) · b06 reverse dialog · b07 reversed receipt · b08 receipt · b09 printable invoice ·
+  b10 Trip Detail billing panel · b11 quote-import draft · b12 invoices list · b13 invoice at 820px
+
+======================================================================================================================
+6. KNOWN LIMITATIONS
+======================================================================================================================
+- One passenger per invoice (R1); facility batch billing deferred.
+- Prices are entered by hand or copied from a Plus quote; no rate cards, tax, credits or refunds (reversal = correction).
+- No email / PDF sending: staff print or save PDF from the browser.
+- Who recorded a payment is not shown in the UI (audit_events keeps the actor).
+- No-show / cancellation fees not invoiceable (completed trips only, D3).
+- No tax-ID field on the invoice header (organizations has none); business name / address / phone / email are used.
+- Dispatchers have no billing access in the MVP (D2).
+- "Collected this month" uses payment received dates (reversals by their recording date).
+
+======================================================================================================================
+7. OUTSTANDING PRODUCTION RELEASE STEPS (not done)
+======================================================================================================================
+1. Owner review; commit on np-bill-p1; PR to main (expected checks: Vercel preview, db-compat, release-db-compat).
+2. Production release of the two migrations through the established process: read-only preflight (head 20261024110000,
+   95 migrations), backup, owner authorization, `supabase db push`, post-migration checks (tables, RLS, grants,
+   triggers, function security), then merge so the UI ships after the schema.
+3. Production verification after the migration: READ-ONLY checks only (tables, RLS policies, grants, triggers, function
+   security definer / search_path, migration head). No invoice is issued and no payment recorded in production as part
+   of the release.
+Financial smoke policy (PR review check B)
+- Full invoice issue, payment, reversal and void testing stays on the isolated stack (SQL suite, concurrency suite,
+  browser E2E), where fictional data can be reset with the whole database.
+- Issued invoices and payment history are never deleted or edited -- not for cleanup, not in tests, not by an owner.
+  No production operation may bypass the immutability / append-only triggers (no session_replication_role, no direct
+  table edits, no trigger disabling).
+- Any later production synthetic test needs separate owner authorization, a specifically designated fictional
+  organization, and leaves its financial records and audit history in place (corrections only by void / reversal).
+- No production smoke testing is performed during the PR phase.
+No production data, deployment or financial collection happened in this phase.

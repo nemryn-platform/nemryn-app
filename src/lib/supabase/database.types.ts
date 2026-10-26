@@ -81,6 +81,360 @@ export type Database = {
           },
         ]
       }
+      billing_invoice_counters: {
+        Row: {
+          next_number: number
+          organization_id: string
+        }
+        Insert: {
+          next_number?: number
+          organization_id: string
+        }
+        Update: {
+          next_number?: number
+          organization_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_invoice_counters_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_invoice_lines: {
+        Row: {
+          amount_cents: number
+          description: string
+          id: string
+          invoice_id: string
+          organization_id: string
+          position: number
+          quantity: number
+          source: string
+          trip_id: string | null
+          unit_cents: number
+        }
+        Insert: {
+          amount_cents: number
+          description: string
+          id?: string
+          invoice_id: string
+          organization_id: string
+          position: number
+          quantity?: number
+          source?: string
+          trip_id?: string | null
+          unit_cents: number
+        }
+        Update: {
+          amount_cents?: number
+          description?: string
+          id?: string
+          invoice_id?: string
+          organization_id?: string
+          position?: number
+          quantity?: number
+          source?: string
+          trip_id?: string | null
+          unit_cents?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_invoice_lines_invoice_fkey"
+            columns: ["invoice_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "billing_invoices"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_invoice_lines_invoice_trip_fkey"
+            columns: ["invoice_id", "trip_id"]
+            isOneToOne: false
+            referencedRelation: "billing_invoice_trips"
+            referencedColumns: ["invoice_id", "trip_id"]
+          },
+          {
+            foreignKeyName: "billing_invoice_lines_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_invoice_trips: {
+        Row: {
+          created_at: string
+          invoice_id: string
+          organization_id: string
+          released_at: string | null
+          trip_id: string
+        }
+        Insert: {
+          created_at?: string
+          invoice_id: string
+          organization_id: string
+          released_at?: string | null
+          trip_id: string
+        }
+        Update: {
+          created_at?: string
+          invoice_id?: string
+          organization_id?: string
+          released_at?: string | null
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_invoice_trips_invoice_fkey"
+            columns: ["invoice_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "billing_invoices"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_invoice_trips_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_invoice_trips_trip_fkey"
+            columns: ["trip_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      billing_invoices: {
+        Row: {
+          bill_to_address: string | null
+          bill_to_email: string | null
+          bill_to_facility_id: string | null
+          bill_to_kind: string
+          bill_to_name: string
+          bill_to_passenger_id: string | null
+          bill_to_phone: string | null
+          bill_to_request_id: string | null
+          created_at: string
+          created_by: string
+          currency: string
+          discount_cents: number
+          due_date: string | null
+          id: string
+          idempotency_key: string
+          invoice_number: number | null
+          issue_date: string | null
+          issued_at: string | null
+          issued_by: string | null
+          organization_id: string
+          passenger_id: string
+          source_quote_id: string | null
+          source_quote_kind: string | null
+          source_quote_number: number | null
+          status: string
+          subtotal_cents: number
+          terms_note: string | null
+          total_cents: number
+          updated_at: string
+          version: number
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
+        }
+        Insert: {
+          bill_to_address?: string | null
+          bill_to_email?: string | null
+          bill_to_facility_id?: string | null
+          bill_to_kind: string
+          bill_to_name: string
+          bill_to_passenger_id?: string | null
+          bill_to_phone?: string | null
+          bill_to_request_id?: string | null
+          created_at?: string
+          created_by: string
+          currency?: string
+          discount_cents?: number
+          due_date?: string | null
+          id?: string
+          idempotency_key: string
+          invoice_number?: number | null
+          issue_date?: string | null
+          issued_at?: string | null
+          issued_by?: string | null
+          organization_id: string
+          passenger_id: string
+          source_quote_id?: string | null
+          source_quote_kind?: string | null
+          source_quote_number?: number | null
+          status?: string
+          subtotal_cents?: number
+          terms_note?: string | null
+          total_cents?: number
+          updated_at?: string
+          version?: number
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
+        }
+        Update: {
+          bill_to_address?: string | null
+          bill_to_email?: string | null
+          bill_to_facility_id?: string | null
+          bill_to_kind?: string
+          bill_to_name?: string
+          bill_to_passenger_id?: string | null
+          bill_to_phone?: string | null
+          bill_to_request_id?: string | null
+          created_at?: string
+          created_by?: string
+          currency?: string
+          discount_cents?: number
+          due_date?: string | null
+          id?: string
+          idempotency_key?: string
+          invoice_number?: number | null
+          issue_date?: string | null
+          issued_at?: string | null
+          issued_by?: string | null
+          organization_id?: string
+          passenger_id?: string
+          source_quote_id?: string | null
+          source_quote_kind?: string | null
+          source_quote_number?: number | null
+          status?: string
+          subtotal_cents?: number
+          terms_note?: string | null
+          total_cents?: number
+          updated_at?: string
+          version?: number
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_invoices_bill_to_facility_fkey"
+            columns: ["bill_to_facility_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "facilities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_invoices_bill_to_passenger_fkey"
+            columns: ["bill_to_passenger_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "passengers"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_invoices_bill_to_request_fkey"
+            columns: ["bill_to_request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_invoices_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_invoices_passenger_fkey"
+            columns: ["passenger_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "passengers"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_invoices_source_quote_fkey"
+            columns: ["source_quote_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_quotes"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      billing_payments: {
+        Row: {
+          amount_cents: number
+          entry_kind: string
+          id: string
+          idempotency_key: string
+          invoice_id: string
+          method: string | null
+          note: string | null
+          organization_id: string
+          reason: string | null
+          received_on: string
+          recorded_at: string
+          recorded_by: string
+          reference: string | null
+          reverses_payment_id: string | null
+        }
+        Insert: {
+          amount_cents: number
+          entry_kind: string
+          id?: string
+          idempotency_key: string
+          invoice_id: string
+          method?: string | null
+          note?: string | null
+          organization_id: string
+          reason?: string | null
+          received_on: string
+          recorded_at?: string
+          recorded_by: string
+          reference?: string | null
+          reverses_payment_id?: string | null
+        }
+        Update: {
+          amount_cents?: number
+          entry_kind?: string
+          id?: string
+          idempotency_key?: string
+          invoice_id?: string
+          method?: string | null
+          note?: string | null
+          organization_id?: string
+          reason?: string | null
+          received_on?: string
+          recorded_at?: string
+          recorded_by?: string
+          reference?: string | null
+          reverses_payment_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_payments_invoice_fkey"
+            columns: ["invoice_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "billing_invoices"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "billing_payments_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_payments_reverses_fkey"
+            columns: ["reverses_payment_id", "invoice_id"]
+            isOneToOne: false
+            referencedRelation: "billing_payments"
+            referencedColumns: ["id", "invoice_id"]
+          },
+        ]
+      }
       driver_invites: {
         Row: {
           accepted_at: string | null
@@ -2808,6 +3162,87 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      _billing_audit: {
+        Args: {
+          p_action: string
+          p_after: Json
+          p_before: Json
+          p_entity_id: string
+          p_entity_type: string
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: undefined
+      }
+      _billing_lock_invoice: {
+        Args: { p_invoice_id: string; p_organization_id: string }
+        Returns: {
+          bill_to_address: string | null
+          bill_to_email: string | null
+          bill_to_facility_id: string | null
+          bill_to_kind: string
+          bill_to_name: string
+          bill_to_passenger_id: string | null
+          bill_to_phone: string | null
+          bill_to_request_id: string | null
+          created_at: string
+          created_by: string
+          currency: string
+          discount_cents: number
+          due_date: string | null
+          id: string
+          idempotency_key: string
+          invoice_number: number | null
+          issue_date: string | null
+          issued_at: string | null
+          issued_by: string | null
+          organization_id: string
+          passenger_id: string
+          source_quote_id: string | null
+          source_quote_kind: string | null
+          source_quote_number: number | null
+          status: string
+          subtotal_cents: number
+          terms_note: string | null
+          total_cents: number
+          updated_at: string
+          version: number
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "billing_invoices"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _billing_org_today: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
+      _billing_paid_cents: { Args: { p_invoice_id: string }; Returns: number }
+      _billing_payment_state: {
+        Args: { p_paid: number; p_status: string; p_total: number }
+        Returns: string
+      }
+      _billing_recompute_totals: {
+        Args: { p_invoice_id: string }
+        Returns: undefined
+      }
+      _billing_require_admin: {
+        Args: { p_organization_id: string }
+        Returns: undefined
+      }
+      _billing_require_key: { Args: { p_key: string }; Returns: string }
+      _billing_trip_line_description: {
+        Args: {
+          p_organization_id: string
+          p_trip: Database["public"]["Tables"]["trips"]["Row"]
+        }
+        Returns: string
+      }
       _create_public_request: {
         Args: {
           p_acquisition?: Json
@@ -3304,6 +3739,233 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "trip_assignment_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_create_invoice_draft: {
+        Args: {
+          p_bill_to_id: string
+          p_bill_to_kind: string
+          p_bill_to_name: string
+          p_idempotency_key: string
+          p_organization_id: string
+          p_source_quote_id: string
+          p_trip_ids: string[]
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_invoice_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_invoice_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_discard_invoice_draft: {
+        Args: {
+          p_expected_version: number
+          p_invoice_id: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_invoice_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_invoice_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_get_invoice: {
+        Args: { p_invoice_id: string; p_organization_id: string }
+        Returns: {
+          balance_cents: number
+          bill_to_address: string
+          bill_to_email: string
+          bill_to_kind: string
+          bill_to_name: string
+          bill_to_phone: string
+          created_at: string
+          currency: string
+          discount_cents: number
+          due_date: string
+          invoice_id: string
+          invoice_number: number
+          is_overdue: boolean
+          issue_date: string
+          issued_at: string
+          paid_cents: number
+          passenger_id: string
+          passenger_name: string
+          payment_state: string
+          source_quote_id: string
+          source_quote_kind: string
+          source_quote_number: number
+          status: string
+          subtotal_cents: number
+          terms_note: string
+          total_cents: number
+          version: number
+          void_reason: string
+          voided_at: string
+        }[]
+      }
+      billing_issue_invoice: {
+        Args: {
+          p_due_date: string
+          p_expected_version: number
+          p_invoice_id: string
+          p_issue_date: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_invoice_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_invoice_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_list_billable_trips: {
+        Args: {
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_passenger_id: string
+        }
+        Returns: {
+          completed_at: string
+          destination_description: string
+          destination_facility_id: string
+          destination_facility_name: string
+          passenger_id: string
+          passenger_name: string
+          pickup_description: string
+          pickup_facility_id: string
+          pickup_facility_name: string
+          request_id: string
+          requester_name: string
+          scheduled_pickup_at: string
+          total_count: number
+          trip_id: string
+        }[]
+      }
+      billing_list_invoices: {
+        Args: {
+          p_filter: string
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_search: string
+        }
+        Returns: {
+          balance_cents: number
+          bill_to_name: string
+          created_at: string
+          due_date: string
+          invoice_id: string
+          invoice_number: number
+          is_overdue: boolean
+          issue_date: string
+          paid_cents: number
+          passenger_name: string
+          payment_state: string
+          status: string
+          total_cents: number
+          total_count: number
+          trip_count: number
+        }[]
+      }
+      billing_record_payment: {
+        Args: {
+          p_amount_cents: number
+          p_expected_version: number
+          p_idempotency_key: string
+          p_invoice_id: string
+          p_method: string
+          p_note: string
+          p_organization_id: string
+          p_received_on: string
+          p_reference: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_payment_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_payment_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_reverse_payment: {
+        Args: {
+          p_expected_version: number
+          p_idempotency_key: string
+          p_organization_id: string
+          p_payment_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_payment_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_payment_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_summary: {
+        Args: { p_organization_id: string }
+        Returns: {
+          collected_this_month_cents: number
+          draft_count: number
+          outstanding_cents: number
+          outstanding_count: number
+          overdue_cents: number
+          overdue_count: number
+          ready_trip_count: number
+        }[]
+      }
+      billing_trip_status: {
+        Args: { p_organization_id: string; p_trip_id: string }
+        Returns: {
+          balance_cents: number
+          billable: boolean
+          invoice_id: string
+          invoice_number: number
+          payment_state: string
+          status: string
+        }[]
+      }
+      billing_update_invoice_draft: {
+        Args: {
+          p_bill_to_address: string
+          p_bill_to_email: string
+          p_bill_to_name: string
+          p_bill_to_phone: string
+          p_discount_cents: number
+          p_expected_version: number
+          p_invoice_id: string
+          p_lines: Json
+          p_organization_id: string
+          p_terms_note: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_invoice_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_invoice_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      billing_void_invoice: {
+        Args: {
+          p_expected_version: number
+          p_invoice_id: string
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_invoice_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_invoice_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -5938,6 +6600,22 @@ export type Database = {
       [_ in never]: never
     }
     CompositeTypes: {
+      billing_invoice_write_result: {
+        invoice_id: string | null
+        invoice_number: number | null
+        status: string | null
+        version: number | null
+        total_cents: number | null
+        changed: boolean | null
+      }
+      billing_payment_write_result: {
+        payment_id: string | null
+        invoice_id: string | null
+        paid_cents: number | null
+        balance_cents: number | null
+        version: number | null
+        changed: boolean | null
+      }
       driver_active_trip_summary: {
         trip_id: string | null
         assignment_id: string | null

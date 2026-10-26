@@ -37,6 +37,8 @@ import { deriveTripExtent, formatTripExtent } from "@/lib/operations/trip-overla
 import { overlapUnavailableView } from "@/components/operations/overlap/OverlapNotes";
 import { TripExceptionsPanel } from "@/components/operations/trip-detail/TripExceptionsPanel";
 import { TripNotesPanel } from "@/components/operations/trip-detail/TripNotesPanel";
+import { TripBillingPanel } from "@/components/billing/TripBillingPanel";
+import { getTripBillingStatus, type TripBillingStatus } from "@/lib/billing/billing";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -122,6 +124,9 @@ export default async function TripDetailPage({
     assignments.map((a) => a.assignedBy).filter((id): id is string => id !== null),
   ).catch(() => new Map<string, string>());
   const attribution = deriveAssignmentAttribution(assignments, viewer?.id ?? null, visibleNames);
+  // NP-BILL-P1: billing status for completed trips, Organization Admins only (billing is admin-only, D2)
+  const showBilling = organization.role === "organization_admin" && trip.state === "completed";
+  const billingStatus: TripBillingStatus | null = showBilling ? await getTripBillingStatus(organization.organizationId, trip.id) : null;
 
   // P1-OPS-PROG4: the planned window (a plan, never a lifecycle fact) and, for a non-terminal trip with a current
   // assignment, the same canonical overlap facts the dialog uses. A failed read shows "Can't fully check" (R1).
@@ -355,6 +360,7 @@ export default async function TripDetailPage({
                 ) : undefined
               }
             />
+            {showBilling && <TripBillingPanel tripId={trip.id} status={billingStatus} />}
             <TripReadinessPanel readiness={readiness} unavailable={readinessUnavailable} />
             <TripDurationPanel
               tripId={trip.id}
