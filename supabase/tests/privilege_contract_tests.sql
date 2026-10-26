@@ -78,7 +78,14 @@ c_tables(tbl) as (values
   ('plus_inquiry_forms'),
   ('plus_inquiries'),
   ('plus_inquiry_public_access'),
-  ('plus_inquiry_rate_limit_events')
+  ('plus_inquiry_rate_limit_events'),
+  -- NP-BILL-P1 Core billing: invoices / trip links / lines / payment ledger (SELECT via RLS for Organization Admins;
+  -- writes through RPCs only); invoice counters (class A: no privilege for any role)
+  ('billing_invoice_counters'),
+  ('billing_invoices'),
+  ('billing_invoice_trips'),
+  ('billing_invoice_lines'),
+  ('billing_payments')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -118,7 +125,11 @@ c_auth_tbl(tbl, priv) as (values
   ('plus_agent_recommendations', 'SELECT'),
   ('plus_request_attributions', 'SELECT'),
   ('plus_quotes', 'SELECT'),
-  ('plus_inquiry_forms', 'SELECT')
+  ('plus_inquiry_forms', 'SELECT'),
+  ('billing_invoices', 'SELECT'),
+  ('billing_invoice_trips', 'SELECT'),
+  ('billing_invoice_lines', 'SELECT'),
+  ('billing_payments', 'SELECT')
 ),
 -- authenticated: COLUMN-level privileges
 c_auth_col(tbl, priv, col) as (values
@@ -455,7 +466,33 @@ c_fn(sig, roles) as (values
   ('plus_count_new_inquiries(uuid)', 'u'),
   ('plus_convert_inquiry(uuid,uuid,integer,text,uuid,boolean,boolean,text,uuid,boolean)', 'u'),
   ('plus_dismiss_inquiry(uuid,uuid,integer,text,text)', 'u'),
-  ('plus_reopen_inquiry(uuid,uuid,integer)', 'u')
+  ('plus_reopen_inquiry(uuid,uuid,integer)', 'u'),
+  -- NP-BILL-P1 Core billing: internal helpers + immutability triggers (owner only); Organization Admin RPCs
+  ('_billing_audit(uuid,text,uuid,text,jsonb,jsonb,text)', ''),
+  ('_billing_invoice_lines_guard()', ''),
+  ('_billing_invoice_trips_guard()', ''),
+  ('_billing_invoices_guard()', ''),
+  ('_billing_lock_invoice(uuid,uuid)', ''),
+  ('_billing_org_today(uuid)', ''),
+  ('_billing_paid_cents(uuid)', ''),
+  ('_billing_payment_state(text,bigint,bigint)', ''),
+  ('_billing_payments_guard()', ''),
+  ('_billing_recompute_totals(uuid)', ''),
+  ('_billing_require_admin(uuid)', ''),
+  ('_billing_require_key(text)', ''),
+  ('_billing_trip_line_description(uuid,trips)', ''),
+  ('billing_create_invoice_draft(uuid,uuid[],text,uuid,text,uuid,text)', 'u'),
+  ('billing_discard_invoice_draft(uuid,uuid,integer)', 'u'),
+  ('billing_get_invoice(uuid,uuid)', 'u'),
+  ('billing_issue_invoice(uuid,uuid,integer,date,date)', 'u'),
+  ('billing_list_billable_trips(uuid,uuid,integer,integer)', 'u'),
+  ('billing_list_invoices(uuid,text,text,integer,integer)', 'u'),
+  ('billing_record_payment(uuid,uuid,integer,bigint,date,text,text,text,text)', 'u'),
+  ('billing_reverse_payment(uuid,uuid,integer,text,text)', 'u'),
+  ('billing_summary(uuid)', 'u'),
+  ('billing_trip_status(uuid,uuid)', 'u'),
+  ('billing_update_invoice_draft(uuid,uuid,integer,text,text,text,text,jsonb,bigint,text)', 'u'),
+  ('billing_void_invoice(uuid,uuid,integer,text)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required
