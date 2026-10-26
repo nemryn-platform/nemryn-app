@@ -71,6 +71,9 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const filtered = Boolean(params.search) || params.status !== "new";
   const pages = list ? Math.max(1, Math.ceil(list.total / INQUIRIES_PAGE_SIZE)) : 1;
   const pastEnd = list !== null && list.rows.length === 0 && params.page > 1;
+  // NP-P2-S7-D: the default (New) and All views without a search share the "nothing yet" copy; it never says the public
+  // form is live -- that depends on Nemryn's activation, explained in Settings.
+  const unfilteredEmpty = !params.search && (params.status === "new" || params.status === "all");
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -128,10 +131,10 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
         <Panel surface="raised" padding="none" data-testid="inquiries-empty">
           <EmptyState
             icon={<ChatCircleText className="size-6" aria-hidden />}
-            title={params.search ? "No inquiries match this search." : params.status === "new" ? "No new inquiries." : "No inquiries here."}
+            title={unfilteredEmpty ? "No inquiries yet" : params.search ? "No inquiries match this search." : "No inquiries here."}
             description={
-              params.status === "new" && !params.search
-                ? "New questions from your website inquiry form appear here. Set the form up in Settings → Nemryn Plus."
+              unfilteredEmpty
+                ? "Questions submitted through your inquiry form will appear here. Manage your form in Settings → Nemryn Plus."
                 : "Change the search or status to see other inquiries."
             }
             action={

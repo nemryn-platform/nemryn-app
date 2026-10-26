@@ -4,6 +4,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { operationsTripStatusLabel } from "./presentation";
 import { operationsEventLabel } from "./presentation";
 import { completionRecordOf, type CompletionRecord } from "./trip-completion-core";
+import { displayAssignmentOf } from "./trip-assignment-display-core";
 
 /**
  * Server-side data access boundary for Operations Trip Detail (P1-E3-S6,
@@ -87,6 +88,7 @@ type RequesterRelation = RequesterEmbed | RequesterEmbed[] | null;
 
 interface AssignmentEmbed {
   id: string;
+  organization_id: string;
   ended_at: string | null;
   assigned_by: string | null;
   assigned_at: string;
@@ -192,6 +194,13 @@ export interface TripDetailData {
   driverPhone: string | null;
   vehicleId: string | null;
   vehicleLabel: string | null;
+  /**
+   * NP-P2-S7-D (D-1): the driver / vehicle the summary strip shows -- the active assignment, or for a completed trip the
+   * most recently ended one (who drove). Display only; every assignment control keeps using the active-assignment
+   * fields above.
+   */
+  summaryDriverName: string | null;
+  summaryVehicleLabel: string | null;
   /** Read-only — see DRIVER_NEXT_ACTION_LABEL's own doc comment. Null once terminal (nothing left to progress). */
   driverNextActionLabel: string | null;
 }
@@ -239,7 +248,7 @@ const TRIP_COLUMNS =
   "transportation_requests!trips_request_id_organization_id_fkey(requester_name, requester_relationship, requester_phone, requester_email), " +
   "pickup_facility:facilities!trips_pickup_facility_id_organization_id_fkey(name, city, state), " +
   "destination_facility:facilities!trips_destination_facility_id_organization_id_fkey(name, city, state), " +
-  "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, ended_at, assigned_by, assigned_at, end_reason, " +
+  "trip_assignments!trip_assignments_trip_id_organization_id_fkey(id, organization_id, ended_at, assigned_by, assigned_at, end_reason, " +
   "drivers!trip_assignments_driver_id_organization_id_fkey(id, display_name, phone), " +
   "vehicles!trip_assignments_vehicle_id_organization_id_fkey(id, label))";
 
@@ -297,6 +306,11 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
   const activeAssignment = (tripRow.trip_assignments ?? []).find((a) => a.ended_at === null) ?? null;
   const driver = unwrapOne(activeAssignment?.drivers);
   const vehicle = unwrapOne(activeAssignment?.vehicles);
+  const summaryAssignment = displayAssignmentOf(
+    (tripRow.trip_assignments ?? []).map((a) => ({ ...a, organizationId: a.organization_id, endedAt: a.ended_at, assignedAt: a.assigned_at })),
+    tripRow.state,
+    organizationId,
+  );
   const passenger = unwrapOne(tripRow.passengers);
   const requester = unwrapOne(tripRow.transportation_requests);
   const pickupFacility = unwrapOne(tripRow.pickup_facility);
@@ -349,6 +363,8 @@ export async function getTripDetail(tripId: string, organizationId: string): Pro
     driverPhone: driver?.phone ?? null,
     vehicleId: vehicle?.id ?? null,
     vehicleLabel: vehicle?.label ?? null,
+    summaryDriverName: unwrapOne(summaryAssignment?.drivers)?.display_name ?? null,
+    summaryVehicleLabel: unwrapOne(summaryAssignment?.vehicles)?.label ?? null,
     driverNextActionLabel: DRIVER_NEXT_ACTION_LABEL[tripRow.state] ?? null,
   };
 

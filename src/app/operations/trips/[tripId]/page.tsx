@@ -250,8 +250,8 @@ export default async function TripDetailPage({
           facts={tripSummaryFacts({
             scheduledPickupAt: trip.scheduledPickupAt,
             appointmentAt: trip.appointmentAt,
-            driverName: trip.driverName,
-            vehicleLabel: trip.vehicleLabel,
+            driverName: trip.summaryDriverName,
+            vehicleLabel: trip.summaryVehicleLabel,
             timezone,
           })}
         >
