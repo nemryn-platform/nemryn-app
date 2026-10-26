@@ -1,0 +1,224 @@
+NEMRYN — NP-P2-S7C IMPLEMENTATION — Growth Inquiry Management & Conversion
+Date: 2026-10-26
+Branch: np-p2-s7c-inquiry-management (from main 9b3af1b, which includes PR #38 / S7-B, merged 2026-10-26T04:55Z)
+State: implemented and tested locally. NOT committed, NOT pushed, NOT merged. Waiting for owner review.
+
+VERDICT: PASS — all S7-C acceptance areas implemented; all listed checks pass; awaiting owner review
+
+======================================================================================================================
+1. SCOPE AND RESTRICTIONS (as briefed)
+======================================================================================================================
+Implemented the approved S7-C design on the S7-A database contract (production head 20261024110000, 95 migrations).
+No new migration, RPC or schema change. Every write goes through the existing S7-A RPCs with the ordinary
+per-request cookie client (never service role), so the database re-checks membership, the named grant, entitlement,
+organization, version and state on every call.
+
+Restrictions observed:
+- No production migration or production data change. Nothing was run against production.
+- No production public activation: PLUS_INQUIRY_SUBMISSIONS not set anywhere; production allowlist untouched (empty).
+- No real customer submission: all testing used the isolated NemrynS1Iso stack and fictional seed identities.
+- No git commit / push / merge. No deployment-gate change. No unrelated features or infrastructure.
+
+======================================================================================================================
+2. CHANGED FILES
+======================================================================================================================
+New
+  src/lib/plus/inquiries-core.ts                         pure rules: labels, list params, consent / skip wording,
+                                                         error text, form validation, link + embed snippet builders,
+                                                         default opportunity title, match-on wording (import-free)
+  src/lib/plus/inquiries-core.test.mjs                   unit tests (12)
+  src/lib/plus/inquiries.ts                              server-only reads (list, get, duplicate hints, new count,
+                                                         form settings)
+  src/app/operations/growth/inquiries/page.tsx           Growth -> Inquiries list
+  src/app/operations/growth/inquiries/[inquiryId]/page.tsx   inquiry detail
+  src/app/operations/growth/inquiries/actions.ts         convert / dismiss / reopen server actions
+  src/components/growth/InquiriesTable.tsx               list table (DataTable navigableRows)
+  src/components/growth/InquiryActions.tsx               Convert / Dismiss dialogs, Reopen
+  src/components/operations/settings/InquiryFormSection.tsx  Settings -> Nemryn Plus -> Inquiry form
+  tests/e2e/plus-inquiries/staff.e2e.mjs                 staff browser + SQL E2E (74 checks)
+  docs/design/concept-b/reviews/s7c/*.png                8 screenshots
+  docs/reports/NP-P2-S7C-implementation.txt              this report
+
+Modified
+  src/lib/plus/growth-nav-core.ts (+ .test.mjs)          "Inquiries" child after Dashboard
+  src/design/icons.ts                                    navIcons.inquiries (ChatCircleText)
+  src/components/operations/GrowthNavGroup.tsx           new-inquiry badge (list + flyout), rail dot + aria-label
+  src/components/operations/OperationsSidebar.tsx        passes newInquiryCount
+  src/components/operations/OperationsLayoutClient.tsx   passes newInquiryCount
+  src/app/operations/layout.tsx                          reads plus_count_new_inquiries when Growth is visible
+  src/lib/operations/nav-core.ts (+ .test.mjs)           header context "Growth > Inquiries"
+  src/app/operations/settings/plus/page.tsx              Inquiry form section
+  src/app/operations/settings/plus/actions.ts            inquiryFormAction (save / publish / disable)
+  src/lib/plus/consents-core.ts                          web_form label "Website inquiry form"; "enquiry" -> "inquiry"
+  tests/e2e/plus-quotes/s3a-directory.e2e.mjs            Growth menu expectation includes Inquiries
+  tests/e2e/ui-foundations/p1b.e2e.mjs                   Growth menu expectation includes Inquiries
+
+======================================================================================================================
+3. IMPLEMENTATION
+======================================================================================================================
+3.1 Navigation (Phase 1)
+- Growth children: Dashboard, Inquiries, Pipeline, Contacts, Estimates & Quotes, Tasks. Active state for the
+  sub-tree; context header shows "Growth > Inquiries".
+- Badge: the layout calls plus_count_new_inquiries only when Growth is visible (request-cached). A visible number
+  (99+ cap) plus screen-reader text "N new"; in the icon rail a dot plus aria-label "Growth, N new inquiries".
+  Any read failure shows no badge (never an error page). Conversions / dismissals revalidate the /operations layout,
+  so the count updates immediately.
+
+3.2 Inquiries list
+- plus_list_inquiries: status filter New (default) / Converted / Dismissed / All, search (name, phone, email,
+  max 200 chars), 25 per page with Previous / Next, total count. Malformed URL parameters fall back to defaults.
+- Columns: From (name + phone / email; the row link), About, Service, Received (workspace timezone), Status
+  (badge; dismissed rows show the reason). Whole row opens the inquiry (DataTable navigableRows, keyboard link).
+- Loading via server render; error state with Retry; empty states for "no new inquiries" (points to Settings) and
+  for filters; past-the-end page message. Container-query filter layout (same pattern as Quotes).
+
+3.3 Inquiry detail
+- plus_get_inquiry; unknown, foreign and malformed ids render the same not-found (no existence oracle).
+- Panels: Status (new / converted with contact + opportunity links and who / when / dismissed with reason, note,
+  who / when); What they sent (all submitted fields; question kept verbatim); "Communication boxes on the form"
+  ("Ticked: …" / "Not ticked: … (no permission given)" plus a note that a tick becomes consent only on conversion and
+  an unticked box is never permission); Possible matches (plus_list_inquiry_duplicate_hints: contacts and other new
+  inquiries, "hints only, nothing is merged"); How they found you (UTM / page / referrer, shown only when present).
+- Actions in the page header: Convert + Dismiss (status new), Reopen (status dismissed). Read-only viewers (READ
+  grant, read_only workspace) see "View only" and no controls; the RPCs refuse them anyway (ZW001).
+
+3.4 Conversion (Phase 2) — plus_convert_inquiry
+- Dialog: "Create a new contact" or "Link to an existing contact". Link targets are the matching ACTIVE contacts
+  from the duplicate hints (enriched server-side with Do not contact and blank fields); link is preselected when a
+  match exists and disabled when none does.
+- Fill blanks: offered only when the chosen contact lacks a phone / email the inquiry has; fills empty fields only.
+- Duplicate rule: "create" with a possible duplicate returns possible_duplicates; nothing is written; the dialog
+  explains and the button becomes "Create a new contact anyway" (confirm flag) — or staff switch to Link.
+- Do not contact: choosing a DNC contact shows a critical warning and a required "I've read this warning" checkbox;
+  Convert stays disabled until ticked; the server refuses without it (ZW004 do_not_contact_acknowledgement_required).
+  No consent is recorded for a DNC contact and DNC stays on.
+- Consent: the browser sends NO consent values. The dialog explains in advance which ticked purposes will be recorded
+  (email + phone given, matching the contact, never SMS) or that none will. The success panel reports the count
+  recorded and explains every skipped pair in plain words (consent_skipped). An unticked box is never permission.
+- Opportunity title optional; the placeholder is exactly the RPC's default title. Owner left unassigned (null).
+- Concurrency / staleness: expected_version is the inquiry version shown; a stale dialog gets "Someone else changed
+  this just now. Reload…"; nothing is written. Converted is final.
+- Never creates a Core Request (verified: Requests / Passengers / Trips / notifications unchanged in every run).
+- Success: explicit message, consent notes, links to the opportunity and the contact; Done refreshes the page.
+
+3.5 Dismiss / reopen
+- Reasons: Spam, Duplicate, Not relevant, Outside our service area, Other (note required for Other; max 500,
+  "don't include medical details"). Reopen returns a dismissed inquiry to New. Both version-checked.
+
+3.6 Settings -> Nemryn Plus -> Inquiry form (Phase 3)
+- Shown to Organization Admins while Plus is write or read_only (same visibility as Team access); editable only in
+  write. Fields: headline (1-120, required), introduction (<= 500), services = checkboxes over the workspace's
+  current offerings (service_options; never airport). Server validation re-reads the allowed services server-side.
+- Buttons: Create draft / Save draft; Publish (draft or disabled); Turn off (published). Saving a PUBLISHED form asks
+  for confirmation first ("changes show on your website as soon as you save"), per the S7-A contract.
+- Activation: when either gate is off the section says "Public inquiries aren't turned on yet" and lists both
+  states — "This workspace: not turned on yet / turned on by Nemryn" (DB allowlist, read-only) and "Nemryn servers:
+  not accepting / accepting public inquiries" (PLUS_INQUIRY_SUBMISSIONS, read-only). Publishing without the
+  allowlist is refused by the database (ZW004 public_access_not_enabled) and explained in plain words. Neither gate
+  can be changed from the app.
+- Share: for published / disabled forms, the hosted link (origin/inquiry/<key>) and the copyable embed snippet
+  (div data-nemryn-inquiry-form + /embed/inquiry-form.js), each with a Copy button.
+- Robustness: getAppOrigin() throws by design on a misconfigured origin. That is caught: the page keeps working and
+  the share area says the link can't be shown right now (seen on the local production build, whose origin is
+  loopback).
+
+3.7 Wording (Phase 4)
+- Communication preferences: captured_via web_form now reads "Website inquiry form"; follow-up purpose text says
+  "inquiry" (no "enquiry" remains in src/ or public/). Core "Website form" activity strings (Core request form) left
+  unchanged on purpose.
+- Concept B components only (PageHeader, Panel, SectionHeader, DefinitionList, DataTable, StatusBadge, Dialog,
+  AttentionState, EmptyState, Brand Lock v2 tokens). No approved page was redesigned.
+
+======================================================================================================================
+4. TESTS
+======================================================================================================================
+All runs on the isolated stack (NemrynS1Iso + `next start -p 3100`, production build), fictional seed data only.
+
+Static / unit
+  npx tsc --noEmit                                       PASS (clean)
+  npm run lint                                           PASS (0 errors; no new warnings in S7-C files)
+  npm test (node --test src/**/*.test.mjs)               PASS 926 / 926 (incl. inquiries-core 12, growth-nav-core,
+                                                         nav-core)
+  npm run test:release                                   PASS 28 / 28
+  next build                                             PASS (routes /operations/growth/inquiries[/id] present)
+
+Database (S7-A, unchanged)
+  supabase/tests/plus_inquiries_tests.sql                PASS (failures = 0 of 65)
+  supabase/tests/plus_inquiries_concurrency_test.sh      PASS (ALL PASS)
+
+New staff E2E — tests/e2e/plus-inquiries/staff.e2e.mjs  PASS 74 / 74 (app WITHOUT PLUS_INQUIRY_SUBMISSIONS)
+  Navigation: Inquiries after Dashboard, badge number + "N new" text, aria-current, rail dot + aria-label, header.
+  List: default New, newest first, search, empty state, malformed params, keyboard row link, 820px no h-scroll,
+        Converted / All filters.
+  Detail: all submitted fields, consent ticks wording, acquisition, hints, foreign / unknown / malformed id -> same
+        not-found.
+  Convert create: contact + ONE private-pay opportunity (new_inquiry, web_inquiry, DB default title) linked to the
+        inquiry; consent ONLY for the ticked purpose (email + voice, web_form), never marketing-unticked or SMS;
+        success feedback + links; badge decrements; contact shows "Website inquiry form"; re-convert refused (ZW003).
+  Convert link: match preselected, fill blanks fills only the empty phone, email kept, custom title; consent for
+        both ticked purposes; no second contact.
+  DNC: warning + Convert disabled until acknowledged; server refuses without ack (ZW004
+        do_not_contact_acknowledgement_required); converted with NO consent, 4 skipped pairs explained, DNC stays on.
+  Duplicate on create: warning, nothing written, "Create a new contact anyway" -> new contact, never merged.
+  Stale / concurrency: stale dialog refused with "Reload"; 3 parallel conversions -> exactly 1 succeeds, 2 ZW003,
+        ONE opportunity, ONE contact.
+  Dismiss / reopen: note required for Other, reason + note stored, Reopen -> New, stale dismiss refused (ZW003).
+  Roles: Dispatcher without grant -> no Growth; READ grant -> View only + RPC ZW001; WRITE grant -> actions;
+        Dispatcher can't open Settings; read_only workspace -> View only + RPC ZW001.
+  Cross-tenant: Org B sees only its own inquiry, Org A id -> not found, RPC ZW002, badge counts Org B only.
+  Settings: activation explanation (both gates), share fallback, services = offerings, confirm before saving a
+        published form, config_version incremented, empty headline rejected, Turn off, Publish refused without
+        allowlist (plain text), allowlist never changed by the app, public config 404 with switch off, publish with
+        local allowlist, read_only -> view only, 820px no h-scroll.
+  Core: Requests / Passengers / Trips / notifications unchanged throughout.
+  axe: list, detail, convert dialog, dismiss dialog, settings — 0 serious / critical.
+
+Regression
+  S7-B public E2E, switch OFF                            PASS 5 / 5
+  S7-B public E2E, switch ON (local only)                PASS 28 / 28 (server stopped afterwards)
+  QA2 strict (core-requests, core-trips-dispatch, core-records, growth, auth-access)   PASS all 5 suites (199 checks)
+  Quotes strict (s2, s3a, s3b, s3c, o1, s4-integrated, s4-a11y)                       PASS all suites
+        s3a first failed 1 check (N1) only because it pinned the old Growth menu; expectation updated to include
+        Inquiries (approved order) and s3a re-run: 31 / 31.
+  Consents E2E (S6-B)                                    PASS 49 / 49
+  UI foundations p1b                                     PASS (S4 Growth menu expectation updated the same way)
+
+Test files updated for the approved menu change: tests/e2e/plus-quotes/s3a-directory.e2e.mjs,
+tests/e2e/ui-foundations/p1b.e2e.mjs (expected Growth children now include Inquiries after Dashboard).
+
+======================================================================================================================
+5. SCREENSHOTS (docs/design/concept-b/reviews/s7c/, fictional data, isolated stack)
+======================================================================================================================
+  s7c-inquiries-list-1440.png      list, New filter, nav badge
+  s7c-inquiries-list-820.png       icon rail with the badge dot
+  s7c-inquiry-detail-1440.png      detail: what they sent, consent ticks, matches, acquisition
+  s7c-convert-dialog.png           convert (create) dialog with the consent explanation
+  s7c-convert-dnc.png              link to a Do not contact contact: warning + required acknowledgement
+  s7c-convert-success.png          success with consent notes and links
+  s7c-inquiry-dismissed.png        dismissed state with reason, note and Reopen
+  s7c-settings-inquiry-form.png    Settings inquiry form, activation explanation, share fallback
+  s7c-settings-share-dev.png       Settings share area with a configured origin (PR-prep verification, dev mode)
+  s7c-embed-on-customer-page-dev.png  embed snippet on a separate-origin page (PR-prep verification, dev mode)
+
+======================================================================================================================
+6. LIMITATIONS / NOTES FOR REVIEW
+======================================================================================================================
+- No owner selection in the convert dialog: the opportunity is created unowned (existing rules); it can be assigned
+  in the Pipeline. Kept out to stay within the approved design.
+- Link targets are limited to the duplicate-hint contacts (max 5, matching name / phone / email). Linking to an
+  unrelated contact would need a contact picker; not in the approved design.
+- Hosted link / embed snippet: the local `next start` production build refuses a loopback origin by design, so the
+  E2E above exercises the fallback. Verified separately at PR preparation on `next dev` with the configured origin
+  (isolated stack, local switch only): Settings link + snippet correct, hosted link opens the form, snippet on a
+  separate-origin page injects the embed iframe (see docs/reports/NP-P2-S7C-pr-handoff.txt).
+- Pre-existing (not changed): the Core "Use a Nemryn form" settings page calls getAppOrigin() without a fallback and
+  would fail the same way on a loopback production build.
+- The new-inquiry count is one extra RPC per /operations layout render, only for people who can see Growth.
+- Public activation remains OFF in production (no env var, empty allowlist). Turning it on is a separate, owner-
+  approved release step.
+
+======================================================================================================================
+7. NEXT STEP
+======================================================================================================================
+STOP for owner review. On approval: commit on np-p2-s7c-inquiry-management, open a PR (no migration in this
+slice), merge per the usual release process. No database release is needed.

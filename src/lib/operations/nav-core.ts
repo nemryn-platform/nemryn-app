@@ -93,6 +93,7 @@ export function isNavItemActive(href: string, pathname: string): boolean {
 const OTHER_CONTEXT: { prefix: string; section: string; label: string }[] = [
   { prefix: "/operations/proof-of-service", section: "Today", label: "Proof of Service" },
   { prefix: "/operations/growth/agent", section: "Growth", label: "Growth Agent" },
+  { prefix: "/operations/growth/inquiries", section: "Growth", label: "Inquiries" },
   { prefix: "/operations/growth/pipeline", section: "Growth", label: "Pipeline" },
   { prefix: "/operations/growth/contacts", section: "Growth", label: "Contacts" },
   { prefix: "/operations/growth/quotes", section: "Growth", label: "Estimates & Quotes" },

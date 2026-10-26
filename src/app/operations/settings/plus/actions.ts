@@ -10,6 +10,8 @@ import {
   teamAccessErrorMessage,
   validateTeamChangeInput,
 } from "@/lib/plus/team-access-core";
+import { inquiryErrorMessage, validateInquiryFormSettings } from "@/lib/plus/inquiries-core";
+import { InquiriesError, getInquiryFormSettings } from "@/lib/plus/inquiries";
 
 export interface PlusTeamActionState {
   status: "idle" | "success" | "error";
@@ -74,4 +76,65 @@ export async function changePlusTeamAccessAction(_prev: PlusTeamActionState, for
     status: "success",
     message: input.change === "none" ? "Nemryn Plus access removed." : `Nemryn Plus access set to ${plusAccessLabel(input.change).toLowerCase()}.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Settings -> Nemryn Plus -> Inquiry form (NP-P2-S7-C)
+// ---------------------------------------------------------------------------
+
+export interface InquiryFormActionState {
+  status: "idle" | "success" | "error";
+  message?: string;
+  fieldErrors?: { headline?: string; introText?: string; services?: string };
+}
+
+/**
+ * Save / publish / disable the organization's public inquiry form. Organization Admin only (re-derived here) and the
+ * form must have been rendered for the CURRENT session workspace; the S7-A RPCs re-check admin + Plus write, the
+ * version (ZW003) and the services. Publishing additionally needs Nemryn's per-organization activation (ZW004
+ * public_access_not_enabled otherwise) -- and public submissions also need the PLUS_INQUIRY_SUBMISSIONS server switch.
+ * Neither gate can be changed from here.
+ */
+export async function inquiryFormAction(_prev: InquiryFormActionState, formData: FormData): Promise<InquiryFormActionState> {
+  const pathname = await getCurrentPathname(PAGE);
+  const organization = await requireOrganizationAdminAccess(pathname);
+  if (formData.get("organizationId") !== organization.organizationId) {
+    return { status: "error", message: TEAM_ACCESS_WRONG_ORGANIZATION_MESSAGE };
+  }
+  const intent = formData.get("intent");
+  const rawVersion = formData.get("expectedVersion");
+  const version = typeof rawVersion === "string" && rawVersion !== "" ? Number.parseInt(rawVersion, 10) : null;
+  if (version !== null && (!Number.isInteger(version) || version < 1)) return { status: "error", message: inquiryErrorMessage("ZW006") };
+
+  const supabase = await createServerSupabaseClient();
+  if (intent === "save") {
+    let allowed: string[];
+    try {
+      allowed = (await getInquiryFormSettings(organization.organizationId)).serviceOptions;
+    } catch (e) {
+      return { status: "error", message: inquiryErrorMessage(e instanceof InquiriesError ? e.code : undefined) };
+    }
+    const input = validateInquiryFormSettings({ headline: formData.get("headline"), introText: formData.get("introText"), services: formData.getAll("services") }, allowed);
+    if (!input.ok) return { status: "error", message: "Check the highlighted fields.", fieldErrors: input.errors };
+    const { data, error } = await supabase.rpc("plus_save_inquiry_form", {
+      p_organization_id: organization.organizationId,
+      p_headline: input.value.headline,
+      p_intro_text: input.value.introText as string,
+      p_offered_service_types: input.value.services,
+      p_expected_version: version as number,
+    });
+    if (error || !data) return { status: "error", message: inquiryErrorMessage(error?.code, error?.message) };
+    revalidatePath(PAGE);
+    return { status: "success", message: data.changed ? (data.status === "published" ? "Saved. The live form now shows these changes." : "Saved.") : "No changes to save." };
+  }
+  if (intent !== "publish" && intent !== "disable") return { status: "error", message: inquiryErrorMessage("ZW006") };
+  if (version === null) return { status: "error", message: "Save the form first." };
+  const { data, error } =
+    intent === "publish"
+      ? await supabase.rpc("plus_publish_inquiry_form", { p_organization_id: organization.organizationId, p_expected_version: version })
+      : await supabase.rpc("plus_disable_inquiry_form", { p_organization_id: organization.organizationId, p_expected_version: version });
+  if (error || !data) return { status: "error", message: inquiryErrorMessage(error?.code, error?.message) };
+  revalidatePath(PAGE);
+  if (!data.changed) return { status: "success", message: intent === "publish" ? "The form is already published." : "The form is already turned off." };
+  return { status: "success", message: intent === "publish" ? "Published." : "The form is turned off. Its link and website code now show that it isn't available." };
 }

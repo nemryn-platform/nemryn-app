@@ -10,6 +10,16 @@ import { GROWTH_CHILDREN, GROWTH_ROOT, isGrowthChildActive, isGrowthRoute } from
 
 import { navItemActive as itemActive, navItemBase as itemBase, navItemIdle as itemIdle } from "@/components/operations/nav-styles";
 
+/** NP-P2-S7-C: the NEW website-inquiry count beside Inquiries. Visible number + a screen-reader phrase ("3 new"). */
+function NewCountBadge({ count }: { count: number }) {
+  return (
+    <span className={cn(typography.metadata, "ml-auto rounded-full bg-chrome-item-active-marker px-1.5 py-px font-semibold leading-4 text-chrome-background tabular-nums")} data-testid="growth-nav-inquiries-badge">
+      <span aria-hidden>{count > 99 ? "99+" : count}</span>
+      <span className="sr-only">{`${count} new`}</span>
+    </span>
+  );
+}
+
 /**
  * NP-P2-S2: the Growth group of the EXISTING Operations sidebar (no second sidebar or shell). Rendered only when the
  * server authorized Growth for this person (canAccessGrowth) -- every Growth route and every database call still
@@ -24,7 +34,8 @@ import { navItemActive as itemActive, navItemBase as itemBase, navItemIdle as it
  * fixed-position flyout of the same links (keyboard: Enter / Space opens and focuses the first link, Escape closes and
  * returns focus, Tab out or an outside click closes). Never hover-only, never a dead icon.
  */
-export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; collapsed: boolean }) {
+export function GrowthNavGroup({ pathname, collapsed, newInquiryCount = null }: { pathname: string; collapsed: boolean; newInquiryCount?: number | null }) {
+  const badge = (key: string) => (key === "inquiries" && newInquiryCount !== null && newInquiryCount > 0 ? <NewCountBadge count={newInquiryCount} /> : null);
   const onGrowth = isGrowthRoute(pathname);
   const [open, setOpen] = useState(onGrowth);
   const [flyout, setFlyout] = useState(false);
@@ -118,6 +129,7 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
                   data-testid="growth-nav-child"
                 >
                   <span>{c.label}</span>
+                  {badge(c.key)}
                 </Link>
               </li>
             );
@@ -133,12 +145,13 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
           onClick={() => (flyout ? closeFlyout(false) : openFlyout())}
           aria-expanded={flyout}
           aria-controls={flyoutId}
-          aria-label="Growth"
+          aria-label={newInquiryCount ? `Growth, ${newInquiryCount} new ${newInquiryCount === 1 ? "inquiry" : "inquiries"}` : "Growth"}
           data-nav-label="Growth"
           className={cn(typography.bodySmall, itemBase, "w-full justify-center", onGrowth ? itemActive : itemIdle)}
           data-testid="growth-nav-rail-button"
         >
           <GrowthIcon className="size-5 shrink-0" weight={onGrowth ? "fill" : "regular"} aria-hidden />
+          {newInquiryCount ? <span className="absolute right-2 top-1.5 size-2 rounded-full bg-chrome-item-active-marker" aria-hidden data-testid="growth-nav-rail-dot" /> : null}
         </button>
         {flyout && flyoutPos && (
           <div
@@ -169,6 +182,7 @@ export function GrowthNavGroup({ pathname, collapsed }: { pathname: string; coll
                     >
                       <Icon className="size-4 shrink-0" aria-hidden />
                       <span>{c.label}</span>
+                      {badge(c.key)}
                     </Link>
                   </li>
                 );

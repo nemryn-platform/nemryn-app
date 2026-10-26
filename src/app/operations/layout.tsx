@@ -7,6 +7,7 @@ import { getActiveMemberships } from "@/lib/auth/membership";
 import { getOperatorLinkedDriverId } from "@/lib/operations/assignment-context";
 import { OperationsLayoutClient } from "@/components/operations/OperationsLayoutClient";
 import { getPlusAccessState } from "@/lib/plus/access";
+import { countNewInquiries } from "@/lib/plus/inquiries";
 import { canOpenGrowth } from "@/lib/plus/access-core";
 
 /**
@@ -54,6 +55,9 @@ export default async function OperationsLayout({ children }: { children: ReactNo
   // database re-checks independently.
   const plus = await getPlusAccessState(organization.organizationId);
   const canAccessGrowth = canOpenGrowth(plus.state, plus.capability);
+  // NP-P2-S7-C: the NEW website-inquiry count beside Growth -> Inquiries (Plus READ, re-checked in the database). A
+  // failed read shows no badge -- never an error page.
+  const newInquiryCount = canAccessGrowth ? await countNewInquiries(organization.organizationId) : null;
 
   return (
     <OperationsLayoutClient
@@ -63,6 +67,7 @@ export default async function OperationsLayout({ children }: { children: ReactNo
       hasMultipleOrganizations={hasMultipleOrganizations}
       hasLinkedDriverProfile={hasLinkedDriverProfile}
       canAccessGrowth={canAccessGrowth}
+      newInquiryCount={newInquiryCount}
     >
       {children}
     </OperationsLayoutClient>
