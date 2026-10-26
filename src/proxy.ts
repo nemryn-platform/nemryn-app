@@ -22,7 +22,9 @@ import { isRequestFormHost, resolveRequestDomainRoute } from "@/lib/operations/w
  */
 
 // Public / static paths that never need a session refresh on the app host (the previous matcher exclusions, unchanged).
-const NO_SESSION_PATH = /^\/(?:sw\.js$|driver\.webmanifest$|api\/ping$|offline$|request\/|embed\/|api\/public-forms\/)/;
+// NP-P2-S7-B adds the public Plus inquiry form and its API (`embed/` already covers /embed/inquiry and its loader). The
+// request-form host allowlist (resolveRequestDomainRoute) is NOT changed: inquiry pages are app-host only (ZD-256).
+const NO_SESSION_PATH = /^\/(?:sw\.js$|driver\.webmanifest$|api\/ping$|offline$|request\/|embed\/|api\/public-forms\/|inquiry\/|api\/plus-inquiries\/)/;
 
 // The same response headers the app host sets for /request/* in next.config.ts. Header rules match the INCOMING path, so a
 // rewritten /<publicKey> would not inherit them: they are applied here explicitly.

@@ -25,21 +25,30 @@ import type { Database } from "./database.types";
  * value bypasses Row Level Security ENTIRELY for anything it is used to
  * call.
  *
- * THE ONLY CALLER of `createServiceRoleSupabaseClient()` in this entire
- * codebase is `src/lib/public-intake/website-intake.ts`, and it is used
- * there to call ONLY two functions:
- * `check_and_record_public_intake_rate_limit` and
- * `submit_public_transportation_request` — both now restricted to
- * `service_role` by
- * supabase/migrations/20260919120000_public_intake_ingress_hardening.sql,
- * closing the direct-anon-RPC bypass P1-PILOT-S4A's own report flagged.
- * This is deliberately NOT a generic "admin database helper" — nothing
- * in this codebase uses this client for a raw table read/write, a
- * different RPC, or any purpose beyond those two calls. Every protection
- * those two functions enforce (tenant resolution, field bounds,
- * idempotency, rate limits, no-auto-Passenger, no-auto-Trip,
- * cross-tenant integrity) lives entirely inside the functions themselves
- * — this client is not, and must never become, a way to bypass that
+ * THE COMPLETE LIST of callers of `createServiceRoleSupabaseClient()`
+ * (corrected in NP-P2-S7-B; the earlier "only caller" text had become
+ * stale -- finding A01 / A02R A6). Each calls ONLY these service_role
+ * functions / reads:
+ *  - src/lib/public-intake/website-intake.ts:
+ *    `submit_public_transportation_request`
+ *  - src/lib/public-intake/rate-limit.ts:
+ *    `check_and_record_public_intake_rate_limit`; SELECT on
+ *    `request_intake_integrations` (connection classification)
+ *  - src/lib/public-intake/cors.ts: SELECT on `request_intake_integrations`
+ *    (the website-intake CORS lookup; the one table privilege the
+ *    privilege contract grants service_role)
+ *  - src/lib/public-forms/public-form.ts: `get_public_request_form`,
+ *    `submit_public_form_request`
+ *  - src/lib/notifications/dispatch.ts: `claim_notification_dispatch`,
+ *    `complete_notification_dispatch`
+ *  - src/lib/plus-inquiry/inquiry-public.ts (NP-P2-S7-B):
+ *    `get_public_plus_inquiry_form`,
+ *    `check_and_record_plus_inquiry_rate_limit`, `submit_plus_inquiry`
+ * A new caller MUST be added here. This is deliberately NOT a generic
+ * "admin database helper": every protection (tenant resolution, field
+ * bounds, idempotency, rate limits, activation, no-auto-Passenger,
+ * no-auto-Trip, cross-tenant integrity) lives inside those functions --
+ * this client is not, and must never become, a way to bypass that
  * authority from application code.
  *
  * Never returned in any HTTP response. Never logged (see
