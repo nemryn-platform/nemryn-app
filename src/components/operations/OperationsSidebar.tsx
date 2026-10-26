@@ -49,6 +49,8 @@ export interface OperationsSidebarProps {
   canManageSettings?: boolean;
   /** NP-P1-S2: true only when the server resolved Nemryn Plus entry (Organization Admin + write / read_only entitlement) -- gates the "Growth" nav item. Navigation convenience only; every /operations/growth route re-checks requirePlusAccess and the database re-checks plus_access_state. Never shown while Plus is locked or absent. */
   canAccessGrowth?: boolean;
+  /** NP-P2-S7-C: NEW website inquiries shown beside Growth -> Inquiries (null / 0 = no badge). Navigation only. */
+  newInquiryCount?: number | null;
   /** NP-UI-P1b: real fact from `getActiveMemberships()` (> 1) — adds a "Switch workspace" link to the workspace row (the same `/select-organization?switch=1` destination as the account menu). */
   hasMultipleOrganizations?: boolean;
 }
@@ -79,6 +81,7 @@ export function OperationsSidebar({
   hasLinkedDriverProfile,
   canManageSettings,
   canAccessGrowth,
+  newInquiryCount,
   hasMultipleOrganizations,
 }: OperationsSidebarProps) {
   const pathname = usePathname();
@@ -193,7 +196,7 @@ export function OperationsSidebar({
               </p>
               <ul aria-labelledby={labelId} className="flex flex-col gap-[3px]">
                 {section.key === "growth" ? (
-                  <GrowthNavGroup key="growth-group" pathname={pathname} collapsed={collapsed} />
+                  <GrowthNavGroup key="growth-group" pathname={pathname} collapsed={collapsed} newInquiryCount={newInquiryCount ?? null} />
                 ) : (
                   section.items.map((item) => {
                     const Icon = navIcons[item.key];

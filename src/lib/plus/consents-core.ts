@@ -30,7 +30,7 @@ export const CONSENT_LIMITS = { note: 500, historyPageSize: 20, captureWindowDay
 const CHANNEL_LABELS: Record<ConsentChannel, string> = { email: "Email", sms: "Text messages (SMS)", voice: "Phone calls" };
 const PURPOSE_LABELS: Record<ConsentPurpose, string> = { service_followup: "Service follow-up", marketing: "Marketing" };
 const PURPOSE_DESCRIPTIONS: Record<ConsentPurpose, string> = {
-  service_followup: "Replying to this person about their own enquiry or booking.",
+  service_followup: "Replying to this person about their own inquiry or booking.",
   marketing: "Promotional news and offers. Separate from follow-up.",
 };
 const METHOD_LABELS: Record<string, string> = {
@@ -39,7 +39,7 @@ const METHOD_LABELS: Record<string, string> = {
   written: "In writing",
   email_reply: "By email reply",
   do_not_contact: "Do not contact switched on",
-  web_form: "Website form",
+  web_form: "Website inquiry form",
 };
 
 export function consentChannelLabel(channel: string): string {

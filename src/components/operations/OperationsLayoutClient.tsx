@@ -24,6 +24,8 @@ export interface OperationsLayoutClientProps {
   hasLinkedDriverProfile: boolean;
   /** NP-P1-S2: server-resolved Nemryn Plus entry (see OperationsSidebar.canAccessGrowth). */
   canAccessGrowth: boolean;
+  /** NP-P2-S7-C: NEW website inquiries (null = unknown or no Growth access -> no badge). */
+  newInquiryCount: number | null;
   children: ReactNode;
 }
 
@@ -77,6 +79,7 @@ export function OperationsLayoutClient({
   hasMultipleOrganizations,
   hasLinkedDriverProfile,
   canAccessGrowth,
+  newInquiryCount,
   children,
 }: OperationsLayoutClientProps) {
   const pathname = usePathname();
@@ -90,6 +93,7 @@ export function OperationsLayoutClient({
         hasLinkedDriverProfile,
         canManageSettings: organization.role === "organization_admin",
         canAccessGrowth,
+        newInquiryCount,
         hasMultipleOrganizations,
       }}
       header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations)}

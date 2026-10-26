@@ -7,9 +7,10 @@ import assert from "node:assert/strict";
 
 const n = await import("./growth-nav-core.ts");
 
-test("children in canonical order: Dashboard, Pipeline, Contacts, Estimates & Quotes, Tasks", () => {
-  assert.deepEqual(n.GROWTH_CHILDREN.map((c) => c.label), ["Dashboard", "Pipeline", "Contacts", "Estimates & Quotes", "Tasks"]);
+test("children in canonical order: Dashboard, Inquiries, Pipeline, Contacts, Estimates & Quotes, Tasks", () => {
+  assert.deepEqual(n.GROWTH_CHILDREN.map((c) => c.label), ["Dashboard", "Inquiries", "Pipeline", "Contacts", "Estimates & Quotes", "Tasks"]);
   assert.equal(n.GROWTH_CHILDREN.find((c) => c.key === "quotes").href, "/operations/growth/quotes");
+  assert.equal(n.GROWTH_CHILDREN.find((c) => c.key === "inquiries").href, "/operations/growth/inquiries");
   assert.equal(n.GROWTH_CHILDREN[0].href, "/operations/growth");
 });
 
@@ -28,6 +29,8 @@ test("exactly one child is active per Growth route; Dashboard hosts the agent pa
   assert.deepEqual(active("/operations/growth/contacts/new"), ["Contacts"]);
   assert.deepEqual(active("/operations/growth/tasks"), ["Tasks"]);
   assert.deepEqual(active("/operations/growth/quotes"), ["Estimates & Quotes"]);
+  assert.deepEqual(active("/operations/growth/inquiries"), ["Inquiries"]);
+  assert.deepEqual(active("/operations/growth/inquiries/abc"), ["Inquiries"]);
   assert.deepEqual(active("/operations/growth/quotesx"), []);
   assert.deepEqual(active("/operations/trips"), []);
   assert.deepEqual(active("/operations/growth/pipelinex"), []);

@@ -51,6 +51,7 @@ test("operationsContext: section + label for the header's location line", () => 
   assert.deepEqual(n.operationsContext("/operations/recurring-care/abc"), { section: "Planning", label: "Standing Orders" });
   assert.deepEqual(n.operationsContext("/operations/settings/team"), { section: "Administration", label: "Settings" });
   assert.deepEqual(n.operationsContext("/operations/growth/quotes"), { section: "Growth", label: "Estimates & Quotes" });
+  assert.deepEqual(n.operationsContext("/operations/growth/inquiries/abc"), { section: "Growth", label: "Inquiries" });
   assert.deepEqual(n.operationsContext("/operations/growth/agent"), { section: "Growth", label: "Growth Agent" });
   assert.deepEqual(n.operationsContext("/operations/growth"), { section: "Growth", label: "Dashboard" });
   assert.deepEqual(n.operationsContext("/operations/proof-of-service"), { section: "Today", label: "Proof of Service" });

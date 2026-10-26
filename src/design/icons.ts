@@ -1,5 +1,6 @@
 import {
   AddressBook,
+  ChatCircleText,
   CheckSquare,
   Kanban,
   SquaresFour,
@@ -63,6 +64,8 @@ export const navIcons: Record<string, Icon> = {
   tasks: CheckSquare,
   // NP-P2-S5-S3A: Growth -> Estimates & Quotes (a document glyph; Receipt stays Billing so quotes never read as invoices)
   quotes: FileText,
+  // NP-P2-S7-C: Growth -> Inquiries (website questions)
+  inquiries: ChatCircleText,
 };
 
 export type NavIconKey = keyof typeof navIcons;

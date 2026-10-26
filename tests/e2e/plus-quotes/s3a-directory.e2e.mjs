@@ -81,8 +81,8 @@ try {
   section("N. Growth navigation");
   await go(admin, "/operations/growth");
   const labels = await admin.evaluate(`[...document.querySelectorAll('[data-testid="growth-nav-child"]')].map(a => a.textContent.trim())`);
-  check("N1 Growth navigation: Dashboard, Pipeline, Contacts, Estimates & Quotes, Tasks (existing sidebar component)",
-    JSON.stringify(labels) === JSON.stringify(["Dashboard", "Pipeline", "Contacts", "Estimates & Quotes", "Tasks"]), JSON.stringify(labels));
+  check("N1 Growth navigation: Dashboard, Inquiries, Pipeline, Contacts, Estimates & Quotes, Tasks (existing sidebar component)",
+    JSON.stringify(labels) === JSON.stringify(["Dashboard", "Inquiries", "Pipeline", "Contacts", "Estimates & Quotes", "Tasks"]), JSON.stringify(labels));
   await admin.evaluate(`[...document.querySelectorAll('[data-testid="growth-nav-child"]')].find(a => a.textContent.trim() === 'Estimates & Quotes').click()`);
   await waitFor(async () => (await path(admin)).startsWith("/operations/growth/quotes"), 10000);
   await sleep(1200);

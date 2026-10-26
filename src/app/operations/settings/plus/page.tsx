@@ -7,6 +7,10 @@ import { canEnterGrowth, plusStatusSummary } from "@/lib/plus/access-core";
 import { listPlusTeamAccess } from "@/lib/plus/team-access";
 import type { PlusTeamMember } from "@/lib/plus/team-access-core";
 import { PlusTeamAccessSection } from "@/components/operations/settings/PlusTeamAccessSection";
+import { InquiryFormSection } from "@/components/operations/settings/InquiryFormSection";
+import { getInquiryFormSettings, type InquiryFormSettings } from "@/lib/plus/inquiries";
+import { publicInquiriesEnabled } from "@/lib/plus-inquiry/inquiry-public";
+import { getAppOrigin } from "@/lib/app-url";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
@@ -24,6 +28,9 @@ export const metadata = { title: "Nemryn Plus" };
  *   (ZD-207), and no billing exists.
  * - Team access (S3): while Plus is write or read_only, the Admin chooses which existing Dispatchers may use Growth
  *   (read or write) and can remove access. Not shown while restricted (locked) or not enabled -- no Plus data then.
+ * - Inquiry form (NP-P2-S7-C): the public website inquiry form -- headline, introduction, services, draft / publish /
+ *   turn off, and its link and website code. Same visibility as Team access; editable only while Plus is writable.
+ *   Public submissions also need Nemryn's activation and the server switch, which are shown but never changed here.
  */
 export default async function PlusSettingsPage() {
   const pathname = await getCurrentPathname("/operations/settings/plus");
@@ -38,6 +45,26 @@ export default async function PlusSettingsPage() {
       team = await listPlusTeamAccess(organization.organizationId);
     } catch {
       teamError = true;
+    }
+  }
+
+  let inquiryForm: InquiryFormSettings | null = null;
+  let inquiryFormError = false;
+  if (canEnterGrowth(plus.state)) {
+    try {
+      inquiryForm = await getInquiryFormSettings(organization.organizationId);
+    } catch {
+      inquiryFormError = true;
+    }
+  }
+  // The link / website code need the app's canonical origin; getAppOrigin throws on a misconfiguration (by design).
+  // That must never take the whole Settings page down: the form stays editable and the link area explains.
+  let origin: string | null = null;
+  if (inquiryForm) {
+    try {
+      origin = await getAppOrigin();
+    } catch {
+      origin = null;
     }
   }
 
@@ -71,6 +98,18 @@ export default async function PlusSettingsPage() {
       )}
       {teamError && (
         <AttentionState level="warning" title="Team access could not be loaded" description="Reload the page to try again. Nobody's access was changed." />
+      )}
+      {inquiryForm && (
+        <InquiryFormSection
+          organizationId={organization.organizationId}
+          form={inquiryForm}
+          canEdit={plus.state === "write"}
+          submissionsSwitchOn={publicInquiriesEnabled()}
+          origin={origin}
+        />
+      )}
+      {inquiryFormError && (
+        <AttentionState level="warning" title="The inquiry form could not be loaded" description="Reload the page to try again. Nothing was changed." />
       )}
     </div>
   );
