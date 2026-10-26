@@ -948,6 +948,7 @@ export type Database = {
           evidence_note: string | null
           id: string
           idempotency_key: string
+          inquiry_id: string | null
           organization_id: string
           purpose: string
           recorded_at: string
@@ -966,6 +967,7 @@ export type Database = {
           evidence_note?: string | null
           id?: string
           idempotency_key: string
+          inquiry_id?: string | null
           organization_id: string
           purpose: string
           recorded_at?: string
@@ -984,6 +986,7 @@ export type Database = {
           evidence_note?: string | null
           id?: string
           idempotency_key?: string
+          inquiry_id?: string | null
           organization_id?: string
           purpose?: string
           recorded_at?: string
@@ -1011,6 +1014,13 @@ export type Database = {
             columns: ["corrects_consent_id", "organization_id", "contact_id"]
             isOneToOne: false
             referencedRelation: "plus_communication_consents"
+            referencedColumns: ["id", "organization_id", "contact_id"]
+          },
+          {
+            foreignKeyName: "plus_consents_inquiry_fkey"
+            columns: ["inquiry_id", "organization_id", "contact_id"]
+            isOneToOne: false
+            referencedRelation: "plus_inquiries"
             referencedColumns: ["id", "organization_id", "contact_id"]
           },
         ]
@@ -1074,6 +1084,257 @@ export type Database = {
           },
         ]
       }
+      plus_inquiries: {
+        Row: {
+          consent_followup: boolean
+          consent_marketing: boolean
+          consent_text_version: string
+          contact_id: string | null
+          dismiss_note: string | null
+          dismiss_reason: string | null
+          email: string | null
+          form_config_version: number
+          form_id: string
+          id: string
+          idempotency_key: string
+          inquiry_type: string
+          landing_path: string | null
+          name: string
+          organization_id: string
+          phone: string | null
+          preferred_reply: string
+          question: string
+          received_at: string
+          referrer_host: string | null
+          relationship: string | null
+          service_type: string | null
+          status: string
+          timeframe: string | null
+          triaged_at: string | null
+          triaged_by: string | null
+          updated_at: string
+          utm_campaign: string | null
+          utm_content: string | null
+          utm_medium: string | null
+          utm_source: string | null
+          utm_term: string | null
+          version: number
+        }
+        Insert: {
+          consent_followup?: boolean
+          consent_marketing?: boolean
+          consent_text_version: string
+          contact_id?: string | null
+          dismiss_note?: string | null
+          dismiss_reason?: string | null
+          email?: string | null
+          form_config_version: number
+          form_id: string
+          id?: string
+          idempotency_key: string
+          inquiry_type: string
+          landing_path?: string | null
+          name: string
+          organization_id: string
+          phone?: string | null
+          preferred_reply?: string
+          question: string
+          received_at?: string
+          referrer_host?: string | null
+          relationship?: string | null
+          service_type?: string | null
+          status?: string
+          timeframe?: string | null
+          triaged_at?: string | null
+          triaged_by?: string | null
+          updated_at?: string
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+          version?: number
+        }
+        Update: {
+          consent_followup?: boolean
+          consent_marketing?: boolean
+          consent_text_version?: string
+          contact_id?: string | null
+          dismiss_note?: string | null
+          dismiss_reason?: string | null
+          email?: string | null
+          form_config_version?: number
+          form_id?: string
+          id?: string
+          idempotency_key?: string
+          inquiry_type?: string
+          landing_path?: string | null
+          name?: string
+          organization_id?: string
+          phone?: string | null
+          preferred_reply?: string
+          question?: string
+          received_at?: string
+          referrer_host?: string | null
+          relationship?: string | null
+          service_type?: string | null
+          status?: string
+          timeframe?: string | null
+          triaged_at?: string | null
+          triaged_by?: string | null
+          updated_at?: string
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_inquiries_contact_fkey"
+            columns: ["contact_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_contacts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_inquiries_form_fkey"
+            columns: ["form_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_inquiry_forms"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "plus_inquiries_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      plus_inquiry_forms: {
+        Row: {
+          config_version: number
+          consent_text_version: string
+          created_at: string
+          created_by: string
+          disabled_at: string | null
+          disabled_by: string | null
+          headline: string
+          id: string
+          intro_text: string | null
+          offered_service_types: string[]
+          organization_id: string
+          public_key: string
+          published_at: string | null
+          published_by: string | null
+          status: string
+          updated_at: string
+          updated_by: string
+          version: number
+        }
+        Insert: {
+          config_version?: number
+          consent_text_version: string
+          created_at?: string
+          created_by: string
+          disabled_at?: string | null
+          disabled_by?: string | null
+          headline: string
+          id?: string
+          intro_text?: string | null
+          offered_service_types?: string[]
+          organization_id: string
+          public_key?: string
+          published_at?: string | null
+          published_by?: string | null
+          status?: string
+          updated_at?: string
+          updated_by: string
+          version?: number
+        }
+        Update: {
+          config_version?: number
+          consent_text_version?: string
+          created_at?: string
+          created_by?: string
+          disabled_at?: string | null
+          disabled_by?: string | null
+          headline?: string
+          id?: string
+          intro_text?: string | null
+          offered_service_types?: string[]
+          organization_id?: string
+          public_key?: string
+          published_at?: string | null
+          published_by?: string | null
+          status?: string
+          updated_at?: string
+          updated_by?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_inquiry_forms_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      plus_inquiry_public_access: {
+        Row: {
+          enabled_at: string
+          enabled_by: string
+          organization_id: string
+          reason: string
+        }
+        Insert: {
+          enabled_at?: string
+          enabled_by: string
+          organization_id: string
+          reason: string
+        }
+        Update: {
+          enabled_at?: string
+          enabled_by?: string
+          organization_id?: string
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_inquiry_public_access_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      plus_inquiry_rate_limit_events: {
+        Row: {
+          client_key: string
+          form_public_key: string
+          id: number
+          occurred_at: string
+        }
+        Insert: {
+          client_key: string
+          form_public_key: string
+          id?: never
+          occurred_at?: string
+        }
+        Update: {
+          client_key?: string
+          form_public_key?: string
+          id?: never
+          occurred_at?: string
+        }
+        Relationships: []
+      }
       plus_opportunities: {
         Row: {
           campaign_code: string | null
@@ -1084,6 +1345,7 @@ export type Database = {
           created_by: string
           estimated_value_cents: number | null
           id: string
+          inquiry_id: string | null
           inquiry_type: string | null
           lost_note: string | null
           lost_reason: string | null
@@ -1107,6 +1369,7 @@ export type Database = {
           created_by: string
           estimated_value_cents?: number | null
           id?: string
+          inquiry_id?: string | null
           inquiry_type?: string | null
           lost_note?: string | null
           lost_reason?: string | null
@@ -1130,6 +1393,7 @@ export type Database = {
           created_by?: string
           estimated_value_cents?: number | null
           id?: string
+          inquiry_id?: string | null
           inquiry_type?: string | null
           lost_note?: string | null
           lost_reason?: string | null
@@ -1145,6 +1409,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "plus_opportunities_inquiry_fkey"
+            columns: ["inquiry_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "plus_inquiries"
+            referencedColumns: ["id", "organization_id"]
+          },
           {
             foreignKeyName: "plus_opportunities_organization_id_fkey"
             columns: ["organization_id"]
@@ -2729,6 +3000,58 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string
       }
+      _plus_inquiry_append_web_form_consent: {
+        Args: {
+          p_channel: string
+          p_contact_id: string
+          p_inquiry: Database["public"]["Tables"]["plus_inquiries"]["Row"]
+          p_organization_id: string
+          p_purpose: string
+        }
+        Returns: string
+      }
+      _plus_inquiry_public_access_enabled: {
+        Args: { p_organization_id: string }
+        Returns: boolean
+      }
+      _plus_inquiry_public_form: {
+        Args: { p_public_key: string }
+        Returns: {
+          config_version: number
+          consent_text_version: string
+          created_at: string
+          created_by: string
+          disabled_at: string | null
+          disabled_by: string | null
+          headline: string
+          id: string
+          intro_text: string | null
+          offered_service_types: string[]
+          organization_id: string
+          public_key: string
+          published_at: string | null
+          published_by: string | null
+          status: string
+          updated_at: string
+          updated_by: string
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_forms"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _plus_inquiry_service_options: {
+        Args: { p_organization_id: string }
+        Returns: string[]
+      }
+      _plus_inquiry_service_type_list: { Args: never; Returns: string[] }
+      _plus_inquiry_service_types_valid: {
+        Args: { p_types: string[] }
+        Returns: boolean
+      }
       _plus_insert_task: {
         Args: {
           p_actor: string
@@ -2840,6 +3163,7 @@ export type Database = {
           created_by: string
           estimated_value_cents: number | null
           id: string
+          inquiry_id: string | null
           inquiry_type: string | null
           lost_note: string | null
           lost_reason: string | null
@@ -3016,6 +3340,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "membership_change_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      check_and_record_plus_inquiry_rate_limit: {
+        Args: { p_client_key: string; p_form_public_key: string }
+        Returns: Database["public"]["CompositeTypes"]["rate_limit_check_result"]
+        SetofOptions: {
+          from: "*"
+          to: "rate_limit_check_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3403,6 +3737,17 @@ export type Database = {
         Args: { p_organization_id: string }
         Returns: string[]
       }
+      get_public_plus_inquiry_form: {
+        Args: { p_public_key: string }
+        Returns: {
+          config_version: number
+          consent_text_version: string
+          headline: string
+          intro_text: string
+          organization_name: string
+          service_types: string[]
+        }[]
+      }
       get_public_request_form: {
         Args: { p_public_key: string }
         Returns: {
@@ -3704,6 +4049,16 @@ export type Database = {
           total_organizations: number
         }[]
       }
+      platform_get_plus_inquiry_public_access: {
+        Args: { p_organization_id: string }
+        Returns: {
+          enabled: boolean
+          enabled_at: string
+          enabled_by_name: string
+          organization_id: string
+          reason: string
+        }[]
+      }
       platform_list_activity: {
         Args: { p_before_at?: string; p_before_id?: string; p_limit?: number }
         Returns: {
@@ -3800,6 +4155,20 @@ export type Database = {
               isSetofReturn: false
             }
           }
+      platform_set_plus_inquiry_public_access: {
+        Args: {
+          p_enabled: boolean
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_public_access_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_public_access_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_access_state: {
         Args: { p_organization_id: string }
         Returns: Database["public"]["CompositeTypes"]["plus_access_state_result"]
@@ -3888,6 +4257,27 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_convert_inquiry: {
+        Args: {
+          p_confirm_possible_duplicate: boolean
+          p_contact_id: string
+          p_contact_mode: string
+          p_dnc_acknowledged: boolean
+          p_expected_version: number
+          p_fill_blank_contact_fields: boolean
+          p_inquiry_id: string
+          p_opportunity_title: string
+          p_organization_id: string
+          p_owner_membership_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_conversion_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_conversion_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_convert_opportunity_to_request: {
         Args: {
           p_additional_notes: string
@@ -3910,6 +4300,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      plus_count_new_inquiries: {
+        Args: { p_organization_id: string }
+        Returns: number
       }
       plus_create_contact: {
         Args: {
@@ -4024,6 +4418,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_disable_inquiry_form: {
+        Args: { p_expected_version: number; p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_form_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_form_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_dismiss_agent_recommendation: {
         Args: {
           p_expected_updated_at: string
@@ -4035,6 +4439,22 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_agent_review_outcome"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_dismiss_inquiry: {
+        Args: {
+          p_expected_version: number
+          p_inquiry_id: string
+          p_note: string
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_triage_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_triage_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4087,6 +4507,61 @@ export type Database = {
           recorded_at: string
           recorded_by_name: string
           recorded_status: string
+        }[]
+      }
+      plus_get_inquiry: {
+        Args: { p_inquiry_id: string; p_organization_id: string }
+        Returns: {
+          consent_followup: boolean
+          consent_marketing: boolean
+          consent_text_version: string
+          contact_display_name: string
+          contact_id: string
+          dismiss_note: string
+          dismiss_reason: string
+          email: string
+          form_config_version: number
+          id: string
+          inquiry_type: string
+          landing_path: string
+          name: string
+          opportunity_id: string
+          phone: string
+          preferred_reply: string
+          question: string
+          received_at: string
+          referrer_host: string
+          relationship: string
+          service_type: string
+          status: string
+          timeframe: string
+          triaged_at: string
+          triaged_by_name: string
+          utm_campaign: string
+          utm_content: string
+          utm_medium: string
+          utm_source: string
+          utm_term: string
+          version: number
+        }[]
+      }
+      plus_get_inquiry_form: {
+        Args: { p_organization_id: string }
+        Returns: {
+          config_version: number
+          consent_text_version: string
+          disabled_at: string
+          form_id: string
+          headline: string
+          intro_text: string
+          offered_service_types: string[]
+          public_access_enabled: boolean
+          public_key: string
+          published_at: string
+          service_options: string[]
+          status: string
+          updated_at: string
+          version: number
         }[]
       }
       plus_get_opportunity: {
@@ -4387,6 +4862,45 @@ export type Database = {
           updated_at: string
         }[]
       }
+      plus_list_inquiries: {
+        Args: {
+          p_limit: number
+          p_offset: number
+          p_organization_id: string
+          p_search: string
+          p_status: string
+        }
+        Returns: {
+          contact_id: string
+          dismiss_reason: string
+          email: string
+          id: string
+          inquiry_type: string
+          name: string
+          opportunity_id: string
+          phone: string
+          preferred_reply: string
+          received_at: string
+          relationship: string
+          service_type: string
+          status: string
+          timeframe: string
+          total_count: number
+          triaged_at: string
+          version: number
+        }[]
+      }
+      plus_list_inquiry_duplicate_hints: {
+        Args: { p_inquiry_id: string; p_organization_id: string }
+        Returns: {
+          display_name: string
+          kind: string
+          match_on: string
+          received_at: string
+          record_id: string
+          status: string
+        }[]
+      }
       plus_list_member_access: {
         Args: { p_organization_id: string }
         Returns: {
@@ -4629,6 +5143,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      plus_publish_inquiry_form: {
+        Args: { p_expected_version: number; p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_form_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_form_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       plus_quote_directory_summary: {
         Args: { p_organization_id: string }
         Returns: {
@@ -4684,6 +5208,20 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_quote_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_reopen_inquiry: {
+        Args: {
+          p_expected_version: number
+          p_inquiry_id: string
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_triage_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_triage_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4758,6 +5296,22 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_agent_review_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_save_inquiry_form: {
+        Args: {
+          p_expected_version: number
+          p_headline: string
+          p_intro_text: string
+          p_offered_service_types: string[]
+          p_organization_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_form_write_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_form_write_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -5205,6 +5759,32 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      submit_plus_inquiry: {
+        Args: {
+          p_acquisition: Json
+          p_consent_followup: boolean
+          p_consent_marketing: boolean
+          p_email: string
+          p_form_config_version: number
+          p_idempotency_key: string
+          p_inquiry_type: string
+          p_name: string
+          p_phone: string
+          p_preferred_reply: string
+          p_public_key: string
+          p_question: string
+          p_relationship: string
+          p_service_type: string
+          p_timeframe: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_inquiry_submission_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_inquiry_submission_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       submit_public_form_request: {
         Args: {
           p_acquisition?: Json
@@ -5548,6 +6128,38 @@ export type Database = {
         updated_at: string | null
         changed: boolean | null
         possible_duplicates: number | null
+      }
+      plus_inquiry_conversion_result: {
+        outcome: string | null
+        inquiry_id: string | null
+        contact_id: string | null
+        opportunity_id: string | null
+        possible_duplicates: number | null
+        consent_granted: number | null
+        consent_skipped: string[] | null
+        version: number | null
+      }
+      plus_inquiry_form_write_result: {
+        form_id: string | null
+        status: string | null
+        version: number | null
+        config_version: number | null
+        changed: boolean | null
+      }
+      plus_inquiry_public_access_result: {
+        organization_id: string | null
+        enabled: boolean | null
+        changed: boolean | null
+      }
+      plus_inquiry_submission_result: {
+        status: string | null
+        changed: boolean | null
+      }
+      plus_inquiry_triage_result: {
+        inquiry_id: string | null
+        status: string | null
+        version: number | null
+        changed: boolean | null
       }
       plus_member_access_result: {
         membership_id: string | null

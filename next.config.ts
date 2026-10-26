@@ -49,6 +49,37 @@ const nextConfig: NextConfig = {
         ],
       },
       { source: "/api/public-forms/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
+      // NP-P2-S7-B Nemryn Plus public INQUIRY form: the same policy as the request form above (ZD-244). Hosted page never
+      // framed; only the embed page may be framed; both not indexed; the loader is a briefly cached public script. Availability
+      // is decided on the server (PLUS_INQUIRY_SUBMISSIONS kill switch + database allowlist), never by these headers.
+      {
+        source: "/inquiry/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
+      {
+        source: "/embed/inquiry/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors *" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
+      {
+        source: "/embed/inquiry-form.js",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=3600" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Access-Control-Allow-Origin", value: "*" },
+        ],
+      },
+      { source: "/api/plus-inquiries/:path*", headers: [{ key: "Cache-Control", value: "no-store" }, { key: "X-Robots-Tag", value: "noindex, nofollow" }] },
     ];
   },
   // Pin the workspace root explicitly: this project's git repo root is the

@@ -1,0 +1,209 @@
+NP-P2-S7-B — PUBLIC INQUIRY FORM AND SUBMISSION API — IMPLEMENTATION REPORT
+===========================================================================
+Date: 2026-10-26.
+Branch: np-p2-s7b-public-inquiry, from main 5d9ec53 (PR #37 merged 2026-10-25T21:45Z).
+Environment: isolated NemrynS1Iso only (95 migrations); fictional data only.
+- NOT done: no production data or environment change; no public enablement; no S7-A migration change; no Core intake /
+  scheduling change; no Git staging / commit / push / merge.
+
+VERDICT: PASS. Ready for owner review.
+- The hosted form, the embed (with loader) and the secure submission API are implemented on the S7-A contracts, with
+  the kill switch (default OFF) and the database allowlist both enforced on the server.
+- Unit 914 / 914; E2E on 28 / 28 (twice), off 5 / 5.
+- S7-A suites 65 / 65 and concurrency ALL PASS; consents 78 / 78; privilege contract 0 / 29.
+- Core intake 42 / 42 + 8 / 8; QA2 199 / 199; release 28 / 28; tsc, ESLint and build pass.
+- Public inquiries remain OFF everywhere except local test processes. Real submissions stay disabled pending PD-10 /
+  PD-11 and the consent-wording legal review.
+
+1. WHAT WAS BUILT
+-----------------
+Public routes (app host only, ZD-256):
+- Hosted page: GET /inquiry/[publicKey].
+- Embed page: GET /embed/inquiry/[publicKey].
+- Embed loader: GET /embed/inquiry-form.js.
+- Config API: GET /api/plus-inquiries/[publicKey].
+- Submit API: POST /api/plus-inquiries/[publicKey]/submit.
+
+Experience:
+- A clean, Brand Lock v2 form: the action-primary teal button and the accent-strong organization name. It follows the
+  same structure and neutral palette as the approved Core request form, so the public look is consistent.
+- Responsive: one column on phones, two columns from sm.
+- The headline and intro come from the organization's form; the organization name is shown; "Powered by Nemryn".
+- Fields (ZD-246):
+  - required: name; phone and/or email; question type; question (≤ 500, with a counter);
+  - optional: preferred reply (Either / Phone / Email), who the transportation is for, service, timeframe.
+- Services = the form's offered services ∩ what the organization still offers, from the 8 Plus types only.
+  airport_transportation is never shown or accepted (ZD-263), including when the organization offers it in Core.
+- "This form is for questions. It doesn't book a ride." No address, date of birth, diagnosis, insurance or exact date
+  is collected.
+- Consent (ZD-252): two SEPARATE, OPTIONAL, UNTICKED boxes using the approved P2-S7 wording (consent text version
+  plus-inquiry-consent-v1):
+  - "<Org> may follow up with me about transportation services by the contact details above."
+  - "Send me news and offers from <Org>."
+  A submission records only what was ticked. No consent ledger row is written (that happens at staff conversion, S7-C).
+  LEGAL REVIEW OF THIS WORDING IS STILL OUTSTANDING, so real submissions stay disabled (§3).
+- States:
+  - editing;
+  - sending (button disabled; one request in flight);
+  - submitted (a focused confirmation; content cleared from memory; "Ask another question");
+  - unavailable (the neutral page, identical for every cause);
+  - invalid (an error summary with links; focus moved there; fields marked aria-invalid);
+  - rate-limited ("Please wait a little while, then try again" — no threshold disclosed);
+  - form updated (409 → "Reload the form");
+  - server error ("We couldn't send your question right now").
+- Privacy:
+  - content lives only in React state;
+  - the only browser storage is the acquisition-only first-touch context (S4C keys, namespaced
+    nemryn:inquiry-form:<key>:acquisition);
+  - no tracking scripts, pixels or third-party code;
+  - pages are noindex and no-store.
+
+2. FILES CHANGED
+----------------
+New:
+  src/lib/plus-inquiry/inquiry-core.ts               pure: key format, kill-switch rule, copy, options, client + server
+                                                     validation, body builder, status → HTTP, embed protocol
+  src/lib/plus-inquiry/inquiry-core.test.mjs         12 unit tests incl. the REAL loader in a VM sandbox
+  src/lib/plus-inquiry/inquiry-public.ts             server-only boundary to the 3 service_role RPCs
+  src/app/inquiry/[publicKey]/page.tsx, not-found.tsx
+  src/app/embed/inquiry/[publicKey]/page.tsx, not-found.tsx
+  src/app/api/plus-inquiries/[publicKey]/route.ts, submit/route.ts
+  src/components/plus-inquiry/PublicInquiryForm.tsx, InquiryUnavailable.tsx, useInquiryEmbedParent.ts
+  public/embed/inquiry-form.js                       the embed loader (derived from the Core loader; own protocol)
+  tests/e2e/plus-inquiries/inquiries.e2e.mjs         browser + API E2E (modes on / off)
+  docs/design/concept-b/reviews/s7b/*.png            screenshots
+  docs/reports/NP-P2-S7B-implementation.txt          this report
+Modified (reviewed shared files, as planned in the approved design §8):
+  next.config.ts                                     header rules for /inquiry, /embed/inquiry, the loader and the API
+  src/proxy.ts                                       NO_SESSION_PATH + inquiry/ and api/plus-inquiries/ (the request-form
+                                                     host allowlist is NOT changed)
+  src/lib/supabase/service-role-server.ts            COMMENT ONLY: the stale "only caller" text is replaced by the real
+                                                     caller / RPC inventory (A01 / A02R A6)
+  src/lib/supabase/database.types.ts                 regenerated (`supabase gen types --local`): +612 lines, S7-A objects
+                                                     only, 0 removed
+  .env.example                                       documents PLUS_INQUIRY_SUBMISSIONS (empty = off)
+Not modified: every S7-A migration, all Core intake code (src/lib/public-intake/*, src/lib/public-forms/*, Core routes /
+pages / loader), and Core scheduling. Core PURE helpers are imported, not edited: hashClientIp,
+resolveClientIpFromHeaders, acquisitionFromLocation, mergeFirstTouch, sanitizeAcquisitionContext, clampEmbedHeight.
+
+3. SECURITY AND ACTIVATION BEHAVIOUR
+------------------------------------
+Two independent server-side gates, and BOTH must allow (ZD-259 / ZD-262):
+- (1) Global kill switch PLUS_INQUIRY_SUBMISSIONS.
+  - ON only when it is exactly "on" (unit-tested: unset, "", "ON", "true", "1", " on" … are all OFF).
+  - Checked first on the hosted page, the embed page, the config API and the submit API, BEFORE any database call.
+  - Default OFF. No production environment variable was set or changed.
+- (2) The per-organization allowlist (plus_inquiry_public_access), plus a published form, an active organization and
+  Plus write, all enforced inside the service_role RPCs. The production allowlist is EMPTY.
+- When either gate is closed: the identical neutral 404 / unavailable page (no tenant enumeration, no reason).
+
+Submit pipeline:
+  kill switch → key format → Origin (only the app's own origins; a missing Origin is allowed and is never the auth
+  boundary) → 8 KB cap → JSON → closed-key schema (organizationId / formId / status / contactId … reject the whole
+  body) → durable atomic rate limit (5 / client / h, 60 / form / h; the client key is a salted one-way hash of the IP,
+  never stored or logged raw) → submit_plus_inquiry (authoritative re-validation; organization resolved ONLY from the
+  key).
+
+- Responses: 200 {ok:true} | 400 invalid_request | 404 unavailable | 409 form_changed | 429 try_later |
+  503 try_later. They carry no ids, ZW codes, database text or limits.
+- Logging: fixed messages only; no key, IP, hash or submitted content.
+- Service-role credentials: only server-only modules (`import "server-only"`); nothing reaches the browser.
+- Idempotency:
+  - one submission reference (UUID) per form instance, reused on retries;
+  - the database key unique (organization, key) makes replays and concurrent duplicates store ONE row.
+- A submission creates ONLY one plus_inquiries row: no contact, opportunity, Core Request, consent record or
+  notification (E2E S2 / Z1).
+
+Embedding:
+- the loader builds an isolated iframe and auto-resizes it;
+- messages are trusted only from its own iframe AND the Nemryn origin, in the "nemryn-inquiry-form" protocol (the
+  Core request-form protocol is ignored);
+- the iframe posts its content-free "ready" to "*" and everything else only to the verified parent origin;
+- the iframe submits same-origin (no CORS on the API);
+- availability, validation, rate limits and tenancy are identical to the hosted page.
+- Headers: the hosted page has frame-ancestors 'none' + X-Frame-Options DENY; the embed page has frame-ancestors *;
+  both are noindex and no-store; the loader has nosniff and a 5-minute public cache.
+
+4. TEST RESULTS (isolated; production build of this branch on :3100)
+--------------------------------------------------------------------
+- Unit:
+  - src/lib/plus-inquiry/inquiry-core.test.mjs: 12 / 12;
+  - npm test: 914 / 914 (902 before + 12).
+- E2E — kill switch ON (local process env only; fixtures: Org A allowlisted, Org B published but NOT allowlisted):
+  28 / 28 ALL PASS, run twice (the second run after fixing a test-page charset; it refreshed the screenshots).
+  - Covered:
+    - H1–H5: rendering, services ∩ offerings with no airport, unticked consent, noindex, headers, Org B / unknown /
+      malformed keys → the identical unavailable page, config API fields only;
+    - V1: empty submit → focused error summary + aria-invalid, nothing sent;
+    - S1 / S2: a valid UI submission → a focused confirmation, ONE row (consent as ticked, landing path recorded), NO
+      side effects;
+    - A1 / A2: idempotent replay and 6 concurrent same-key submissions → ONE row;
+    - A3–A6: forbidden key, foreign Origin, > 8 KB, malformed JSON → 400;
+    - A7: airport_transportation and an un-offered service → 400;
+    - A8: a stale config version → 409;
+    - A9: cross-tenant (Org B key) → 404;
+    - A10: no ids / codes in responses;
+    - A11: rate limit 5 then 429;
+    - D1: a disabled form and a removed allowlist row → 404 immediately;
+    - E1 / E2: the loader on a FOREIGN-ORIGIN agency page mounts one iframe and auto-resizes it; embed / loader headers;
+    - M1: 390 / 768 px with no overflow and ≥ 40 px targets;
+    - X1: axe 0 serious / critical on the form (1280, 390) and the unavailable page;
+    - Z1: no Plus or Core side effects across the run.
+- E2E — kill switch OFF (the production default): 5 / 5 — OFF1–OFF5.
+  - Even an ALLOWLISTED, PUBLISHED form is unavailable: config 404, submit 404 with nothing stored, hosted and embed
+    pages neutral, no side effects.
+- S7-A database contracts (unchanged; re-run on this build's database):
+  - plus_inquiries_tests.sql: 65 / 65;
+  - plus_inquiries_concurrency_test.sh: ALL PASS;
+  - plus_communication_consents_tests.sql: 78 / 78 (consent / DNC controls preserved);
+  - privilege_contract_tests.sql: 0 / 29.
+- Core intake unaffected:
+  - public_request_intake_tests.sql: 42 / 42;
+  - public_intake_rate_limit_tests.sql: 8 / 8;
+  - QA2 strict: 199 / 199 (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79), "RESULT: all suites pass"; equal to baseline.
+- npm run test:release: 28 / 28.
+- tsc --noEmit: PASS.
+- ESLint (src + scripts): 0 errors (1 pre-existing warning, growth/tasks/page.tsx).
+- next build: PASS. New routes: /inquiry/[publicKey], /embed/inquiry/[publicKey], /api/plus-inquiries/[publicKey]
+  (+ /submit).
+
+Screenshots (docs/design/concept-b/reviews/s7b/): hosted-1280, hosted-768, hosted-390, hosted-confirmation-1280,
+embed-agency-page-1280 (the form inside a fictional agency site on another origin).
+
+5. LOCAL SYNTHETIC DEMONSTRATION (isolated stack only; never production)
+------------------------------------------------------------------------
+1. Start the isolated app with the switch on, for that process only:
+     source ~/NemrynS1Iso/.env.isolated.local && PLUS_INQUIRY_SUBMISSIONS=on npx next start -p 3100
+2. Create a published form and allowlist a FICTIONAL organization. The simplest way is the E2E fixtures:
+     INQUIRY_E2E_MODE=on node tests/e2e/plus-inquiries/inquiries.e2e.mjs
+   It creates and then removes them. For a manual demo, run its fixture SQL block alone. In S7-C this becomes Settings →
+   Nemryn Plus → Inquiry form, plus platform_set_plus_inquiry_public_access by a Platform Admin.
+3. Open http://localhost:3100/inquiry/<inq_ key>. To embed it on any page:
+     <div data-nemryn-inquiry-form="inq_…"></div>
+     <script src="http://localhost:3100/embed/inquiry-form.js" async></script>
+   In production the script origin is https://app.nemryn.com.
+4. Submitted inquiries appear in plus_inquiries (status new). The staff inbox is S7-C.
+
+6. REMAINING S7-C DEPENDENCIES
+------------------------------
+- Staff UI:
+  - Growth → Inquiries (list, badge via plus_count_new_inquiries) and the inquiry detail (duplicate hints, Convert
+    with create / link, fill-blanks, DNC acknowledgement, Dismiss / Reopen);
+  - Settings → Nemryn Plus → Inquiry form (save / publish / disable; the hosted link + embed snippet; a "not enabled
+    yet" state when public_access_enabled = false).
+- A Communication preferences label for captured_via = web_form (the S6-B UI has none yet).
+- Align the one S6 "enquiry" string (ZD-245).
+- Optional: a Platform Admin control for the allowlist (the RPCs exist).
+
+7. GENUINE BLOCKERS AND OUTSTANDING ITEMS
+-----------------------------------------
+- No technical blocker for S7-B.
+- Real public submissions remain NOT authorized:
+  - PD-10 (HIPAA / BAA) and PD-11 (retention / erasure) are OPEN;
+  - the consent wording needs legal review.
+  - Production stays OFF: PLUS_INQUIRY_SUBMISSIONS unset and the allowlist empty.
+- Spam controls follow the approved synthetic-phase decision (ZD-254 / ZD-261): rate limits, closed schema, Origin,
+  body cap, idempotency, and no honeypot or CAPTCHA. Re-decide before any real tenant.
+- Deploying this branch is safe while the switch is off: every inquiry route returns the neutral unavailable response.
+
+STOP for owner review.
