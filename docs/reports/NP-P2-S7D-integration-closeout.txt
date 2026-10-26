@@ -1,0 +1,297 @@
+NEMRYN — NP-P2-S7D FINAL INTEGRATION & DEMO READINESS — CLOSEOUT
+Date: 2026-10-26
+Branch: np-p2-s7d-integration (from main 82736e3 = PR #39 merge). One small copy change, uncommitted.
+Audience: owner / product. Verification and closeout only — no new architecture or features.
+
+VERDICT: PASS — P2-S7 verified end to end and ready to close; demo-ready with documented workarounds
+         (pre-existing Core defect D-1; invoicing / payment not yet built — see sections 5, 7, 8)
+
+======================================================================================================================
+0. BASELINE (Phase 0)
+======================================================================================================================
+- PR #39 (S7-C) MERGED 2026-10-26T09:11:10Z by nemryn; merge commit 82736e3.
+- Production deployment for 82736e3: GitHub deployment "Production" = success; commit status Vercel = success.
+  HTTP smoke (read-only, no sign-in): app.nemryn.com/sign-in 200; /operations 307 (redirect to sign-in);
+  /inquiry/<unknown key> 404; /api/plus-inquiries/<unknown key> 404; /embed/inquiry-form.js 200.
+- Local main fast-forwarded to 82736e3; branch np-p2-s7d-integration created from it.
+- Production database (read-only): Supabase CLI on the Nemryn account (project wyocbivzgrbekuyqdfts, ACTIVE_HEALTHY);
+  `supabase migration list --linked`: 95 migrations, 95/95 local == remote, head 20261024110000.
+- Production activation state (read-only query): plus_inquiry_public_access = 0 rows, plus_inquiry_forms = 0,
+  plus_inquiries = 0. Allowlist empty and untouched.
+
+======================================================================================================================
+1. PUBLIC INQUIRY WORKFLOW (Phase 1) — isolated NemrynS1Iso stack, fictional orgs, switch ON only in that process
+======================================================================================================================
+Area                                      Result   Evidence
+Public form configuration (Settings)      PASS     staff E2E F1–F13 (save / confirm-live / publish / turn off / refusal
+                                                   without allowlist / read_only)
+Hosted page + embedding                   PASS     S7-B ON E2E 28/28; PR-prep link check V1–V6 (hosted link, snippet on a
+                                                   separate origin injects the iframe)
+Successful public submission              PASS     journey J2 (real browser form, UTM captured, only follow-up ticked)
+Inquiries list + badge                    PASS     journey J3; staff E2E N1–N3, L1–L8
+Detail + source attribution               PASS     journey J4 (google / cpc / dialysis-rides); staff E2E D1–D3
+Duplicate suggestions                     PASS     staff E2E D5, U1–U2
+Conversion → Contact + Opportunity        PASS     journey J5; staff E2E C1–C9
+Existing-contact linking (fill blanks)    PASS     staff E2E K1–K4
+Consent + DNC rules                       PASS     journey J5 (follow-up only, email + phone, never SMS); staff E2E C3,
+                                                   K3, X1–X4 (ack required client + server; no consent; DNC stays on)
+Dismiss + reopen                          PASS     staff E2E R1–R4
+Read-only staff + cross-tenant            PASS     staff E2E P1–P7, T1–T4
+Concurrency                               PASS     staff E2E S1–S2 (3 parallel conversions → exactly 1); SQL concurrency
+                                                   suite ALL PASS
+
+======================================================================================================================
+2. CORE + PLUS BUSINESS WORKFLOW (Phase 2) — one continuous fictional journey (journey script, isolated stack)
+======================================================================================================================
+Persona: "Margaret Fictional" asks (via the public form, from a Google ad link) about dialysis rides for her mother.
+
+ #  Step                                   Status            How it was verified / notes
+ 1  Inquiry received                       WORKING           J1–J4 public form → Growth → Inquiries (badge, detail, source)
+ 2  Contact created or linked              WORKING           J5 convert dialog (create); linking in staff E2E K1–K4
+ 3  Opportunity created                    WORKING           J5 private-pay opportunity "Margaret Fictional — Price question"
+ 4  Qualification + follow-up              WORKING           J6 stages New inquiry → Contacted → Qualified (with note); follow-up
+                                                             task. Stage moves, notes, tasks, activities are manual staff
+                                                             records. No reminders are sent; nothing is emailed/called.
+ 5  Estimate / quote created               WORKING           J7 quote with line items (base, mileage, mobility assistance)
+ 6  Revision, printing, lifecycle          WORKING*          J7–J8: Q1 sent → revised (Q1 superseded) → Q2 sent → ACCEPTED;
+                                                             opportunity moves to "Quote accepted (reported)"; print view opens.
+                                                             *"Sent" and "accepted" are RECORDED by staff. Nemryn does not
+                                                             email the quote, has no customer-facing acceptance or e-signature.
+ 7  Opportunity → Core Request handoff     WORKING           J9 "Create transportation request" → ONE pending Core Request
+                                                             (source Web); opportunity becomes Converted. Never automatic.
+ 8  Core Request approval                  WORKING           J10 staff Accept (+ link existing passenger). The handed-off request
+                                                             arrives with "Passenger needed": staff link or create the
+                                                             passenger first (correct Core behaviour; a demo step).
+ 9  Scheduling + dispatch                  WORKING           J11 trip created from the request, assigned to driver + vehicle;
+                                                             dispatch board
+10  Driver + trip workflow                 WORKING           J12 driver app (390px): en route → arrived → onboard → to
+                                                             destination → arrived → completed
+11  Completed transportation record        WORKING (defect)  J13 Proof of Service (Today) lists the trip "Ready for review" with
+                                                             driver + vehicle. DEFECT D-1: the completed Trip Detail header shows
+                                                             "Driver: Unassigned / Vehicle: —" (see section 5).
+ –  Invoicing / payment collection         MISSING           Billing page is a placeholder ("billing records are built in a
+                                                             later phase"). Payment on an opportunity is a staff-reported label
+                                                             only.
+ –  Quote delivery / customer acceptance   MISSING           No sending by email/SMS, no customer portal / e-sign; staff record.
+ –  Automatic communications               NOT PRESENT       By design in this phase (none were sent in any test).
+
+Core remained the authority: the only Core Request and the only trip in the journey were created by explicit staff
+actions (J15: requests +1, trips +1). Nothing was approved automatically.
+
+======================================================================================================================
+3. INQUIRIES UX REFINEMENT (Phase 3)
+======================================================================================================================
+File: src/app/operations/growth/inquiries/page.tsx (the only code change in S7-D)
+- Unfiltered empty state (New or All, no search): title "No inquiries yet"; description "Questions submitted through
+  your inquiry form will appear here. Manage your form in Settings → Nemryn Plus."
+- Filtered empty states unchanged in meaning ("No inquiries match this search." / "No inquiries here.").
+- No new component, layout change or database call (uses the existing list result). The copy does not say the form
+  is live; whether public submissions are possible is explained only in Settings (both gates shown).
+- Verified: journey J1 (screenshot d02-inquiries-empty.png); tsc, eslint clean.
+- Note: after earlier inquiries were converted / dismissed, the New view can be empty while older inquiries exist;
+  "No inquiries yet" is then slightly literal. Acceptable for the demo; revisit only if customers find it confusing.
+
+======================================================================================================================
+4. SECURITY & REGRESSION (Phase 4)
+======================================================================================================================
+All on the isolated stack (production build, `next start -p 3100`); public switch ON only for the ON-mode runs and the
+journey, OFF (production default) for everything else.
+
+Static / build
+  npx tsc --noEmit                                       PASS
+  npm run lint                                           PASS (0 errors; 113 warnings, all pre-existing)
+  next build                                             PASS
+  npm test                                               PASS 926 / 926
+  npm run test:release                                   PASS 28 / 28
+
+Database
+  plus_inquiries_tests.sql (RLS, roles, tenant, consent)  PASS 65 / 65
+  plus_inquiries_concurrency_test.sh                      PASS (ALL PASS)
+
+Inquiries
+  S7-B public E2E, switch OFF (default-off proof)        PASS 5 / 5  (config 404, submission 404 + nothing stored)
+  S7-B public E2E, switch ON (local only)                PASS 28 / 28
+  S7-C staff E2E                                         PASS 74 / 74 (with the new empty-state copy)
+  S7-D integrated journey (scratchpad script)            PASS 15 / 15 (J13 re-checked on the Today window; see 2)
+
+Regression
+  QA2 strict: core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79   PASS (199)
+  Quotes strict: s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26                 PASS (272)
+  Consents E2E (S6-B)                                    PASS 49 / 49
+  UI foundations p1b (shell, nav, responsive)            PASS 52 / 52
+
+Coverage of the Phase 4 list
+  Default-OFF public submissions      S7-B OFF 5/5; production HTTP 404 on unknown keys
+  Empty production allowlist          read-only production count = 0 (untouched)
+  Organization isolation / RLS        SQL 65/65; staff E2E T1–T4; QA2 auth-access 79/79
+  Staff roles + read_only             staff E2E P1–P7; F12
+  Consent + DNC                       staff E2E C3, K3, X1–X4; consents 49/49
+  Concurrent conversion               staff E2E S2; SQL concurrency suite
+  No cross-tenant leakage             staff E2E D6, T1–T4
+  Core intake unchanged               QA2 core-requests 25/25; no Core file changed
+  Responsive (mobile + desktop)       staff E2E L6 / F13 (820px); driver app 390px (journey); p1b 52/52
+  Keyboard accessibility              staff E2E L5; consents keyboard dialogs; axe 0 serious / critical (s4-a11y,
+                                      S7-C list / detail / dialogs / settings)
+
+======================================================================================================================
+5. DEFECTS AND OBSERVATIONS
+======================================================================================================================
+D-1 (legitimate, pre-existing Core, severity B — not fixed here, verification-only phase)
+    Completed Trip Detail shows "Driver: Unassigned" and "Vehicle: —". Cause: src/lib/operations/trip-detail.ts:297
+    shows only the ACTIVE assignment; completing a trip ends the assignment (trip_assignments.ended_at set), so the
+    header loses who drove. Data is intact (assignment row kept; Proof of Service shows driver + vehicle). Fix: fall
+    back to the last ended assignment for completed trips. Matters for billing review and customer disputes.
+O-1 (minor UX, C) Opportunity "Move to stage" picker starts on "New inquiry" whatever the current stage (it is a target
+    picker; the current stage is the badge). Could pre-select the next stage.
+O-2 (demo note) A request created from an opportunity has no passenger linked; staff link / create the passenger
+    before accepting. Intended Core behaviour; mention it in the demo.
+O-3 (test hygiene, not product) The S7-B public E2E's fixture cleanup cannot delete inquiries that a previous run
+    converted (opportunity FK). Run order / a reset avoids it; documented here, no change made.
+No security defect found.
+
+======================================================================================================================
+6. SCREENSHOTS (docs/design/concept-b/reviews/s7d/, fictional data, isolated stack)
+======================================================================================================================
+  d01-operations-brief         Core operational dashboard
+  d02-inquiries-empty          new empty-state copy
+  d03-public-inquiry-form      public hosted form (filled)
+  d04-public-inquiry-confirmation
+  d05-inquiries-list           list + badge
+  d06-inquiry-detail           detail with source attribution
+  d07-convert-dialog           convert (create) with consent explanation
+  d08-convert-success
+  d09-opportunity-detail       opportunity, "Quote accepted (reported)", Create transportation request
+  d10-opportunity-quotes       estimates & quotes panel
+  d11-quote-print              printable quote
+  d12-quotes-directory
+  d13-pipeline
+  d14-core-request-pending     handed-off request (pending, passenger needed)
+  d15-core-request-scheduled
+  d16-trip-detail              scheduled + assigned
+  d17-dispatch
+  d18-driver-home              driver app (390px)
+  d19-driver-trip-arrived
+  d20-trip-completed           shows defect D-1
+  d21-proof-of-service         completed record (Today)
+  d22-contact-history
+Earlier S7-C screenshots (docs/design/concept-b/reviews/s7c/) cover DNC, dismiss, Settings and the embed.
+
+======================================================================================================================
+7. 10-MINUTE AGENCY DEMO SCRIPT ("Nemryn Complete")
+======================================================================================================================
+Audience: owner / dispatcher of a small NEMT company. Plain language. Fictional agency "Fictional Org A".
+Setup (before the call, demo workspace only): Plus active; a published inquiry form; one fresh inquiry submitted from
+the public link (e.g. with ?utm_source=google); one passenger record; one active driver + vehicle; driver signed in on
+a phone (or a second browser at phone size). Never use real customer data.
+
+0:00  The problem (30s)
+      "Leads come in by phone, website and referrals; quotes live in spreadsheets; then dispatch retypes everything.
+       Nemryn keeps it in one place: Growth wins the ride, Core runs it."
+0:30  Core at a glance — Operations Brief (1 min)                                   [d01]
+      Today's trips, what needs attention, tomorrow's readiness. "This is where your dispatcher starts the day."
+1:30  A new inquiry arrives — website form (1 min)                                  [d03, d04, d05]
+      Show the short public form on the agency's site ("questions, not bookings"). Back in Nemryn: Growth → Inquiries
+      shows a badge. Open it: what they asked, who it's for, and that it came from a Google ad.            [d06]
+2:30  Turn it into a customer — Convert (1 min)                                     [d07, d08]
+      One click creates the contact and a sales opportunity. Point out: consent is only recorded for boxes the person
+      actually ticked; "Do not contact" customers get a warning. Nothing is sent automatically.
+3:30  Follow-up — Pipeline, contact, task (1 min)                                   [d13, d09, d22]
+      Move the opportunity to Contacted → Qualified with a note; add "Send quote tomorrow" as a task. Show the contact
+      timeline.
+4:30  The quote (1.5 min)                                                           [d10, d11, d12]
+      Create a quote (base fare, mileage, wheelchair assistance). Revise it — the old version is kept as superseded.
+      Mark sent, then record "accepted" when the family says yes. Show the printable quote and the quotes list.
+      Say clearly: "You send it the way you do today (print, PDF, email from your own mailbox); Nemryn records it."
+6:00  Book it — hand off to operations (1 min)                                      [d09 → d14]
+      "Create transportation request" turns the won opportunity into ONE pending request in Core. Dispatch decides:
+      link or add the passenger (Passenger needed), then Accept. Nothing is booked automatically.
+7:00  Schedule and dispatch (1 min)                                                 [d15, d16, d17]
+      Create the trip from the request, assign driver and vehicle, see it on the dispatch board.
+8:00  The driver's phone (1 min)                                                    [d18, d19]
+      Driver sees the trip, navigates, taps arrived / passenger onboard / complete. Wheelchair and instructions show.
+9:00  Proof the ride happened (40s)                                                 [d21]
+      Proof of Service → Today: the completed trip with driver and vehicle, ready for review before billing.
+      (Avoid opening the completed Trip Detail header until D-1 is fixed, or explain it.)
+9:40  Wrap-up (20s)
+      "Inquiry to completed ride, one system. Next on our roadmap: private-pay invoicing and payment, and facility
+       referral management." Do NOT claim invoicing, online payment, quote e-mailing or customer e-signature.
+
+Workarounds / not available during the demo
+- Public form in production: NOT activated (allowlist empty, server switch off). Demo the public form only in a
+  demo / isolated environment, or show screenshots d03–d04.
+- Quote delivery and acceptance are staff-recorded; billing/payment not available (Billing is a placeholder).
+- Handed-off request needs the passenger linked/created before accepting (intended).
+- Completed Trip Detail header shows "Unassigned" (D-1) — use Proof of Service for the completed record.
+
+======================================================================================================================
+8. COMMERCIAL GAP ASSESSMENT (Phase 6) — not built
+======================================================================================================================
+A = blocks the minimum paid operational workflow; B = important for pilot adoption; C = defer until validated.
+
+Acquire a customer
+  B  Activate the public inquiry form in production (owner-approved release: allowlist + server switch, privacy /
+     consent text review). Works end-to-end in isolation today.
+  C  Automated lead notifications to staff (email / SMS on a new inquiry); currently the in-app badge only.
+  C  Opportunity owner selection in the convert dialog; free contact search when linking.
+Prepare and communicate a quote
+  B  Send the quote from Nemryn (email with PDF) and record delivery automatically; today staff send outside Nemryn
+     and record "sent".
+  C  Customer-facing acceptance (link / e-signature); today staff record the response.
+Book a transportation request
+  —  Working (opportunity → pending Core Request; Core approval).
+  B  Carry passenger details from the opportunity/contact into the request (today "Passenger needed" is manual).
+Execute the trip
+  —  Working (scheduling, dispatch, driver app, completion, Proof of Service).
+  B  D-1: show who drove on completed Trip Detail.
+Invoice and collect payment
+  A  Private-pay invoicing: create an invoice from a completed trip / accepted quote, numbering, PDF, status
+     (unpaid / paid / void). The Billing area is a placeholder — this is the single gap that blocks a paid end-to-end
+     private-pay workflow inside Nemryn.
+  A  Record payments against invoices (manual: cash / check / card-on-file reference) and outstanding balance.
+  C  Online card payment collection (payment provider integration) — after manual payment recording is validated.
+  C  Insurance / broker (Medicaid) billing — separate product decision.
+Manage repeat customers
+  —  Largely working: contact history, rebooking from a contact (existing), Standing Orders for recurring care.
+  C  Customer-level price lists / saved rates.
+Manage facility referral relationships
+  B  Facility (clinic / dialysis centre / hospital) as a referral account in Growth: linked contacts, referral
+     volume, last referral, follow-ups. Core already has Facilities as locations; Growth has no account model.
+  C  Facility portal / bulk referral intake.
+
+Minimum to sell a paid pilot: A-items (invoicing + payment recording), then B-items in this order: D-1 fix, passenger
+carry-over, quote sending, facility referral accounts, production activation of the inquiry form.
+
+======================================================================================================================
+9. PRODUCTION ACTIVATION AND COMPLIANCE LIMITATIONS
+======================================================================================================================
+- Production public inquiries are OFF: PLUS_INQUIRY_SUBMISSIONS not set in production; activation allowlist empty
+  (verified read-only: 0 rows). Activation needs a separate, owner-approved release: choose organizations, set the
+  allowlist via the platform function, set the server switch, verify the hosted link on the real origin.
+- Consent: recorded only from ticked boxes, per channel/purpose, with consent text version; marketing never from an
+  unticked box; SMS never. Before activation, have the consent wording and privacy notice reviewed for each market
+  (TCPA / CAN-SPAM in the US).
+- The public form asks people not to include medical details, but cannot prevent it; free-text may contain health
+  information. Treat inquiry data as potentially sensitive (access is Plus-scoped, tenant-isolated, audited). HIPAA
+  posture (BAA with hosting / database vendors, retention policy) must be confirmed before marketing to covered
+  entities.
+- No automatic communications exist (no email/SMS from inquiries, quotes or tasks).
+- Payments: Nemryn does not take or verify payments; "payment reported" is a staff label.
+
+======================================================================================================================
+10. RECOMMENDATION ON P2-S7 CLOSURE
+======================================================================================================================
+CLOSE P2-S7. Inquiry intake (S7-A database, S7-B public form, S7-C staff management) works end to end on the
+isolated stack, with tenant isolation, roles, consent / DNC and concurrency verified, and production unchanged
+(95 migrations, public inquiries off, allowlist empty). The only S7-D code change is the empty-state copy (uncommitted,
+for owner review).
+
+Demo-ready for "Nemryn Complete" with the documented workarounds (section 7). Next priorities, matching the plan:
+1. Private-pay invoicing + manual payment recording (gap A).
+2. D-1 fix (completed trip shows who drove) — small Core change.
+3. Quote-to-trip completion: carry passenger details into the handed-off request; send quote from Nemryn.
+4. Facility referral accounts in Growth.
+5. Production activation of the inquiry form for chosen pilot organizations (separate approved release).
+
+Restrictions observed: no production data change (production touched read-only only: migration list + one count
+query); no activation; no migration; fictional data only; no commit / push / merge; no deployment-gate change; no
+communications sent. Isolated-stack test data was cleaned up or reset by the regression runners.

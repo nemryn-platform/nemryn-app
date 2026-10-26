@@ -1,0 +1,119 @@
+NEMRYN — NP-P2-S7D FINAL CLOSEOUT — S7-D copy change + Core defect D-1
+Date: 2026-10-26
+Branch: np-p2-s7d-integration (from main 82736e3). Uncommitted — awaiting owner review.
+
+VERDICT: PASS — D-1 fixed with display-only change, S7-D copy preserved; all targeted and regression checks green
+
+======================================================================================================================
+1. FILES CHANGED
+======================================================================================================================
+Modified
+  src/app/operations/growth/inquiries/page.tsx        S7-D empty-state copy (unchanged from the approved S7-D patch)
+  src/lib/operations/trip-detail.ts                   D-1: assignment embed also selects organization_id; new
+                                                      display-only fields summaryDriverName / summaryVehicleLabel
+  src/app/operations/trips/[tripId]/page.tsx          D-1: summary strip uses the display-only fields (2 lines)
+New
+  src/lib/operations/trip-assignment-display-core.ts        displayAssignmentOf() — pure selection rule
+  src/lib/operations/trip-assignment-display-core.test.mjs  7 regression tests
+Supporting (documentation, fictional data)
+  docs/reports/NP-P2-S7D-integration-closeout.txt     S7-D report (from the previous step)
+  docs/reports/NP-P2-S7D-final-closeout.txt           this report
+  docs/design/concept-b/reviews/s7d/*.png             S7-D journey screenshots + d1-completed-trip-after.png
+
+Not changed: trip completion logic, assignment RPCs / history, Proof of Service, database schema / migrations,
+public inquiry activation, deployment gate, production data.
+
+======================================================================================================================
+2. D-1 — CAUSE AND SOLUTION
+======================================================================================================================
+Cause
+  getTripDetail() (src/lib/operations/trip-detail.ts) took driver and vehicle only from the ACTIVE assignment
+  (ended_at IS NULL). Completing a trip ends its assignment (ended_at set, row kept as history), so a completed trip had
+  no active assignment and the summary strip showed "Driver: Unassigned / Vehicle: —". Data was intact (Proof of
+  Service already showed the driver and vehicle).
+
+Solution (smallest safe change)
+  - New pure helper displayAssignmentOf(assignments, tripState, organizationId):
+      * any trip with an active assignment -> that assignment (existing behaviour, unchanged);
+      * a COMPLETED trip with no active assignment -> the most recently ended assignment (latest ended_at; ties ->
+        latest assigned_at), i.e. who actually drove — after a reassignment, the final driver;
+      * cancelled / no-show / scheduled-without-assignment / no or unreadable history -> none (placeholders stay);
+      * rows of another organization are ignored (defence in depth; the query already joins assignments on
+        (trip_id, organization_id) under the caller's RLS, and the trip itself is filtered by organization).
+  - Only the summary strip's Driver / Vehicle facts use it (summaryDriverName / summaryVehicleLabel).
+    activeAssignmentId, driverId, vehicleId, driverName, driverPhone and vehicleLabel are unchanged, so assignment /
+    reassignment controls, overlap checks, the Current Status panel, the action bar and the status label behave exactly
+    as before. No extra query (organization_id added to the existing embed).
+
+======================================================================================================================
+3. TEST RESULTS
+======================================================================================================================
+Unit — trip-assignment-display-core.test.mjs            PASS 7 / 7
+  active trip -> active assignment (4 active states); completed -> most recently ended; reassigned then completed ->
+  final driver (order-independent, tie-break); completed with an active row -> active wins; missing / null /
+  unparseable history -> none; non-completed terminal states (cancelled, no_show, scheduled after unassign) -> none;
+  cross-tenant rows (active and ended) never selected.
+
+Browser — isolated stack (production build, fictional seed; verification scripts in the session scratchpad)
+  PASS  active trip: summary shows the active driver + vehicle (Fictional Driver A1 / Van A1)
+  PASS  active trip: "Manage Assignment" still offered
+  PASS  reassigned (A1/Van A1 ended) then completed by A2: summary shows Fictional Driver A2 / Fictional Van A2
+  PASS  completed trip: no assignment control appears
+  PASS  completed trip with NO assignment history (legacy record simulated in the isolated DB): "Unassigned" / "—",
+        no error  (Core correctly refuses to complete a never-assigned trip, so this was simulated)
+  PASS  cross-tenant: Org B admin opening the Org A trip sees no trip and no driver name
+  Screenshot: docs/design/concept-b/reviews/s7d/d1-completed-trip-after.png
+
+Suites
+  QA2 strict: core-requests 25, core-trips-dispatch 44 (Trip Detail / assignment / dispatch), core-records 28,
+              growth 23, auth-access 79                  PASS 199 / 199
+  S7-C staff Inquiries E2E                               PASS 74 / 74
+  npx tsc --noEmit                                       PASS
+  npm run lint                                           PASS (0 errors; 113 pre-existing warnings, none new)
+  next build                                             PASS
+  npm test                                               PASS 933 / 933 (926 + 7 new)
+  npm run test:release                                   PASS 28 / 28
+
+======================================================================================================================
+4. S7-D COPY CONFIRMATION
+======================================================================================================================
+Diff unchanged from the approved S7-D patch (src/app/operations/growth/inquiries/page.tsx, +6 / -3). Rendered on the
+isolated stack:
+  default (New, no search)  "No inquiries yet / Questions submitted through your inquiry form will appear here. Manage
+                             your form in Settings → Nemryn Plus."
+  All, no search            same copy
+  Dismissed                 "No inquiries here. / Change the search or status to see other inquiries."
+  search "nobody"           "No inquiries match this search. / Change the search or status to see other inquiries."
+No new component, layout change or database call; the copy does not claim public submissions are active.
+
+======================================================================================================================
+5. RECOMMENDED COMMIT AND PR
+======================================================================================================================
+Commit (one commit; stage exactly these paths):
+  git add src/app/operations/growth/inquiries/page.tsx \
+          src/lib/operations/trip-detail.ts \
+          "src/app/operations/trips/[tripId]/page.tsx" \
+          src/lib/operations/trip-assignment-display-core.ts \
+          src/lib/operations/trip-assignment-display-core.test.mjs \
+          docs/reports/NP-P2-S7D-integration-closeout.txt \
+          docs/reports/NP-P2-S7D-final-closeout.txt \
+          docs/design/concept-b/reviews/s7d
+
+  Message:
+    fix(core): show who drove on completed trip detail; finalize inquiries empty state
+
+    - Trip Detail summary falls back to the most recent ended assignment for completed trips (D-1);
+      assignment controls still use the active assignment
+    - Growth -> Inquiries empty-state copy (NP-P2-S7-D)
+    - S7-D integration closeout and demo journey screenshots
+
+PR: branch np-p2-s7d-integration -> main, title "fix(core): completed trip driver display + S7-D closeout".
+  Push with the nemryn GitHub account (gh credential helper for that command only). No migration, no environment
+  change, public inquiries stay off. Expected checks: Vercel preview, db-compat, release-db-compat (report-only).
+  Do not merge without owner review.
+
+======================================================================================================================
+6. RESTRICTIONS OBSERVED
+======================================================================================================================
+No commit / push / merge. No production data change, migration, schema change or public-inquiry activation. All test
+data fictional on the isolated stack (reset by the QA2 runner afterwards). No communications sent.
