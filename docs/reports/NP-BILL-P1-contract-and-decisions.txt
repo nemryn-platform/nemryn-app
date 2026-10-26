@@ -1,0 +1,218 @@
+NEMRYN — NP-BILL-P1 — PRIVATE-PAY BILLING MVP: CONTRACT AND DECISIONS
+Date: 2026-10-26
+Base: main c078f40 (PR #40 merged 2026-10-26T11:44Z). Design only — no migration, code, commit or production access.
+Status: STOP for owner review. Approve the six decisions in section 5, then implementation starts at step 1 of
+section 6.
+
+======================================================================================================================
+1. WHAT EXISTS TODAY (findings)
+======================================================================================================================
+- Billing: /operations/billing is a placeholder (OperationsRouteStub "billing records are built in a later phase").
+  It is NOT in the sidebar; it is only named in the header context (nav-core.ts OTHER_CONTEXT, "Administration").
+- No financial tables in Core. No invoice, payment, rate or tax data anywhere.
+- Trips: trips.state 'completed' + completed_at; passenger_id, request_id, pickup / destination descriptions and
+  facility ids; assignment history kept (D-1 fix shows who drove). Requests keep requester name / relationship /
+  phone / email.
+- Proof of Service: a review CHECKLIST over completed trips ("ready for review" / "needs review"); explicitly not a
+  billing or payment status and holds no money. Read-only for billing purposes.
+- Plus quotes: plus_quotes holds itemised prices in integer cents (base, mileage, wait, extra stops, mobility
+  assistance, escort, return leg, other, discount, total, currency 'USD'); per-org numbering via
+  plus_quote_counters; idempotency keys; staff-recorded sent / accepted; printable page /quote-print/[id].
+  plus_opportunities.payment_reported_status is a staff label, never settlement.
+- Organizations: name, business_phone / business_email / business_address, timezone — enough for an invoice header.
+- Reusable patterns: SECURITY DEFINER RPCs as the only write path (ZW001..ZW006 error codes), composite
+  (id, organization_id) foreign keys for tenant safety, has_org_role() RLS helpers, expected-version concurrency,
+  idempotency keys, audit_events (entity, action, before / after jsonb), counters with row locks, print routes outside
+  /operations (browser Print -> PDF), Concept B DataTable / Panel / Dialog / StatusBadge / StatTile, isolated-stack
+  SQL + concurrency + browser E2E harnesses.
+
+======================================================================================================================
+2. OWNERSHIP (recommendation)
+======================================================================================================================
+Billing is CORE (tables prefixed billing_, routes under /operations/billing), available to every organization with
+no Plus entitlement. It bills Core trips for Core passengers / requesters / facilities. Plus is optional input only:
+an invoice MAY reference a Plus quote (to pre-fill lines and show "From quote Q-0012"), but never requires it, and an
+invoice keeps working if Plus lapses (the quote number is snapshotted).
+
+======================================================================================================================
+3. MINIMAL DATA MODEL (2 migrations)
+======================================================================================================================
+All amounts bigint cents >= 0, currency 'USD' only. Every table: organization_id, composite (id, organization_id) key,
+RLS enabled, SELECT policy for the billing role (decision D2), NO insert / update / delete policies — writes only via
+RPCs. Every write audited in audit_events.
+
+billing_invoice_counters   organization_id PK, next_number   (same pattern as plus_quote_counters)
+
+billing_invoices
+  id, organization_id, invoice_number (NULL while draft; unique per org once issued), status draft | issued | void,
+  bill_to_kind passenger | requester | facility | other,
+  bill_to_passenger_id / bill_to_facility_id (nullable composite FKs),
+  bill_to_name, bill_to_address, bill_to_email, bill_to_phone   (SNAPSHOT at issue; never re-read later),
+  source_quote_id (nullable composite FK -> plus_quotes), source_quote_number (snapshot),
+  subtotal_cents, discount_cents, total_cents, currency,
+  issue_date, due_date (org-local dates), terms_note,
+  version, idempotency_key (unique per org), created_by/at, issued_by/at, voided_by/at, void_reason.
+  Checks: issued/void => number + issue_date; void => reason; total = subtotal - discount >= 0.
+
+billing_invoice_lines
+  id, organization_id, invoice_id, position, trip_id (nullable composite FK), description, quantity numeric(10,2),
+  unit_cents bigint, amount_cents bigint (= round(quantity * unit) computed by the RPC).
+
+billing_invoice_trips      (the duplicate-invoicing guard)
+  invoice_id, trip_id, organization_id, released_at.
+  UNIQUE (trip_id) WHERE released_at IS NULL  -> a trip can be on at most ONE non-void invoice. Void releases it.
+
+billing_payments           (append-only ledger)
+  id, organization_id, invoice_id, entry_kind payment | reversal, amount_cents > 0, received_on date,
+  method cash | check | card_external | bank_transfer | other, reference, note,
+  reverses_payment_id (UNIQUE: a payment can be reversed once), idempotency_key (unique per org), recorded_by/at.
+  Trigger blocks UPDATE / DELETE for everyone (corrections are reversal entries, never edits).
+
+Derived, never stored separately:
+  paid_cents = sum(payments) - sum(reversals);  balance_cents = total_cents - paid_cents
+  display status: draft | issued (nothing paid) | partially_paid | paid | void  (+ "overdue" badge when due_date <
+  today in the org timezone and balance > 0). Computing it avoids status drift.
+
+RPCs (SECURITY DEFINER, row-locked, version / idempotency checked)
+  billing_list_invoices(filters, page) · billing_get_invoice(id) · billing_list_billable_trips(passenger?, page)
+  billing_summary() (outstanding, overdue, collected this month)
+  billing_create_invoice_draft(trip_ids[], bill_to, source_quote_id?, idempotency_key)
+      -> eligible trips only (completed, same org, not on a non-void invoice); pre-fills one line per trip, or the
+         quote's lines when a readable quote is given
+  billing_update_invoice_draft(id, expected_version, bill_to, lines jsonb, discount, due_date, terms)
+  billing_discard_draft(id, expected_version)          drafts were never financial records: delete + release trips,
+                                                        audited (number never assigned, so no gap)
+  billing_issue_invoice(id, expected_version, issue_date, due_date)
+      -> locks the counter, assigns the next number, snapshots bill-to, freezes lines (trigger)
+  billing_void_invoice(id, expected_version, reason)   only when paid_cents = 0; keeps number; releases trips
+  billing_record_payment(invoice_id, expected_version, amount, received_on, method, reference, note, idempotency_key)
+      -> issued only; amount <= balance (no overpayment); same key returns the same row
+  billing_reverse_payment(payment_id, reason, idempotency_key)  -> one reversal per payment; invoice reopens
+
+======================================================================================================================
+4. MINIMUM USER EXPERIENCE (existing shell, Concept B)
+======================================================================================================================
+Workflow: Completed Trip -> Create invoice -> (edit draft) -> Issue -> Record payment -> Receipt.
+
+- Sidebar: "Billing" under Administration (the section that already names it), visible to the billing role only;
+  the stub page is replaced. No shell change.
+- /operations/billing: StatTiles (Outstanding, Overdue, Collected this month); two tabs — "Ready to invoice"
+  (completed, uninvoiced trips with passenger, date, route, Proof-of-Service state as an informational badge) and
+  "Invoices" (number, bill-to, issue / due date, total, balance, status; search + status filter; DataTable).
+- /operations/billing/invoices/[id]: header (number or "Draft", status), bill-to, line items (editable only in draft),
+  totals, payments list with reversals, actions: Issue · Record payment (dialog) · Reverse (dialog, reason required) ·
+  Void (dialog, reason required) · Print invoice. Each action shows an explicit result message.
+- Trip Detail (completed trips, billing role only): small Billing panel — "Create invoice" or
+  "Invoice INV-0007 · Partially paid" link. Nothing else on Trip Detail changes.
+- Print pages outside /operations (same pattern as /quote-print): /invoice-print/[id] and /receipt-print/[paymentId]
+  — organization header from organizations.business_*, bill-to snapshot, lines, totals, payments, balance. Browser
+  Print / Save as PDF. No email or public link.
+
+Deferred (explicitly out of scope): Stripe / any gateway or card capture (no card data stored), Medicaid / broker
+claims, accounting software / ledgers / tax engines, payroll, facility batch billing, automated reminders or
+statements, credits / refunds beyond reversal, multi-currency, CRM additions.
+
+======================================================================================================================
+5. OWNER DECISIONS (six) — recommended default first
+======================================================================================================================
+D1  Packaging: Billing is part of Core for every organization (no entitlement check).
+    Why: invoicing completed trips is the minimum paid workflow; gating it would block Core-only pilots. A module
+    switch can be added later through organization_modules if pricing requires it.
+
+D2  Who can bill: Organization Admins only (view + all actions). Dispatchers see no Billing in the MVP.
+    Why: money handling needs a small, accountable group; matches Settings. Alternative later: a named "billing"
+    grant for dispatchers (same pattern as the Plus team-access grant).
+
+D3  Invoice scope: an invoice covers one or more COMPLETED trips for ONE bill-to party; each trip can be on at most
+    one non-void invoice. Proof of Service "needs review" is shown as a warning, not a block.
+    Why: weekly dialysis families want one invoice for 3 rides; one-trip-only invoices would triple paperwork.
+    Blocking on Proof of Service would stall billing for minor evidence gaps. No-show / cancellation fees: deferred
+    (add as an eligible trip state later).
+
+D4  Numbering and immutability: per-organization sequential numbers "INV-000123", assigned at ISSUE (drafts unnumbered
+    and discardable). Issued invoices are frozen; the only change is Void (reason required, number kept, allowed only
+    while nothing is paid net of reversals).
+    Why: gap-free numbers for issued invoices without locking drafts; matches common small-business practice and
+    keeps an auditable trail.
+
+D5  Payments: manual entries (cash, check, card on an external terminal, bank transfer / ACH, other) with date,
+    amount, reference; overpayment blocked; corrections only by a reversal entry (reason required), never edit /
+    delete.
+    Why: append-only ledger = trustworthy balances and audit; no credit-balance accounting needed in the MVP.
+
+D6  Bill-to, tax, terms: bill-to chosen per invoice from the trip's passenger, the request's requester, a facility,
+    or "other" (typed name / address); snapshotted at issue. No tax calculation (USD only). Due date per invoice,
+    default issue date + 15 days.
+    Why: private-pay NEMT is usually paid by the rider or a family member; facilities occasionally. Tax rules vary
+    and most NEMT private-pay rides are not taxed — add a tax line later only if a pilot needs it.
+
+======================================================================================================================
+6. IMPLEMENTATION SEQUENCE
+======================================================================================================================
+ 1. Branch np-bill-p1 from main.
+ 2. Migration A (tables, constraints, partial unique index, append-only trigger, RLS, grants, counters).
+ 3. Migration B (RPCs, audit writes, grants to authenticated only; anon nothing).
+ 4. SQL suite supabase/tests/billing_tests.sql (rollback-only) + billing_concurrency_test.sh (isolated-stack guard).
+ 5. Regenerate database.types.ts.
+ 6. src/lib/billing/billing-core.ts (pure: money format, status derivation, validation, labels) + unit tests.
+ 7. src/lib/billing/billing.ts (server reads) + server actions (admin guard + organization binding).
+ 8. Billing page (tiles, Ready to invoice, Invoices), invoice detail, dialogs; sidebar item; Trip Detail panel.
+ 9. Print pages (invoice, receipt).
+10. Browser E2E on the isolated stack + regression (QA2 strict, Quotes strict, consents, p1b, staff Inquiries).
+11. Report + PR. Production migration later through the established release process (read-only preflight, backup,
+    owner authorization, post-migration checks).
+
+======================================================================================================================
+7. SECURITY, CONCURRENCY, RISKS
+======================================================================================================================
+Security / safety design
+  - Deny by default: RLS on every billing table, SELECT only for the billing role in the same organization, no write
+    policies; RPCs re-check has_org_role + organization on every call; composite FKs make cross-tenant links
+    impossible; anon has no grants.
+  - Concurrency: invoice row FOR UPDATE + expected_version on every draft / issue / void / payment; counter row lock
+    for numbers (no duplicates, no gaps among issued); partial unique index for the one-active-invoice-per-trip rule;
+    idempotency keys on create / payment / reversal (double-clicks and retries return the same row).
+  - Immutability: trigger rejects changes to lines / bill-to / amounts once issued; payments table rejects UPDATE /
+    DELETE; void never deletes; every action in audit_events.
+  - No card data, no payment-provider secrets, no outbound email.
+
+Genuine risks / blockers
+  - Production migration required (two migrations): needs the usual backup + owner authorization step.
+  - Invoices contain passenger names and trip addresses: for HIPAA-covered customers this is PHI. Keep print-only
+    distribution, no public links; confirm vendor BAAs before selling to covered entities.
+  - Legal invoice requirements (business name / address / tax id) vary by state: organizations.business_address
+    exists; a tax-id field is NOT present — add only if a pilot requires it (small follow-up).
+  - Pricing input is manual (or copied from a quote): no rate cards. Acceptable for the MVP; rate cards are a later
+    candidate.
+  - D2 admin-only may slow agencies where a dispatcher does billing; mitigated by the later grant option.
+
+======================================================================================================================
+8. TARGETED TEST PLAN
+======================================================================================================================
+SQL (rollback-only suite, isolated stack)
+  RLS deny-by-default for anon / driver / dispatcher (per D2) / other tenant; admin read / write; eligibility (only
+  completed, own org, not already invoiced); draft edit rules; issue numbering + snapshot + freeze; void rules
+  (blocked when paid, releases trips, keeps number); payments (issued only, no overpayment, idempotency, one reversal,
+  balance math); append-only enforcement; audit rows for every action.
+Concurrency script
+  Parallel issue of several drafts (unique consecutive numbers); parallel payments that together exceed the balance
+  (exactly the allowed ones succeed); parallel create for the same trip (one invoice); payment vs void race.
+Unit (node --test)
+  Money formatting / parsing (cents), quantity x unit rounding, derived status + overdue in org timezone, validation.
+Browser E2E (isolated stack, fictional data)
+  Completed trip -> create -> edit lines -> issue -> partial payment -> receipt -> remaining payment -> paid;
+  reversal reopens balance; void blocked while paid; duplicate invoicing refused; Trip Detail panel; dispatcher /
+  driver / Org B denied; print pages; axe; 390 / 820 / 1440 layouts.
+Regression
+  QA2 strict, Quotes strict, consents, p1b, Inquiries staff E2E, npm test, test:release, tsc, lint, build.
+
+======================================================================================================================
+9. ESTIMATED CHANGE SURFACE
+======================================================================================================================
+  SQL       2 migrations (~1,000-1,300 lines), SQL suite (~600), concurrency script (~200)
+  App       ~14 new files (core + tests, server reads, actions, 2 pages + detail, 4 dialogs / tables, 2 print pages)
+            ~2,000-2,500 lines; modified: nav-core (+test), icons, Trip Detail page (panel), database.types
+  E2E       1 new suite (~450 lines)
+  No change to trips, assignments, Proof of Service, requests, Plus tables (other than an optional FK reference to
+  plus_quotes), deployment gate or public inquiry activation.
+  One focused development cycle after approval.

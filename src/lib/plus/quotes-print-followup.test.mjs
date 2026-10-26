@@ -250,5 +250,11 @@ test("O1 source rules: the stage comes from the existing plus_get_quote row; the
   const migrations = readdirSync(new URL("../../../supabase/migrations/", import.meta.url).pathname).sort();
   assert.ok(migrations.includes("20261021100000_plus_quote_lifecycle_activity.sql"));
   const later = migrations.filter((m) => m > "20261021100000_plus_quote_lifecycle_activity.sql");
-  for (const m of later) assert.doesNotMatch(src(`supabase/migrations/${m}`), /plus_quotes|plus_get_quote|plus_quote_/, m);
+  // NP-BILL-P1's Core billing migrations only READ quotes (an optional FK + the import read, R3): they may name
+  // plus_quotes but never change the quote schema, rows or RPCs.
+  const billing = (m) => /_core_billing_/.test(m);
+  for (const m of later.filter((x) => !billing(x))) assert.doesNotMatch(src(`supabase/migrations/${m}`), /plus_quotes|plus_get_quote|plus_quote_/, m);
+  for (const m of later.filter(billing)) {
+    assert.doesNotMatch(src(`supabase/migrations/${m}`), /alter table public\.plus_quotes|update public\.plus_quotes|insert into public\.plus_quotes|delete from public\.plus_quotes|function public\.plus_[a-z_]*quote/i, m);
+  }
 });
