@@ -16,6 +16,7 @@ import { isUuid } from "@/lib/plus/attribution-core";
 import { parseServiceTypeInput } from "@/lib/operations/log-request-options";
 import { SERVICE_TYPE_VALUES } from "@/lib/public-intake/website-intake-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { parsePassengerChoice } from "@/lib/plus/handoff-core";
 
 /**
  * Conversion & rebooking actions (NP-P2-S4). Each re-checks Growth access (requirePlusAccess), the organization binding
@@ -30,9 +31,12 @@ const NO_WRITE = "You can view this record but can't create transportation reque
 export interface BookingActionState {
   status: "idle" | "success" | "error";
   message?: string;
-  errors?: BookingFieldErrors;
+  errors?: BookingFieldErrors & { passenger?: string; riderName?: string };
   requestId?: string;
   replayed?: boolean;
+  /** NP-PILOT-P1: what happened to the optional passenger / rider name (absent when neither was given) */
+  passengerLinked?: boolean;
+  passengerNote?: string;
 }
 
 function text(formData: FormData, name: string): string {
@@ -61,12 +65,36 @@ async function guardWrite(formData: FormData) {
   return { context } as const;
 }
 
+function readPassengerChoice(formData: FormData) {
+  return parsePassengerChoice({ passengerId: formData.get("passengerId"), passengerConfirmed: formData.get("passengerConfirmed"), riderName: formData.get("riderName") });
+}
+
+/**
+ * NP-PILOT-P1: the chosen passenger / rider name goes INTO the booking RPC, so Core's log_transportation_request links the
+ * passenger (same organization, ACTIVE -- re-checked in the same transaction) or records the rider-name snapshot for Add
+ * New Passenger. A refused passenger rolls the whole conversion back: nothing is created. A replayed submit returns the
+ * original request unchanged.
+ */
+function passengerOutcome(choice: { passengerId: string | null; riderName: string | null }, created: boolean): Pick<BookingActionState, "passengerLinked" | "passengerNote"> {
+  if (!choice.passengerId && !choice.riderName) return {};
+  if (!created) return { passengerLinked: false, passengerNote: "This request already existed, so its passenger wasn't changed. Check it on the request page." };
+  if (choice.passengerId) return { passengerLinked: true, passengerNote: "Passenger linked to the request. Operations still reviews, accepts and schedules it." };
+  return { passengerLinked: false, passengerNote: `Rider's name recorded: ${choice.riderName}. Add them as a new passenger on the request page (the form is prefilled with this name).` };
+}
+
+/** A refused passenger / rider name sends the person back to that field (the message says nothing was created). */
+function passengerFieldError(reason: string | undefined): BookingActionState["errors"] {
+  if (reason === "passenger_unavailable") return { passenger: "Choose again, or decide on the request page." };
+  if (reason === "invalid_passenger_name") return { riderName: "Check the rider's name." };
+  return undefined;
+}
+
 // No revalidatePath here: in a Server Action it re-renders the CURRENT page immediately, which would show the converted
 // opportunity WITHOUT its conversion control and unmount the confirmation before the person sees it. The dialog refreshes
 // the page (router.refresh) when the person closes the confirmation; the Operations pages are dynamic and render fresh.
 function refresh() {}
 
-/** Opportunity -> ONE pending Core Request (+ conversion link, opportunity converted), in one database transaction. */
+/** Opportunity -> ONE pending Core Request (+ optional passenger / rider name, conversion link, opportunity converted), in one database transaction. */
 export async function convertOpportunityAction(_prev: BookingActionState, formData: FormData): Promise<BookingActionState> {
   const guard = await guardWrite(formData);
   if ("error" in guard) return { status: "error", message: guard.error };
@@ -79,6 +107,8 @@ export async function convertOpportunityAction(_prev: BookingActionState, formDa
   const parsed = validateBookingForm(readValues(formData), { needsSource: false });
   if (!parsed.ok) return { status: "error", errors: parsed.errors, message: "Check the highlighted fields." };
   const v = parsed.value;
+  const passenger = readPassengerChoice(formData);
+  if (!passenger.ok) return { status: "error", errors: { [passenger.field]: passenger.error }, message: passenger.error };
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.rpc("plus_convert_opportunity_to_request", {
     p_organization_id: guard.context.organizationId,
@@ -93,13 +123,15 @@ export async function convertOpportunityAction(_prev: BookingActionState, formDa
     p_preferred_time: v.preferredTime as string,
     p_assistance_notes: v.assistanceNotes as string,
     p_additional_notes: v.additionalNotes as string,
+    p_passenger_id: passenger.passengerId ?? undefined,
+    p_requested_passenger_name: passenger.riderName ?? undefined,
   });
   if (error || !data) {
     console.error("[plus] conversion failed", error?.code ?? "no_data");
-    return { status: "error", message: bookingErrorMessage(error?.code, error?.message) };
+    return { status: "error", message: bookingErrorMessage(error?.code, error?.message), errors: passengerFieldError(error?.message) };
   }
   refresh();
-  return { status: "success", message: BOOKING_SUCCESS_MESSAGE, requestId: data.request_id ?? undefined, replayed: data.changed === false };
+  return { status: "success", message: BOOKING_SUCCESS_MESSAGE, requestId: data.request_id ?? undefined, replayed: data.changed === false, ...passengerOutcome(passenger, data.changed === true) };
 }
 
 /** Contact -> ONE new pending Core Request (+ rebooking link). No opportunity is created or changed. */
@@ -116,6 +148,8 @@ export async function rebookContactAction(_prev: BookingActionState, formData: F
   // never trimmed into a valid value). Configured Services do not restrict it (OD-S1 = A); Core re-validates.
   const service = parseServiceTypeInput(formData.get("serviceType"), SERVICE_TYPE_VALUES);
   if (!service.ok) return { status: "error", errors: { serviceType: BOOKING_SERVICE_ERROR }, message: "Check the highlighted fields." };
+  const passenger = readPassengerChoice(formData);
+  if (!passenger.ok) return { status: "error", errors: { [passenger.field]: passenger.error }, message: passenger.error };
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.rpc("plus_create_rebooking_request", {
     p_organization_id: guard.context.organizationId,
@@ -131,11 +165,13 @@ export async function rebookContactAction(_prev: BookingActionState, formData: F
     p_assistance_notes: v.assistanceNotes as string,
     p_additional_notes: v.additionalNotes as string,
     p_service_type: service.value ?? undefined,
+    p_passenger_id: passenger.passengerId ?? undefined,
+    p_requested_passenger_name: passenger.riderName ?? undefined,
   });
   if (error || !data) {
     console.error("[plus] rebooking failed", error?.code ?? "no_data");
-    return { status: "error", message: bookingErrorMessage(error?.code, error?.message) };
+    return { status: "error", message: bookingErrorMessage(error?.code, error?.message), errors: passengerFieldError(error?.message) };
   }
   refresh();
-  return { status: "success", message: BOOKING_SUCCESS_MESSAGE, requestId: data.request_id ?? undefined, replayed: data.changed === false };
+  return { status: "success", message: BOOKING_SUCCESS_MESSAGE, requestId: data.request_id ?? undefined, replayed: data.changed === false, ...passengerOutcome(passenger, data.changed === true) };
 }

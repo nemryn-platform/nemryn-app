@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState } from "react";
+import { startTransition, useActionState, useEffect, useState } from "react";
 import { convertOpportunityAction, rebookContactAction, type BookingActionState } from "@/app/operations/growth/booking/actions";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { BOOKING_LIMITS, BOOKING_PENDING_NOTE, doNotContactNotice } from "@/lib/plus/booking-core";
+import { PASSENGER_MATCH_LABELS, RIDER_NAME_MAX, type HandoffPrefill, type PassengerChoice } from "@/lib/plus/handoff-core";
 import { REQUESTER_RELATIONSHIP_OPTIONS, RETURN_TRIP_OPTIONS, SOURCE_OPTIONS, DEFAULT_SOURCE, SERVICE_NOT_SPECIFIED_LABEL, SERVICE_OPTIONS_UNAVAILABLE_NOTE, selectOptionLabel, type SelectOption } from "@/lib/operations/log-request-options";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
@@ -48,6 +50,11 @@ export function BookingRequestDialog(props: {
   serviceOptions?: SelectOption[];
   /** rebooking: the organization's Services could not be loaded (only "Not specified" is offered, with a short note) */
   serviceOptionsUnavailable?: boolean;
+  /**
+   * NP-PILOT-P1 handoff hints: suggested (editable) "Who is requesting" / "Return trip" from data Growth already holds,
+   * and the organization's active passengers for an OPTIONAL "Who will ride?" choice (null = list unavailable).
+   */
+  handoff?: { prefill: HandoffPrefill; passengers: PassengerChoice[] | null };
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -86,6 +93,7 @@ function BookingForm({
   opportunityServiceLabel,
   serviceOptions,
   serviceOptionsUnavailable = false,
+  handoff,
   title,
   onClose: close,
 }: Parameters<typeof BookingRequestDialog>[0] & { title: string; onClose: (created: boolean) => void }) {
@@ -108,10 +116,10 @@ function BookingForm({
   const [step, setStep] = useState<"edit" | "review">("edit");
   const [state, action, pending] = useActionState(mode === "convert" ? convertOpportunityAction : rebookContactAction, IDLE);
   const [v, setV] = useState({
-    requesterRelationship: "self",
+    requesterRelationship: (handoff?.prefill.requesterRelationship ?? "self") as string,
     pickupDescription: "",
     destinationDescription: "",
-    returnTripNeeded: "no",
+    returnTripNeeded: handoff?.prefill.returnTripNeeded ?? "no",
     preferredDate: "",
     preferredTime: "",
     assistanceNotes: "",
@@ -119,10 +127,26 @@ function BookingForm({
     source: DEFAULT_SOURCE,
     // rebooking only: "" = Not specified (posted as a hidden field; the conversion action never reads it)
     serviceType: "",
+    // NP-PILOT-P1: "" = decide on the request page (the existing flow); a chosen passenger needs explicit confirmation
+    passengerId: "",
+    passengerConfirmed: "",
+    // NP-PILOT-P1 D1/D3: OR the name of a rider who isn't a passenger yet (recorded on the request for Add New Passenger).
+    // The requester's name is only suggested when staff tick "the requester is the person who will ride".
+    riderName: "",
+    riderIsRequester: "",
   });
+  const chosenPassenger = handoff?.passengers?.find((p) => p.id === v.passengerId) ?? null;
   const rebookServiceOptions = serviceOptions ?? [{ value: "", label: SERVICE_NOT_SPECIFIED_LABEL }];
   const set = (k: keyof typeof v) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [k]: e.target.value }));
-  const missing = !v.pickupDescription.trim() || !v.destinationDescription.trim();
+  const setRiderIsRequester = (on: boolean) =>
+    setV((x) => ({
+      ...x,
+      riderIsRequester: on ? "yes" : "",
+      requesterRelationship: on ? "self" : x.requesterRelationship,
+      // suggest the contact's name (editable); unticking removes it only if it is still exactly the suggestion
+      riderName: on ? (x.riderName.trim() || customer.name) : x.riderName === customer.name ? "" : x.riderName,
+    }));
+  const missing = !v.pickupDescription.trim() || !v.destinationDescription.trim() || (v.passengerId !== "" && v.passengerConfirmed !== "yes");
   const errors = state.errors ?? {};
   // a server-side validation error sends the person back to the fields
   const [seen, setSeen] = useState<BookingActionState>(IDLE);
@@ -134,6 +158,8 @@ function BookingForm({
     setSeen(state);
     if (state.status === "error") setHadError(true);
     if (state.status === "error" && state.errors) setStep("edit");
+    // a refused passenger (inactive / not in this workspace) is not offered again as if still chosen
+    if (state.status === "error" && state.errors?.passenger) setV((x) => ({ ...x, passengerId: "", passengerConfirmed: "" }));
   }
   const onClose = () => close(state.status === "success");
   // a confirmed result ends this intended request: the next opened form is a NEW request with a new key
@@ -149,6 +175,11 @@ function BookingForm({
       <Dialog open onClose={onClose} title={title}>
         <div className="flex flex-col gap-zw-md" data-testid="booking-success">
           <AttentionState level="info" title={state.message ?? ""} description={BOOKING_PENDING_NOTE} />
+          {state.passengerNote && (
+            <p className={cn(typography.bodySmall, state.replayed ? "text-warning-text" : "text-text-secondary")} data-testid="booking-passenger-result">
+              {state.passengerNote}
+            </p>
+          )}
           {state.replayed && (hadError || restored) && (
             <p className={cn(typography.metadata, "text-text-secondary")} data-testid="booking-replayed">
               This request had already been created; nothing new was added.
@@ -169,7 +200,16 @@ function BookingForm({
 
   return (
     <Dialog open onClose={onClose} title={title} description={BOOKING_PENDING_NOTE}>
-      <form action={action} onSubmit={rememberKey} className="flex flex-col gap-zw-md" noValidate data-testid="booking-form">
+      {/* dispatched by hand: a <form action> is reset by React after every submit, which would show the selects' first
+          options while the form state still holds the person's choices */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          rememberKey();
+          const fd = new FormData(e.currentTarget);
+          startTransition(() => action(fd));
+        }}
+        className="flex flex-col gap-zw-md" noValidate data-testid="booking-form">
         <input type="hidden" name="organizationId" value={organizationId} />
         <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
         {opportunityId && <input type="hidden" name="opportunityId" value={opportunityId} />}
@@ -220,9 +260,82 @@ function BookingForm({
 
         {step === "edit" ? (
           <div className="flex flex-col gap-zw-md" data-testid="booking-edit">
-            <Select label="Who is requesting" options={REQUESTER_RELATIONSHIP_OPTIONS} value={v.requesterRelationship} onChange={set("requesterRelationship")} error={errors.requesterRelationship} data-testid="booking-relationship" />
-            <Textarea label="Pickup location" required rows={2} maxLength={BOOKING_LIMITS.location} value={v.pickupDescription} onChange={set("pickupDescription")} error={errors.pickupDescription} data-testid="booking-pickup" />
-            <Textarea label="Destination" required rows={2} maxLength={BOOKING_LIMITS.location} value={v.destinationDescription} onChange={set("destinationDescription")} error={errors.destinationDescription} data-testid="booking-destination" />
+            <Select
+              label="Who is requesting"
+              options={REQUESTER_RELATIONSHIP_OPTIONS}
+              value={v.requesterRelationship}
+              // someone requesting for another person can't also be the rider
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value !== "self" && v.riderIsRequester === "yes") setRiderIsRequester(false);
+                setV((x) => ({ ...x, requesterRelationship: value }));
+              }}
+              error={errors.requesterRelationship}
+              data-testid="booking-relationship"
+            />
+            {handoff && handoff.prefill.notes.length > 0 && (
+              <ul className={cn(typography.metadata, "-mt-2 text-text-muted")} data-testid="booking-prefill-notes">
+                {handoff.prefill.notes.map((n) => (
+                  <li key={n}>Suggested — {n} Check before continuing.</li>
+                ))}
+              </ul>
+            )}
+            {handoff && (
+              <div className="flex flex-col gap-2 rounded-md border border-border-subtle p-3" data-testid="booking-passenger">
+                {handoff.passengers === null ? (
+                  <p className={cn(typography.bodySmall, "text-text-secondary")}>The passenger list couldn&apos;t be loaded. Link or add the passenger on the request page.</p>
+                ) : (
+                  <>
+                    <Select
+                      label="Who will ride? (optional)"
+                      options={[
+                        { value: "", label: "Decide on the request page" },
+                        ...handoff.passengers.map((p) => ({
+                          value: p.id,
+                          label: `${p.displayName}${p.phone ? ` · ${p.phone}` : ""}${p.match ? ` — ${PASSENGER_MATCH_LABELS[p.match]}` : ""}`,
+                        })),
+                      ]}
+                      value={v.passengerId}
+                      onChange={(e) => setV((x) => ({ ...x, passengerId: e.target.value, passengerConfirmed: "", ...(e.target.value ? { riderName: "", riderIsRequester: "" } : {}) }))}
+                      helpText="Choose an existing passenger to link to the new request. Suggestions are hints only — the requester and the rider may be different people."
+                      error={errors.passenger}
+                      data-testid="booking-passenger-select"
+                    />
+                    {chosenPassenger && (
+                      <Checkbox
+                        label={`I've checked that ${chosenPassenger.displayName} is the person who will ride`}
+                        checked={v.passengerConfirmed === "yes"}
+                        onChange={(e) => setV((x) => ({ ...x, passengerConfirmed: e.target.checked ? "yes" : "" }))}
+                        data-testid="booking-passenger-confirm"
+                      />
+                    )}
+                  </>
+                )}
+                {!chosenPassenger && (
+                  <>
+                    <Checkbox
+                      label={`${customer.name} (the requester) is the person who will ride`}
+                      checked={v.riderIsRequester === "yes"}
+                      onChange={(e) => setRiderIsRequester(e.target.checked)}
+                      data-testid="booking-rider-is-requester"
+                    />
+                    <Input
+                      label="New rider's name (optional)"
+                      value={v.riderName}
+                      maxLength={RIDER_NAME_MAX}
+                      onChange={set("riderName")}
+                      error={errors.riderName}
+                      helpText="If the rider isn't in the list. Recorded on the request so Operations can add them as a new passenger — no passenger is created here."
+                      data-testid="booking-rider-name"
+                    />
+                  </>
+                )}
+              </div>
+            )}
+            <Textarea label="Pickup location" required rows={2} maxLength={BOOKING_LIMITS.location} value={v.pickupDescription} onChange={set("pickupDescription")} error={errors.pickupDescription}
+              helpText={handoff ? "Not stored in Growth — enter where the passenger is picked up." : undefined} data-testid="booking-pickup" />
+            <Textarea label="Destination" required rows={2} maxLength={BOOKING_LIMITS.location} value={v.destinationDescription} onChange={set("destinationDescription")} error={errors.destinationDescription}
+              helpText={handoff ? "Not stored in Growth — enter the appointment or drop-off address." : undefined} data-testid="booking-destination" />
             {mode === "rebook" && (
               <Select
                 label="Service requested (optional)"
@@ -259,6 +372,16 @@ function BookingForm({
             <dl className="grid grid-cols-1 gap-2 md:grid-cols-2">
               {[
                 ["Who is requesting", selectOptionLabel(REQUESTER_RELATIONSHIP_OPTIONS, v.requesterRelationship)],
+                ...(handoff
+                  ? [[
+                      "Passenger",
+                      chosenPassenger
+                        ? `${chosenPassenger.displayName} (will be linked)`
+                        : v.riderName.trim()
+                          ? `${v.riderName.trim()} (new — added on the request page)`
+                          : "Not chosen — link or add on the request page",
+                    ]]
+                  : []),
                 ["Pickup", v.pickupDescription.trim()],
                 ["Destination", v.destinationDescription.trim()],
                 ["Preferred", [v.preferredDate, v.preferredTime].filter(Boolean).join(" ") || "No date given"],

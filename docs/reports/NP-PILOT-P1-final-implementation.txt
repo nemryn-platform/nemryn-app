@@ -1,0 +1,318 @@
+NEMRYN — NP-PILOT-P1 FINAL HANDOFF IMPROVEMENTS — IMPLEMENTATION REPORT
+Date: 2026-10-27. Branch np-pilot-p1-handoff (from main 679695e). UNCOMMITTED — stopped for owner review.
+Owner decisions implemented: D1 APPROVE (rider name) · D2 APPROVE (atomic convert-and-link) · D3 APPROVE WITH
+RESTRICTION (requester = rider only when staff confirm; suggestion editable) · D4 REJECT (no passenger creation in Growth).
+Isolated NemrynS1Iso stack only, fictional data. No production migration, no production data change, public inquiries
+OFF, nothing committed / pushed / merged. Builds on NP-PILOT-P1-handoff-review.txt (all of those improvements kept).
+
+VERDICT: PASS — all required verification passed on the FINAL build (isolated stack, migration 98).
+  Migration compatibility verdict: PASS — backward compatible with the deployed app; no overloads; no dependents;
+  privileges and hardening preserved; function-only migration (no schema / data change).
+  During QA one product defect was found and fixed (React form reset after an error, section 2) and three failures in
+  PRE-EXISTING test suites were traced to test-data / clock issues outside this change and re-verified (section 5.4).
+  Not committed, not pushed, not merged. Production migration NOT authorized by this report.
+
+======================================================================================================================
+1. MIGRATION — supabase/migrations/20261028100000_plus_booking_passenger_handoff.sql (migration 98)
+======================================================================================================================
+No table, column, CHECK, index, policy, table grant, trigger or data change; no backfill. Functions only.
+
+1a. Core: public.log_transportation_request
+    before  (uuid, text, text, text, text, text, text, text, text, uuid, date, time, text, text, text)            15 args
+    after   (... same 15 ..., p_requested_passenger_name text DEFAULT NULL)                                       16 args
+    - Body VERBATIM from 20261017100000 plus: the snapshot is nullif(btrim(...), ''); > 200 characters or any control
+      character -> ZW006 invalid_input; stored in the EXISTING transportation_requests.requested_passenger_name column
+      (the column Core's "Add New Passenger" already prefills from — P1-OPS-R1A; same limits as the website intake).
+    - Unchanged: authority (Organization Admin / Dispatcher), organization binding, the existing p_passenger_id check
+      (same organization AND active, else ZW006), pending-only Request, request_events, audit.
+1b. Plus: public.plus_convert_opportunity_to_request
+    before  (uuid, uuid, timestamptz, text, text, text, text, text, date, time, text, text)                       12 args
+    after   (... same 12 ..., p_passenger_id uuid DEFAULT NULL, p_requested_passenger_name text DEFAULT NULL)    14 args
+1c. Plus: public.plus_create_rebooking_request
+    before  (uuid, uuid, text, text, text, text, text, text, date, time, text, text, text)                        13 args
+    after   (... same 13 ..., p_passenger_id uuid DEFAULT NULL, p_requested_passenger_name text DEFAULT NULL)    15 args
+    Both Plus bodies are the 20261017110000 bodies VERBATIM (Plus write + Core request-role checks, advisory lock,
+    idempotency replay, eligibility, contact active + phone, Core call, attribution, activities, audit, service type)
+    with ONE inserted block, placed AFTER the replay check and BEFORE anything is written:
+      - passenger AND name both given -> ZW006 invalid_input
+      - name > 200 characters or control characters -> ZW006 invalid_passenger_name
+      - passenger not in this organization or not active -> ZW006 passenger_unavailable (a plain read; Plus never locks
+        or writes a Core table — Core's own call re-validates the passenger inside the same transaction)
+    and the Core call now passes p_passenger_id (10th argument) and the trimmed name (16th argument).
+    The audit after_data is unchanged (ids only — no rider name in audit_events).
+Signature / overload / grant assessment
+    - CREATE OR REPLACE cannot add parameters, and keeping the old identity beside a longer one with DEFAULTs would make
+      every existing call ambiguous ("function is not unique"). So each exact old identity is DROPPED (no CASCADE) and
+      the longer one CREATED: exactly one function per name, no overloads (asserted by tests R1 / R2 / A2).
+    - Dependents: none in pg_depend; the only database callers of log_transportation_request are the two Plus RPCs,
+      re-created in the same migration with positional 16-argument calls (plpgsql resolves at run time).
+    - Backwards compatible: the deployed app calls all three by NAMED arguments without the new parameters -> the
+      DEFAULT NULLs apply and behaviour is exactly today's. The new app needs the migration first (see section 7).
+    - SECURITY DEFINER, SET search_path = public, pg_temp (as before) and comments re-asserted; REVOKE ALL FROM public, anon, service_role;
+      GRANT EXECUTE TO authenticated only — identical to before (privilege contract 0 violations of 29).
+    - notify pgrst, 'reload schema' at the end.
+
+======================================================================================================================
+2. API / APP CHANGES
+======================================================================================================================
+src/lib/plus/handoff-core.ts (pure, unit-tested)
+    parsePassengerChoice({passengerId, passengerConfirmed, riderName}) -> { passengerId | null, riderName | null }:
+    EITHER a confirmed existing passenger OR a trimmed rider name (<= 200, no control characters) OR neither; both ->
+    refused. RIDER_NAME_MAX = 200.
+src/app/operations/growth/booking/actions.ts
+    - convertOpportunityAction / rebookContactAction pass p_passenger_id and p_requested_passenger_name INTO the RPC.
+    - The previous post-create link (link_request_passenger after the request existed) is REMOVED — no partial state.
+    - A refused passenger / name returns an error with field errors (passenger / riderName) and NOTHING created.
+    - Success notes: "Passenger linked …", "Rider's name recorded: <name>. Add them as a new passenger on the request
+      page (the form is prefilled with this name).", replay: "This request already existed, so its passenger wasn't
+      changed."
+src/lib/plus/booking-core.ts — plain messages for passenger_unavailable / invalid_passenger_name ("Nothing was created").
+src/components/growth/BookingRequestDialog.tsx
+    - "Who will ride? (optional)": existing passenger list (hints only, never pre-selected) + explicit confirmation.
+    - When no passenger is chosen: checkbox "<contact> (the requester) is the person who will ride" (D3) and
+      "New rider's name (optional)" (D1). Ticking the box sets "Who is requesting" = The passenger themselves and
+      SUGGESTS the contact's name in the field (editable); unticking, or switching the requester to Family / Caregiver
+      / Facility / Other, unticks and removes the untouched suggestion. Nothing is ever filled without the tick.
+    - Review row "Passenger": "<name> (will be linked)" / "<name> (new — added on the request page)" / "Not chosen".
+    - Refused passenger: the dialog returns to the fields, clears the refused choice, shows "Not created" + field note.
+    - Fix found during this review (pre-existing since S4, now more visible): the form was submitted through
+      <form action>, which React 19 RESETS after every submit — after any error the native selects visually showed
+      their first option ("Decide on the request page", Return trip "Yes") while the form state kept the old values,
+      so staff would submit something other than what they saw. The form is now dispatched by hand (no reset).
+src/lib/supabase/database.types.ts — regenerated: the two optional RPC args on the three functions.
+Unchanged (D4 and ownership): no passenger is created from Growth; Core keeps Add New Passenger, accept / decline,
+scheduling, dispatch. Opportunity → request attribution, quote → opportunity link and the Billing import path are
+untouched. Concept B layout, consent / DNC reminders, tenant isolation unchanged.
+
+======================================================================================================================
+3. FUNCTIONALITY (what staff now see)
+======================================================================================================================
+  - Existing rider: pick from the list (rode before / same phone / same name hints), confirm, and the request arrives in
+    Operations already linked — in the SAME transaction as the request. If that passenger was deactivated meanwhile or
+    the id is not in this workspace, NOTHING is created and staff choose again.
+  - New rider: type their name; Operations sees "Requested passenger: <name> · Passenger needed" and Add New Passenger
+    opens prefilled with that name. No passenger record is created until Operations adds it.
+  - Requester is the rider: tick the box; the contact's name is suggested (editable) and "The passenger themselves" set.
+  - Family / caregiver / facility requester: nothing about the rider is assumed; the rider is chosen, named, or left
+    for the request page.
+  - Replay / double submit: returns the original request; its passenger is never changed by a replay.
+
+======================================================================================================================
+4. SECURITY & COMPATIBILITY REVIEW
+======================================================================================================================
+  Authorization   unchanged gates: Plus write + Core request role (ZW001); read-only grant refused (E2E A2).
+  Organization    passenger must belong to p_organization_id (Plus pre-check AND Core check); forged other-org id ->
+                  passenger_unavailable, nothing created (E2E I1, I4). Message neutral — no foreign name / code leaks.
+  Active status   inactive -> refused (E2E I2 race, I4 rebooking); Core re-checks inside the same transaction.
+  Atomicity       one transaction: Request + passenger/snapshot + attribution + opportunity converted + activity +
+                  audit, or nothing (E2E I1 / I2 / I2b; SQL concurrency test incl. no-orphan rollback).
+  Idempotency     replay check runs BEFORE the new parameters are read; same key + different passenger -> original
+                  request unchanged, one attribution (E2E I3); a refused attempt consumes no key (retry succeeds, I2b).
+  Core ownership  Plus never writes / locks Core tables (attribution tests G2 / K2 / K3); the name goes through Core's
+                  own RPC. K2 gained one documented read-only exception for billing_create_invoice_draft (pre-existing
+                  Billing P1 read of plus_request_attributions, already in production; not part of this change).
+  Data minimum    the rider name is stored only in the existing Core snapshot column; not in Growth, not in audit.
+  Input           trimmed, <= 200, control characters refused (app AND database).
+  Privileges      SECURITY DEFINER + pinned search_path kept; EXECUTE authenticated only; contract 0 / 29.
+  Compatibility   old app + new DB: works (defaults). New app + old DB: the RPC would reject the unknown named args ->
+                  so the migration MUST be released first (section 7).
+
+======================================================================================================================
+5. TESTS (isolated NemrynS1Iso at migration 98, public inquiries OFF)
+======================================================================================================================
+All results below are actual runs on the isolated NemrynS1Iso stack (migration head 20261028100000, 98 migrations),
+public inquiries OFF, fictional data only. "Final build" = the app built 2026-10-27 after the form-reset fix
+(tsc + next build at 2026-10-27 ~05:00 UTC); the final regression chain ran 05:44-07:21 UTC; follow-up re-runs
+08:00-09:10 UTC. Raw logs: session scratchpad regfinal/ (first chain) and regfinal2/ (final chain).
+
+5.1 MIGRATION 98 VERIFICATION (Task 1) — catalog queries on the migrated isolated DB + statement audit
+  Signatures (exactly one each; to_regprocedure + pg_proc):
+    log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time,text,text,text,text)   16 args
+    plus_convert_opportunity_to_request(uuid,uuid,timestamptz,text,text,text,text,text,date,time,text,text,uuid,text)  14
+    plus_create_rebooking_request(uuid,uuid,text,text,text,text,text,text,date,time,text,text,text,uuid,text)      15
+    new trailing parameters are DEFAULT NULL on all three ............................................. PASS
+  Overloads: count per name = 1 / 1 / 1 ............................................................... PASS
+  Dependents: pg_depend non-function dependents = 0; database callers of log_transportation_request = the two
+    re-created Plus RPCs only ......................................................................... PASS
+  Hardening: prosecdef = true, proconfig = {search_path=public, pg_temp}, ACL = postgres + authenticated EXECUTE only
+    (anon / service_role / public: none) ............................................................... PASS
+  Statement audit of the migration file: 3 DROP FUNCTION, 3 CREATE FUNCTION, 3 COMMENT ON FUNCTION, 3 REVOKE,
+    3 GRANT, 1 NOTIFY — no table / column / constraint / index / policy / trigger / table-grant DDL and no DML;
+    transportation_requests.requested_passenger_name is the pre-existing nullable text column ......... PASS
+  Legacy API compatibility — tests/e2e/handoff/legacy-api.e2e.mjs (PostgREST, signed-in staff, main's EXACT named
+    call shapes, no new arguments) ..................................................................... 5 / 5 PASS
+      L1 Core New Request (15 named args incl. p_passenger_id): pending, passenger linked, no snapshot
+      L2 conversion (12 named args) · L3 rebooking (13 named args): pending, no passenger, no snapshot
+      L4 signed-out caller refused (no EXECUTE) and nothing created
+      (first run 4 / 5: L1 failed because MY test used an invalid service type "ambulatory"; corrected to a canonical
+      value "dialysis" -> 5 / 5. Not a product issue.)
+  Full rollback on cross-tenant / inactive / unknown passenger, and idempotent replay: see 5.2 R1-R3, I1, B1-B2 and
+  5.3 I1-I4.
+
+5.2 SQL TESTS (rollback-only suites, final chain)
+  plus_booking_passenger_handoff_tests.sql (NEW, this change) ........................................ 15 / 15 PASS
+      S1 signatures / defaults / hardening / grants
+      P1 active same-org passenger linked atomically   P2 audit stays ids-only (no names)
+      N1 rider-name snapshot, trimmed, no Passenger created   N2 requester stays the contact (requester/rider separate)
+      R1 inactive / OTHER-ORG / unknown passenger -> passenger_unavailable; footprint unchanged (requests,
+         attributions, activities, audit, request events, passengers, conversions)
+      R2 passenger+name -> invalid_input; 201 chars / newline / tab -> invalid_passenger_name; nothing written
+      R3 a refused attempt does not consume its idempotency key   R4 200 characters accepted
+      A1 driver / other-org admin refused by authority (ZW002) before any passenger lookup; Org B with an Org A
+         passenger -> passenger_unavailable
+      I1 replay with another / no / inactive passenger or a name -> original Request unchanged, nothing written
+      B1 rebooking: link, snapshot, refusals with nothing written   B2 rebooking replay unchanged
+      C1 Core RPC: snapshot stored; 201 chars refused; legacy call stores no snapshot
+      Z1 no Passenger created by any booking
+      (first run 14 / 15: A1 expected ZW001, but the established contract for non-members / drivers is ZW002
+      not_found (existing suite P5) — my expectation was wrong, the function was right; corrected -> 15 / 15.
+      Re-run after all database resets at the end of the chain: 15 / 15.)
+  plus_conversion_rebooking_tests ............. 44 / 44     plus_booking_service_type_tests ......... 27 / 27
+  core_staff_request_service_type_tests ....... 50 / 50     plus_request_attributions_tests ......... 73 / 73
+  request_mutation_privilege_tests ............ 22 / 22     privilege_contract_tests ........ 0 violations / 29
+  plus_inquiries_tests ........................ 65 / 65     plus_communication_consents_tests ....... 78 / 78
+  billing_tests ............................... 67 / 67     (see 5.4 for an earlier 56 / 67 run)
+  plus_opportunities_tests .................... 75 / 75 on a clean seed (see 5.4 for a 73 / 75 run)
+
+5.3 BROWSER E2E (final build, next start -p 3100)
+  Handoff — tests/e2e/handoff/handoff.e2e.mjs ...................................................... 35 / 35 PASS
+    Quote -> Core -> Billing journey: inquiry-born opportunity, accepted round-trip quote, suggested relationship /
+      return trip with sources (H1-H3); family requester: rider NOT assumed (H3b); confirmation required (H4-H5);
+      ONE pending request with the passenger linked atomically (H6); Core request page ready, Accept with Operations
+      (C1); accept -> trip -> driver completes (C2); Trip Detail Billing (C3); invoice draft importing the
+      ORIGINATING quote, not issued (C4-C5).
+    Missing data / decide later (M1-M4).
+    Atomicity: forged other-org passenger -> nothing created, neutral message (I1); passenger deactivated before
+      submit -> whole conversion rolled back (I2); retry with decide-later converts once (I2b); refused choice
+      cleared, every other entry kept and SHOWN as entered (I2c — form reset fix); RPC refusals with nothing created
+      (I4); replay with a different passenger unchanged, one attribution (I3).
+    New rider name: review (N1); pending, no passenger, snapshot, no Passenger created (N2); Core "Requested
+      passenger" + Add New Passenger prefilled with the name (N3).
+    Requester-is-rider: never assumed, tick suggests contact name + Self, switching to Family unticks and removes
+      it (N4); staff-edited name recorded (N5); axe 0 serious / critical on both dialogs.
+    Rebooking: "rode before" suggested, not pre-selected (RB1); confirmed passenger linked atomically (RB2).
+    Authorization: read-only grant sees no dialog / passenger list (A1); RPC refused (A2); nothing auto-approved (Z1).
+    Run history (all real):
+      run 1 (pre-fix build, original I2c = message only) ............................... 35 / 35
+      run 2 (pre-fix build, I2c strengthened to check the visible form state) .......... 34 / 35 — I2c FAIL:
+            after the refusal the Return-trip select SHOWED "yes" while the form held "no" (React form reset)
+      fix: form dispatched by hand + refused passenger cleared (BookingRequestDialog.tsx); rebuilt
+      run 3 (final build, final chain) ................................................... 35 / 35
+  Billing E2E (billing.e2e.mjs) .................................................................... 50 / 50
+  Inquiries staff (staff.e2e.mjs) .................................................................. 74 / 74
+  Inquiries with public submissions OFF (inquiries.e2e.mjs, mode off) ............................... 5 / 5
+  Consents (npm run test:e2e:consents) .............................................................. ALL PASS
+  QA2 strict: core-requests 25/25 · core-trips-dispatch 44/44 · core-records 28/28 · growth 23/23 ·
+    auth-access 79/79 ....................................................................... 5 / 5 suites PASS
+  Quotes strict: s2 33/33 · s3a 31/31 · s3b 32/32 · s3c 54/54 · o1 27/27 · s4-integrated 69/69 ·
+    s4-a11y 26/26 ........................................................................... 7 / 7 suites PASS
+  UI foundations p1b (p1b.e2e.mjs) ...................... 52 / 52 on a clean seed (see 5.4 for the 3-failure runs)
+
+5.4 FAILURES IN PRE-EXISTING SUITES — diagnosed, NOT caused by this change, NOT fixed here (no extra scope)
+  a) billing_tests.sql 56 / 67 at 02:30 UTC (11 payment tests: ZW006 invalid_dates). The test dates payments with
+     UTC current_date; billing_record_payment refuses a date after the organization's LOCAL today (America/New_York:
+     still 10-26 while UTC was 10-27). Clock-window flake (~00:00-04:00/05:00 UTC). Re-run at 05:44 UTC: 67 / 67.
+     Migration 98 does not touch billing.
+  b) plus_opportunities_tests 73 / 75 (F1 / F2 list counts) in the final chain: Org A still held 7 "A11y …" fixture
+     opportunities left by the Quotes s4-a11y suite of the previous chain; F1 / F2 count all Org A opportunities.
+     After `supabase db reset --local` (clean seed): 75 / 75.
+  c) p1b 3 failures (axe link-name on /operations/growth at 1440 / 1024 / 768 px). Reproduced and isolated: the
+     billing E2E cleanup deletes its opportunities / contacts with session_replication_role = replica (bypassing
+     foreign keys) and leaves 3 plus_activities rows pointing at deleted records; the Growth "Recent activity" list
+     renders them as links with no text. Proof: clean seed -> p1b 52 / 52; after billing E2E -> 3 failures; after
+     removing only those 3 orphaned test rows -> 52 / 52. Cannot occur in production: plus_activities foreign keys
+     have no ON DELETE action, so deleting a referenced opportunity / contact is refused.
+  Recommended follow-ups (separate, owner to schedule): use the organization-local date in billing_tests; delete
+  plus_activities in the billing E2E cleanup; make Quotes s4-a11y clean up its fixtures.
+
+5.5 ATOMICITY & CONCURRENCY
+  Conversion / rebooking concurrency (plus_conversion_rebooking_concurrency_test.sh, run retargeted to the isolated
+    container): CONC-C1..C10 + C5b, 11 / 11 PASS, incl. C10 failure-after-Core-creation rolls back (no orphan Request)
+  Request attributions concurrency: TOTAL FAILURES 0          Billing concurrency: ALL PASS
+  Passenger parameters: refusal before any write, same-transaction Core link, no key consumed (SQL R1-R3, I1; E2E
+    I1-I4). Not separately race-tested: a passenger deactivated in the instant between Core's check and commit
+    (see Known limitations).
+
+5.6 UNIT / STATIC
+  npm test 946 / 946 (incl. handoff-core: passenger XOR rider name, 200 limit, control characters)
+  tsc --noEmit: 0 errors · eslint: 0 errors, 113 warnings (all pre-existing; one new warning of mine — an unused
+  variable in handoff.e2e.mjs — was removed) · next build: PASS (final build)
+
+======================================================================================================================
+6. SCREENSHOTS (docs/design/concept-b/reviews/pilot-p1/)
+======================================================================================================================
+  h01 conversion form: suggestions with sources, passenger choice + confirmation, "not stored in Growth"
+  h02 success "Passenger linked"            h03 request ready (linked, Growth link, Accept with Operations)
+  h04 invoice draft from the completed trip importing the originating quote
+  h05 rebooking "rode before for this contact"
+  h06 refused passenger: "Not created … Nothing was created", choice cleared, all other entries kept
+  h07 Core request: "Requested passenger" + Passenger needed; Add New Passenger prefilled with the rider name
+  h08 "the requester is the person who will ride" ticked, suggested name edited by staff
+
+======================================================================================================================
+7. PR READINESS & PRODUCTION RELEASE REQUIREMENTS
+======================================================================================================================
+Files changed (working tree vs main 679695e; nothing committed)
+  new       supabase/migrations/20261028100000_plus_booking_passenger_handoff.sql     (migration 98)
+            supabase/tests/plus_booking_passenger_handoff_tests.sql                   (15 SQL tests, rollback-only)
+            src/lib/plus/handoff-core.ts, src/lib/plus/handoff-core.test.mjs, src/lib/plus/handoff.ts
+            tests/e2e/handoff/handoff.e2e.mjs, tests/e2e/handoff/legacy-api.e2e.mjs
+            docs/design/concept-b/reviews/pilot-p1/h01..h08 *.png
+            docs/reports/NP-PILOT-P1-handoff-review.txt, docs/reports/NP-PILOT-P1-final-implementation.txt
+  modified  src/app/operations/growth/booking/actions.ts, src/lib/plus/booking-core.ts,
+            src/components/growth/BookingRequestDialog.tsx,
+            src/app/operations/growth/pipeline/[opportunityId]/page.tsx, src/app/operations/growth/contacts/[contactId]/page.tsx,
+            src/lib/supabase/database.types.ts (regenerated from the isolated DB at migration 98),
+            supabase/tests/privilege_contract_tests.sql, plus_booking_service_type_tests.sql,
+            core_staff_request_service_type_tests.sql, request_mutation_privilege_tests.sql (new identities),
+            supabase/tests/plus_request_attributions_tests.sql (K2: documented read-only exception for Billing P1)
+  not part of the PR: .tmp-qa/ scratch scripts (untracked, pre-existing).
+PR readiness: READY TO COMMIT after owner approval — code, migration, tests and report complete; all required
+  checks pass on the final build. The PR must state that migration 98 has to be applied to production BEFORE the
+  application is deployed. Not committed, pushed or merged.
+  Note: test runs rewrote untracked, pre-existing p1b screenshots under docs/design/concept-b/reviews/p1b/ — not part
+  of this PR.
+
+Production release requirements (database first; nothing below is authorized by this report)
+  1. Separate written owner authorization to apply migration 98 to production (migration 98 ONLY).
+  2. Read-only production preflight: migration head 20261027110000 / 97 migrations; the three OLD identities exist
+     exactly once (log_transportation_request 15 args, plus_convert_opportunity_to_request 12, plus_create_rebooking_request
+     13); no other overloads; no non-function pg_depend dependents; privilege snapshot of the three functions.
+  3. A FRESH encrypted production backup taken immediately before the migration with the established procedure
+     (streaming encrypted export; key never in command-line arguments, logs or files), and VERIFIED (decrypt / restore
+     check as in the Billing P1 release) before step 4. No backup, no migration.
+  4. Apply migration 98 in a single transaction. Read-only post-checks: one identity each with the new trailing
+     DEFAULT NULL parameters; SECURITY DEFINER + search_path = public, pg_temp; EXECUTE authenticated only (anon /
+     service_role none); privilege contract 0 violations; head 20261028100000 / 98 migrations.
+  5. Between steps 4 and 6 the currently deployed app keeps working unchanged (verified on the isolated stack:
+     legacy-api L1-L3 replay main's exact call shapes against migration 98).
+  6. Only then merge the PR (separate owner approval) -> application deploy. The application must NOT be deployed
+     before migration 98: the new app sends p_passenger_id / p_requested_passenger_name, which an un-migrated database
+     does not accept.
+  7. Post-deploy verification is READ-ONLY by default: the Growth pages and the conversion / rebooking dialogs open
+     for an authorized user, the "Who will ride?" section renders, no server errors in logs, and the function catalog
+     checks from step 4. NO automatic production request creation, conversion, rebooking or cleanup is part of this
+     release. Any production test that creates or changes business records (requests, conversions, passengers,
+     attributions) requires its own separate owner authorization, scope and cleanup plan.
+  Rollback: reverting the application is safe at any time (the previous app works against migration 98 — legacy-api).
+  A database rollback (re-creating the previous identities from 20261017100000 / 20261017110000) is only needed if
+  the new functions misbehave, and would itself require owner authorization; the app must be reverted first.
+Known limitations
+  1. Deactivation race window: the passenger check (Plus pre-check and Core's own check) is a plain read at READ
+     COMMITTED. A deactivation committing between the check and the request's commit is not detected — the request
+     links a passenger who became inactive a moment later. Same behaviour as Core's existing New Request; no lock was
+     added because Plus must never lock Core tables. Staff see the passenger on the request page as usual.
+  2. The passenger list is loaded when the dialog opens; a passenger deactivated afterwards still appears until
+     reload, but the database refuses it at submit and nothing is created (E2E I2).
+  3. The rider name is free text: no duplicate detection. Core's Add New Passenger (staff-confirmed) decides whether
+     a new passenger is created; Growth never creates one (D4).
+  4. A replayed submit cannot change the passenger of the original request (by design); changes are made on the Core
+     request page.
+  5. The three pre-existing test-suite issues in 5.4 remain (follow-ups recommended there).
+Recorded follow-ups (owner-approved list; NOT implemented in this PR)
+  F1 Billing SQL tests must use organization-local dates (avoid failures around midnight UTC).
+  F2 Billing E2E cleanup must remove its activities without bypassing foreign-key protections
+     (no session_replication_role = replica deletes that orphan plus_activities).
+  F3 Quotes accessibility (s4-a11y) tests must clean up their fictional fixtures.
+  F4 Review the existing Core passenger-deactivation concurrency window separately (Known limitation 1).
+STOP — awaiting owner review. Nothing committed, pushed or merged.

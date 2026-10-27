@@ -4597,6 +4597,7 @@ export type Database = {
           p_pickup_description: string
           p_preferred_date?: string
           p_preferred_time?: string
+          p_requested_passenger_name?: string
           p_requester_email?: string
           p_requester_name: string
           p_requester_phone: string
@@ -4949,9 +4950,11 @@ export type Database = {
           p_idempotency_key: string
           p_opportunity_id: string
           p_organization_id: string
+          p_passenger_id?: string
           p_pickup_description: string
           p_preferred_date: string
           p_preferred_time: string
+          p_requested_passenger_name?: string
           p_requester_relationship: string
           p_return_trip_needed: string
         }
@@ -5047,9 +5050,11 @@ export type Database = {
           p_destination_description: string
           p_idempotency_key: string
           p_organization_id: string
+          p_passenger_id?: string
           p_pickup_description: string
           p_preferred_date: string
           p_preferred_time: string
+          p_requested_passenger_name?: string
           p_requester_relationship: string
           p_return_trip_needed: string
           p_service_type?: string

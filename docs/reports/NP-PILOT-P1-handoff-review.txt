@@ -1,0 +1,117 @@
+NEMRYN — NP-PILOT-P1 QUOTE-TO-TRIP HANDOFF REVIEW
+Date: 2026-10-26. Branch np-pilot-p1-handoff (from main 679695e). Uncommitted — awaiting owner review.
+No migration, no production access, fictional data on the isolated stack only. Public inquiries stay off.
+
+VERDICT: PASS — handoff improved within the existing schema and APIs; D1–D4 need owner decisions (no migration made)
+
+======================================================================================================================
+1. EXISTING WORKFLOW (audit)
+======================================================================================================================
+Conversion (Growth → Core)
+  - Opportunity page "Create transportation request" (BookingRequestDialog, mode convert) → convertOpportunityAction →
+    plus_convert_opportunity_to_request: requires Plus write AND the Core request role; calls Core's own
+    log_transportation_request as the staff member with requester name / phone / email from the ACTIVE contact, source
+    mapped from the opportunity, the opportunity's service type, and passenger = NULL. Writes a converted_from_opportunity
+    attribution, marks the opportunity converted, audits. Idempotent per key. Rebooking from a contact page is the same
+    via plus_create_rebooking_request.
+  - The request is PENDING; Core owns accept / decline, passenger, trip creation, dispatch.
+Passenger step (Core request page)
+  - "Passenger needed" readiness; RequestPassengerPanel searches active passengers, links via link_request_passenger
+    (Organization Admin / Dispatcher, same organization, ACTIVE passenger, pending / accepted request without trips;
+    same passenger again = no-op), or "Add New Passenger" prefilled ONLY from the request's requested_passenger_name
+    snapshot (a deliberate rule: the requester may not be the rider).
+Data Growth already holds
+  - Contact: name, phone, email, kind (individual / family_caregiver / facility_staff / referral / other), DNC.
+  - Inquiry (if the opportunity came from the website form): requester relationship (self / family / caregiver /
+    facility staff / other), timeframe, free-text question — NO pickup / destination / rider name.
+  - Opportunity: title, service type, inquiry type, source.
+  - Quote: service type, round trip, distance, prices — NO addresses or dates.
+  - Earlier requests of the contact (attributions) and the passengers linked to them.
+Friction found
+  F1 The conversion form starts blank: "Who is requesting" defaults to Self and "Return trip" to No even when the inquiry
+     said "family member" and the accepted quote was priced as a round trip — staff re-enter what Growth knows.
+  F2 Every converted / rebooked request arrives as "Passenger needed": no passenger can be chosen at conversion, and the
+     Add New Passenger prefill is empty for converted requests (no requested_passenger_name snapshot is written).
+  F3 Repeat customers: staff must search for the same rider again on every rebooking.
+  F4 The form does not say that pickup / destination are not stored in Growth.
+  Already working (kept): Core approval / scheduling / dispatch; the request page shows its Growth link
+  (RequestGrowthPanel); trips carry request_id; Billing's quote import follows request → opportunity → quote.
+
+======================================================================================================================
+2. CHANGES MADE (existing schema and APIs only)
+======================================================================================================================
+1. Suggested, editable prefill in the conversion / rebooking form (handoff-core.ts handoffPrefill):
+   - Who is requesting: from the website inquiry's own answer, else only an unambiguous contact kind
+     (family / caregiver → Family member, facility staff → Facility coordinator); "individual" suggests nothing.
+   - Return trip: "Yes" only when the newest ACCEPTED (else newest live SENT) quote was priced as a round trip.
+   - Each suggestion is shown with its source ("Suggested — … Check before continuing"). Nothing else is prefilled;
+     pickup and destination are marked "Not stored in Growth — enter …" (F4). No address, date, time or assistance need
+     is ever invented.
+2. Optional "Who will ride?" choice (F2, F3):
+   - Lists the organization's ACTIVE passengers (same query Core forms use, under RLS); hints ranked first: rode before
+     for this contact (passengers on the contact's earlier requests), same phone (10+ digits), same name. Hints only —
+     NOTHING is pre-selected; default "Decide on the request page" keeps today's flow.
+   - Choosing a passenger requires an explicit "I've checked that <name> is the person who will ride" confirmation
+     (Review stays disabled until then); the review shows "<name> (will be linked)".
+   - After the request is created, the server action links the chosen passenger through Core's own
+     link_request_passenger (the database enforces role, organization, active status, request state). Linked only for
+     a NEWLY created request — a replayed submit never changes an existing request's passenger. If the link is refused
+     (inactive, another organization, race), the request is still created exactly as today ("Passenger needed") with a
+     plain note; no error codes or names leak.
+   - New passengers are still created on the request page (Core ownership unchanged).
+3. Unchanged by design: no auto-approval or scheduling, no passenger creation from Growth, consent / DNC reminders
+   intact, quote reference and opportunity → request attribution untouched, Trip Detail → Billing → quote import path
+   untouched (verified end to end).
+Files
+  new      src/lib/plus/handoff-core.ts (+ handoff-core.test.mjs, 5 tests), src/lib/plus/handoff.ts,
+           tests/e2e/handoff/handoff.e2e.mjs (24 checks), docs/design/concept-b/reviews/pilot-p1/*.png
+  modified src/components/growth/BookingRequestDialog.tsx, src/app/operations/growth/booking/actions.ts,
+           src/app/operations/growth/pipeline/[opportunityId]/page.tsx, src/app/operations/growth/contacts/[contactId]/page.tsx
+
+======================================================================================================================
+3. TESTS (isolated NemrynS1Iso stack, fictional data, public inquiries OFF)
+======================================================================================================================
+Handoff E2E — tests/e2e/handoff/handoff.e2e.mjs        PASS 24 / 24
+  Journey: website inquiry → opportunity → accepted round-trip quote → conversion with suggested "Family member" and
+  return trip "Yes" (sources shown) → phone-matched passenger chosen + confirmed → ONE pending request with the
+  passenger linked (no trip, not approved; attribution kept) → request page ready (no "Passenger needed", Growth link,
+  Accept still with Operations) → staff accept → trip with that passenger → driver completes → Trip Detail Billing →
+  invoice draft importing the ORIGINATING quote (quote lines, number kept; not issued).
+  Missing data: no inquiry / quote / individual contact → nothing suggested; Review blocked until pickup / destination
+  entered; decide-later keeps today's "Passenger needed".
+  Duplicate / incorrect associations: nothing pre-selected; confirmation required; inactive and other-organization
+  passengers never offered; a FORGED other-organization passenger id is refused by the database (request created, not
+  linked, neutral warning); passenger deactivated between choice and submit → not linked; replayed conversion returns
+  the original request and never re-links.
+  Rebooking: the passenger who rode before for this contact is suggested first (not pre-selected).
+  Authorization: read-only Growth grant sees no conversion / rebooking dialog (no passenger list) and the RPC refuses
+  (ZW001); no request approved or scheduled automatically. axe 0 serious / critical on the conversion dialog.
+Unit: handoff-core 5 / 5; npm test 946 / 946.   tsc clean · lint 0 errors (113 pre-existing warnings) · next build pass.
+Regression: billing E2E 50 / 50 · inquiries staff 74 / 74 · consents ALL PASS · p1b 52 / 52 ·
+  QA2 strict 5 / 5 suites (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79) ·
+  Quotes strict 7 / 7 suites (s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26).
+  Note: the first chain run hit timeouts in 3 QA2 and 4 Quotes suites (Chrome launch / sign-in / spawnSync ETIMEDOUT)
+  while the machine slept overnight; those suites were re-run unchanged and all passed.
+
+======================================================================================================================
+4. SCREENSHOTS (docs/design/concept-b/reviews/pilot-p1/)
+======================================================================================================================
+  h01 conversion form: suggested relationship / return trip with sources, passenger choice + confirmation, "not stored
+      in Growth" guidance · h02 success with "Passenger linked" · h03 request ready (no "Passenger needed", Growth link,
+      Accept still with Operations) · h04 invoice draft from the completed trip with the originating quote ·
+      h05 rebooking with "rode before for this contact"
+
+======================================================================================================================
+5. UNRESOLVED DECISIONS (each needs a migration or a data-handling decision — not implemented)
+======================================================================================================================
+D1 Rider name for NEW passengers (recommended next). Let the conversion / rebooking form record "Passenger name (if not
+   in the list)" into the request's existing requested_passenger_name snapshot, so Core's Add New Passenger is
+   prefilled. Needs a small migration (an optional parameter on the two Plus booking RPCs passed through to Core).
+   Recommendation: approve as the next small slice.
+D2 Atomic convert-and-link. Today: create, then link (a refused link leaves today's behaviour). An optional
+   p_passenger_id on the booking RPCs (Core's log_transportation_request already accepts one) would make it one
+   transaction. Recommendation: fold into the D1 migration; not urgent.
+D3 Prefill Add New Passenger from the requester when the requester is the rider ("Self"). Changes the approved R1A
+   rule (prefill only from requested_passenger_name). Recommendation: allow only for "Self", still staff-confirmed — owner
+   decision because it copies contact details into a Core passenger.
+D4 Creating a passenger from Growth. Recommendation: no — keep passenger creation in Core.
