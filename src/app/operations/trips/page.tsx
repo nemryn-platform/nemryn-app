@@ -13,6 +13,7 @@ import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { GettingStartedLink } from "@/components/operations/GettingStartedLink";
 import { TripStatus } from "@/components/ui/TripStatus";
 import type { TripsListRow } from "@/lib/operations/trips-list";
 
@@ -169,6 +170,7 @@ export default async function TripsListPage({
                 ? "Try a different search term or clear the filters."
                 : "Trips you create will appear here."
             }
+            action={search || date !== "all" || assignment !== "all" ? undefined : <GettingStartedLink />}
           />
         }
       />

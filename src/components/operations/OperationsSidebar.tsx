@@ -51,6 +51,8 @@ export interface OperationsSidebarProps {
   canAccessGrowth?: boolean;
   /** NP-P2-S7-C: NEW website inquiries shown beside Growth -> Inquiries (null / 0 = no badge). Navigation only. */
   newInquiryCount?: number | null;
+  /** NP-PILOT-P2: essential setup steps still to do (null = complete or unknown -> no "Getting started" item). */
+  setupRemaining?: number | null;
   /** NP-UI-P1b: real fact from `getActiveMemberships()` (> 1) — adds a "Switch workspace" link to the workspace row (the same `/select-organization?switch=1` destination as the account menu). */
   hasMultipleOrganizations?: boolean;
 }
@@ -82,10 +84,11 @@ export function OperationsSidebar({
   canManageSettings,
   canAccessGrowth,
   newInquiryCount,
+  setupRemaining = null,
   hasMultipleOrganizations,
 }: OperationsSidebarProps) {
   const pathname = usePathname();
-  const sections = operationsNavSections({ hasLinkedDriverProfile, canManageSettings, canAccessGrowth });
+  const sections = operationsNavSections({ hasLinkedDriverProfile, canManageSettings, canAccessGrowth, setupRemaining });
   const sectionIdPrefix = useId();
 
   // P1-UX-R2: defaults to expanded (`false`) so the very first render —
@@ -206,7 +209,7 @@ export function OperationsSidebar({
                         <Link
                           href={item.href}
                           aria-current={isActive ? "page" : undefined}
-                          aria-label={item.label}
+                          aria-label={item.key === "setup" && setupRemaining ? `${item.label}, ${setupRemaining} ${setupRemaining === 1 ? "step" : "steps"} left` : item.label}
                           data-nav-label={item.label}
                           data-testid={`nav-item-${item.key}`}
                           className={cn(typography.bodySmall, navItemBase, "justify-center", !collapsed && "lg:justify-start", isActive ? navItemActive : navItemIdle)}
@@ -214,6 +217,15 @@ export function OperationsSidebar({
                           <Icon className="size-5 shrink-0" weight={isActive ? "fill" : "regular"} aria-hidden />
                           {/* The accessible name is the aria-label above; this span is visual only and hides in the rail. */}
                           <span className={cn("truncate", textVisibility)}>{item.label}</span>
+                          {item.key === "setup" && setupRemaining ? (
+                            <span
+                              className={cn(typography.metadata, "ml-auto rounded-full bg-chrome-item-active-marker px-1.5 py-px font-semibold leading-4 text-chrome-background tabular-nums", textVisibility)}
+                              aria-hidden
+                              data-testid="nav-setup-remaining"
+                            >
+                              {setupRemaining}
+                            </span>
+                          ) : null}
                         </Link>
                       </li>
                     );

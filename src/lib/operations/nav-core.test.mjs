@@ -58,3 +58,12 @@ test("operationsContext: section + label for the header's location line", () => 
   assert.deepEqual(n.operationsContext("/operations/proof-of-service"), { section: "Today", label: "Proof of Service" });
   assert.deepEqual(n.operationsContext("/operations/nope"), { section: null, label: "Operations" });
 });
+
+test("NP-PILOT-P2: 'Getting started' appears under Today only while essential setup remains", () => {
+  const today = (setupRemaining) => n.operationsNavSections({ setupRemaining })[0].items.map((i) => i.key);
+  assert.deepEqual(today(3), ["overview", "setup", "requests", "trips", "dispatch", "tomorrow"]);
+  assert.deepEqual(today(0), ["overview", "requests", "trips", "dispatch", "tomorrow"]);
+  assert.deepEqual(today(null), ["overview", "requests", "trips", "dispatch", "tomorrow"]);
+  assert.deepEqual(today(undefined), ["overview", "requests", "trips", "dispatch", "tomorrow"]);
+  assert.deepEqual(n.operationsContext("/operations/getting-started"), { section: "Today", label: "Getting started" });
+});

@@ -3,14 +3,15 @@
 import { useId, useState } from "react";
 import Link from "next/link";
 import type { Icon } from "@phosphor-icons/react";
-import { Buildings, CalendarPlus, CaretDown, CaretUp, Check, IdentificationCard, Path, Storefront, Users, Van } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, Buildings, CalendarPlus, CaretDown, CaretUp, Check, IdentificationCard, ListChecks, Path, Storefront, Users, Van } from "@phosphor-icons/react/dist/ssr";
 import { IconButton } from "@/components/ui/IconButton";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
-import type { OnboardingChecklist } from "@/lib/operations/onboarding-checklist";
+import { setupStatusText, type GettingStarted, type SetupStepKey } from "@/lib/operations/getting-started-core";
 
-const STEP_ICONS: Record<OnboardingChecklist["items"][number]["key"], Icon> = {
+const STEP_ICONS: Partial<Record<SetupStepKey, Icon>> = {
   business: Storefront,
+  services: ListChecks,
   vehicle: Van,
   driver: IdentificationCard,
   facility: Buildings,
@@ -42,8 +43,13 @@ const STEP_ICONS: Record<OnboardingChecklist["items"][number]["key"], Icon> = {
  * NP-UI-V2-1 (Brand Lock v2 §4, Concept B `.setup`): the hero surface — mint-to-white gradient, 31px display heading,
  * a teal segmented progress bar, and six 43px circular step marks with a check badge when done (an empty badge when
  * not). The steps, count, links and the disclosure are unchanged; only the presentation moved.
+ *
+ * NP-PILOT-P2: only the FOUR business-setup essentials of the Getting started model (getting-started-core: business
+ * details, services, vehicle, active driver) -- real checks (no step is complete just because the organization
+ * exists); first-use milestones live on /operations/getting-started. An admin-only step shows no link for other staff,
+ * and a step whose fact is unknown says so. "All setup steps and what they mean" opens the page.
  */
-export function OnboardingChecklistBanner({ checklist }: { checklist: OnboardingChecklist | null }) {
+export function OnboardingChecklistBanner({ checklist }: { checklist: GettingStarted | null }) {
   const [expanded, setExpanded] = useState(true);
   const stepsId = useId();
   const titleId = useId();
@@ -69,7 +75,7 @@ export function OnboardingChecklistBanner({ checklist }: { checklist: Onboarding
           <h2 id={titleId} className={cn(typography.displaySetup, "mt-2 text-text-primary")}>
             Finish setting up
           </h2>
-          <p className={cn(typography.body, "mt-1 text-text-secondary")}>Complete a few key steps to get your operations running.</p>
+          <p className={cn(typography.body, "mt-1 text-text-secondary")}>Four business setup steps. Your first passenger and trip are tracked separately as milestones.</p>
         </div>
         <div className="flex w-full max-w-[14.6875rem] flex-col gap-2.5 self-center sm:w-[14.6875rem]">
           <p className={cn(typography.metadata, "font-bold text-text-primary")} data-testid="setup-progress-count">
@@ -84,7 +90,7 @@ export function OnboardingChecklistBanner({ checklist }: { checklist: Onboarding
             aria-valuetext={progressText}
             className="flex w-full gap-[5px]"
           >
-            {checklist.items.map((item) => (
+            {checklist.essentials.map((item) => (
               <span key={item.key} className={cn("h-1.5 flex-1 rounded-full", item.complete ? "bg-success-strong bg-progress-done" : "bg-progress-track")} />
             ))}
           </div>
@@ -101,21 +107,15 @@ export function OnboardingChecklistBanner({ checklist }: { checklist: Onboarding
         className="absolute right-3 top-3 text-text-secondary hover:bg-surface-hover"
         data-testid="setup-progress-toggle"
       />
-      <ul id={stepsId} hidden={!expanded} className="grid grid-cols-1 gap-[7px] @md:grid-cols-2 @xl:grid-cols-3 @5xl:grid-cols-6">
-        {checklist.items.map((item) => {
+      <ul id={stepsId} hidden={!expanded} className="grid grid-cols-1 gap-[7px] @md:grid-cols-2 @4xl:grid-cols-4">
+        {checklist.essentials.map((item) => {
           const StepIcon = STEP_ICONS[item.key] ?? CalendarPlus;
-          return (
-            <li key={item.key} className="min-w-0 @5xl:border-l @5xl:border-border-subtle @5xl:pl-3 @5xl:first:border-l-0 @5xl:first:pl-0">
-              <Link
-                href={item.href}
-                className="flex items-center gap-[9px] rounded-sm px-0.5 py-[9px] transition-colors duration-base hover:bg-surface-elevated/60 motion-reduce:transition-none"
-                data-testid="setup-step"
-                data-complete={item.complete ? "true" : "false"}
-              >
+          const content = (
+            <>
                 <span
                   className={cn(
                     "relative flex size-[2.6875rem] shrink-0 items-center justify-center rounded-full border-[1.5px] bg-step-mark-background",
-                    item.complete ? "border-step-mark-border text-text-link" : "border-border-strong/50 text-text-muted",
+                    item.complete === true ? "border-step-mark-border text-text-link" : "border-border-strong/50 text-text-muted",
                   )}
                   aria-hidden
                 >
@@ -123,7 +123,7 @@ export function OnboardingChecklistBanner({ checklist }: { checklist: Onboarding
                   <span
                     className={cn(
                       "absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full border-2 border-surface-elevated",
-                      item.complete ? "bg-success-strong text-white" : "bg-surface-elevated ring-1 ring-inset ring-border-strong/70",
+                      item.complete === true ? "bg-success-strong text-white" : "bg-surface-elevated ring-1 ring-inset ring-border-strong/70",
                     )}
                   >
                     {item.complete && <Check className="size-2.5" weight="bold" />}
@@ -132,14 +132,40 @@ export function OnboardingChecklistBanner({ checklist }: { checklist: Onboarding
                 <span className="min-w-0">
                   <span className={cn(typography.metadata, "block font-semibold text-text-primary")}>{item.label}</span>
                   <span className={cn(typography.metadata, "block", item.complete ? "text-success-text" : "text-text-secondary")}>
-                    {item.complete ? "Complete" : "Not complete"}
+                    {setupStatusText(item)}
                   </span>
                 </span>
-              </Link>
+            </>
+          );
+          const rowClass = "flex items-center gap-[9px] rounded-sm px-0.5 py-[9px]";
+          return (
+            <li key={item.key} className="min-w-0 @4xl:border-l @4xl:border-border-subtle @4xl:pl-3 @4xl:first:border-l-0 @4xl:first:pl-0">
+              {item.href ? (
+                <Link
+                  href={item.href}
+                  className={cn(rowClass, "transition-colors duration-base hover:bg-surface-elevated/60 motion-reduce:transition-none")}
+                  data-testid="setup-step"
+                  data-complete={item.complete === true ? "true" : "false"}
+                >
+                  {content}
+                </Link>
+              ) : (
+                <div className={rowClass} data-testid="setup-step" data-complete={item.complete === true ? "true" : "false"}>
+                  {content}
+                </div>
+              )}
             </li>
           );
         })}
       </ul>
+      <Link
+        href="/operations/getting-started"
+        className={cn(typography.bodySmall, "inline-flex items-center gap-1.5 self-start font-medium text-text-link hover:underline")}
+        data-testid="setup-guide-link"
+      >
+        All setup steps and what they mean
+        <ArrowRight className="size-4" aria-hidden />
+      </Link>
     </section>
   );
 }

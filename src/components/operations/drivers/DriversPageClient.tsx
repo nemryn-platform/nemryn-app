@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { IconButton } from "@/components/ui/IconButton";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { GettingStartedLink } from "@/components/operations/GettingStartedLink";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Panel } from "@/components/ui/Panel";
 import { typography } from "@/design/typography";
@@ -178,7 +179,7 @@ export function DriversPageClient({ rows, invites, canInvite, availability, time
         rows={rows}
         getRowId={(row) => row.id}
         emptyState={
-          <EmptyState icon={<IdentificationBadge className="size-8" aria-hidden />} title="No drivers yet" description="Drivers on your team will appear here." />
+          <EmptyState icon={<IdentificationBadge className="size-8" aria-hidden />} title="No drivers yet" description="Drivers on your team will appear here." action={<GettingStartedLink />} />
         }
       />
 

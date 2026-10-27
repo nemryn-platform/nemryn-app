@@ -9,6 +9,7 @@ import { OperationsLayoutClient } from "@/components/operations/OperationsLayout
 import { getPlusAccessState } from "@/lib/plus/access";
 import { countNewInquiries } from "@/lib/plus/inquiries";
 import { canOpenGrowth } from "@/lib/plus/access-core";
+import { getGettingStarted } from "@/lib/operations/onboarding-checklist";
 
 /**
  * Server-side authorization gate for every /operations/* route (work item
@@ -58,6 +59,11 @@ export default async function OperationsLayout({ children }: { children: ReactNo
   // NP-P2-S7-C: the NEW website-inquiry count beside Growth -> Inquiries (Plus READ, re-checked in the database). A
   // failed read shows no badge -- never an error page.
   const newInquiryCount = canAccessGrowth ? await countNewInquiries(organization.organizationId) : null;
+  // NP-PILOT-P2: "Getting started" in the sidebar while essential setup remains (same cached read as the Brief banner);
+  // a failed read hides the item rather than failing the layout.
+  const setupRemaining = await getGettingStarted(organization.organizationId, organization.role === "organization_admin", canAccessGrowth)
+    .then((s) => (s.isComplete ? null : s.remaining))
+    .catch(() => null);
 
   return (
     <OperationsLayoutClient
@@ -68,6 +74,7 @@ export default async function OperationsLayout({ children }: { children: ReactNo
       hasLinkedDriverProfile={hasLinkedDriverProfile}
       canAccessGrowth={canAccessGrowth}
       newInquiryCount={newInquiryCount}
+      setupRemaining={setupRemaining}
     >
       {children}
     </OperationsLayoutClient>
