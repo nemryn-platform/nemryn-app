@@ -35,6 +35,7 @@ import { BookingRequestDialog } from "@/components/growth/BookingRequestDialog";
 import { QuotesPanel } from "@/components/growth/QuotesPanel";
 import { isQuoteActivity, quoteActivityLine } from "@/lib/plus/quotes-core";
 import { getContact } from "@/lib/plus/contacts";
+import { getHandoffContext, type HandoffContext } from "@/lib/plus/handoff";
 import { listLinkedRequests } from "@/lib/plus/attribution";
 import { coreSourceForOpportunity } from "@/lib/plus/booking-core";
 import { SOURCE_OPTIONS, selectOptionLabel } from "@/lib/operations/log-request-options";
@@ -95,6 +96,7 @@ export default async function OpportunityDetailPage({
   // is never turned into a second Request). The database re-checks every one of these and the Core role.
   let linkedCount: number | null = null;
   let customer: { name: string; phone: string | null; email: string | null; doNotContact: boolean } | null = null;
+  let contactKind: string | null = null;
   if (canWrite && open && !o.contactArchived) {
     try {
       linkedCount = (await listLinkedRequests(context.organizationId, { opportunityId: o.id })).total;
@@ -104,11 +106,16 @@ export default async function OpportunityDetailPage({
     try {
       const c = await getContact(context.organizationId, o.contactId);
       customer = c ? { name: c.displayName, phone: c.phone, email: c.email, doNotContact: c.doNotContact } : null;
+      contactKind = c?.contactKind ?? null;
     } catch {
       customer = null;
     }
   }
   const canConvert = canWrite && open && !o.contactArchived && linkedCount === 0 && customer !== null;
+  // NP-PILOT-P1: handoff hints for the conversion form (suggested, editable; optional passenger choice)
+  const handoff: HandoffContext | undefined = canConvert && customer
+    ? await getHandoffContext(context.organizationId, { opportunityId: o.id, contactId: o.contactId, contactName: customer.name, contactPhone: customer.phone, contactKind })
+    : undefined;
   const saved = (await searchParams).saved;
   const savedMessage = typeof saved === "string" ? SAVED[saved] : undefined;
 
@@ -134,6 +141,7 @@ export default async function OpportunityDetailPage({
                   expectedVersion={o.updatedAt}
                   sourceLabel={selectOptionLabel(SOURCE_OPTIONS, coreSourceForOpportunity(o.source))}
                   opportunityServiceLabel={o.serviceType ? (SERVICE_TYPE_LABELS[o.serviceType as ServiceType] ?? null) : null}
+                  handoff={handoff}
                 />
               )}
             </div>

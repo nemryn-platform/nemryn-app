@@ -118,14 +118,15 @@ begin
   v_core9 := array(select (regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''::text', 'g'))[1] from pg_constraint c where c.conname = 'transportation_requests_service_type_check');
 
   -- ===================================================================== R. RPC contract
-  perform pg_temp.t('R1 exactly ONE plus_create_rebooking_request; 13 args; last p_service_type text DEFAULT NULL',
+  -- NP-PILOT-P1 (20261028100000) appended p_passenger_id / p_requested_passenger_name (both DEFAULT NULL) after p_service_type
+  perform pg_temp.t('R1 exactly ONE plus_create_rebooking_request; 15 args; p_service_type text DEFAULT NULL then the two NP-PILOT-P1 options',
     (select count(*) from pg_proc where proname = 'plus_create_rebooking_request') = 1
-    and (select pronargs from pg_proc where proname = 'plus_create_rebooking_request') = 13
-    and pg_get_function_arguments((select oid from pg_proc where proname = 'plus_create_rebooking_request')) like '%p_additional_notes text, p_service_type text DEFAULT NULL::text');
-  perform pg_temp.t('R2 plus_convert_opportunity_to_request keeps its 12-argument signature (one function)',
+    and (select pronargs from pg_proc where proname = 'plus_create_rebooking_request') = 15
+    and pg_get_function_arguments((select oid from pg_proc where proname = 'plus_create_rebooking_request')) like '%p_additional_notes text, p_service_type text DEFAULT NULL::text, p_passenger_id uuid DEFAULT NULL::uuid, p_requested_passenger_name text DEFAULT NULL::text');
+  perform pg_temp.t('R2 plus_convert_opportunity_to_request: one function, the 12 original arguments + the two NP-PILOT-P1 options',
     (select count(*) from pg_proc where proname = 'plus_convert_opportunity_to_request') = 1
     and (select oid::regprocedure::text from pg_proc where proname = 'plus_convert_opportunity_to_request')
-      = 'plus_convert_opportunity_to_request(uuid,uuid,timestamp with time zone,text,text,text,text,text,date,time without time zone,text,text)');
+      = 'plus_convert_opportunity_to_request(uuid,uuid,timestamp with time zone,text,text,text,text,text,date,time without time zone,text,text,uuid,text)');
   perform pg_temp.t('R3 both: SECURITY DEFINER, search_path pinned, EXECUTE authenticated only (not PUBLIC / anon / service_role)',
     (select bool_and(p.prosecdef and p.proconfig = array['search_path=public, pg_temp'] and has_function_privilege('authenticated', p.oid, 'EXECUTE')
        and not has_function_privilege('anon', p.oid, 'EXECUTE') and not has_function_privilege('service_role', p.oid, 'EXECUTE')

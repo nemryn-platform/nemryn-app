@@ -118,12 +118,13 @@ begin
    where n.nspname = 'public' and p.proname = 'log_transportation_request';
   perform pg_temp.t('A1 exactly ONE log_transportation_request (no overload)',
     (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'log_transportation_request') = 1);
-  perform pg_temp.t('A2 exactly 15 input arguments; identity = the 14 original + text',
-    (select pronargs from pg_proc where oid = v_fn) = 15
-    and v_fn::regprocedure::text = 'log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text)',
+  -- NP-PILOT-P1 (20261028100000) appended p_requested_passenger_name text DEFAULT NULL after p_service_type
+  perform pg_temp.t('A2 exactly 16 input arguments; identity = the 14 original + service type + requested passenger name',
+    (select pronargs from pg_proc where oid = v_fn) = 16
+    and v_fn::regprocedure::text = 'log_transportation_request(uuid,text,text,text,text,text,text,text,text,uuid,date,time without time zone,text,text,text,text)',
     v_fn::regprocedure::text);
-  perform pg_temp.t('A3 the first 14 parameters keep their names / defaults; the last is p_service_type text DEFAULT NULL',
-    pg_get_function_arguments(v_fn) = 'p_organization_id uuid, p_requester_name text, p_requester_relationship text, p_requester_phone text, p_pickup_description text, p_destination_description text, p_return_trip_needed text, p_source text, p_requester_email text DEFAULT NULL::text, p_passenger_id uuid DEFAULT NULL::uuid, p_preferred_date date DEFAULT NULL::date, p_preferred_time time without time zone DEFAULT NULL::time without time zone, p_assistance_notes text DEFAULT NULL::text, p_additional_notes text DEFAULT NULL::text, p_service_type text DEFAULT NULL::text',
+  perform pg_temp.t('A3 the first 14 parameters keep their names / defaults; then p_service_type and p_requested_passenger_name, both DEFAULT NULL',
+    pg_get_function_arguments(v_fn) = 'p_organization_id uuid, p_requester_name text, p_requester_relationship text, p_requester_phone text, p_pickup_description text, p_destination_description text, p_return_trip_needed text, p_source text, p_requester_email text DEFAULT NULL::text, p_passenger_id uuid DEFAULT NULL::uuid, p_preferred_date date DEFAULT NULL::date, p_preferred_time time without time zone DEFAULT NULL::time without time zone, p_assistance_notes text DEFAULT NULL::text, p_additional_notes text DEFAULT NULL::text, p_service_type text DEFAULT NULL::text, p_requested_passenger_name text DEFAULT NULL::text',
     pg_get_function_arguments(v_fn));
   perform pg_temp.t('A4 returns request_creation_result; plpgsql; VOLATILE; SECURITY DEFINER; search_path pinned; owner postgres',
     pg_get_function_result(v_fn) = 'request_creation_result'

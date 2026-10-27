@@ -434,7 +434,9 @@ begin
     pg_temp.core_fp() = v_fp);
   perform pg_temp.t('K2 no Core function or policy references plus_request_attributions; no Plus function writes Core tables',
     not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
-                and p.proname !~ '^(plus_|_plus_|_require_plus_)' and p.prosrc ~ 'plus_request_attributions')
+                and p.proname !~ '^(plus_|_plus_|_require_plus_)' and p.prosrc ~ 'plus_request_attributions'
+                -- NP-BILL-P1 (R3, owner-approved): Core billing READS attributions for the optional quote import only
+                and not (p.proname = 'billing_create_invoice_draft' and p.prosrc !~* '(insert\s+into|update|delete\s+from)\s+(public\.)?plus_request_attributions'))
     and not exists (select 1 from pg_policy where polrelid::regclass::text !~ '^(public\.)?plus_' and coalesce(pg_get_expr(polqual, polrelid), '') ~ 'plus_')
     and not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname ~ '^(plus_|_plus_)'
       and p.prosrc ~* '(insert\s+into|update|delete\s+from)\s+(public\.)?(transportation_requests|request_events|request_acquisition_attributions|passengers|trips|recurring_arrangements|trip_assignments)\M'));

@@ -151,6 +151,9 @@ export function bookingErrorMessage(code: string | undefined, reason?: string): 
     case "ZW006":
       if (reason === "contact_phone_required") return "Add a phone number to the contact first. Operations needs one to review the request.";
       if (reason === "contact_not_active") return "This contact is archived. Only an active contact can have a new transportation request.";
+      // NP-PILOT-P1: refused passenger / rider name -- nothing was created (the whole conversion rolled back)
+      if (reason === "passenger_unavailable") return "That passenger isn't available any more (inactive or not in this workspace). Nothing was created — choose again or decide on the request page.";
+      if (reason === "invalid_passenger_name") return "Check the rider's name (up to 200 characters). Nothing was created.";
       return "Check the transportation details: pickup, destination, who is requesting and whether a return trip is needed.";
     case "ZW001":
       return "You can view this record but can't create transportation requests. Ask an Organization Admin for access.";

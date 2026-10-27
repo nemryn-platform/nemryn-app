@@ -3,6 +3,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
 import { canWriteGrowth, isPlusReadOnly } from "@/lib/plus/access-core";
 import { getContact, listContactActivities, type ContactActivity } from "@/lib/plus/contacts";
+import { getHandoffContext } from "@/lib/plus/handoff";
 import {
   activityTypeLabel,
   contactChannelLabel,
@@ -99,6 +100,10 @@ export default async function ContactDetailPage({
     }
   }
   const rebookServiceOptions = serviceRequestedOptions(SERVICE_TYPE_VALUES, SERVICE_TYPE_LABELS, configuredServices);
+  // NP-PILOT-P1: handoff hints for rebooking (who rode before for this contact first; nothing pre-selected)
+  const handoff = canWrite
+    ? await getHandoffContext(context.organizationId, { contactId: contact.id, contactName: contact.displayName, contactPhone: contact.phone, contactKind: contact.contactKind })
+    : undefined;
 
   return (
     <div className="flex flex-col gap-zw-lg">
@@ -120,6 +125,7 @@ export default async function ContactDetailPage({
                 contactId={contact.id}
                 serviceOptions={rebookServiceOptions}
                 serviceOptionsUnavailable={configuredServices === null}
+                handoff={handoff}
               />
             </div>
           ) : undefined
