@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { GettingStartedLink } from "@/components/operations/GettingStartedLink";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { FacilityFormDialog } from "./FacilityFormDialog";
 import type { FacilitiesListRow } from "@/lib/operations/facilities-list";
@@ -57,6 +58,7 @@ export function FacilitiesPageClient({ rows }: FacilitiesPageClientProps) {
             icon={<Buildings className="size-8" aria-hidden />}
             title="No facilities yet"
             description="Facilities linked to your trips will appear here."
+            action={<GettingStartedLink />}
           />
         }
       />

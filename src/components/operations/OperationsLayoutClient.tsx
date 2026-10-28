@@ -26,6 +26,8 @@ export interface OperationsLayoutClientProps {
   canAccessGrowth: boolean;
   /** NP-P2-S7-C: NEW website inquiries (null = unknown or no Growth access -> no badge). */
   newInquiryCount: number | null;
+  /** NP-PILOT-P2: essential Getting started steps still to do (null = complete / unknown). */
+  setupRemaining: number | null;
   children: ReactNode;
 }
 
@@ -80,6 +82,7 @@ export function OperationsLayoutClient({
   hasLinkedDriverProfile,
   canAccessGrowth,
   newInquiryCount,
+  setupRemaining,
   children,
 }: OperationsLayoutClientProps) {
   const pathname = usePathname();
@@ -94,6 +97,7 @@ export function OperationsLayoutClient({
         canManageSettings: organization.role === "organization_admin",
         canAccessGrowth,
         newInquiryCount,
+        setupRemaining,
         hasMultipleOrganizations,
       }}
       header={buildHeaderProps(pathname, organization, dispatcherDisplayName, dispatcherEmail, hasMultipleOrganizations)}

@@ -7,7 +7,9 @@ import {
   type TodaysOperationsData,
   type TodaysOperationsTrip,
 } from "@/lib/operations/todays-operations";
-import { getOnboardingChecklist, type OnboardingChecklist } from "@/lib/operations/onboarding-checklist";
+import { getGettingStarted, type GettingStarted } from "@/lib/operations/onboarding-checklist";
+import { getPlusAccessState } from "@/lib/plus/access";
+import { canOpenGrowth } from "@/lib/plus/access-core";
 import {
   getDriverSnapshot,
   getRequestSummary,
@@ -136,10 +138,14 @@ export default async function OperationsOverviewPage() {
   // is simply omitted from the page entirely (`checklist: null` — the
   // banner returns null for that case too), which is truthful: it never
   // claims onboarding is complete, it just doesn't claim anything at all.
-  const checklistPromise: Promise<OnboardingChecklist | null> = getOnboardingChecklist(organization.organizationId).catch(() => {
-    console.error("[operations] getOnboardingChecklist failed");
-    return null;
-  });
+  // NP-PILOT-P2: the same per-request (cached) Getting started read the layout's sidebar entry uses.
+  const isAdmin = organization.role === "organization_admin";
+  const checklistPromise: Promise<GettingStarted | null> = getPlusAccessState(organization.organizationId)
+    .then((plus) => getGettingStarted(organization.organizationId, isAdmin, canOpenGrowth(plus.state, plus.capability)))
+    .catch(() => {
+      console.error("[operations] getGettingStarted failed");
+      return null;
+    });
   const driverSnapshotPromise: Promise<OperationsBriefDriverSnapshot | null> = getDriverSnapshot(organization.organizationId).catch(() => {
     console.error("[operations] getDriverSnapshot failed");
     return null;
@@ -161,7 +167,7 @@ export default async function OperationsOverviewPage() {
   // P1-OPS-PROG3B fact-signal composition -- assembled ONLY from data this
   // page already loaded (no new query). null = could not be loaded, never 0.
   // No business_stage, size, membership or vehicle input exists at all.
-  const tripChecklistItem = checklist?.items.find((item) => item.key === "trip") ?? null;
+  const tripChecklistItem = checklist?.steps.find((step) => step.key === "trip") ?? null;
   const nextTodayPickupAt =
     data?.todayTrips
       .filter((trip) => trip.state === "scheduled" && trip.scheduledPickupAt && Date.parse(trip.scheduledPickupAt) > now.getTime())
@@ -184,7 +190,9 @@ export default async function OperationsOverviewPage() {
     proofReviewCount: proofOfService?.needsReviewCount ?? null,
     activeDriverCount: driverSnapshot?.totalActiveDrivers ?? null,
     hasEverHadTrip: tripChecklistItem ? tripChecklistItem.complete : null,
-    checklistComplete: checklist ? checklist.isComplete : null,
+    // NP-PILOT-P2: setup completes with the four business essentials, before any trip; the "fresh" Brief (Get started
+    // rows) keeps its original meaning -- set up AND a first trip -- so a configured agency still sees it until then.
+    checklistComplete: checklist ? checklist.isComplete && tripChecklistItem?.complete === true : null,
   };
   const composition = composeOperationsBrief(signals);
   const hasLinkedDriver = (await getOperatorLinkedDriverId(organization.organizationId)) !== null;
@@ -264,7 +272,7 @@ export default async function OperationsOverviewPage() {
               value={`${checklist.completedCount} of ${checklist.totalCount}`}
               icon={<ListChecks className="size-5" />}
               tone="accent"
-              href="#setup"
+              href="/operations/getting-started"
               testId="tile-setup"
             />
           ) : null,

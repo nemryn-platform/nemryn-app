@@ -4,6 +4,7 @@ import { useState } from "react";
 import { UsersThree } from "@phosphor-icons/react/dist/ssr";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { GettingStartedLink } from "@/components/operations/GettingStartedLink";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EditPassengerDialog } from "./EditPassengerDialog";
 import type { PassengersListRow } from "@/lib/operations/passengers-list";
@@ -40,6 +41,7 @@ export function PassengersTable({ rows, search }: PassengersTableProps) {
             icon={<UsersThree className="size-8" aria-hidden />}
             title={search ? "No passengers match that search" : "No passengers yet"}
             description={search ? "Try a different name or phone number." : "Passengers you add will appear here."}
+            action={search ? undefined : <GettingStartedLink />}
           />
         }
       />

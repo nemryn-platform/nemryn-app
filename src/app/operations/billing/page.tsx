@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CheckCircle, ClockCountdown, FileText, Receipt, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
+import { getOrganizationSettings } from "@/lib/operations/organization-settings";
 import { getBillingSummary, listBillableTrips, listInvoices, type BillableTrip, type BillingSummary, type InvoiceListRow } from "@/lib/billing/billing";
 import {
   BILLING_PAGE_SIZE,
@@ -68,12 +69,17 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
   const params = parseBillingParams(raw);
   const tz = organization.organizationTimezone;
 
-  const [summaryResult, listResult] = await Promise.allSettled([
+  const [summaryResult, listResult, settingsResult] = await Promise.allSettled([
     getBillingSummary(organization.organizationId),
     params.view === "ready"
       ? listBillableTrips(organization.organizationId, { page: params.page })
       : listInvoices(organization.organizationId, { filter: params.filter, search: params.search, page: params.page }),
+    getOrganizationSettings(organization.organizationId),
   ]);
+  // NP-PILOT-P2: invoices / receipts print the business phone and address only when saved -- say so before invoicing.
+  // Unknown (failed read) shows nothing rather than a guess.
+  const business = settingsResult.status === "fulfilled" ? settingsResult.value : null;
+  const businessDetailsMissing = business !== null && (!business.businessPhone.trim() || !business.businessAddress.trim());
   const summary: BillingSummary | null = summaryResult.status === "fulfilled" ? summaryResult.value : null;
   const list = listResult.status === "fulfilled" ? listResult.value : null;
   const pages = list ? Math.max(1, Math.ceil(list.total / BILLING_PAGE_SIZE)) : 1;
@@ -85,6 +91,20 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
         description="Invoice completed private-pay trips and record the payments you receive. Nemryn doesn't take card payments or send invoices; print or save them as PDF."
         breadcrumb={[{ label: "Billing" }]}
       />
+      {businessDetailsMissing && (
+        <div data-testid="billing-business-details-missing">
+          <AttentionState
+            level="info"
+            title="Add your business phone and address"
+            description="They print on your invoices and receipts so customers know how to reach you. Add them in Settings → Organization."
+            action={
+              <LinkButton href="/operations/settings/organization" size="sm" variant="outline">
+                Add business details
+              </LinkButton>
+            }
+          />
+        </div>
+      )}
       {raw.discarded === "1" && (
         <p role="status" className={cn(typography.bodySmall, "text-text-secondary")} data-testid="billing-flash">
           Draft discarded. Its trips are ready to invoice again.

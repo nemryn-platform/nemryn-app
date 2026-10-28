@@ -1,0 +1,193 @@
+NEMRYN — NP-PILOT-P2 PAID PILOT ONBOARDING — IMPLEMENTATION REPORT (with final refinements 1 + 2)
+Date: 2026-10-27. Branch np-pilot-p2-onboarding (from main 166f25d). UNCOMMITTED — stopped for owner review.
+No migration, no new permission model, no production write (production was only read: SELECT audits), public
+inquiries untouched, fictional data only.
+
+VERDICT: PASS — refinements 1 and 2 implemented and verified; all suites pass. No migration or permission decision
+  needed; one visible-change note for the owner (F, L1).
+
+======================================================================================================================
+A. ONBOARDING AUDIT (existing functionality — kept, not rebuilt)
+======================================================================================================================
+Already working
+  - Sign-up creates the workspace + Organization Admin and opens a guided 5-step flow (/onboarding: basics, vehicle,
+    driver, facility, passenger) with "Skip for now" / "Finish later".
+  - Operations Brief "Finish setting up" banner (Concept B) with live counts; fresh-workspace Brief; Settings
+    (Organization, Services, Team + invitations, Plus, Website requests, ...) all Organization-Admin guarded; Core vs
+    Plus access resolved server-side; Billing (NP-BILL-P1).
+Friction found
+  F1 "Business profile" was hard-coded COMPLETE in the checklist, and the guided "Business basics" step saves only the
+     timezone. No production organization has a business phone + address (read-only check, 6 / 6 without), so
+     quotes, invoices and receipts print with NO business contact block — and nothing told the agency.
+  F2 Services offered were not part of setup (the Pilot Simulation tenant has 0 services configured).
+  F3 Setup mixed business configuration with first use: "setup complete" required a facility, a passenger and a trip,
+     i.e. having transported someone. Team invitations and Growth (Plus) were not mentioned at all.
+  F4 The checklist existed only as the Overview banner: no sidebar entry, no explanations, nothing from the empty
+     Vehicles / Drivers / Passengers / Facilities / Trips pages, and nothing on Billing.
+  F5 Non-admin staff: the banner linked everyone to the same pages (admin-only Settings would have redirected).
+  F6 Demo: the production Pilot Simulation tenant (read-only audit) has no open opportunity, no inquiry form or
+     inquiry, no invoice, no business details and no services — the inquiry -> invoice story cannot be shown there
+     without creating production records.
+
+======================================================================================================================
+B. CHANGES — GETTING STARTED (Refinement 1: setup versus first-use milestones)
+======================================================================================================================
+Model — src/lib/operations/getting-started-core.ts (pure, 10 unit tests)
+  BUSINESS SETUP ESSENTIALS (the ONLY steps that decide "setup complete"; count "N of 4"):
+    1 Business details — business phone AND address saved (blank / whitespace does not count)
+    2 Services you offer — at least one service configured
+    3 First vehicle — at least one vehicle
+    4 Driver setup — at least one ACTIVE driver
+  FIRST-USE MILESTONES (shown separately, never block setup):
+    First facility (where relevant) · First passenger (a fictional practice rider is fine) · First request or trip
+    (a logged request OR a scheduled trip) · Invite your team (recommended, not required)
+    Section note: "Milestones only show that a first record exists in Nemryn. They are not required for setup and do
+    not mean your organization is approved or ready to handle real patient information. While you evaluate Nemryn, use
+    fictional practice records."
+  GROWTH (OPTIONAL, only with Nemryn Plus access): First Growth contact · First estimate or quote.
+  Rules kept: completion only from live data (opening a page completes nothing); a fact the person cannot read (team
+  for non-admins) or that failed to load is "unknown" — never counted complete ("Managed by an Organization Admin" /
+  "Couldn't check right now"); admin-only steps (business, services, team) link to Settings only for an Organization
+  Admin; page footer: "Completing them does not make your organization HIPAA compliant or certify any regulatory
+  requirement."
+Data — src/lib/operations/onboarding-checklist.ts: getGettingStarted() (replaces getOnboardingChecklist()), per-request
+  cached (layout + Brief share one set of reads), each read degrades to null on its own, the caller's own client
+  (RLS + existing RPC role checks; team lists read only for admins). Reads: organization business phone / address,
+  service offerings, vehicles, active drivers, facilities, passengers, trips, transportation requests, (admin) team
+  members + staff invitations, (Growth) contacts + quotes.
+UI (Concept B components only)
+  - /operations/getting-started (admins + staff with Operations access): "N of 4 business setup steps complete" /
+    "Business setup is complete"; sections Business setup essentials (ordered), First-use milestones (with the note),
+    Nemryn Plus — Growth (optional); text status badges; action / Review buttons; mobile-safe.
+  - Operations Brief banner: the 4 essentials ("0 of 4 complete"), subtitle "Four business setup steps. Your first
+    passenger and trip are tracked separately as milestones.", link "All setup steps and what they mean". It
+    disappears once the 4 essentials are done. The "setup steps complete" tile links to the page.
+  - The fresh Brief view ("Get started" rows) keeps its meaning — shown until the FIRST TRIP even when setup is done.
+  - Sidebar: "Getting started" under Today with the remaining essentials count (max 4), only while essentials remain
+    (accessible name "Getting started, N steps left").
+  - Empty states (Vehicles, Drivers, Passengers, Facilities, Trips; true empty state only): "See all setup steps".
+  - Billing: "Add your business phone and address" notice (with link) while either is missing.
+Files
+  new       src/lib/operations/getting-started-core.ts (+ .test.mjs), src/app/operations/getting-started/page.tsx,
+            src/components/operations/GettingStartedLink.tsx, tests/e2e/onboarding/getting-started.e2e.mjs,
+            tests/e2e/demo/pilot-demo.mjs, tests/e2e/demo/isolation-guard.mjs, docs/demo/NP-PILOT-P2-demo-runbook.md,
+            docs/design/concept-b/reviews/pilot-p2/g01..g06 *.png
+  modified  src/lib/operations/onboarding-checklist.ts, src/components/operations/OnboardingChecklistBanner.tsx,
+            src/app/operations/page.tsx, src/app/operations/layout.tsx, src/components/operations/OperationsLayoutClient.tsx,
+            src/components/operations/OperationsSidebar.tsx, src/lib/operations/nav-core.ts (+ test), src/design/icons.ts,
+            src/app/operations/billing/page.tsx, src/app/operations/trips/page.tsx, 4 empty-state components
+            (drivers, facilities, fleet, passengers), tests/e2e/ui-foundations/p1b.e2e.mjs (O6 / S2, see D)
+Security / scope: no migration, no RLS / grant / permission change; every route and mutation keeps its server guard
+  (E2E S4: a Dispatcher is still redirected from Settings); no public-inquiry activation; no real patient data.
+
+======================================================================================================================
+C. FICTIONAL DEMO (Refinement 2: reset safety)
+======================================================================================================================
+  tests/e2e/demo/pilot-demo.mjs  status | prepare --confirm-isolated=NemrynS1Iso | reset --confirm-isolated=NemrynS1Iso
+  tests/e2e/demo/isolation-guard.mjs — FAILS CLOSED before any database statement unless ALL are proven:
+    - no DATABASE_URL / SUPABASE_DB_URL / POSTGRES_URL* / SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL / PGHOST pointing
+      anywhere but localhost / 127.0.0.1 / ::1 (refuses production and any remote URL);
+    - container exactly supabase_db_NemrynS1Iso (no override; QUOTES_E2E_ALLOW_OTHER_LOCAL_STACK refused), running,
+      Supabase CLI project label NemrynS1Iso; local Docker unix socket; DOCKER_HOST unset;
+    - ~/NemrynS1Iso/supabase/config.toml project_id = "NemrynS1Iso" and its [db] port = the container's published port;
+    - a database answers on loopback 127.0.0.1:<that port>;
+    - fictional seed fingerprint 2/1/0 (both seed orgs + seed admin present; production Pilot Simulation org absent).
+    Unproven identity -> "REFUSED (demo isolation guard): … Nothing was changed." exit 2.
+  Explicit confirmation: prepare and reset (both destructive) require --confirm-isolated=NemrynS1Iso.
+  No production ledger bypass: every SQL batch is prefixed IN THE SAME psql SESSION (ON_ERROR_STOP) with a guard that
+    re-proves the fictional fingerprint, database 'postgres' and a local socket (inet_server_addr() is null) and aborts
+    otherwise — so the reset's append-only billing trigger bypass (session_replication_role, limited to the demo's own
+    invoices, all rows of each invoice together) can never execute against any other database. The demo reaches the
+    database only through `docker exec` on the local container; it never uses the Supabase CLI's linked project.
+  Story staged by prepare (Fictional Org A): Plus on (only if not already present; reset removes only the demo's own
+    Plus row), fictional business details (only if empty), returning rider "DEMO Rose Fictional", website inquiry
+    from her daughter (public access for ONE submission inside the isolated DB, removed at once), contact +
+    opportunity, accepted round-trip dialysis quote.
+  Presenter steps live (docs/demo/NP-PILOT-P2-demo-runbook.md, 9 steps + guard rails): booking handoff (rider chosen +
+    confirmed) -> Core accepts -> schedule -> dispatch -> driver completes -> invoice from the originating quote ->
+    issue -> record payment. The production Pilot Simulation tenant is never used.
+
+======================================================================================================================
+D. TESTS (isolated NemrynS1Iso, app built from this branch, public inquiries OFF) — final run 2026-10-27
+======================================================================================================================
+Final regression chain 2026-10-27 13:32-14:10 UTC on the rebuilt app (real runs; logs in the session scratchpad):
+  Getting started E2E (tests/e2e/onboarding/getting-started.e2e.mjs) ........................... 26 / 26 PASS
+    F0-F5 real sign-up -> fresh workspace: banner "0 of 4", 4 steps, guide link; sidebar "Getting started, 4 steps
+      left"; page 0 of 4 — essentials = business, services, vehicle, driver; milestones = facility, passenger,
+      request/trip, team; Core-only (no Growth); notes: no HIPAA claim, milestones not an authorization to handle real
+      patient information (fictional practice records)
+    V1-V3 opening every setup page completes nothing (still 0 of 4); Vehicles empty-state link; Billing notice shown
+    R1-R3 phone alone is not enough; phone + address + a service -> exactly 2 of 4; Billing notice disappears
+    R4 FOUR-ESSENTIAL COMPLETION: vehicle + active driver -> setup complete with NO facility, passenger or trip; banner
+      and sidebar entry disappear
+    R5 the Brief keeps its fresh "Get started" view until the first trip
+    R6 page: "Business setup is complete"; every milestone still "Not complete" and not blocking
+    R7 facility, passenger and first trip complete their milestones; setup count unchanged; Team stays optional
+    R8 after the first trip the Brief becomes operational
+    M1 390 px: no horizontal overflow; AXE 0 serious / critical (desktop, 390 px, Core + Plus)
+    S1-S4 Dispatcher: admin-only steps without links + "An Organization Admin completes this"; team makes no claim;
+      operational links kept; Settings still server-guarded
+    P1 Core + Plus admin sees the optional Growth steps from real counts
+  Unit: getting-started-core 10 / 10 (incl. each essential required, four essentials alone complete setup, request OR
+    trip milestone, unknown facts, admin-only links, Growth never blocks, notes) + nav-core -> npm test 957 / 957
+  Demo safeguards (tests on the isolated stack with DEMO rows staged; row counts compared after every attempt):
+    G1 reset without confirmation ................................................ REFUSED, exit 2, rows unchanged
+    G2 reset with a wrong confirmation .......................................... REFUSED, exit 2, rows unchanged
+    G3 production Supabase URL in NEXT_PUBLIC_SUPABASE_URL ...................... REFUSED, exit 2, rows unchanged
+    G4 remote DATABASE_URL (production host) .................................... REFUSED, exit 2, rows unchanged
+    G5 remote PGHOST (Supabase pooler) .......................................... REFUSED, exit 2, rows unchanged
+    G6 another local container (ZenWard) even with the opt-in flag .............. REFUSED, exit 2, rows unchanged
+    G7 remote DOCKER_HOST ....................................................... REFUSED, exit 2, rows unchanged
+    G8 unverifiable project identity (config.toml missing) ...................... REFUSED, exit 2, rows unchanged
+    G9 prepare without confirmation ............................................. REFUSED, exit 2, rows unchanged
+    G10 in-session guard: the reset's ledger-bypass batch on a database without the fictional fingerprint aborts
+        before 'set session_replication_role' ("demo isolation guard: not the fictional local isolated database")
+  Demo prepare / status / reset (confirmed) on the isolated stack: "isolation proven: supabase_db_NemrynS1Iso
+    (project NemrynS1Iso), loopback 127.0.0.1:54362, fingerprint 2/1/0"; scripted presenter journey -> request
+    pending with the rider linked -> trip completed -> invoice issued from the quote (3 lines) -> paid 6500 / 6500;
+    reset -> 0 DEMO rows of every kind, 0 orphaned activities / invoice-trip links / trip events, public access 0,
+    business details restored; a pre-existing Plus row created by another suite was correctly left untouched.
+  Existing suites: p1b 52 / 52 (O6 now "0 of 4"; S2 allows the conditional Getting started item) · handoff 35 / 35 ·
+    billing E2E 50 / 50 · inquiries staff 74 / 74 · inquiries OFF 5 / 5 · consents ALL PASS · QA2 strict 5 / 5 suites
+    (core-requests 25, core-trips-dispatch 44, core-records 28, growth 23, auth-access 79) · Quotes s4-integrated
+    69 / 69 + s4-a11y 26 / 26 (earlier full Quotes strict run on the first version of this branch: 7 / 7 suites)
+  Static: tsc 0 errors · eslint 0 errors, 113 warnings (pre-existing baseline; the branch adds none) · next build PASS
+  PR preparation (2026-10-27 ~14:30 UTC): the banner component had been reflowed by a formatter (80-column churn not
+    matching the codebase); it was restored from main and only the functional edits re-applied (diff 46 / 20 lines).
+    Re-verified on a fresh build: tsc 0, npm test 957 / 957, Getting started E2E 26 / 26, p1b 52 / 52, demo guard
+    G1-G10 refusals + confirmed prepare / reset.
+
+======================================================================================================================
+E. SCREENSHOTS (docs/design/concept-b/reviews/pilot-p2/)
+======================================================================================================================
+  g01 fresh workspace Brief: banner "0 of 4" + sidebar "Getting started 4"
+  g02 Getting started page, fresh workspace (admin)
+  g03 business setup complete with first-use milestones still open (note visible)
+  g04 390 px mobile        g05 Dispatcher view (admin-only steps without links)        g06 Core + Plus (Growth steps)
+
+======================================================================================================================
+F. REMAINING LIMITATIONS / OWNER DECISIONS
+======================================================================================================================
+  L1 Visible change after deploy (truthful): read-only production check under the 4-essential model — business
+     details are missing in all 6 organizations, so every workspace shows setup as incomplete:
+       Nemryn Pilot Simulation 2 / 4 (business details, services) · tenant 7096ad03 3 / 4 (business details) — both
+       had completed the old checklist and will see the banner again; tenants 627a9fa6 3 / 4, 887d2a2f 2 / 4,
+       7975fcbf 0 / 4, 9272c1e0 0 / 4 already saw a setup banner. The Brief layout of workspaces with trips is
+       unchanged.
+  L2 The guided /onboarding/basics step still asks only for the timezone; business phone / address are entered in
+     Settings -> Organization (the step links there). Adding them to the guided step is a small follow-up.
+  L3 The demo runs on the isolated local stack only; a hosted demo environment would need a separate decision.
+  L4 The demo guard proves the environment it can see (env, Docker, config, loopback, seed fingerprint, in-session
+     check); it is a safety net for an operator on this machine, not an access-control boundary.
+  No migration or permission decision is required.
+
+======================================================================================================================
+G. PR READINESS
+======================================================================================================================
+READY TO COMMIT after owner approval. Suggested commit:
+  feat(core): add getting started checklist with first-use milestones and pilot demo kit
+  Contents: the files in section B (code, tests, demo script + guard, runbook, screenshots) and this report.
+  Not included: .tmp-qa/ scratch, tests/e2e/fixtures/ (pre-existing untracked local fixture).
+  Release: app-only (no migration) — merge -> Vercel deploy -> read-only production check (Getting started page,
+  banner and sidebar entry render; no writes). Expect L1 (setup banner visible in all current workspaces).
+STOP — awaiting owner review. Nothing committed.

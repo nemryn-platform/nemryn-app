@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { GettingStartedLink } from "@/components/operations/GettingStartedLink";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { VehicleFormDialog } from "./VehicleFormDialog";
 import type { VehiclesListRow } from "@/lib/operations/vehicles-list";
@@ -101,7 +102,7 @@ export function FleetPageClient({ rows, availability, isAdmin, timezone }: Fleet
         onRowClick={isAdmin ? (row) => setDialog({ mode: "edit", vehicle: { id: row.id, label: row.label, status: row.status } }) : undefined}
         rowActionLabel={() => "Edit"}
         emptyState={
-          <EmptyState icon={<Car className="size-8" aria-hidden />} title="No vehicles yet" description="Vehicles in your fleet will appear here." />
+          <EmptyState icon={<Car className="size-8" aria-hidden />} title="No vehicles yet" description="Vehicles in your fleet will appear here." action={<GettingStartedLink />} />
         }
       />
 

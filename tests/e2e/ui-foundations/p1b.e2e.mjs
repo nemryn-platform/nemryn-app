@@ -76,8 +76,13 @@ try {
   await go(admin, "/operations");
   const model = await sidebarModel(admin);
   check("S1 sections in order: Today, Planning, Records, Growth, Administration", JSON.stringify(model.map((m) => m.label)) === JSON.stringify(["Today", "Planning", "Records", "Growth", "Administration"]), JSON.stringify(model.map((m) => m.label)));
-  check("S2 Today: Operations Brief, Requests, Trips, Dispatch, Tomorrow Readiness -> existing routes",
-    JSON.stringify(model[0]?.items) === JSON.stringify(["Operations Brief=/operations", "Requests=/operations/requests", "Trips=/operations/trips", "Dispatch=/operations/dispatch", "Tomorrow Readiness=/operations/tomorrow"]), JSON.stringify(model[0]?.items));
+  // NP-PILOT-P2: "Getting started" sits after the Brief only while essential setup remains (live data; seeded Org A has
+  // no business details / services), so it is checked separately from the fixed Today items.
+  const todayFixed = (model[0]?.items ?? []).filter((i) => !i.endsWith("=/operations/getting-started"));
+  const setupItem = (model[0]?.items ?? []).find((i) => i.endsWith("=/operations/getting-started"));
+  check("S2 Today: Operations Brief, [Getting started while setup remains], Requests, Trips, Dispatch, Tomorrow Readiness -> existing routes",
+    JSON.stringify(todayFixed) === JSON.stringify(["Operations Brief=/operations", "Requests=/operations/requests", "Trips=/operations/trips", "Dispatch=/operations/dispatch", "Tomorrow Readiness=/operations/tomorrow"])
+      && (!setupItem || (model[0].items.indexOf(setupItem) === 1 && /^Getting started, \d+ steps? left=/.test(setupItem))), JSON.stringify(model[0]?.items));
   check("S3 Planning: Standing Orders -> /operations/recurring-care; Records: Passengers, Facilities, Drivers, Vehicles(/fleet)",
     JSON.stringify(model[1]?.items) === JSON.stringify(["Standing Orders=/operations/recurring-care"]) && JSON.stringify(model[2]?.items) === JSON.stringify(["Passengers=/operations/passengers", "Facilities=/operations/facilities", "Drivers=/operations/drivers", "Vehicles=/operations/fleet"]), JSON.stringify(model.slice(1, 3)));
   const growthKids = await admin.evaluate(`[...document.querySelectorAll('[data-testid="growth-nav-child"]')].map(a => a.textContent.trim() + '=' + a.getAttribute('href'))`);
@@ -228,7 +233,9 @@ try {
   await go(empty, "/operations");
   const emptyPath = await empty.evaluate("location.pathname");
   const prog = await empty.evaluate(`(function(){const p=document.querySelector('[data-testid="setup-progress"] [role="progressbar"]'); return p ? { now: p.getAttribute('aria-valuenow'), max: p.getAttribute('aria-valuemax'), text: document.querySelector('[data-testid="setup-progress-count"]').innerText, steps: [...document.querySelectorAll('[data-testid="setup-step"]')].map(s => s.dataset.complete) } : null;})()`);
-  check("O6 empty workspace: 'Finish setting up' derives count + segments from the real checklist (business profile only = 1 of 6)", emptyPath === "/operations" && prog && prog.now === "1" && prog.max === "6" && prog.text === "1 of 6 complete" && JSON.stringify(prog.steps) === JSON.stringify(["true", "false", "false", "false", "false", "false"]), `${emptyPath} ${JSON.stringify(prog)}`);
+  // NP-PILOT-P2: the banner shows the four business-setup essentials (business details, services, vehicle, driver);
+  // business details are a real check now (an empty workspace has none) -> 0 of 4.
+  check("O6 empty workspace: 'Finish setting up' derives count + segments from the real checklist (nothing configured = 0 of 4)", emptyPath === "/operations" && prog && prog.now === "0" && prog.max === "4" && prog.text === "0 of 4 complete" && JSON.stringify(prog.steps) === JSON.stringify(["false", "false", "false", "false"]), `${emptyPath} ${JSON.stringify(prog)}`);
   check("O7 empty workspace: fresh Brief with Get started rows (first trip, business basics + timezone, website requests, I also drive); no zero tiles", (await empty.evaluate(`document.querySelector('[data-testid="brief"]').dataset.briefKind`)) === "fresh" && !(await has(empty, '[data-testid="brief-summary-tiles"]'))
     && JSON.stringify(await empty.evaluate(`[...document.querySelectorAll('[data-testid="get-started"] li a')].map(a => a.getAttribute('href'))`)) === JSON.stringify(["/operations/trips/new", "/onboarding/basics", "/operations/settings/website-requests", "/operations/settings/my-access"]) && /Timezone: America\/New_York/.test(await empty.evaluate(`document.querySelector('[data-testid="get-started-timezone"]').innerText`)));
   await focusOn(empty, '[data-testid="setup-progress-toggle"]');

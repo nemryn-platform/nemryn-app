@@ -11,6 +11,7 @@
 
 export type OperationsNavItemKey =
   | "overview"
+  | "setup"
   | "requests"
   | "trips"
   | "dispatch"
@@ -46,6 +47,11 @@ export interface OperationsNavAccess {
   canManageSettings?: boolean;
   /** Server-resolved Nemryn Plus entry -- gates the Growth section. Every Growth route re-checks requirePlusAccess. */
   canAccessGrowth?: boolean;
+  /**
+   * NP-PILOT-P2: essential Getting started steps still to do (live data). > 0 shows "Getting started" under Today;
+   * 0 or null (complete, or not known) hides it -- the page itself stays reachable from the Operations Brief.
+   */
+  setupRemaining?: number | null;
 }
 
 const TODAY: OperationsNavItem[] = [
@@ -77,8 +83,12 @@ export function operationsNavSections(access: OperationsNavAccess): OperationsNa
     ...(access.canManageSettings ? [{ key: "billing" as const, label: "Billing", href: "/operations/billing" }] : []),
     ...(access.canManageSettings ? [{ key: "settings" as const, label: "Settings", href: "/operations/settings" }] : []),
   ];
+  const today: OperationsNavItem[] =
+    access.setupRemaining && access.setupRemaining > 0
+      ? [TODAY[0], { key: "setup", label: "Getting started", href: "/operations/getting-started" }, ...TODAY.slice(1)]
+      : TODAY;
   return [
-    { key: "today", label: "Today", items: TODAY },
+    { key: "today", label: "Today", items: today },
     { key: "planning", label: "Planning", items: PLANNING },
     { key: "records", label: "Records", items: RECORDS },
     ...(access.canAccessGrowth ? [{ key: "growth" as const, label: "Growth", items: [] }] : []),
@@ -94,6 +104,7 @@ export function isNavItemActive(href: string, pathname: string): boolean {
 
 /** Routes reachable from the Brief rather than the sidebar, still named in the context header. */
 const OTHER_CONTEXT: { prefix: string; section: string; label: string }[] = [
+  { prefix: "/operations/getting-started", section: "Today", label: "Getting started" },
   { prefix: "/operations/proof-of-service", section: "Today", label: "Proof of Service" },
   { prefix: "/operations/growth/agent", section: "Growth", label: "Growth Agent" },
   { prefix: "/operations/growth/inquiries", section: "Growth", label: "Inquiries" },
