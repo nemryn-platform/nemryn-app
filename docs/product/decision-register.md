@@ -3704,7 +3704,7 @@ Builds on NP-BILL-P1 D1–D6 and R1–R4 (`docs/reports/NP-BILL-P1-contract-and-
 
 ## NP-FIN-P1G — Financial-write gate (locked 2026-10-29 from OD-G1 to OD-G6 and EC-1 to EC-6)
 
-Common status for ZD-281 to ZD-287:
+Common status for ZD-281 to ZD-290:
 - Approved by the owner in the NP-FIN-P1G final-refinements authorization (2026-10-29).
 - No commit, production migration, deployment or production enablement is authorized by these entries.
 
@@ -3758,7 +3758,7 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
 - **Decision:**
   - P1G is a separate PR based on the reviewed FIN-P1 commit (0ded235).
   - PR #44 is not modified.
-- **Status:** CONFIRMED — OWNER-APPROVED
+- **Status:** SUPERSEDED IN PART by ZD-288 (2026-10-29) — only the release packaging / branch-merge strategy ("PR #44 is not modified"). The separation of P1G as its own reviewed commit and PR stands.
 - **Affected Product Areas:** PR #44, the P1G PR
 - **Dependencies:** ZD-285
 - **Owner:** Owner
@@ -3809,6 +3809,58 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
 - **Owner:** Owner / Engineering
 - **Review Trigger:** Planning of the first live enablement
 
-No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
+### ZD-288 — Combined release: PR #45 merges into np-fin-p1-ledger; PR #44 becomes the single release PR (M-1; supersedes ZD-284)
+
+- **Date:** 2026-10-29 (approved)
+- **Category:** Release process
+- **Decision:**
+  - PR #45 merges into `np-fin-p1-ledger`, preferably as a fast-forward to b254039 so the reviewed commit ids are kept. This deploys nothing to production: the base is not `main`, and Vercel builds a preview only.
+  - PR #44 then carries FIN-P1 + P1G and becomes the combined release PR.
+  - There is exactly ONE merge into `main` and ONE production deployment.
+  - The three migrations (20261029100000, 20261029110000, 20261029120000) are applied atomically with `docs/reports/NP-FIN-P1G-atomic-release-package.sql` (psql) and verified BEFORE that merge (ZD-285).
+  - CI on PR #44 after the merge is informational: gate-tests tests the release-gate script; db-compat is report-only (NP-RELEASE-01C). Neither replaces the isolated SQL, RLS and concurrency suites, and a check that has not run is never reported as passing.
+- **Reason:** It removes the degraded-UI window and the release-gate DRIFT finding (scenario D) that two sequential deploys would create (`docs/reports/NP-FIN-P1-P1G-joint-release-readiness.txt` §2.2, §7).
+- **Scope of supersession:** replaces ZD-284 ONLY for release packaging and branch merging. Unchanged: every security requirement (ZD-281 to ZD-287), the migration order M1 -> M2 -> M3, the atomic package (ZD-285), the recorded test evidence, and every explicit production authorization gate.
+- **Status:** CONFIRMED — OWNER-APPROVED (D1, 2026-10-29). Authorizes the development-branch update only. The merge into `main`, the production migration window, the deployment and any enablement each still require their own explicit authorization.
+- **Affected Product Areas:** PR #44, PR #45, branch `np-fin-p1-ledger`, the production release procedure
+- **Dependencies:** ZD-284 (superseded on approval), ZD-285
+- **Owner:** Owner
+- **Review Trigger:** Any change to the combined release PR before its merge into `main`
+
+### ZD-289 — Preview deployments use a separate non-production Supabase project (P-1)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Privacy / Release
+- **Decision:**
+  - Vercel Preview deployments must point at a separate NON-PRODUCTION Supabase project that holds fictional data only.
+  - No Preview deployment may be used to read or test production data.
+  - Until Preview is verified to be isolated, any Preview that points at production is a release BLOCKER for the FIN-P1 / P1G production merge.
+- **Not authorized by this entry:** provisioning the non-production project, or changing Vercel environment variables or deployment settings. Each needs separate authorization.
+- **Status:** CONFIRMED — OWNER-APPROVED (D3 / P-1, 2026-10-29)
+- **Affected Product Areas:** Vercel Preview environment, Supabase projects
+- **Dependencies:** ZD-280, ZD-288
+- **Owner:** Owner
+- **Review Trigger:** Any change to Vercel environment variables or Supabase projects
+
+### ZD-290 — Production backup custody policy v1 (encrypted only; owner-controlled; escrowed keys)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Privacy / Operations
+- **Decision (approved principles; policy text: `docs/reports/NP-LAUNCH-03A-backup-containment.txt` §7, as amended here):**
+  - Production backups are encrypted only; no uncontrolled plaintext copy may exist.
+  - Primary storage is owner-controlled (`~/NemrynBackups`, FileVault Mac, owner account).
+  - Off-machine copies are ENCRYPTED sets on an owner-controlled encrypted external drive (not iCloud).
+  - One random encryption key per set, kept in the login Keychain; the recovery key is escrowed in an owner-controlled password manager.
+  - Every set is verified by decrypt-to-hash against its MANIFEST.
+  - Restores happen only into controlled, disposable environments, torn down the same day.
+  - The restore rehearsal (D-REH) is approved IN PRINCIPLE as a future procedure under these safeguards.
+- **Not authorized by this entry:** creating, restoring, moving, copying or deleting any backup; deleting the legacy plaintext sets (NP-LAUNCH-03A A1 remains a separate approval); executing the restore rehearsal; accessing password-manager secrets.
+- **Status:** CONFIRMED — OWNER-APPROVED (D4 C1 / C2 / C3 / C4 / C6, 2026-10-29)
+- **Affected Product Areas:** Production backups, release procedures
+- **Dependencies:** NP-LAUNCH-03A
+- **Owner:** Owner
+- **Review Trigger:** Monthly custody review; any incident; counsel advice (Q-C6)
+
+No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place. ZD-284 has been SUPERSEDED IN PART by ZD-288 (release packaging / branch merging only).
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)
