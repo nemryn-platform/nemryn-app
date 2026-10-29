@@ -8,6 +8,10 @@
 \set ON_ERROR_STOP on
 \pset pager off
 begin;
+-- FU-3: dates in this suite are Org A's LOCAL date, as the billing RPCs compute them (organizations.timezone). Pinning
+-- this test transaction's timezone to Org A's own makes current_date correct at every hour (the suite used to fail
+-- between 00:00 and 04:00 UTC, when the UTC date is already ahead of the organization's). Production code unchanged.
+select set_config('timezone', (select timezone from public.organizations where id = '10000000-0000-0000-0000-0000000000a1'), true);
 create temp table k_results (n serial, name text, ok boolean, detail text);
 create temp table k (name text primary key, v text);
 grant select on k to authenticated, anon;
@@ -210,7 +214,9 @@ select pg_temp.t('D1 partial payment: paid 5000, balance 5988, state partially_p
 select pg_temp.t('D2 idempotent: the same key returns the same payment (changed=false), no second row',
   split_part(pg_temp.pay(pg_temp.kv('D1'), 5000, 'bill-pay-key-0001', 1), '|', 1) = split_part(pg_temp.kv('PAY1'), '|', 1)
   and split_part(pg_temp.pay(pg_temp.kv('D1'), 5000, 'bill-pay-key-0001', 1), '|', 4) = 'false'
-  and (select count(*) from public.billing_payments where invoice_id = pg_temp.kv('D1')::uuid) = 1);
+  -- NP-FIN-P1: a payment is now one receipt + one apply allocation (billing_payments is retired)
+  and (select count(*) from public.billing_allocations where invoice_id = pg_temp.kv('D1')::uuid) = 1
+  and (select count(*) from public.billing_receipts where idempotency_key = 'bill-pay-key-0001') = 1);
 select pg_temp.t('D3 a stale form (old version, new key) cannot double-record (ZW003)',
   pg_temp.code(pg_temp.pay(pg_temp.kv('D1'), 5000, 'bill-pay-key-0002', pg_temp.ver(pg_temp.kv('D1')) - 1)) = 'ZW003');
 select pg_temp.t('D4 overpayment refused (ZW006 amount_exceeds_balance); zero / negative refused',
@@ -226,16 +232,29 @@ insert into k values ('REV1', pg_temp.a1(format('select (r).payment_id::text || 
   pg_temp.kv('A'), split_part(pg_temp.kv('PAY1'), '|', 1), pg_temp.ver(pg_temp.kv('D1')))));
 select pg_temp.t('D7 reversal: new ledger entry (original untouched), paid back to 0, balance = total, reason stored, audited',
   split_part(pg_temp.kv('REV1'), '|', 2) = '0' and split_part(pg_temp.kv('REV1'), '|', 3) = '10988'
-  and (select entry_kind = 'reversal' and amount_cents = 5000 and reason like 'Check bounced%' from public.billing_payments where id = split_part(pg_temp.kv('REV1'), '|', 1)::uuid)
-  and (select entry_kind = 'payment' and amount_cents = 5000 from public.billing_payments where id = split_part(pg_temp.kv('PAY1'), '|', 1)::uuid)
+  -- NP-FIN-P1: the reversal is a receipt reversal (+ an unapply of the payment's allocation); the original is untouched
+  and (select reason_code = 'entry_error' and reason like 'Check bounced%' from public.billing_receipt_reversals where id = split_part(pg_temp.kv('REV1'), '|', 1)::uuid)
+  and (select kind = 'apply' and amount_cents = 5000 from public.billing_allocations where id = split_part(pg_temp.kv('PAY1'), '|', 1)::uuid)
+  and (select count(*) = 1 and min(amount_cents) = 5000 and min(reason) like 'Check bounced%' from public.billing_allocations
+       where unapplies_allocation_id = split_part(pg_temp.kv('PAY1'), '|', 1)::uuid)
   and pg_temp.audits('billing_payment_reversed', split_part(pg_temp.kv('REV1'), '|', 1)) = 1, pg_temp.kv('REV1'));
 select pg_temp.t('D8 a payment can be reversed only once; reversal needs a reason; a reversal cannot be reversed',
   pg_temp.msg(pg_temp.a1(format('select (public.billing_reverse_payment(%L, %L, %s, ''again please'', ''bill-rev-key-0002'')).paid_cents::text', pg_temp.kv('A'), split_part(pg_temp.kv('PAY1'), '|', 1), pg_temp.ver(pg_temp.kv('D1'))))) = 'already_reversed'
   and pg_temp.code(pg_temp.a1(format('select (public.billing_reverse_payment(%L, %L, %s, ''  '', ''bill-rev-key-0003'')).paid_cents::text', pg_temp.kv('A'), split_part(pg_temp.kv('PAY1'), '|', 1), pg_temp.ver(pg_temp.kv('D1'))))) in ('ZW004', 'ZW006')
   and pg_temp.code(pg_temp.a1(format('select (public.billing_reverse_payment(%L, %L, %s, ''reverse the reversal'', ''bill-rev-key-0004'')).paid_cents::text', pg_temp.kv('A'), split_part(pg_temp.kv('REV1'), '|', 1), pg_temp.ver(pg_temp.kv('D1'))))) = 'ZW006');
+-- NP-FIN-P1: the payment rows now live in billing_allocations / billing_receipts; the retired billing_payments refuses
+-- every write, INSERT included
 select pg_temp.t('D9 DB-level append-only: owner UPDATE / DELETE / TRUNCATE of payments refused',
-  pg_temp.owner_try(format('update public.billing_payments set amount_cents = 1 where id = %L', split_part(pg_temp.kv('PAY1'), '|', 1))) like 'ZW004:%'
-  and pg_temp.owner_try(format('delete from public.billing_payments where id = %L', split_part(pg_temp.kv('PAY1'), '|', 1))) like 'ZW004:%'
+  pg_temp.owner_try(format('update public.billing_allocations set amount_cents = 1 where id = %L', split_part(pg_temp.kv('PAY1'), '|', 1))) like 'ZW004:%'
+  and pg_temp.owner_try(format('delete from public.billing_allocations where id = %L', split_part(pg_temp.kv('PAY1'), '|', 1))) like 'ZW004:%'
+  -- (deferred invariant checks pending in this test transaction are flushed first -- PostgreSQL refuses TRUNCATE with
+  -- pending trigger events (55006) before our guard would even run -- then deferred mode is restored)
+  and pg_temp.owner_try('set constraints all immediate') = 'ok'
+  and pg_temp.owner_try('truncate public.billing_allocations cascade') like 'ZW004:%'
+  and pg_temp.owner_try('set constraints all deferred') = 'ok'
+  and pg_temp.owner_try(format('update public.billing_receipts set gross_cents = 1 where idempotency_key = %L', 'bill-pay-key-0001')) like 'ZW004:%'
+  and pg_temp.owner_try(format('delete from public.billing_receipts where idempotency_key = %L', 'bill-pay-key-0001')) like 'ZW004:%'
+  and pg_temp.owner_try(format('insert into public.billing_payments (organization_id, invoice_id, entry_kind, amount_cents, received_on, method, idempotency_key, recorded_by) values (%L, %L, ''payment'', 1, current_date, ''cash'', ''legacy-ins-0001'', %L)', pg_temp.kv('A'), pg_temp.kv('D1'), pg_temp.kv('a1'))) like 'ZW004:%'
   and pg_temp.owner_try('truncate public.billing_payments cascade') like 'ZW004:%');
 insert into k values ('PAY2', pg_temp.pay(pg_temp.kv('D1'), 10988, 'bill-pay-key-0010'));
 select pg_temp.t('D10 full payment -> paid, balance 0; further payment refused',
@@ -365,11 +384,15 @@ select pg_temp.t('F15 another organization''s request (even with the same reques
 select pg_temp.t('G1 Org B admin sees NO Org A billing rows through the tables (RLS)',
   pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, 'select count(*)::text from public.billing_invoices') = '0'
   and pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, 'select count(*)::text from public.billing_payments') = '0'
+  and pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, 'select count(*)::text from public.billing_receipts') = '0'
+  and pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, 'select count(*)::text from public.billing_allocations') = '0'
   and pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, 'select count(*)::text from public.billing_invoice_lines') = '0'
   and pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, 'select count(*)::text from public.billing_invoice_trips') = '0');
 select pg_temp.t('G2 Org A dispatcher and driver see no billing rows (admin-only, D2)',
   pg_temp.x('authenticated', pg_temp.kv('a2')::uuid, 'select count(*)::text from public.billing_invoices') = '0'
-  and pg_temp.x('authenticated', pg_temp.kv('a3')::uuid, 'select count(*)::text from public.billing_payments') = '0');
+  and pg_temp.x('authenticated', pg_temp.kv('a3')::uuid, 'select count(*)::text from public.billing_payments') = '0'
+  and pg_temp.x('authenticated', pg_temp.kv('a2')::uuid, 'select count(*)::text from public.billing_receipts') = '0'
+  and pg_temp.x('authenticated', pg_temp.kv('a3')::uuid, 'select count(*)::text from public.billing_allocations') = '0');
 select pg_temp.t('G3 Org A admin sees its own rows; Org B admin cannot read an Org A invoice through the RPC (ZW002)',
   pg_temp.a1('select count(*)::text from public.billing_invoices')::integer >= 3
   and pg_temp.code(pg_temp.x('authenticated', pg_temp.kv('b1')::uuid, format('select status from public.billing_get_invoice(%L, %L)', pg_temp.kv('B'), pg_temp.kv('D1')))) = 'ZW002'

@@ -99,3 +99,50 @@ export function InvoicesTable({ rows }: { rows: InvoiceRow[] }) {
   ];
   return <DataTable columns={columns} rows={rows} getRowId={(r) => r.id} navigableRows />;
 }
+
+export interface ReceiptRow {
+  id: string;
+  number: string;
+  payer: string;
+  received: string;
+  method: string;
+  amount: string;
+  credit: string;
+  hasCredit: boolean;
+  stateLabel: string;
+  stateTone: "neutral" | "informational" | "warning" | "positive" | "cancelled";
+  assuranceLabel: string;
+  assuranceTone: "neutral" | "informational" | "positive";
+}
+
+/** Billing -> Payments received (NP-FIN-P1): receipts with what is applied and the payer credit left. */
+export function ReceiptsTable({ rows }: { rows: ReceiptRow[] }) {
+  const columns: DataTableColumn<ReceiptRow>[] = [
+    {
+      key: "number",
+      header: "Receipt",
+      primary: true,
+      render: (r) => (
+        <Link href={`/operations/billing/receipts/${r.id}`} onClick={(e) => e.stopPropagation()} className={cn(typography.bodySmall, "font-medium tabular-nums text-text-primary hover:underline")} data-testid="billing-receipt-row-link" data-row-link>
+          {r.number}
+        </Link>
+      ),
+    },
+    { key: "payer", header: "Paid by", render: (r) => <span className="truncate">{r.payer}</span> },
+    { key: "received", header: "Received", render: (r) => r.received },
+    { key: "method", header: "Method", render: (r) => r.method },
+    { key: "amount", header: "Amount", align: "right", render: (r) => <span className="tabular-nums">{r.amount}</span> },
+    { key: "credit", header: "Payer credit", align: "right", render: (r) => <span className={cn("tabular-nums", !r.hasCredit && "text-text-muted")}>{r.credit}</span> },
+    {
+      key: "status",
+      header: "Status",
+      render: (r) => (
+        <div className="flex flex-wrap items-center gap-1">
+          <StatusBadge label={r.stateLabel} category={r.stateTone} />
+          <StatusBadge label={r.assuranceLabel} category={r.assuranceTone} />
+        </div>
+      ),
+    },
+  ];
+  return <DataTable columns={columns} rows={rows} getRowId={(r) => r.id} navigableRows />;
+}

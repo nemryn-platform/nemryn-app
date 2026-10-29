@@ -1,0 +1,206 @@
+NEMRYN — NP-FIN-P1 FINAL CODE REVIEW
+Date: 2026-10-29. Branch np-fin-p1-ledger (from origin/main 85f2042). UNCOMMITTED.
+Not done: FIN-P2 work, commit, push, merge, deploy, production migration, production write.
+
+======================================================================================================================
+1. FILES REVIEWED
+======================================================================================================================
+Evidence reports
+  - docs/reports/NP-FIN-P1-{implementation, test-results, security-review, migration-preflight, final-review}.txt
+  - docs/reports/NP-FIN-P1-readonly-preflight.sql
+  - docs/reports/NP-FIN-P1-emergency-reversal.sql
+Migrations, read in full
+  - supabase/migrations/20261029100000_core_billing_ledger_foundation.sql
+  - supabase/migrations/20261029110000_core_billing_ledger_rpcs.sql
+NP-BILL-P1 context
+  - supabase/migrations/20261027100000_core_billing_foundation.sql
+  - supabase/migrations/20261027110000_core_billing_rpcs.sql
+Application
+  - src/lib/billing/{billing.ts, billing-core.ts, billing-core.test.mjs}
+  - src/app/operations/billing/{actions.ts, page.tsx, invoices/[invoiceId]/page.tsx, receipts/[receiptId]/page.tsx,
+    receipts/new/page.tsx}
+  - src/app/receipt-print/[receiptId]/page.tsx
+  - src/app/invoice-print/[invoiceId]/page.tsx
+  - src/components/billing/{InvoiceActions.tsx, ReceiptActions.tsx, BillingTables.tsx}
+Tests
+  - supabase/tests/{billing_tests.sql, billing_ledger_tests.sql, billing_concurrency_test.sh,
+    billing_ledger_concurrency_test.sh, privilege_contract_tests.sql}
+  - tests/e2e/billing/{billing.e2e.mjs, billing-ledger.e2e.mjs}
+  - tests/e2e/handoff/handoff.e2e.mjs, tests/e2e/demo/pilot-demo.mjs
+Decisions
+  - docs/product/decision-register.md ZD-264..ZD-280
+  - docs/reports/NP-FIN-P0-decision-lock.txt
+
+======================================================================================================================
+2. CONFORMANCE WITH ZD-264..ZD-280
+======================================================================================================================
+  ZD-264 / 265 / 267 (pre-trip invoices, request basis, deposits)   FIN-P2, not implemented. FIN-P1 adds no trip or request
+                                                                     coupling to receipts, so nothing conflicts.        OK
+  ZD-266 immutable documents; RCPT- sequence                        per-organization counter (lock step 1); append-only  OK
+  ZD-268 receipts / allocations / refunds / reversals; freeze+revoke  4 record kinds (+ refund correction, V1); zero-row
+                                                                     gate in the migration; billing_payments refuses every
+                                                                     write, SELECT kept one release; wrappers compatible OK
+  ZD-269 explicit allocation, oldest-first, payer credit            suggestion over same-payer invoices only; the rest is
+                                                                     credit; cross-payer = Admin + confirmation + reason OK
+  ZD-270 four assurance facts                                       recorded / evidence (staff) / provider_confirmed /
+                                                                     reconciled (CHECK: never staff). Clearance rules
+                                                                     belong to FIN-P3a.                                  OK
+  ZD-271 advisory clearance only                                    no dispatch change in FIN-P1                          OK
+  ZD-272 permission matrix; sensitive = Organization Admin          catalogue; every RPC authorizes through it;
+                                                                     SENSITIVE: void, unapply, reverse, refund,
+                                                                     refund_reverse, cross_payer_allocate                OK
+  ZD-273 no automatic fees; never a silent refund / change          nothing automatic; every money change is an explicit,
+                                                                     audited staff action (OD-3)                         OK
+  ZD-274 / 275 / 276 / 277                                          not applicable to FIN-P1; untouched                  OK
+  ZD-278 manual refunds; reconciliation later                       refunds are records; provider / reconciliation facts
+                                                                     reserved for FIN-P5 / P6                            OK
+  ZD-279 no medical data in financial records                       audit allow-list; no service type or notes in any
+                                                                     ledger read (tests Y1 / Y3)                         OK
+  ZD-280 synthetic data only                                        all runs on the isolated stack with fictional
+                                                                     fixtures                                            OK
+
+======================================================================================================================
+3. MAINTENANCE FIXES APPLIED
+======================================================================================================================
+FU-2 — Plus guard suites flagging billing_create_invoice_draft (pre-existing since NP-BILL-P1)
+  Cause
+    - The three suites assert that no Core function references Plus access helpers or Plus tables.
+    - The approved NP-BILL-P1 R3 / ZD-274 quote import calls plus_can_read() in billing_create_invoice_draft, to
+      verify that the caller may read the optional quote.
+  Change (test-only, narrow), in the C1 / C2 / P6 queries of supabase/tests/plus_access_helpers_tests.sql,
+  plus_member_grants_tests.sql and plus_contacts_activities_tests.sql
+    - That ONE function is excluded only when its source, with the single token "plus_can_read" removed, no longer
+      matches the suite's own forbidden pattern.
+    - Any other Plus reference in it (plus_can_write, organization_modules, member grants, plus_contacts …) still fails.
+    - Every other Core function is checked exactly as before.
+  Before / after
+    - plus_access_helpers 169 -> 170 / 170; plus_contacts_activities 84 -> 85 / 85; plus_member_grants 75 -> 76 / 76.
+    - Negative control: the same predicate applied to the function's source + "plus_can_write(x)",
+      + "organization_modules" or + "plus_contacts" -> STILL FLAGGED (all three).
+FU-3 — date-dependent billing SQL fixtures failed between 00:00 and 04:00 UTC
+  Cause
+    - The fixtures used current_date in the session's timezone (UTC).
+    - The billing RPCs validate dates against organizations.timezone (Org A New York, Org B Chicago), which are a day
+      behind UTC in that window.
+  Change (test fixtures only; NO production code or behaviour changed)
+    - billing_tests.sql / billing_ledger_tests.sql: the test transaction's timezone is pinned to Org A's own
+      organizations.timezone (set_config('timezone', …, true)).
+    - The ledger suite uses pg_temp.org_today(org) for Org B dates (issue dates, receipt dates).
+    - billing_concurrency_test.sh / billing_ledger_concurrency_test.sh: every psql session runs with PGTZ = the throwaway
+      organization's timezone (one ORG_TZ variable also used to create the organization).
+  Before
+    - 01:44 UTC (natural window): billing_tests 11 failures.
+    - PGTZ = UTC+14 at any hour: billing_tests 14 failures; the ledger suite aborted at a fixture (invalid_dates).
+  After (fresh reset, 01:55 UTC = inside the window)
+    - billing_tests 67 / 67 and billing_ledger_tests 0 failures under PGTZ = UTC, Pacific/Kiritimati (UTC+14) and
+      Pacific/Pago_Pago (UTC−11).
+    - Both concurrency scripts ALL PASS in the window.
+  Out of scope, recorded: the recurring-care suites have the same UTC-window flake (SKIP-05, SKIP-08/09, RTC-04).
+    - Proven pre-existing: identical failures at 02:01 UTC on fresh databases WITH and WITHOUT FIN-P1.
+    - Follow-up FU-7.
+
+======================================================================================================================
+4. FINANCIAL INTEGRITY REVIEW (independent inspection + new adversarial tests)
+======================================================================================================================
+Receipt allocation invariants
+  - Three layers:
+      RPC checks;
+      a BEFORE INSERT guard that locks the receipt, then the invoice, and re-reads committed state;
+      DEFERRED commit-time invariants (0 <= paid <= total; money only on issued invoices; allocated + refunded <= gross;
+      reversed at net 0).
+  - An unapply is a full mirror of one apply (composite self-FK + unique).
+  Verified: I1-I11, Z1 / Z2, K1, K2, K10.                                                                      SOUND
+Cross-payer and cross-tenant protection
+  - Composite (id, organization_id) FKs on every link, plus an explicit cross_organization guard.
+  - Payer identity is by scoped id only, never by name.
+  - The cross-payer path needs the cross_payer_allocate permission + a reason, and is flagged and audited.
+  Verified: X1-X5, I11, P2-P4, E2E E2 / E8.                                                                    SOUND
+Duplicate transaction handling
+  - Hard: idempotency keys (receipt, allocation request, unapply, refund, reversals) under an advisory lock, with replay
+    comparing the money facts; provider_txn_id unique per organization + provider.
+  - Soft: a likely duplicate staff reference (method + normalized reference + amount + date) needs explicit
+    confirmation.
+  Verified: D1-D5, K3, E2E E6.                                                                                 SOUND (see CR-3)
+Invoice void versus allocation concurrency
+  Verified: K5 (RPCs, both orders), K5b (direct owner bypass, both orders: refused by the row guard or the deferred
+  check at COMMIT), I5, I10.                                                                                   SOUND
+Refund and refund-correction lifecycle (the requested question)
+  Can a correction create an invalid available balance?
+    NO.
+    - refundable = gross − net allocated − active (uncorrected) refunds, 0 once reversed.
+    - A correction removes exactly that refund's amount from "active", once.
+    - R10: 400 -> 1000, never above gross.
+    - The deferred invariant enforces allocated + refunded <= gross at commit.
+  Can it enable duplicate refunds?
+    Not automatically.
+    - A correction can run only once per refund (R11, K11).
+    - Active refunds can never exceed gross: R11, and K11 in both orders (correction vs new refund at the same moment).
+    - After a correction, a new refund is a separate, deliberate Admin action.
+    - Residual: misuse risk. An Admin who "corrects" a refund that WAS paid out restores credit that could then be
+      refunded or applied again. Controls: SENSITIVE (Admin only), reason required, audit row, the original refund kept
+      and shown as "Corrected", UI text "Use this only when the refund was recorded by mistake". See CR-1.
+  Can it misrepresent funds returned?
+    - Corrected refunds stop counting everywhere: refunded_cents, the ledger summary "refunds this month",
+      "collected this month", receipt print (active refunds only), receipt page (marked Corrected).
+    - R12 verifies these reads.
+    - A refund is labelled "Recorded by staff", never provider-confirmed (V4, E3).
+  Ordering
+    - A receipt with an active refund cannot be reversed.
+    - A correction can target only a refund of the same receipt (composite FK, R13), and never a reversed receipt
+      (row guard).                                                                                             SOUND
+Receipt reversal behaviour
+  - Only at net zero (no allocation, no active refund); once; reason code + reason.
+  - The number and row are kept; reversed receipts cannot be allocated or refunded.
+  - The NP-BILL-P1 reverse wrapper does unapply + reversal atomically, simple whole-receipt payments only.
+  Verified: R4-R8, K8, W2, E2E E5.                                                                             SOUND
+Provider confirmation versus staff evidence
+  - CHECK: kinds provider_confirmed / reconciled require a non-staff source + source_ref; there is no FIN-P1 writer;
+    the staff RPC accepts evidence kinds only.
+  - The UI never shows "Provider confirmed" for staff entries.
+  Verified: V1-V4, E2E E7.                                                                                     SOUND
+Processing-fee accounting
+  - fee 0..gross; net = gross − fee is a generated column.
+  - Customer balances, allocations, refundable funds and "collected" all use GROSS: the fee is the agency's expense
+    (OD-5) and never reduces what the customer paid.
+  - Net is shown on the payment page for the agency's own reconciliation (FIN-P5).
+  Verified: D5.                                                                                                CORRECT AS DESIGNED
+Legacy NP-BILL-P1 compatibility
+  - The billing_record_payment / billing_reverse_payment signatures, result type, check order, codes and idempotency
+    are kept.
+  - Reversing a reversal is still ZW006.
+  - The old app build still reads billing_payments (empty).
+  Verified: BILL SQL 67 / 67, BILL concurrency S1-S8, W1-W4, BILL E2E 50 / 50.                                COMPATIBLE
+
+======================================================================================================================
+5. FINDINGS
+======================================================================================================================
+  CR-1 (Medium, procedural) Refund correction can be misused to restore credit for money that was actually paid out.
+       - Mitigated by Admin-only, reason, audit, visible history.
+       - Recommendation: before real financial use, (a) state in the operating procedure that corrections are for
+         entry errors only, and (b) in FIN-P5 / P6, refuse a correction once the refund is provider-confirmed or
+         reconciled.
+       - No change made in this review (it would be behaviour beyond the approved scope).
+  CR-2 (Low) Refunds have no "possible duplicate" warning, unlike receipts. Two refunds with different keys are allowed
+       while funds remain. Mitigated by Admin-only and the refundable cap. Recommend adding a soft warning in FIN-P4.
+  CR-3 (Info) The receipt "possible duplicate" check is advisory, not race-proof. Two simultaneous identical staff
+       entries with different keys could both pass. Hard uniqueness exists for provider transaction ids. By design
+       (soft check).
+  CR-4 (Info) Requester-kind payer identity is per request: credit across two requests by the same family member needs
+       Admin confirmation. Conservative by design (no name matching).
+  CR-5 (Info) billing_payments SELECT stays for one transition release (ZD-268). Revoke in FIN-P1+1.
+  No defect found that blocks commit / PR.
+
+======================================================================================================================
+6. FILES MODIFIED IN THIS REVIEW
+======================================================================================================================
+  supabase/tests/plus_access_helpers_tests.sql          FU-2 (narrow allow-list, P6)
+  supabase/tests/plus_member_grants_tests.sql           FU-2 (C1)
+  supabase/tests/plus_contacts_activities_tests.sql     FU-2 (C2)
+  supabase/tests/billing_tests.sql                      FU-3 (timezone pinned to Org A's)
+  supabase/tests/billing_ledger_tests.sql               FU-3 (+ org_today for Org B) + R10-R13 refund-correction tests
+                                                         (66 -> 70)
+  supabase/tests/billing_concurrency_test.sh            FU-3 (PGTZ = organization timezone)
+  supabase/tests/billing_ledger_concurrency_test.sh     FU-3 + K11 (refund correction vs new refund, both orders)
+  docs/reports/NP-FIN-P1-code-review.txt (this file), NP-FIN-P1-final-PR-readiness.txt; NP-FIN-P1-test-results.txt
+    and NP-FIN-P1-final-review.txt updated
+  No migration, application or production file changed in this review.

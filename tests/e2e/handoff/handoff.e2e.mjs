@@ -32,6 +32,13 @@ const TAG = "HANDOFF";
 function cleanup() {
   sql(`
     set session_replication_role = replica;
+    delete from billing_assurance_events where organization_id = '${ORG_A}';
+    delete from billing_receipt_reversals where organization_id = '${ORG_A}';
+    delete from billing_refund_reversals where organization_id = '${ORG_A}';
+    delete from billing_refunds where organization_id = '${ORG_A}';
+    delete from billing_allocations where organization_id = '${ORG_A}';
+    delete from billing_receipts where organization_id = '${ORG_A}';
+    delete from billing_receipt_counters where organization_id = '${ORG_A}';
     delete from billing_payments where organization_id = '${ORG_A}';
     delete from billing_invoice_lines where organization_id = '${ORG_A}';
     delete from billing_invoice_trips where organization_id = '${ORG_A}';

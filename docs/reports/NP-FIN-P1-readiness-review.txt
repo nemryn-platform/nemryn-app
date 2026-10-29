@@ -1,0 +1,112 @@
+NEMRYN — NP-FIN-P1 READINESS REVIEW
+Date: 2026-10-28. Documentation only. No migration, application code, RLS, commit, merge or deployment.
+
+======================================================================================================================
+1. TASK A — ARCHITECTURE LOCKED
+======================================================================================================================
+  - FD-01..FD-17 are recorded in docs/product/decision-register.md as ZD-264..ZD-280 (the register previously ended
+    at ZD-263).
+  - Mandatory refinements are applied:
+      ZD-268  ledger separation; freeze+revoke; zero-row gate
+      ZD-270  four assurance facts; configurable clearance
+      ZD-272  permission matrix; sensitive actions = Organization Admin
+      ZD-273  no automatic fees; minimum FIN-P2 cancellation handling
+      ZD-280  synthetic data only; no owner-tenant exemption
+  - Detail and the permission matrix: docs/reports/NP-FIN-P0-decision-lock.txt.
+  - Approval is architecture-level only.
+
+======================================================================================================================
+2. TASK B — FIN-P1 READINESS (summary of docs/reports/NP-FIN-P1-implementation-plan.md)
+======================================================================================================================
+  Schemas
+    - billing_receipts, billing_receipt_events (assurance facts), billing_allocations (apply / unapply),
+      billing_refunds, billing_receipt_reversals, billing_receipt_counters.
+    - Composite FKs, append-only triggers, deferred invariant triggers I1..I5.
+    - billing_payments retired (insert refused; SELECT kept one release).
+  Lock order
+    counter → receipts ↑id → invoices ↑id. A void locks the invoice only. A deadlock probe (K-10) is in the
+    concurrency suite.
+  Compatibility
+    - billing_record_payment and billing_reverse_payment keep their signatures, result type, errors and
+      idempotency; they become wrappers.
+    - The app's 2 direct table reads move to RPCs.
+    - 2 test cleanups are retargeted.
+    - One intentional E2E change: receipt number RCPT-000001 replaces INV-000001-R1.
+  Balances
+    All derived from allocations and refunds; payer credit = Σ unallocated.
+  Assurance
+    - recorded / evidence / provider_confirmed / reconciled.
+    - The last two cannot have source "staff" (database check), so a typed reference is never provider
+      verification.
+  Uniqueness
+    - Idempotency keys.
+    - Provider transaction id unique per organization and provider.
+    - Staff references get a possible-duplicate confirmation.
+  Security
+    - Deny-by-default RLS through the billing_can(org, action) catalogue (all actions = Organization Admin in P1).
+    - No write grants; cross-tenant links unrepresentable.
+    - No-PAN validation; audit allow-list (ids, amounts, kinds only).
+  Tests
+    SQL T-A, T-X, T-I, T-R, T-M, T-D, T-V, T-P, T-Y, T-C; concurrency K-1..K-10; unit tests; E2E E1..E10; full
+    regression chain (security-and-test plan).
+  Release
+    - Preflight G1..G6, with G1 = billing_payments 0 rows or STOP; the migration self-asserts.
+    - Emergency reversal valid only while the new tables are empty; forward-fix afterwards.
+    - The old app build stays functional during the transition release.
+
+  Confirmed by design (each enforced in an RPC under lock AND by a deferred invariant trigger, and tested):
+    ✓ One receipt can be allocated to several invoices: separate allocation rows; Σ ≤ gross (I2; K-1; E1).
+    ✓ Excess funds remain as payer credit: unallocated = gross − allocated − refunded; a receipt may be recorded
+      with no allocation (E1, E2).
+    ✓ Refunds cannot exceed refundable funds: refundable = unallocated under the receipt lock; I2 (R1..R3; K-4;
+      E3).
+
+  BILL-P1 regression preservation (exact):
+    - billing_tests.sql: all 67 RPC-level assertions unchanged; the 10 direct-table assertions retargeted; plus a
+      "billing_payments retired" assertion.
+    - billing_concurrency_test.sh: S1..S8 unchanged, invariant queries retargeted.
+    - billing.e2e.mjs: 50 checks; only R3's receipt number changes.
+    - privilege contract extended.
+    - handoff / demo cleanups retargeted.
+    - Full chain re-run.
+
+  FIN-P2 implications (reviewed)
+    - Deposits: met when net allocation ≥ deposit_required_cents; no further ledger work.
+    - Prepayment: an unallocated receipt (payer credit) is applied when the pre-trip invoice is issued.
+    - Cancellation (ZD-273): unapply → void at net zero → credit → refund or rebooking, all FIN-P1 primitives;
+      Organization Admin only.
+    - Double billing (ZD-265): the request link plus a two-way guard live in P2. FIN-P1 keeps receipts invoice-only
+      (no trip or request coupling), so no conflict arises.
+    - No fee retention before FIN-P4 (OD-3).
+
+======================================================================================================================
+3. DECISIONS THAT STILL GENUINELY REQUIRE THE OWNER
+======================================================================================================================
+  OD-1 Authorize FIN-P1 implementation on branch np-fin-p1-ledger (isolated stack, synthetic data). A production
+       release is a separate later authorization.
+  OD-2 Payer-credit scope. Recommended: credit applies to the same payer (same kind + id). Applying it to a
+       different payer is Organization Admin only, with a reason (implemented as a SENSITIVE action). Confirm, or
+       choose "never across payers".
+  OD-3 Interim cancellation fee before FIN-P4. Recommended: none; retaining a fee waits for credit notes /
+       adjustment invoices. Alternative: allow keeping a fully paid pre-trip invoice unchanged when the customer
+       agreed in writing to forfeit (recorded as a note). Confirm.
+  OD-4 Receipt numbering display. Recommended: RCPT-000123, with "Payment on INV-…" on single-invoice receipts,
+       replacing INV-…-R1 (ZD-266). Confirm the customer-facing format.
+  OD-5 Processing-fee capture in FIN-P1 UI. Recommended: an optional field, labelled as the agency's cost and
+       never charged to the customer. Confirm it is wanted before P5 / P6.
+  Clearance default values (ZD-270 table) are confirmed at FIN-P3a, not now.
+
+======================================================================================================================
+4. FILES CHANGED IN THIS TASK
+======================================================================================================================
+  Modified (tracked)
+    docs/product/decision-register.md                 +ZD-264..ZD-280 section, inserted before the closing summary
+  New (untracked)
+    docs/reports/NP-FIN-P0-decision-lock.txt
+    docs/reports/NP-FIN-P1-implementation-plan.md
+    docs/reports/NP-FIN-P1-security-and-test-plan.md
+    docs/reports/NP-FIN-P1-readiness-review.txt
+  From the previous task (still untracked): the five NP-FIN-P0 reports.
+  No application code, migration, test, RLS or configuration file changed. Nothing committed, merged or deployed.
+
+STATUS: FIN-P1 READY FOR OWNER IMPLEMENTATION AUTHORIZATION

@@ -1,0 +1,155 @@
+NEMRYN — NP-FIN-P1 TEST RESULTS
+Date: 2026-10-28 / 29 (UTC).
+Environment:
+  - Isolated NemrynS1Iso stack (DB 54362, fingerprint 2/1/0).
+  - App built from np-fin-p1-ledger, running `next start -p 3100`, public inquiry submissions OFF.
+  - SYNTHETIC data only.
+All results below are real runs. Logs are in the session scratchpad.
+
+======================================================================================================================
+1. DATABASE
+======================================================================================================================
+  supabase/tests/billing_tests.sql (NP-BILL-P1) ................................. 67 / 67 PASS
+    - Before FIN-P1 (baseline): 67 / 67.
+    - After the migrations, unchanged: 63 / 67. The 4 failures are exactly the assertions that read the retired
+      billing_payments table directly: D2, D7, D8, D9.
+    - Fixes:
+        D2 / D7 / D9 retargeted to the new tables. D9 is now STRICTER: it also proves the retired table refuses INSERT
+          and that receipts are immutable.
+        D8 ("a reversal cannot be reversed" -> ZW006) was fixed in the WRAPPER (it returned ZW002), not in the test.
+        G1 / G2 extended to the new tables.
+    - No assertion was removed or relaxed.
+  supabase/tests/billing_ledger_tests.sql (new) ................................. 66 / 66 PASS
+    Sections: T-A access 7 · T-C core 5 · T-I invariants 11 (incl. 3 owner-bypass) · T-X cross-tenant 5 · T-R
+    refunds / reversals 9 · T-M immutability 3 · T-D duplicates / idempotency 5 · T-V assurance 4 · T-P permissions /
+    payer identity 4 · T-Y privacy 3 · T-W compatibility 4 · T-S reads 4 · Z invariants 2.
+    Failures found and fixed on the way (test-harness defects; none in the migrations):
+      F1 format('%s', boolean) renders t / f, which parsed as a column name. Booleans are now passed as quoted
+         literals.
+      F2 Side-effecting calls and STABLE reads in ONE statement saw the statement-start snapshot. Split into "do" then
+         "assert".
+      F3 TRUNCATE inside the test transaction hit PostgreSQL 55006 (pending deferred trigger events) before our guard.
+         The test now flushes deferred checks first, so the assertion still requires our ZW004.
+    Migration defect found by the suite:
+      M1 A direct owner cross-organization allocation was refused by the balance check rather than an explicit rule.
+         Added a "cross_organization" check to the row guard (the composite FKs remain as well).
+  supabase/tests/privilege_contract_tests.sql ................................... 0 violations / 29 checks
+  supabase/tests/billing_concurrency_test.sh (NP-BILL-P1) ....................... ALL PASS (S1-S8 + invariants)
+    Scenarios unchanged; 7 evidence queries retargeted to allocations / receipt reversals.
+  supabase/tests/billing_ledger_concurrency_test.sh (new) ....................... ALL PASS
+    K1 one receipt -> two invoices over its amount: exactly one · K2 two receipts -> one invoice over its balance:
+    exactly one · K3 same key twice: one receipt · K4 refund vs allocation, both orders · K5 allocation vs VOID through
+    the RPCs, both orders · K5b BYPASS owner INSERT vs owner VOID, both orders: the invariant held (deferred check at
+    COMMIT / row guard) · K6 five receipts at once: RCPT numbers gap-free · K7 unapply vs refund (seen in both
+    resolution orders across runs) · K8 reversal vs allocation, both orders · K9 wrapper equal forms: one + ZW003 ·
+    K10 opposite-order multi-invoice allocations: no deadlock · invariants.
+  ALL OTHER SQL SUITES (differential run, 54 suites)
+    Every supabase/tests/*.sql suite was run on a fresh reset WITHOUT the FIN-P1 migrations (98 migrations), then WITH
+    them (100), and the FAIL / ERROR lines were compared.
+    RESULT: identical, 32 lines on both. 0 regressions, 0 newly fixed. The 32 are pre-existing and spread over 18
+    non-billing suites, for example:
+      - request_decision_expand_compat (only meaningful during a past expand window);
+      - environment- and history-dependent checks;
+      - 3 Plus guard checks that flag the NP-BILL-P1 function billing_create_invoice_draft (its approved quote
+        import calls plus_can_read).
+    The last item is recorded as a follow-up; the tests were not changed.
+  Known pre-existing flake (also affects the new suite):
+    - The billing SQL suites pay "current_date" (session UTC). The database checks dates against the organization's
+      local date (America/New_York). Between 00:00 and 04:00 UTC the two differ and payment tests fail with
+      invalid_dates.
+    - Seen at 01:44 UTC on 2026-10-29 (the NP-BILL-P1 "UTC window" follow-up).
+    - Re-run with the session in the organization's timezone (PGTZ=America/New_York, no test edited): BILL-P1 67 / 67,
+      ledger 66 / 66.
+
+======================================================================================================================
+2. APPLICATION
+======================================================================================================================
+  npm test ......................... 962 / 962 PASS (was 957: +5 ledger tests; 2 assertions updated for OD-4 / new view)
+  npm run test:release ............. 28 / 28 PASS
+  tsc --noEmit ..................... 0 errors
+  eslint . ......................... 0 errors, 113 warnings (the pre-existing baseline; FIN-P1 adds none)
+  next build ....................... PASS (routes /operations/billing/receipts/[id], /receipts/new, /receipt-print/[id])
+
+======================================================================================================================
+3. BROWSER E2E (isolated app; synthetic data)
+======================================================================================================================
+  tests/e2e/billing/billing-ledger.e2e.mjs (new) ................................ 44 / 44 PASS (incl. 7 AXE: 0 serious / critical)
+    E1 one payment received pays three invoices oldest-first and keeps $5.00 credit (RCPT-000001) · E3 refund above
+    refundable refused by the server, $2.00 refund recorded ("Recorded by staff") · E2 other payer's invoice hidden
+    until asked; reason required; flagged "Other payer" · E4 remove from invoice -> credit -> "Apply payer credit"
+    (same payer) · E5 returned check reversed from the invoice, receipt prints PAYMENT REVERSED · E6 duplicate warning
+    + explicit confirmation · E7 "Reference noted", never "Provider confirmed" · E7b overpayment refused unless "keep
+    extra as credit" · E9 receipt print · E10 lists, filters, 390 / 820 px without horizontal scroll · E8 dispatcher /
+    driver / Org B denied · Z1 audit privacy · Z2 invariants.
+    Defects found and fixed:
+      U1 (real UX bug) dialogs lost typed values after a refused submit (React 19 <form action> reset). All ledger
+         dialogs now dispatch by hand (same fix as NP-PILOT-P1).
+      U2 (real UX bug) the payer chooser labelled payers with an invoice's bill-to SNAPSHOT text. billing_list_payers
+         now labels from the payer's own record.
+      T1 / T2 test-logic fixes: E2 cleared the oldest-first suggestion before choosing another payer's invoice;
+         boolean text expectations.
+  tests/e2e/billing/billing.e2e.mjs (NP-BILL-P1) ................................ 50 / 50 PASS
+    Unchanged journeys; evidence queries retargeted; R3 expects RCPT-000001 (OD-4) and "Payment on INV-000001".
+  tests/e2e/handoff/handoff.e2e.mjs ............................................. 35 / 35 PASS
+  tests/e2e/onboarding/getting-started.e2e.mjs .................................. 26 / 26 PASS
+  tests/e2e/ui-foundations/p1b.e2e.mjs .......................................... 52 / 52 PASS (ALL PASS)
+  tests/e2e/plus-inquiries/staff.e2e.mjs ........................................ 74 / 74 PASS
+  tests/e2e/plus-inquiries/inquiries.e2e.mjs (INQUIRY_E2E_MODE=off) ............. 5 / 5 PASS
+  tests/e2e/plus-consents/consents.e2e.mjs ...................................... ALL PASS
+  QA2 strict (fresh reset) ...................................................... 5 / 5 suites
+    core-requests 25 · core-trips-dispatch 44 · core-records 28 · growth 23 · auth-access 79
+  Quotes strict (fresh reset) ................................................... 7 / 7 suites
+    s2 33 · s3a 31 · s3b 32 · s3c 54 · o1 27 · s4-integrated 69 · s4-a11y 26 (U1 / U2 resolved)
+
+======================================================================================================================
+4. RELEASE TOOLING REHEARSALS (isolated stack; production untouched)
+======================================================================================================================
+  Read-only preflight (docs/reports/NP-FIN-P1-readonly-preflight.sql)
+    - Valid SQL.
+    - On the isolated FIN-P1 database it correctly reports G3 / G4 violations (the objects already exist) and passes
+      G1 (billing_payments empty), G2, G5 and G6.
+    - NOT run against production: the attempt was blocked by the permission system, which matches this brief.
+  Emergency reversal (docs/reports/NP-FIN-P1-emergency-reversal.sql)
+    1. With one ledger row present: REFUSED ("forward-fix only"); nothing changed.
+    2. First run on an empty ledger: a syntax error in the prepared script (two multi-line comments cut off). The
+       single transaction rolled back, nothing changed, and the script was FIXED.
+    3. Re-run: COMMIT. Back to 98 migrations / 20261028100000, 0 FIN-P1 tables or functions. main's
+       privilege_contract 0 / 29 and main's NP-BILL-P1 billing_tests 67 / 67 (PGTZ as in §1).
+    4. The FIN-P1 state was restored afterwards by a fresh reset (100 / 20261029110000; suites re-passed).
+  Demo kit
+    - Guard refuses an unconfirmed reset ("Nothing was changed").
+    - Confirmed prepare -> status -> reset works.
+    - A PAID demo invoice (receipt + allocation + evidence) is fully removed by reset: 0 receipts, allocations,
+      events, invoices and demo trips.
+
+======================================================================================================================
+5. FINAL CODE REVIEW RE-RUN (2026-10-29, ~01:44-03:00 UTC, i.e. INSIDE the former UTC-window; fresh resets)
+======================================================================================================================
+  Maintenance applied (test-only; see NP-FIN-P1-code-review.txt §3):
+    FU-2 Plus guard suites: narrow allow-list for the read-gate of billing_create_invoice_draft.
+         plus_access_helpers 170 / 170 · plus_contacts_activities 85 / 85 · plus_member_grants 76 / 76 (each was −1).
+         Negative control: any other Plus reference is still flagged.
+    FU-3 billing timezone fixtures: billing_tests 67 / 67 and billing_ledger_tests 70 / 70, with 0 failures under
+         PGTZ = UTC, UTC+14 and UTC−11 (before: 11 failures in the window, 14 under UTC+14, ledger aborted). Both
+         concurrency scripts ALL PASS in the window.
+  Coverage added by the review:
+    billing_ledger_tests.sql 66 -> 70: R10 a correction restores exactly the corrected amount (never above gross) ·
+      R11 a second correction is refused; active refunds can never exceed gross · R12 corrected refunds stop counting
+      in every read (receipt detail, summary) · R13 a receipt with an active refund can't be reversed; a correction can
+      only target a refund of the same receipt (composite FK) and never a reversed receipt (row guard).
+    billing_ledger_concurrency_test.sh: + K11 refund correction vs a new refund at the same moment, both orders.
+      Active refunds never exceed the receipt.
+  Results:
+    SQL: billing_tests 67 / 67 · billing_ledger_tests 70 / 70 · three Plus guard suites all pass · rls_adversarial 0 FAIL ·
+      privilege contract 0 / 29.
+    54-suite differential (fresh reset): the 3 Plus guard lines are now fixed. The only other differences are the
+      recurring-care UTC-window failures (SKIP-05, SKIP-08/09, RTC-04). They were proven pre-existing: identical at
+      02:01 UTC on fresh databases WITH and WITHOUT FIN-P1. Tracked as FU-7.
+    Concurrency: billing S1-S8 ALL PASS · ledger K1-K11 + K5b ALL PASS.
+    App: npm test 962 / 962 · test:release 28 / 28 · tsc 0 · eslint 0 errors / 113 baseline warnings · next build PASS.
+    E2E (rebuilt app):
+      ledger 44 / 44 (7 AXE) · billing 50 / 50 (8 AXE) · handoff 35 / 35 · getting-started 26 / 26 ·
+      inquiries staff 74 / 74 · inquiries OFF 5 / 5 · consents ALL PASS · QA2 strict 5 / 5 suites (199 checks).
+      p1b: 52 / 52 on a fresh database. When run after the handoff suite in the same database, 3 responsive / axe
+        checks fail (link-name on /operations/growth from leftover Growth activity data). This is the known
+        pre-existing NP-PILOT-P1 p1b ordering follow-up, not FIN-P1.

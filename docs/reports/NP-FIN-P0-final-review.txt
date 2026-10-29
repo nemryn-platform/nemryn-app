@@ -1,0 +1,174 @@
+NEMRYN — NP-FIN-P0 FINAL REVIEW
+Financial architecture, pre-trip invoicing and payment reconciliation audit
+Date: 2026-10-28. READ-ONLY ASSESSMENT.
+  - Only documentation files were created.
+  - No code, migration, RLS, production data, Git or deployment change was made.
+Production was read with SELECT-only aggregate counts.
+
+Companion documents (docs/reports/):
+  NP-FIN-P0-repository-audit.md        confirmed facts, file paths, conflicts
+  NP-FIN-P0-architecture-proposal.md   lifecycle, data model, security, adversarial tests
+  NP-FIN-P0-decision-register.md       FD-01 .. FD-17 (proposed)
+  NP-FIN-P0-phased-implementation.md   phases, MVP, acceptance criteria
+
+======================================================================================================================
+1. WHAT ALREADY EXISTS AND IS REUSABLE (confirmed)
+======================================================================================================================
+NP-BILL-P1 is in production: migrations 20261027100000_core_billing_foundation.sql and 20261027110000_core_billing_rpcs.sql.
+It provides:
+  - Core invoices: draft, issued and void, with per-organization INV- numbering assigned at issue.
+  - Bill-to snapshots (passenger / requester / facility / other).
+  - Frozen issued invoices, enforced by triggers even against direct owner edits.
+  - A one-active-invoice-per-trip partial unique index.
+  - Optional read-only import of a Plus quote, with the quote number snapshotted.
+  - An append-only manual payment ledger with reversals.
+  - Derived balance and status, with overdue computed in the organization's timezone.
+  - Organization Admin-only RLS (SELECT only; RPC-only writes) and audit rows without names.
+  - Print views for invoices and receipts.
+  - 67 SQL tests, a concurrency script, 50 E2E checks, and coverage in the privilege contract.
+Reusable patterns:
+  - Composite (id, organization_id) foreign keys.
+  - SECURITY DEFINER RPCs with ZW001..ZW006 errors.
+  - Expected-version checks, idempotency keys, counter row locks and audit_events.
+  - membership_module_grants (for a billing grant).
+  - The isolated-stack test harnesses.
+  - plus_request_attributions, the request ↔ opportunity link used to find accepted quotes.
+Production financial state:
+  - 1 draft invoice and 0 payments.
+  - 9 quotes (1 accepted).
+  - No rate cards, deposits, credits, refunds, fees, provider ids or payouts anywhere.
+
+======================================================================================================================
+2. WHAT IS MISSING
+======================================================================================================================
+  - Pre-trip invoices (today every invoice requires COMPLETED trips).
+  - Deposits.
+  - One payment allocated across several invoices, and prepayment or credit on account.
+  - Refunds as distinct from correction reversals.
+  - Gross / net / provider-fee amounts, provider and external transaction ids, verification levels.
+  - Any dispatch clearance concept: assign_trip has no financial check.
+  - Payer credit terms and authorized exceptions.
+  - Credit notes and adjustment invoices; a post-trip closeout queue.
+  - Statement imports, matching, payouts and reconciliation.
+  - Provider webhooks and accounting export.
+  - A finance role finer than Organization Admin.
+  - Consolidated facility billing.
+  - Tax.
+
+======================================================================================================================
+3. ARCHITECTURE CONFLICTS (BILL-P1 rule → NP-FIN need)
+======================================================================================================================
+  C1 Invoices require completed trips → pre-trip invoices need a request-anchored basis.
+  C2 Lines and links attach to trips only → add request links plus a two-way double-billing guard.
+  C3 billing_payments.invoice_id NOT NULL → separate receipts (money in) from allocations (money applied).
+  C4 Overpayment blocked → allow unallocated receipt balance as customer credit.
+  C5 Reversal = correction only; void only at net zero → add refunds, credit notes and adjustment invoices.
+  C6 Fixed method list, no fee or provider data; admin-only → new receipt fields and a billing grant.
+  C7 One passenger per invoice → defer consolidated billing (later facility statements).
+  C8 No financial check in dispatch → a derived clearance read model; enforcement only by separate decision.
+  No conflict with Plus. Quotes stay unchanged, and invoices read accepted quotes through the existing attribution.
+  Plus must never keep a ledger.
+
+======================================================================================================================
+4. RECOMMENDED IMPLEMENTATION DESIGN (summary)
+======================================================================================================================
+  - Extend BILL-P1; do not replace it. Nemryn is the record of account, never the merchant of record or custodian.
+  - Lifecycle: Request (accepted) → optional accepted Plus quote → pre-trip invoice (request basis, optional deposit)
+    → receipts and allocations → derived clearance (advisory on Dispatch) → trip → post-trip closeout (credit note,
+    adjustment invoice, refund) → reconciliation (statement lines ↔ receipts / refunds / payouts, human approval).
+  - Booking state, invoice state and financial clearance stay three separate statuses.
+  - New objects (proposed):
+      billing_invoice_requests; invoice basis and deposit columns;
+      billing_receipts / billing_allocations / billing_refunds / billing_receipt_reversals, with RCPT- numbering;
+      billing_settings / billing_payer_terms / billing_dispatch_exceptions; billing_trip_clearance() (status only);
+      billing_credit_notes (CN-) and adjustment invoices;
+      billing_statement_imports / lines / payouts / matches;
+      billing_provider_events.
+  - All of them: deny-by-default RLS, composite FKs (cross-tenant allocation impossible), RPC-only writes, append-only
+    ledgers including for the owner, bigint cents with USD fixed by check, idempotency keys and external-id
+    uniqueness, a fixed lock order, and audit rows without names, notes or service type.
+
+======================================================================================================================
+5. PHASES AND PRIORITIES
+======================================================================================================================
+  Reordered from the brief. The ledger goes first, while production has 0 payment rows.
+  FIN-P1  Ledger re-foundation (receipts, allocations, refunds; BILL-P1 compatibility wrappers)
+  FIN-P2  Pre-trip request-basis invoices + deposits + accepted-quote import
+  FIN-P3a Clearance read model + advisory Dispatch / Trip badges + exceptions + facility terms
+  FIN-P3b (optional, separately approved) opt-in enforcement inside assign_trip
+  FIN-P4  Post-trip closeout (credit notes, adjustment invoices, refunds UI), billing grant, Plus read-display
+  FIN-P5  CSV statement import and reconciliation
+  FIN-P6  Provider webhooks and accounting export (after vendor and legal review)
+  SMALLEST COMMERCIALLY USEFUL MVP: FIN-P1 + FIN-P2 + FIN-P3a.
+  Each phase can be released independently. Only one migration-bearing branch is active at a time.
+
+======================================================================================================================
+6. SECURITY, FINANCIAL-INTEGRITY AND COMPLIANCE RISKS
+======================================================================================================================
+  R1 Ledger migration on a production table (FD-05). Safe only while billing_payments has 0 rows: verify at
+     preflight and STOP otherwise.
+  R2 Double billing between the request and trip paths. Mitigated by a two-way guard under locks, triggers and
+     concurrency test K6.
+  R3 Over-allocation or refunds above received funds. Mitigated by invariants enforced in RPCs and constraint
+     triggers, and tests K1, K2, K4 and K9.
+  R4 Dispatch enforcement could strand a rider. It is advisory first; enforcement needs separate approval, an
+     exception path and a full Core regression.
+  R5 Widening billing RLS from admin-only to a grant (FD-09). That change is more permissive and needs a security
+     review; dispatchers get status only, never amounts.
+  R6 Personal and health-indicative data in financial records. Generic line descriptions; no service_type or notes in
+     lines, exports, provider metadata or audit (FD-16). PD-10 (HIPAA / BAA) and PD-11 (retention / erasure) are
+     still OPEN. Financial records interact with erasure (accounting retention vs. redaction), which is a counsel
+     question.
+  R7 Real customer data. The Zenward tenant holds real enquiries. NP-FIN development and testing use fictional data
+     only; real use follows the NP-LAUNCH-02 GO checklist (FD-17).
+  R8 Provider and accounting integrations (P6) add vendors, secrets and data flows. They need vendor DPAs or BAAs
+     and counsel review, and must never become the merchant of record.
+  R9 Tax and invoicing legal requirements vary by state. There is no tax ID field. CPA or counsel review is needed
+     before tax lines.
+  Required adversarial tests are listed in the architecture proposal §8: S1–S11 (SQL) and K1–K9 (concurrency), plus
+  E2E.
+
+======================================================================================================================
+7. DECISIONS REQUIRING OWNER APPROVAL (recommended option in brackets)
+======================================================================================================================
+  FD-01 Pre-trip invoice trigger [manual from an ACCEPTED request]
+  FD-02 Invoice anchor [request-basis link + two-way double-billing guard; trip basis unchanged]
+  FD-03 Issued invoices immutable; INV- shared; separate CN- and RCPT- sequences [confirm]
+  FD-04 Deposits [deposit fields on the request-basis invoice]
+  FD-05 Ledger shape [receipts + allocations + refunds; retire billing_payments while it has 0 rows]
+  FD-06 Allocation [explicit, with a suggested oldest-first default; leftover becomes payer credit]
+  FD-07 Clearance policy [organization default + payer terms + deposit + exceptions; not per service type]
+  FD-08 Dispatch enforcement [advisory P3a now; opt-in hard block P3b only by separate approval]
+  FD-09 Financial roles [billing module grant read / write; dispatchers status-only]
+  FD-10 Post-trip adjustments [credit notes + adjustment invoices + refunds; fee policy sub-decisions]
+  FD-11 Plus quote → invoice [read-only import of the accepted quote; Plus shows invoice status read-only]
+  FD-12 Consolidated facility billing [defer; facility statements later]
+  FD-13 Accounting source of truth [Nemryn authoritative; one-way export]
+  FD-14 Tax [none until needed; then a manual tax line; CPA review]
+  FD-15 Refund reconciliation [manual first; webhook proposals in P6]
+  FD-16 Financial data minimization [no service_type or notes in financial records]
+  FD-17 Real-data gate [follow the NP-LAUNCH-02 GO checklist]
+  Canonical location: on approval, record the decisions in docs/product/decision-register.md as ZD-264 onward
+  (the current last entry is ZD-263).
+
+======================================================================================================================
+8. FILES GENERATED (documentation only)
+======================================================================================================================
+  docs/reports/NP-FIN-P0-repository-audit.md
+  docs/reports/NP-FIN-P0-architecture-proposal.md
+  docs/reports/NP-FIN-P0-decision-register.md
+  docs/reports/NP-FIN-P0-phased-implementation.md
+  docs/reports/NP-FIN-P0-final-review.txt
+
+======================================================================================================================
+9. GIT AND WORKING TREE
+======================================================================================================================
+  - Branch: np-pilot-p2-onboarding (already merged as PR #43). origin/main = 85f2042.
+  - Every local and remote branch is merged; there are no open PRs; no in-progress work was found.
+  - Working tree: no tracked file modified. Untracked files are documentation reports (including the five above)
+    and .tmp-qa scratch scripts from earlier phases.
+  - No application code, migration, RLS, test or configuration file changed. Nothing committed, pushed, merged or
+    deployed.
+  - Recommendation: start FIN-P1, once approved, on a fresh branch from origin/main (np-fin-p1-ledger).
+
+STATUS: NP-FIN-P0 AUDIT COMPLETE — AWAITING OWNER REVIEW

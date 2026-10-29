@@ -1,0 +1,122 @@
+NEMRYN — NP-FIN-P0 DECISION LOCK
+Date: 2026-10-28. Documentation only. No migration, code, RLS, Git or deployment change.
+Canonical record: docs/product/decision-register.md, ZD-264 .. ZD-280 (the register previously ended at ZD-263).
+Scope of approval: ARCHITECTURE ONLY. Migrations, deployment and mandatory dispatch blocking are NOT authorized.
+
+======================================================================================================================
+1. FD → ZD MAPPING
+======================================================================================================================
+  FD-01 → ZD-264  Manual pre-trip invoice from an ACCEPTED request                 approved as recommended
+  FD-02 → ZD-265  Request-basis invoices + two-way double-billing guard              approved as recommended
+  FD-03 → ZD-266  Immutable issued documents; INV- / CN- / RCPT- sequences           approved as recommended
+  FD-04 → ZD-267  Deposit fields on request-basis invoices                           approved as recommended
+  FD-05 → ZD-268  Receipts / allocations / refunds / receipt reversals; freeze+revoke REFINED (1)
+  FD-06 → ZD-269  Explicit allocation, oldest-first suggestion, payer credit         approved as recommended
+  FD-07 → ZD-270  Four assurance facts; configurable clearance rules                 REFINED (2)
+  FD-08 → ZD-271  Advisory clearance; P3b only by separate approval                  approved as recommended
+  FD-09 → ZD-272  Permission matrix; sensitive actions = Organization Admin          REFINED (3)
+  FD-10 → ZD-273  No automatic fees; minimum FIN-P2 cancellation handling            REFINED (4)
+  FD-11 → ZD-274  Accepted quote → invoice, read-only                                approved as recommended
+  FD-12 → ZD-275  Consolidated billing deferred (statements later)                   approved as recommended
+  FD-13 → ZD-276  Nemryn is the source of truth; one-way accounting export           approved as recommended
+  FD-14 → ZD-277  No tax until needed; CPA review                                    approved as recommended
+  FD-15 → ZD-278  Manual refunds; reconciliation later; webhooks only propose        approved as recommended
+  FD-16 → ZD-279  No medical information in financial records                        approved as recommended
+  FD-17 → ZD-280  Synthetic data only; no owner-tenant exemption                     REFINED (5)
+  Note: the NP-BILL-P1 decisions D1–D6 and R1–R4 live in docs/reports/NP-BILL-P1-contract-and-decisions.txt, not in
+  the register. Recommendation: record them as ZD entries in a later documentation pass (not done here; outside
+  this brief's scope).
+
+======================================================================================================================
+2. REFINEMENTS AS LOCKED
+======================================================================================================================
+(1) FD-05 / ZD-268 — Ledger separation and the old table
+  - Receipt = money received. Allocation = apply / unapply to one invoice. Refund = money returned from a receipt.
+    Receipt reversal = a receipt recorded in error.
+  - BILL-P1 compatibility: billing_record_payment and billing_reverse_payment keep their signatures, result type,
+    error codes and observable rules. They are re-implemented as wrappers (detail in the FIN-P1 plan).
+  - The old billing_payments table is FROZEN AND REVOKED, chosen over dropping it:
+      release FIN-P1:  INSERT refused by trigger (it already refuses UPDATE / DELETE / TRUNCATE); SELECT kept for
+                       one transition release, so a previous app build still loads invoice pages during the
+                       database-before-app window;
+      release FIN-P1+1: SELECT revoked and its policy dropped;
+      later:           DROP only by a separately approved migration.
+    Why this is safer than an immediate drop: it is reversible, it is compatible with the old app build, and it
+    keeps the audit trail of the object. A view replacing the table name was considered and rejected: it would
+    hide the retirement and change RLS semantics.
+  - Zero-row gate: the production preflight must report count(*) = 0 on billing_payments, and the migration also
+    asserts it inside its own transaction. Any non-zero count or unexpected data means STOP.
+
+(2) FD-07 / ZD-270 — Assurance facts and clearance rules
+  Four independent facts per receipt (all append-only events; the current value is derived):
+    A. recorded               always true once a staff user records the receipt
+    B. evidence               none | reference_noted | document_held (staff assertion: check number, terminal slip,
+                               remittance; no file upload in FIN-P1)
+    C. provider_confirmed     ONLY set by a provider integration (FIN-P6) or a provider-settlement import (FIN-P5);
+                               there is no manual path. A typed reference never sets it.
+    D. reconciled             set when a bank / statement line match is APPROVED (FIN-P5)
+  Clearance rules (configured in FIN-P3a, per organization, per method class: minimum fact required):
+    method class               default minimum               configurable to
+    cash                       A recorded                    -
+    check                      B reference_noted (number)    D reconciled (protects against returned checks)
+    card / ACH / transfer /    B reference_noted             C provider_confirmed (after P6) or D reconciled
+      digital wallet                                         (after P5)
+    other                      B document_held               D reconciled
+  Cash and check handling:
+    - Cash counts at recording. Staff record the amount and date. The receipt print is the customer's proof. Cash
+      is never "provider confirmed".
+    - Checks record the check number as reference_noted.
+    - A returned (bounced) check is handled by unapply (Admin) plus receipt reversal (Admin) with reason
+      "returned_check". The invoice reopens and clearance re-derives. It is never edited in place.
+  Clearance status remains derived and is shown to dispatchers without amounts.
+
+(3) FD-09 / ZD-272 — Permission matrix
+  Roles: OA = Organization Admin; BW = billing grant write; BR = billing grant read (grants arrive in FIN-P4);
+         DS = Dispatcher with no grant; DR = Driver.
+  Action                                                     OA   BW   BR   DS   DR   Class
+  View invoices, receipts, balances, credit                  ✓    ✓    ✓    –    –    read
+  View clearance status (no amounts)                         ✓    ✓    ✓    ✓    –    status
+  Create / edit / discard draft; issue invoice               ✓    ✓    –    –    –    write
+  Record receipt; allocate; apply payer credit               ✓    ✓    –    –    –    write
+  Add evidence to a receipt                                  ✓    ✓    –    –    –    write
+  Adjustment invoice (FIN-P4)                                ✓    ✓    –    –    –    write
+  Print invoice / receipt                                    ✓    ✓    ✓    –    –    read
+  Void invoice (net zero)                                    ✓    –    –    –    –    SENSITIVE
+  Unapply allocation                                         ✓    –    –    –    –    SENSITIVE
+  Payment reversal / receipt reversal                        ✓    –    –    –    –    SENSITIVE
+  Refund                                                     ✓    –    –    –    –    SENSITIVE
+  Credit note (FIN-P4)                                       ✓    –    –    –    –    SENSITIVE
+  Allocate credit to a DIFFERENT payer (confirmed + reason)  ✓    –    –    –    –    SENSITIVE
+  Dispatch exception (FIN-P3a)                               ✓    –    –    –    –    SENSITIVE
+  Payer credit terms; billing settings / clearance rules     ✓    –    –    –    –    SENSITIVE (configuration)
+  Grant / revoke billing access                              ✓    –    –    –    –    SENSITIVE (configuration)
+  In FIN-P1 every action maps to OA (BW and BR do not exist yet). All RPCs authorize through one action catalogue
+  (_billing_authorize(org, action)), so FIN-P4 changes the mapping, not the call sites. Delegating any SENSITIVE
+  action needs a later owner decision (for example a separate billing "approve" level).
+
+(4) FD-10 / ZD-273 — No automatic fees; minimum cancellation handling in FIN-P2
+  - Nothing happens automatically on cancellation or no-show. FIN-P2 shows "Needs financial review" on a
+    request-basis invoice whose request was cancelled or whose trips ended as cancelled or no_show.
+  - Minimum handling available in FIN-P2, built from FIN-P1 primitives:
+      nothing paid → Void (OA, reason).
+      paid         → Unapply allocations (OA) → Void at net zero (OA) → funds stay as payer credit →
+                     Refund (OA) or keep the credit for a rebooking (apply to the new invoice).
+  - Keeping a cancellation fee is NOT available until FIN-P4 (credit note or adjustment invoice), unless the owner
+    approves an interim method (open decision OD-3 in the readiness review).
+  - Never: a silent refund, a changed issued invoice, an automatic fee, or a deleted payment.
+
+(5) FD-17 / ZD-280 — Data
+  - Synthetic data only for development, tests, demos and screenshots.
+  - There is no exemption for the owner-operated tenant: real financial use, including Zenward Mobility, waits for
+    the NP-LAUNCH-02 GO gate and the open legal and privacy decisions (PD-10, PD-11, counsel questions).
+
+======================================================================================================================
+3. NOT AUTHORIZED BY THIS LOCK
+======================================================================================================================
+  - Any migration or production change.
+  - FIN-P1 implementation (requires owner implementation authorization).
+  - FIN-P3b enforcement.
+  - Delegation of sensitive actions.
+  - Provider connections.
+  - Real customer data.
+  - NP-RELEASE-01C activation.

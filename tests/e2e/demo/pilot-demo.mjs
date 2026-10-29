@@ -48,6 +48,16 @@ function reset() {
       left join billing_invoice_trips t on t.invoice_id = i.id left join trips tr on tr.id = t.trip_id
       where i.organization_id = '${ORG}' and (tr.pickup_description like '${TAG}%' or i.bill_to_name like '${TAG}%'
         or i.source_quote_id in (select q.id from plus_quotes q where q.idempotency_key like 'demo-%'));
+    create temp table demo_rcpt as select distinct r.id from billing_receipts r
+      where r.source_invoice_id in (select id from demo_inv)
+         or exists (select 1 from billing_allocations a where a.receipt_id = r.id and a.invoice_id in (select id from demo_inv));
+    delete from billing_assurance_events where receipt_id in (select id from demo_rcpt)
+      or refund_id in (select f.id from billing_refunds f where f.receipt_id in (select id from demo_rcpt));
+    delete from billing_receipt_reversals where receipt_id in (select id from demo_rcpt);
+    delete from billing_refund_reversals where receipt_id in (select id from demo_rcpt);
+    delete from billing_refunds where receipt_id in (select id from demo_rcpt);
+    delete from billing_allocations where receipt_id in (select id from demo_rcpt) or invoice_id in (select id from demo_inv);
+    delete from billing_receipts where id in (select id from demo_rcpt);
     delete from billing_payments where invoice_id in (select id from demo_inv);
     delete from billing_invoice_lines where invoice_id in (select id from demo_inv);
     delete from billing_invoice_trips where invoice_id in (select id from demo_inv);

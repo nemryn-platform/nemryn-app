@@ -33,6 +33,13 @@ const LABEL = `BILLE2E-${STAMP}`;
 function cleanup() {
   sql(`
     set session_replication_role = replica;
+    delete from billing_assurance_events where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from billing_receipt_reversals where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from billing_refund_reversals where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from billing_refunds where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from billing_allocations where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from billing_receipts where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from billing_receipt_counters where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from billing_payments where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from billing_invoice_lines where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from billing_invoice_trips where organization_id in ('${ORG_A}', '${ORG_B}');
@@ -173,18 +180,19 @@ try {
   await payDialog("50.00", { reference: "CHK-1001" });
   check("P1 partial payment $50.00 -> Partially paid, balance $59.88", (await balanceText()) === "$59.88" && /Partially paid/.test(await text('[data-testid="billing-invoice-summary"]')));
   await payDialog("10.00", { method: "cash", submitTwice: true });
-  const nPay = one(`select count(*) from billing_payments where invoice_id = '${INV1}' and entry_kind = 'payment'`);
+  const nPay = one(`select count(*) from billing_allocations where invoice_id = '${INV1}' and kind = 'apply'`);
   check("P2 a double-clicked payment is recorded ONCE (idempotency key per dialog)", nPay === "2" && (await balanceText()) === "$49.88", `${nPay} ${await balanceText()}`);
   await click('[data-testid="billing-payment-open"]'); await waitFor(() => has('dialog[open] [data-testid="billing-payment-form"]'), 5000);
   await setValue('dialog[open] [data-testid="billing-payment-amount"]', "1000.00"); await click('[data-testid="billing-payment-submit"]');
   await waitFor(() => has('[data-testid="billing-payment-message"]'), 10000);
-  check("P3 overpayment refused with a plain message; nothing recorded", /more than the balance/.test(await text('[data-testid="billing-payment-message"]')) && one(`select count(*) from billing_payments where invoice_id = '${INV1}'`) === "2");
+  check("P3 overpayment refused with a plain message; nothing recorded", /more than the balance/.test(await text('[data-testid="billing-payment-message"]')) && one(`select count(*) from billing_allocations where invoice_id = '${INV1}'`) === "2" && one(`select count(*) from billing_receipts r where exists (select 1 from billing_allocations a where a.receipt_id = r.id and a.invoice_id = '${INV1}') or r.source_invoice_id = '${INV1}'`) === "2");
   await shot("b05-payment-dialog");
   await axe("payment dialog");
   await ev(`document.querySelector('dialog[open]')?.close?.()`); await go(`/operations/billing/invoices/${INV1}`);
   check("P4 Void is not offered while payments exist", !(await has('[data-testid="billing-void-open"]')));
   // reverse the $10 cash payment (the second)
-  const pay10 = one(`select id from billing_payments where invoice_id = '${INV1}' and entry_kind = 'payment' and amount_cents = 1000`);
+  // NP-FIN-P1: receipts are their own records (RCPT-); a payment's receipt is found through its allocation
+  const pay10 = one(`select a.receipt_id from billing_allocations a where a.invoice_id = '${INV1}' and a.kind = 'apply' and a.amount_cents = 1000`);
   await ev(`(function(){const rows=[...document.querySelectorAll('[data-testid="billing-payment-row"][data-kind="payment"]')]; rows[1].querySelector('[data-testid="billing-reverse-open"]').click();})()`);
   await waitFor(() => has('dialog[open] [data-testid="billing-reverse-form"]'), 5000);
   await setValue('[data-testid="billing-reverse-reason"]', "Entered twice by mistake (fictional)");
@@ -192,14 +200,14 @@ try {
   await click('[data-testid="billing-reverse-submit"]');
   await waitFor(async () => !(await has('dialog[open] [data-testid="billing-reverse-form"]')), 10000); await sleep(800);
   check("R1 reversal: original kept + reversal entry; balance back to $59.88; payment shows Reversed",
-    one(`select count(*) from billing_payments where invoice_id = '${INV1}'`) === "3" && (await balanceText()) === "$59.88" && /Reversed/.test(await text('[data-testid="billing-invoice-payments"]')));
+    one(`select count(*) from billing_allocations where invoice_id = '${INV1}'`) === "3" && one(`select count(*) from billing_receipt_reversals where receipt_id = '${pay10}'`) === "1" && (await balanceText()) === "$59.88" && /Reversed/.test(await text('[data-testid="billing-invoice-payments"]')));
   await go(`/receipt-print/${pay10}`, 1000, 1200);
   check("R2 the reversed payment's receipt says PAYMENT REVERSED, not counted, not a refund", /PAYMENT REVERSED/.test(await text('[data-testid="receipt-print-reversed"]')) && /not proof of payment or of a refund/.test(await text("main")));
   await shot("b07-receipt-reversed");
-  const pay50 = one(`select id from billing_payments where invoice_id = '${INV1}' and entry_kind = 'payment' and amount_cents = 5000`);
+  const pay50 = one(`select a.receipt_id from billing_allocations a where a.invoice_id = '${INV1}' and a.kind = 'apply' and a.amount_cents = 5000`);
   await go(`/receipt-print/${pay50}`, 1000, 1200);
-  check("R3 receipt for the $50.00 check: INV-000001-R1, amount, method, reference; no reversal banner",
-    (await text('[data-testid="receipt-print-number"]')) === "INV-000001-R1" && (await text('[data-testid="receipt-print-amount"]')) === "$50.00" && /CHK-1001/.test(await text("main")) && !(await has('[data-testid="receipt-print-reversed"]')));
+  check("R3 receipt for the $50.00 check: RCPT-000001 (NP-FIN-P1 numbering, was INV-000001-R1) applied to INV-000001, amount, method, reference; no reversal banner",
+    (await text('[data-testid="receipt-print-number"]')) === "RCPT-000001" && /Payment on INV-000001/.test(await text('[data-testid="receipt-print-applied"]')) && (await text('[data-testid="receipt-print-amount"]')) === "$50.00" && /CHK-1001/.test(await text("main")) && !(await has('[data-testid="receipt-print-reversed"]')));
   await shot("b08-receipt");
   await axe("receipt print");
   await go(`/operations/billing/invoices/${INV1}`);

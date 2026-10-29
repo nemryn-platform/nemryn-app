@@ -3412,6 +3412,294 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A decision to add airport transportation to Plus opportunities
 
+---
+
+## NP-FIN — Financial architecture (locked 2026-10-28 from NP-FIN-P0 FD-01 to FD-17)
+
+Common status for ZD-264 to ZD-280:
+- The decisions are approved at the ARCHITECTURE level only.
+- No migration, deployment or mandatory dispatch blocking is authorized by these entries.
+- Each implementation phase (FIN-P1, P2, P3a…) needs its own owner authorization and production release.
+
+Sources:
+- `docs/reports/NP-FIN-P0-decision-register.md` (options and rationale);
+- `docs/reports/NP-FIN-P0-decision-lock.txt` (refinements).
+
+Builds on NP-BILL-P1 D1–D6 and R1–R4 (`docs/reports/NP-BILL-P1-contract-and-decisions.txt`).
+
+### ZD-264 — Pre-trip invoices are created manually from an ACCEPTED request (FD-01)
+
+- **Date:** 2026-10-28
+- **Category:** Product / Billing
+- **Decision:**
+  - Billing staff create a pre-trip invoice explicitly from a Core request in state `accepted`.
+  - Request acceptance never creates an invoice automatically.
+  - Pending, declined and cancelled requests are not eligible.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture; NP-FIN-P0 decision lock)
+- **Affected Product Areas:** FIN-P2; Billing; Request Detail
+- **Dependencies:** ZD-265
+- **Owner:** Product
+- **Review Trigger:** A request for automatic invoicing
+
+### ZD-265 — Request-basis invoices with a two-way double-billing guard (FD-02)
+
+- **Date:** 2026-10-28
+- **Category:** Data / Billing
+- **Decision:**
+  - `billing_invoices` gains a basis: `trips` (the BILL-P1 post-trip path, unchanged) or `request` (pre-trip).
+  - A request-basis invoice links to exactly one request through a dedicated link table. That table allows at most one active (non-void) link per request.
+  - A trip whose request is on an active request-basis invoice cannot be put on a trips-basis invoice.
+  - A request cannot be pre-invoiced while any of its trips is on an active trips-basis invoice.
+  - Both checks run under row locks and are re-checked by triggers.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P2; `billing_create_invoice_draft`; billable-trip lists
+- **Dependencies:** NP-BILL-P1 R1
+- **Owner:** Engineering
+- **Review Trigger:** Consolidated billing (ZD-275)
+
+### ZD-266 — Issued financial documents are immutable; separate number sequences (FD-03)
+
+- **Date:** 2026-10-28
+- **Category:** Billing / Audit
+- **Decision:**
+  - Issued invoices stay frozen (BILL-P1 D4).
+  - Corrections happen only by void (net zero), credit note or adjustment invoice. A credit note or adjustment invoice is a new document.
+  - Numbering, per organization and gap-free:
+    - `INV-` shared by the trips and request bases;
+    - `CN-` for credit notes;
+    - `RCPT-` for receipts.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P1 (RCPT-), FIN-P2, FIN-P4 (CN-)
+- **Dependencies:** NP-BILL-P1 D4
+- **Owner:** Product / Finance
+- **Review Trigger:** An accounting-system numbering requirement
+
+### ZD-267 — Deposits are fields of the request-basis invoice (FD-04)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - A request-basis invoice may carry `deposit_required_cents` (0..total) and `deposit_due_date`. Both are frozen at issue.
+  - There are no separate deposit invoices.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P2; clearance (FIN-P3a); invoice print
+- **Dependencies:** ZD-265, ZD-270
+- **Owner:** Product
+- **Review Trigger:** Multi-instalment plans
+
+### ZD-268 — Ledger: receipts, allocations, refunds and receipt reversals are separate append-only records (FD-05, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Data / Billing / Security
+- **Decision:**
+  - Four separate append-only records:
+    - **receipts** (money received);
+    - **allocations** (money applied to or removed from an invoice: apply / unapply);
+    - **refunds** (money returned);
+    - **receipt reversals** (a receipt recorded in error).
+  - BILL-P1 compatibility is preserved:
+    - `billing_record_payment` and `billing_reverse_payment` keep their signatures and observable behaviour;
+    - they act as wrappers over the new records.
+  - The old `billing_payments` table is **frozen and revoked**, not dropped:
+    - inserts are refused by trigger;
+    - SELECT stays for one transition release so an older app build keeps loading;
+    - it is revoked in the following release;
+    - it is dropped only by a later, separately approved migration.
+  - Production preflight must show **0 rows** in `billing_payments`, and the migration itself asserts this. Any unexpected data is a STOP.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 1)
+- **Affected Product Areas:** FIN-P1; `billing_payments`; billing RPCs; receipt print
+- **Dependencies:** NP-BILL-P1 D5, R2
+- **Owner:** Engineering / Owner
+- **Review Trigger:** Any non-zero `billing_payments` count before FIN-P1 release
+
+### ZD-269 — Allocation is explicit with an oldest-first suggestion; excess becomes payer credit (FD-06)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - Staff choose the invoices and amounts. The UI suggests oldest-first.
+  - Money not allocated stays on the receipt as **payer credit**.
+  - Credit may be applied only within the same organization (database-enforced), to invoices of the same payer. Applying it to a different payer needs an explicit confirmation and reason (audited).
+  - Allocations never exceed an invoice's balance or a receipt's unallocated amount.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P1
+- **Dependencies:** ZD-268
+- **Owner:** Product / Finance
+- **Review Trigger:** Automatic allocation requests
+
+### ZD-270 — Payment assurance is four separate facts; clearance rules are configurable (FD-07, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Billing / Dispatch
+- **Decision:**
+  - A receipt carries four independent assurance facts:
+    1. **staff-recorded** (always);
+    2. **evidence** (none, reference noted, or document held, as stated by staff);
+    3. **provider confirmation** (set ONLY by a provider integration or a provider-settlement import, never by manual entry);
+    4. **reconciliation** (matched to a bank or statement line, FIN-P5).
+  - A manually entered reference is evidence, NOT provider verification.
+  - Clearance (FIN-P3a) uses per-organization rules: for each method class (cash, check, card / ACH / transfer / digital wallet), the minimum assurance that counts toward clearance.
+  - Defaults:
+    - cash counts when recorded;
+    - check counts when recorded with the check number, with an option to require reconciliation;
+    - card, ACH, transfer and digital wallet count with a reference noted, with options to require provider confirmation (once available) or reconciliation.
+  - Organization default policy, payer credit terms, deposits and exceptions apply as in NP-FIN-P0.
+  - Policies never depend on service type.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 2); default values are confirmed at FIN-P3a
+- **Affected Product Areas:** FIN-P1 (facts recorded), FIN-P3a (rules), FIN-P5 / P6
+- **Dependencies:** ZD-268
+- **Owner:** Product / Finance
+- **Review Trigger:** Bounced-check or chargeback incidents
+
+### ZD-271 — Dispatch clearance is advisory; enforcement only by separate approval (FD-08)
+
+- **Date:** 2026-10-28
+- **Category:** Dispatch / Safety
+- **Decision:**
+  - FIN-P3a shows status-only clearance badges. Dispatchers see status, never amounts.
+  - `assign_trip` is not changed.
+  - Opt-in enforcement (FIN-P3b) needs its own owner approval, a rider-safety review and an exception path.
+  - Mandatory blocking is not authorized.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture; P3b NOT authorized)
+- **Affected Product Areas:** FIN-P3a / P3b; Dispatch; Trip Detail
+- **Dependencies:** ZD-270
+- **Owner:** Owner / Operations
+- **Review Trigger:** A request for enforcement
+
+### ZD-272 — Billing permission matrix; sensitive actions default to Organization Admin (FD-09, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Security / Authorization
+- **Decision:**
+  - A billing module grant (`membership_module_grants`, module `billing`, access `read` or `write`) is introduced in FIN-P4. It follows the Plus grant pattern.
+  - Ordinary **billing write** covers drafts, issue, recording receipts, allocating, applying credit, adding evidence and adjustment invoices.
+  - **Sensitive actions** are refunds, credit notes, payment or receipt reversals, unapplying allocations, voids, dispatch exceptions, payer credit terms and billing settings. They are authorized separately and remain **Organization Admin only** until a later approved decision.
+  - Dispatchers see clearance status only. Drivers see nothing.
+  - From FIN-P1 on, every RPC authorizes through one action catalogue. Today every action maps to Organization Admin, so later delegation changes the catalogue, not the call sites.
+  - The full matrix is in `docs/reports/NP-FIN-P0-decision-lock.txt`.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 3)
+- **Affected Product Areas:** All billing RPCs and RLS; FIN-P4 grant
+- **Dependencies:** NP-BILL-P1 D2, ZD-209
+- **Owner:** Security / Owner
+- **Review Trigger:** Any delegation of a sensitive action
+
+### ZD-273 — Post-trip adjustments: manual documents only; no automatic fees; never a silent refund or change (FD-10, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - There are no automatic cancellation or no-show fees.
+  - Every financial change is an explicit staff action producing a new auditable record: void, unapply, refund, credit note or adjustment invoice. An issued invoice is never changed, and money is never refunded without a recorded refund action.
+  - Before FIN-P4, the minimum handling (FIN-P2) for a cancelled request with a pre-trip invoice is:
+    - nothing paid: void, with a reason;
+    - paid: unapply (Admin), then void at net zero (Admin), leaving the funds as payer credit, which may be refunded (Admin) or kept for rebooking.
+  - Retaining a cancellation fee waits for FIN-P4 credit notes or adjustment invoices, unless the owner approves an interim method.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 4)
+- **Affected Product Areas:** FIN-P2, FIN-P4
+- **Dependencies:** ZD-266, ZD-268, ZD-272
+- **Owner:** Product / Finance
+- **Review Trigger:** A fee-policy request
+
+### ZD-274 — Accepted Plus quotes inform Core invoices read-only (FD-11)
+
+- **Date:** 2026-10-28
+- **Category:** Architecture / Plus
+- **Decision:**
+  - A request-basis invoice may import the latest **accepted** quote, found through `plus_request_attributions`. The number, kind and components are snapshotted.
+  - Plus tables and RPCs are not modified.
+  - Plus may later display the invoice status read-only, gated by billing read.
+  - A quote revised after import never changes an issued invoice.
+  - Plus never keeps a ledger.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P2, FIN-P4
+- **Dependencies:** NP-BILL-P1 R3, ZD-212–ZD-225
+- **Owner:** Product
+- **Review Trigger:** Any Plus write into Core billing
+
+### ZD-275 — Consolidated facility billing is deferred; later as statements (FD-12)
+
+- **Date:** 2026-10-28
+- **Category:** Scope
+- **Decision:**
+  - One passenger per invoice stays (BILL-P1 R1).
+  - Facility consolidation will later be periodic statements over existing invoices, never multi-passenger invoices.
+- **Status:** CONFIRMED — OWNER-APPROVED (deferral)
+- **Affected Product Areas:** Future
+- **Dependencies:** NP-BILL-P1 R1
+- **Owner:** Product
+- **Review Trigger:** A facility customer requirement
+
+### ZD-276 — Nemryn is the financial source of truth; accounting is one-way downstream (FD-13)
+
+- **Date:** 2026-10-28
+- **Category:** Integration
+- **Decision:**
+  - Invoices, receipts, allocations, credit notes and refunds originate in Nemryn.
+  - Accounting systems receive one-way exports, and their external ids are stored.
+  - There is no two-way editing.
+  - Nemryn is never the merchant of record or custodian of funds.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P6
+- **Dependencies:** none
+- **Owner:** Product / Finance
+- **Review Trigger:** An accounting-integration design
+
+### ZD-277 — No tax until needed; then a manual tax line after CPA review (FD-14)
+
+- **Date:** 2026-10-28
+- **Category:** Billing / Compliance
+- **Decision:**
+  - No tax calculation.
+  - A manual tax line is added only when a customer needs it, after CPA or counsel confirms the rules for that state.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** Future
+- **Dependencies:** none
+- **Owner:** Owner
+- **Review Trigger:** A taxable customer
+
+### ZD-278 — Refunds are recorded manually; reconciliation matches them later (FD-15)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - Refunds are recorded by an authorized user (ZD-272) against a receipt's refundable funds.
+  - They are matched to statement lines in FIN-P5.
+  - Provider webhooks (FIN-P6) may only PROPOSE refunds.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P1, P5, P6
+- **Dependencies:** ZD-268
+- **Owner:** Finance
+- **Review Trigger:** A provider integration
+
+### ZD-279 — Financial records carry no medical information (FD-16)
+
+- **Date:** 2026-10-28
+- **Category:** Privacy
+- **Decision:** No service type, assistance notes, diagnoses or trip notes appear in:
+  - invoice lines (generic descriptions);
+  - receipts, references or notes;
+  - exports, provider metadata or reconciliation lines;
+  - audit rows (ids, amounts and statuses only).
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture; counsel to confirm, NP-LAUNCH-02 Q-C2)
+- **Affected Product Areas:** All NP-FIN phases
+- **Dependencies:** PD-10, PD-11
+- **Owner:** Privacy / Engineering
+- **Review Trigger:** Counsel advice; any export format
+
+### ZD-280 — Synthetic data only for NP-FIN development and tests (FD-17, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Privacy / Process
+- **Decision:**
+  - NP-FIN development, tests, demos and screenshots use synthetic data only.
+  - No owner-operated-tenant exemption applies.
+  - Real financial use by any tenant, including Zenward Mobility, remains subject to the NP-LAUNCH-02 production GO gate and to the unresolved legal and privacy decisions (PD-10, PD-11, counsel questions).
+- **Status:** CONFIRMED — OWNER-APPROVED (refinement 5)
+- **Affected Product Areas:** All NP-FIN phases
+- **Dependencies:** NP-LAUNCH-02, PD-10, PD-11
+- **Owner:** Owner
+- **Review Trigger:** The NP-LAUNCH-02 GO decision
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

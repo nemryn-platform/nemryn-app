@@ -499,6 +499,10 @@ begin
     not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
       and p.proname !~ '^(plus_|_plus_|_require_plus_)'
       and p.proname not in ('platform_set_organization_module', 'platform_extend_plus_trial', 'platform_get_organization_module')
+      -- NP-FIN-P1 FU-2 (narrow): billing_create_invoice_draft (NP-BILL-P1 R3 / ZD-274) may call plus_can_read ONLY,
+      -- to gate the optional read-only quote import; any other Plus reference in it still fails this check.
+      and not (p.proname = 'billing_create_invoice_draft'
+               and regexp_replace(p.prosrc, 'plus_can_read', '', 'g') !~ 'plus_contacts|plus_activities|plus_can_(read|write)|_require_plus_|_plus_member_access')
       and p.prosrc ~ 'plus_contacts|plus_activities|plus_can_(read|write)|_require_plus_|_plus_member_access'));
   perform pg_temp.t('C3 no Core RLS policy references Plus objects',
     not exists (select 1 from pg_policy where polrelid::regclass::text !~ '^(public\.)?plus_'

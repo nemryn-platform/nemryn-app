@@ -1,5 +1,6 @@
 #!/bin/bash
-# Nemryn Core billing under REAL concurrency (NP-BILL-P1). Parallel psql processes, each its own transaction that holds
+# Nemryn Core billing under REAL concurrency (NP-BILL-P1; evidence queries retargeted to the NP-FIN-P1 ledger:
+# payments are receipts + allocations, reversals are unapply + receipt reversal, billing_payments stays empty). Parallel psql processes, each its own transaction that holds
 # its locks ~1s after the call, so the other session genuinely waits.
 #
 #   S1 two different drafts for the SAME trip at once              -> exactly one draft; the other trip_already_invoiced
@@ -30,12 +31,15 @@ ENDPOINT=$(docker context inspect --format '{{.Endpoints.docker.Host}}' "$(docke
 case "$ENDPOINT" in unix://*) ;; *) refuse "Docker endpoint '$ENDPOINT' is not a local unix socket" ;; esac
 LABEL=$(docker inspect --format '{{index .Config.Labels "com.supabase.cli.project"}}|{{.State.Running}}' "$CONTAINER" 2>/dev/null)
 [ "$LABEL" = "NemrynS1Iso|true" ] || refuse "container '$CONTAINER' is not a running Supabase CLI container of project NemrynS1Iso ('$LABEL')"
-PSQL="docker exec -i $CONTAINER psql -U postgres -d $DB -tA -v ON_ERROR_STOP=0"
+# FU-3: every session runs in the throwaway organization's own timezone, so current_date is its local date at
+# every hour (the RPCs compare dates in organizations.timezone; UTC is a day ahead between 00:00 and 04:00 UTC).
+ORG_TZ="America/New_York"
+PSQL="docker exec -i -e PGTZ=$ORG_TZ $CONTAINER psql -U postgres -d $DB -tA -v ON_ERROR_STOP=0"
 FP=$($PSQL -c "select (select count(*) from organizations where id in ('10000000-0000-0000-0000-0000000000a1','10000000-0000-0000-0000-0000000000b1')) || '/' || (select count(*) from auth.users where email = 'org-a-admin@example.test') || '/' || (select count(*) from organizations where id = '25e3a19b-c8b5-45d2-943e-f20baf697cc5')" 2>/dev/null)
 [ "$FP" = "2/1/0" ] || refuse "database does not carry the fictional seed fingerprint (got '$FP', expected 2/1/0)"
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 STAMP=$(date +%s)
-ORG=$($PSQL -c "insert into public.organizations (name, timezone) values ('Billing Concurrency $STAMP', 'America/New_York') returning id" | head -1)
+ORG=$($PSQL -c "insert into public.organizations (name, timezone) values ('Billing Concurrency $STAMP', '$ORG_TZ') returning id" | head -1)
 AD1=$($PSQL -c "select gen_random_uuid()"); AD2=$($PSQL -c "select gen_random_uuid()")
 [[ "$ORG" =~ $UUID_RE && "$AD1" =~ $UUID_RE && "$AD2" =~ $UUID_RE ]] || refuse "throwaway fixture ids were not created ('$ORG' '$AD1' '$AD2')"
 OUT=$(mktemp -d)
@@ -43,6 +47,13 @@ cleanup() {
   [[ "$ORG" =~ $UUID_RE && "$AD1" =~ $UUID_RE && "$AD2" =~ $UUID_RE ]] || return 0
   $PSQL >/dev/null <<SQL
 set session_replication_role = replica;
+delete from public.billing_assurance_events where organization_id='$ORG';
+delete from public.billing_receipt_reversals where organization_id='$ORG';
+delete from public.billing_refund_reversals where organization_id='$ORG';
+delete from public.billing_refunds where organization_id='$ORG';
+delete from public.billing_allocations where organization_id='$ORG';
+delete from public.billing_receipts where organization_id='$ORG';
+delete from public.billing_receipt_counters where organization_id='$ORG';
 delete from public.billing_payments where organization_id='$ORG';
 delete from public.billing_invoice_lines where organization_id='$ORG';
 delete from public.billing_invoice_trips where organization_id='$ORG';
@@ -122,14 +133,14 @@ else fail "S3" "numbers=$NUMS"; fi
 INV=$(issued "$(trip)" "conc-s4-$STAMP"); V=$(ver "$INV")
 pay_call() { echo "select (r).paid_cents || ':' || (r).changed from (select public.billing_record_payment('$ORG', '$1', $2, $3, current_date, 'cash', null, null, '$4') r) s"; }
 run_as "$OUT/s4a" "$AD1" "$(pay_call "$INV" "$V" 6000 "conc-s4-a-$STAMP")" & run_as "$OUT/s4b" "$AD2" "$(pay_call "$INV" "$V" 6000 "conc-s4-b-$STAMP")" & wait
-A=$(res "$OUT/s4a"); B=$(res "$OUT/s4b"); N=$($PSQL -c "select count(*) || ':' || coalesce(sum(amount_cents), 0) from public.billing_payments where invoice_id='$INV'")
+A=$(res "$OUT/s4a"); B=$(res "$OUT/s4b"); N=$($PSQL -c "select count(*) || ':' || coalesce(sum(amount_cents), 0) from public.billing_allocations where invoice_id='$INV' and kind='apply'")
 if [ "$N" = "1:6000" ] && [[ "$A$B" == *ZW003* ]]; then pass "S4 two payments from equal forms at once: exactly one recorded, the other refused stale ($A | $B)"
 else fail "S4" "a=$A b=$B ledger=$N"; fi
 
 # ---------------------------------------------------------------- S5 same payment key twice
 INV=$(issued "$(trip)" "conc-s5-$STAMP"); V=$(ver "$INV")
 run_as "$OUT/s5a" "$AD1" "$(pay_call "$INV" "$V" 2500 "conc-s5-$STAMP")" & run_as "$OUT/s5b" "$AD1" "$(pay_call "$INV" "$V" 2500 "conc-s5-$STAMP")" & wait
-A=$(res "$OUT/s5a"); B=$(res "$OUT/s5b"); N=$($PSQL -c "select count(*) from public.billing_payments where invoice_id='$INV'")
+A=$(res "$OUT/s5a"); B=$(res "$OUT/s5b"); N=$($PSQL -c "select count(*) from public.billing_allocations where invoice_id='$INV' and kind='apply'")
 if [ "$N" = 1 ] && [[ "$A$B" == *true* && "$A$B" == *false* ]]; then pass "S5 same payment key twice at once: one ledger row, changed true + false"
 else fail "S5" "a=$A b=$B rows=$N"; fi
 
@@ -141,7 +152,7 @@ for order in pay-first void-first; do
   if [ "$order" = pay-first ]; then run_as "$OUT/s6p" "$AD1" "$PAYC" & sleep 0.3; run_as "$OUT/s6v" "$AD2" "$VOIDC" & wait
   else run_as "$OUT/s6v" "$AD2" "$VOIDC" & sleep 0.3; run_as "$OUT/s6p" "$AD1" "$PAYC" & wait; fi
   P=$(res "$OUT/s6p"); W=$(res "$OUT/s6v")
-  ST=$($PSQL -c "select status || ':' || (select count(*) from public.billing_payments where invoice_id='$INV') from public.billing_invoices where id='$INV'")
+  ST=$($PSQL -c "select status || ':' || (select count(*) from public.billing_allocations where invoice_id='$INV' and kind='apply') from public.billing_invoices where id='$INV'")
   if { [ "$ST" = "issued:1" ] && [[ "$W" == *ZW00* ]]; } || { [ "$ST" = "void:0" ] && [[ "$P" == *ZW00* ]]; }; then pass "S6 payment vs void ($order): exactly one wins ($ST; pay=$P void=$W)"
   else fail "S6 $order" "state=$ST pay=$P void=$W"; fi
 done
@@ -152,7 +163,7 @@ PID=$(as_admin "select (public.billing_record_payment('$ORG', '$INV', $V, 4000, 
 V=$(ver "$INV")
 rev_call() { echo "select (r).paid_cents || ':' || (r).changed from (select public.billing_reverse_payment('$ORG', '$PID', $V, 'Concurrency reversal', '$1') r) s"; }
 run_as "$OUT/s7a" "$AD1" "$(rev_call "conc-s7-a-$STAMP")" & run_as "$OUT/s7b" "$AD2" "$(rev_call "conc-s7-b-$STAMP")" & wait
-A=$(res "$OUT/s7a"); B=$(res "$OUT/s7b"); N=$($PSQL -c "select count(*) from public.billing_payments where reverses_payment_id='$PID'")
+A=$(res "$OUT/s7a"); B=$(res "$OUT/s7b"); N=$($PSQL -c "select count(*) from public.billing_receipt_reversals x join public.billing_allocations a on a.receipt_id = x.receipt_id where a.id='$PID'")
 if [ "$N" = 1 ] && [[ "$A$B" == *ZW00* ]]; then pass "S7 two reversals of one payment at once: exactly one ($A | $B)"
 else fail "S7" "a=$A b=$B reversals=$N"; fi
 
@@ -168,8 +179,8 @@ if [ "$N" = 1 ] && { [[ "$A" == *ZW004* ]] || [[ "$B" == *ZW004* ]]; } && [[ "$A
 else fail "S8" "a=$A b=$B active_links=$N"; fi
 
 # ---------------------------------------------------------------- invariants
-BAD=$($PSQL -c "select count(*) from public.billing_invoices i cross join lateral (select coalesce(sum(case when p.entry_kind='payment' then p.amount_cents else -p.amount_cents end), 0) paid from public.billing_payments p where p.invoice_id = i.id) x where i.organization_id='$ORG' and (x.paid < 0 or x.paid > i.total_cents or (i.status = 'void' and x.paid <> 0))")
-REV=$($PSQL -c "select count(*) from (select reverses_payment_id from public.billing_payments where organization_id='$ORG' and reverses_payment_id is not null group by 1 having count(*) > 1) d")
+BAD=$($PSQL -c "select count(*) from public.billing_invoices i cross join lateral (select coalesce(sum(case when p.kind='apply' then p.amount_cents else -p.amount_cents end), 0) paid from public.billing_allocations p where p.invoice_id = i.id) x where i.organization_id='$ORG' and (x.paid < 0 or x.paid > i.total_cents or (i.status = 'void' and x.paid <> 0))")
+REV=$($PSQL -c "select (select count(*) from (select unapplies_allocation_id from public.billing_allocations where organization_id='$ORG' and unapplies_allocation_id is not null group by 1 having count(*) > 1) d) + (select count(*) from (select receipt_id from public.billing_receipt_reversals where organization_id='$ORG' group by 1 having count(*) > 1) e) + (select count(*) from public.billing_payments where organization_id='$ORG')")
 ACT=$($PSQL -c "select count(*) from (select trip_id from public.billing_invoice_trips where organization_id='$ORG' and released_at is null group by 1 having count(*) > 1) d")
 TS=$($PSQL -c "select count(*) from public.trips where organization_id='$ORG' and state <> 'completed'")
 if [ "$BAD" = 0 ] && [ "$REV" = 0 ] && [ "$ACT" = 0 ] && [ "$TS" = 0 ]; then pass "INV 0 <= paid <= total (void => 0); <= 1 reversal per payment; <= 1 active invoice per trip; trips untouched"

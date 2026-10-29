@@ -3,9 +3,12 @@ import { notFound } from "next/navigation";
 import { CurrencyDollar, FileText, Path, Receipt, User } from "@phosphor-icons/react/dist/ssr";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getInvoice } from "@/lib/billing/billing";
+import { getInvoice, listInvoiceCreditSources } from "@/lib/billing/billing";
 import {
+  ASSURANCE_EXPLANATION,
   BILL_TO_KIND_LABELS,
+  assuranceLabel,
+  assuranceTone,
   centsToInput,
   formatCents,
   formatInstantDate,
@@ -14,12 +17,13 @@ import {
   paymentMethodLabel,
   paymentStateLabel,
   paymentStateTone,
+  providerLabel,
   receiptNumberLabel,
   todayInTimezone,
   type BillToKind,
 } from "@/lib/billing/billing-core";
 import { DiscardDraftButton, InvoiceDraftEditor, IssueInvoicePanel } from "@/components/billing/InvoiceDraftEditor";
-import { IssuedInvoiceActions, ReversePaymentButton } from "@/components/billing/InvoiceActions";
+import { IssuedInvoiceActions, ReversePaymentButton, UnapplyPaymentButton } from "@/components/billing/InvoiceActions";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -50,6 +54,8 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
   const today = todayInTimezone(tz);
   const shared = { organizationId: organization.organizationId, invoiceId: inv.id, version: inv.version };
   const isDraft = inv.status === "draft";
+  // NP-FIN-P1: the same payer's unapplied money (authoritative identity only), offered as "Apply payer credit"
+  const creditSources = inv.status === "issued" && inv.balanceCents > 0 ? await listInvoiceCreditSources(organization.organizationId, inv.id) : [];
   const tripLabel = (tripId: string | null) => {
     const t = inv.trips.find((x) => x.tripId === tripId);
     return t ? `Trip ${formatInstantDate(t.scheduledPickupAt ?? t.completedAt, tz)}` : "";
@@ -68,7 +74,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
                 Print invoice
               </LinkButton>
             )}
-            {inv.status === "issued" && <IssuedInvoiceActions shared={shared} balanceCents={inv.balanceCents} paidCents={inv.paidCents} today={today} />}
+            {inv.status === "issued" && <IssuedInvoiceActions shared={shared} balanceCents={inv.balanceCents} paidCents={inv.paidCents} today={today} creditSources={creditSources} />}
             {isDraft && <DiscardDraftButton {...shared} />}
           </div>
         }
@@ -201,44 +207,53 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
             {inv.termsNote && <p className={cn(typography.bodySmall, "whitespace-pre-wrap text-text-secondary")}>{inv.termsNote}</p>}
           </Panel>
           <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="billing-invoice-payments">
-            <SectionHeader title="Payments" icon={<Receipt />} description="Recorded by your team. Corrections are added as reversals; nothing is deleted." />
+            <SectionHeader
+              title="Payments"
+              icon={<Receipt />}
+              description="Money your team recorded as received and applied to this invoice. Corrections are added as new entries; nothing is deleted."
+            />
             {inv.payments.length === 0 ? (
               <p className={cn(typography.bodySmall, "text-text-secondary")}>No payments recorded.</p>
             ) : (
               <ul className="divide-y divide-border-subtle">
-                {inv.payments.map((p) => (
-                  <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0" data-testid="billing-payment-row" data-kind={p.entryKind}>
-                    <div className="min-w-0">
-                      <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>
-                        {p.entryKind === "payment" ? (
-                          <>
-                            {formatCents(p.amountCents)} · {paymentMethodLabel(p.method)}
-                            {p.reference ? ` · ${p.reference}` : ""}
-                          </>
-                        ) : (
-                          <>Reversal −{formatCents(p.amountCents)}</>
-                        )}
-                      </p>
-                      <p className={cn(typography.metadata, "text-text-muted")}>
-                        {p.entryKind === "payment" ? `Received ${formatIsoDate(p.receivedOn)} · receipt ${receiptNumberLabel(inv.invoiceNumber, p.sequence ?? 0)}` : `Recorded ${formatInstantDate(p.recordedAt, tz)} · ${p.reason ?? ""}`}
-                        {p.note ? ` · ${p.note}` : ""}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {p.entryKind === "payment" && p.reversedBy && <StatusBadge label="Reversed" category="cancelled" />}
-                      {p.entryKind === "payment" && (
-                        <Link href={`/receipt-print/${p.id}`} className={cn(typography.bodySmall, "text-text-link hover:underline")} data-testid="billing-receipt-link">
+                {inv.payments.map((p) => {
+                  const counted = !p.unapplied && !p.receiptReversed;
+                  const label = `${formatCents(p.amountCents)} received ${formatIsoDate(p.receivedOn)} (${paymentMethodLabel(p.method)})`;
+                  return (
+                    <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0" data-testid="billing-payment-row" data-kind="payment" data-counted={counted ? "true" : "false"}>
+                      <div className="min-w-0">
+                        <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>
+                          {formatCents(p.amountCents)} · {paymentMethodLabel(p.method)}
+                          {providerLabel(p.provider) ? ` via ${providerLabel(p.provider)}` : ""}
+                          {p.reference ? ` · ${p.reference}` : ""}
+                        </p>
+                        <p className={cn(typography.metadata, "text-text-muted")}>
+                          Received {formatIsoDate(p.receivedOn)} · {receiptNumberLabel(p.receiptNumber)}
+                          {p.note ? ` · ${p.note}` : ""}
+                          {p.receiptReversed ? ` · reversed ${formatInstantDate(p.receiptReversedAt, tz)}: ${p.receiptReversalReason ?? ""}` : ""}
+                          {p.unapplied && !p.receiptReversed ? ` · removed from this invoice: ${p.unapplyReason ?? ""}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {p.receiptReversed && <StatusBadge label="Reversed" category="cancelled" />}
+                        {p.unapplied && !p.receiptReversed && <StatusBadge label="Removed" category="cancelled" />}
+                        {p.differentPayer && <StatusBadge label="Other payer" category="warning" />}
+                        {counted && <StatusBadge label={assuranceLabel(p.assurance)} category={assuranceTone(p.assurance)} />}
+                        <Link href={`/operations/billing/receipts/${p.receiptId}`} className={cn(typography.bodySmall, "text-text-link hover:underline")} data-testid="billing-receipt-page-link">
+                          Payment
+                        </Link>
+                        <Link href={`/receipt-print/${p.receiptId}`} className={cn(typography.bodySmall, "text-text-link hover:underline")} data-testid="billing-receipt-link">
                           Receipt
                         </Link>
-                      )}
-                      {p.entryKind === "payment" && !p.reversedBy && inv.status === "issued" && (
-                        <ReversePaymentButton shared={shared} payment={{ id: p.id, label: `${formatCents(p.amountCents)} received ${formatIsoDate(p.receivedOn)} (${paymentMethodLabel(p.method)})` }} />
-                      )}
-                    </div>
-                  </li>
-                ))}
+                        {counted && inv.status === "issued" && p.simplePayment && <ReversePaymentButton shared={shared} payment={{ id: p.id, label }} />}
+                        {counted && inv.status === "issued" && <UnapplyPaymentButton shared={shared} payment={{ id: p.id, label }} />}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
+            <p className={cn(typography.metadata, "text-text-muted")}>{ASSURANCE_EXPLANATION}</p>
           </Panel>
         </>
       )}

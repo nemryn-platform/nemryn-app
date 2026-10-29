@@ -1,0 +1,124 @@
+NEMRYN — NP-FIN-P1 FINAL REVIEW — Payment ledger re-foundation
+Date: 2026-10-29. Branch np-fin-p1-ledger (from origin/main 85f2042). UNCOMMITTED. Nothing pushed, merged or deployed.
+No production migration and no production write. No real customer financial data: synthetic only, isolated stack.
+
+Reports
+  NP-FIN-P1-implementation.txt        what was built, files, deviations
+  NP-FIN-P1-test-results.txt          every suite, counts, failures and fixes
+  NP-FIN-P1-security-review.txt       requirement -> control -> evidence; residual risks
+  NP-FIN-P1-migration-preflight.txt   gates, release order, rollback (prepared, not executed)
+  NP-FIN-P1-readonly-preflight.sql, NP-FIN-P1-emergency-reversal.sql   prepared tooling (isolated rehearsals only)
+
+1. RESULT
+  - Receipts, allocations (apply / unapply), payer credit, refunds (+ correction), receipt reversals, staff evidence
+    facts, RCPT- numbering, the permission catalogue, deny-by-default RLS and the BILL-P1-compatible RPCs are
+    implemented.
+  - UI: Payments received, Record payment received, Apply credit, payment page, refund / reversal controls,
+    verification labels, receipt print.
+  - Confirmed:
+      ✓ one receipt -> several invoices;
+      ✓ excess stays as payer credit;
+      ✓ refunds <= refundable funds;
+      ✓ void vs allocation safe under concurrency, including direct-database bypass;
+      ✓ NP-BILL-P1 behaviour preserved.
+  - Owner decisions applied: OD-1 branch, OD-2 cross-payer = Admin + confirmation + reason + audit, OD-3 no fee
+    retention, OD-4 RCPT-000123, OD-5 optional processing fee shown as the agency's expense.
+
+2. TESTS (detail in the test-results report)
+  SQL:
+    - BILL-P1 67 / 67; ledger 70 / 70 (66 + R10-R13 from the code review); privilege contract 0 / 29.
+    - BILL concurrency ALL PASS; ledger concurrency K1-K11 + K5b ALL PASS (K11 from the code review).
+    - 54-suite differential run: 0 regressions (the 32 pre-existing failure lines are identical without FIN-P1).
+  Plus guard suites (FU-2): 170 / 170, 85 / 85, 76 / 76. Timezone-safe at every hour (FU-3).
+  App: npm test 962 / 962; test:release 28 / 28; tsc 0; eslint 0 errors (113 baseline warnings, none added); build PASS.
+  E2E:
+    - ledger 44 / 44 (7 AXE clean); billing 50 / 50; handoff 35 / 35; getting-started 26 / 26; p1b 52 / 52;
+    - inquiries staff 74 / 74 + off 5 / 5; consents ALL PASS;
+    - QA2 strict 5 / 5 suites; Quotes strict 7 / 7 suites.
+  Rehearsals: preflight SQL validated; emergency reversal refused with data and restored NP-BILL-P1 exactly when empty;
+    demo guard + paid-demo reset clean.
+
+3. FAILURES FOUND AND FIXED (none weakened a test)
+  Product:
+    - dialogs erased typed values after a refused submit (React 19) -> manual dispatch;
+    - payer chooser showed invoice snapshot names -> names from the payer's record;
+    - explicit cross_organization row guard;
+    - the BILL wrapper returned ZW002 instead of ZW006 for "reverse a reversal";
+    - receipt allocation list ordered deterministically.
+  Tooling: emergency reversal script syntax (caught by the rehearsal, fixed, re-rehearsed).
+  Test harness: boolean formatting, same-statement snapshot visibility, TRUNCATE with pending deferred events, two
+    E2E expectations.
+
+4. DEVIATIONS FROM THE APPROVED ARCHITECTURE (all additive or stricter; detail in the implementation report)
+  - billing_refund_reversals added, so a mistaken refund can be corrected.
+  - Luhn-based card-number refusal (not "any 13+ digits"); the BILL wrapper now refuses card-like references.
+  - The invoice "Record payment" goes through billing_record_receipt; overpayment is still refused by default, with an
+    explicit "keep the extra as payer credit" option.
+  - The NP-BILL-P1 invoice-table RLS stays admin-only (moves to the catalogue with the FIN-P4 grant).
+  - The receipt print route was renamed to /receipt-print/[receiptId] (no production payments, so no broken links).
+
+5. REMAINING RISKS / FOLLOW-UPS (updated by the final code review, NP-FIN-P1-code-review.txt)
+  - FU-1 OPEN: revoke SELECT on billing_payments in the release after FIN-P1 (ZD-268 transition, FIN-P1+1).
+  - FU-2 DONE: narrow allow-list for the read-gate of billing_create_invoice_draft in the three Plus guard suites (each
+    now passes; negative control still flags any other Plus reference).
+  - FU-3 DONE: billing SQL / concurrency fixtures use the organization's local date. They pass at every hour, verified
+    inside the 00:00-04:00 UTC window and under UTC+14 / UTC−11.
+  - FU-4 Manual refunds are records only until FIN-P5 / P6 reconciliation (by design; labelled).
+  - FU-5 Requester-kind payer identity is per request (conservative by design) — see CR-4.
+  - FU-6 Before release, rebase on the then-current main and re-run the suites if main moved. As of PR preparation main
+    has NOT moved (85f2042).
+  - FU-7 OPEN (pre-existing, not FIN-P1): the recurring-care SQL suites have the same UTC-window flake (SKIP-05,
+    SKIP-08/09, RTC-04). Proven identical with and without FIN-P1.
+  Code-review findings:
+    CR-1 Medium (procedural): a refund correction could be misused to restore credit for money really paid out.
+         Mitigated by Admin-only, reason, audit and visible history. Before real use: an operating rule; in FIN-P5 / P6,
+         refuse corrections of provider-confirmed / reconciled refunds.
+    CR-2 Low: no "possible duplicate" warning for refunds (cap + Admin-only mitigate). Candidate for FIN-P4.
+    CR-3 Info: the receipt duplicate check is advisory, not race-proof (provider ids are hard-unique).
+    CR-4 Info: requester identity per request.
+    CR-5 Info: billing_payments SELECT kept for one transition release (FU-1).
+  Test counts after the review: ledger SQL 70 / 70 (R10-R13 added), ledger concurrency K1-K11 + K5b (K11 added).
+  No production implementation, migration, write or deployment has been performed.
+
+6. OWNER DECISIONS STILL NEEDED
+  - Code review, then approval to commit / push / open the PR.
+  - Later and separately: production release authorization (preflight G1-G9, backup, the two migrations).
+  - Whether to schedule FU-2 / FU-3 as a small test-maintenance change before or with the PR.
+
+7. GIT STATUS (np-fin-p1-ledger, nothing staged or committed)
+  Modified (tracked, 18 files, +2,463 / −192):
+    docs/product/decision-register.md
+    src/app/invoice-print/[invoiceId]/page.tsx
+    src/app/operations/billing/actions.ts
+    src/app/operations/billing/invoices/[invoiceId]/page.tsx
+    src/app/operations/billing/page.tsx
+    src/components/billing/BillingTables.tsx
+    src/components/billing/InvoiceActions.tsx
+    src/lib/billing/billing-core.test.mjs
+    src/lib/billing/billing-core.ts
+    src/lib/billing/billing.ts
+    src/lib/supabase/database.types.ts
+    supabase/tests/billing_concurrency_test.sh
+    supabase/tests/billing_tests.sql
+    supabase/tests/privilege_contract_tests.sql
+    tests/e2e/billing/billing.e2e.mjs
+    tests/e2e/demo/pilot-demo.mjs
+    tests/e2e/handoff/handoff.e2e.mjs
+  Renamed (git mv):
+    src/app/receipt-print/[paymentId]/page.tsx -> src/app/receipt-print/[receiptId]/page.tsx
+  New (untracked):
+    supabase/migrations/20261029100000_core_billing_ledger_foundation.sql
+    supabase/migrations/20261029110000_core_billing_ledger_rpcs.sql
+    supabase/tests/billing_ledger_tests.sql
+    supabase/tests/billing_ledger_concurrency_test.sh
+    tests/e2e/billing/billing-ledger.e2e.mjs
+    src/app/operations/billing/receipts/[receiptId]/page.tsx
+    src/app/operations/billing/receipts/new/page.tsx
+    src/components/billing/ReceiptActions.tsx
+    docs/reports/NP-FIN-P1-{implementation, test-results, security-review, migration-preflight, final-review}.txt
+    docs/reports/NP-FIN-P1-readonly-preflight.sql, NP-FIN-P1-emergency-reversal.sql
+  Plus the earlier untracked P0 / P1-planning reports, and the pre-existing .tmp-qa scratch.
+  Outside the repository: the two migrations were copied into ~/NemrynS1Iso/supabase/migrations (the isolated stack's
+  workdir) to apply them there.
+
+STATUS: FIN-P1 IMPLEMENTED LOCALLY — AWAITING OWNER CODE REVIEW
