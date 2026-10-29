@@ -3704,7 +3704,7 @@ Builds on NP-BILL-P1 D1–D6 and R1–R4 (`docs/reports/NP-BILL-P1-contract-and-
 
 ## NP-FIN-P1G — Financial-write gate (locked 2026-10-29 from OD-G1 to OD-G6 and EC-1 to EC-6)
 
-Common status for ZD-281 to ZD-290:
+Common status for ZD-281 to ZD-291:
 - Approved by the owner in the NP-FIN-P1G final-refinements authorization (2026-10-29).
 - No commit, production migration, deployment or production enablement is authorized by these entries.
 
@@ -3745,6 +3745,7 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
 - **Decision:**
   - The organization owning the one production draft invoice stays disabled (its draft is read-only; nothing is lost).
   - Its ownership and purpose may be verified only by an authorized, minimum-necessary read (organization id only).
+- **Verification (2026-10-29, authorized read-only lookup):** the draft belongs to organization `627a9fa6-8399-4b1a-b77f-d7e7df6deda4` (the real Zenward Mobility tenant), `is_pilot_simulation_tenant = false`, 1 draft. Outcome decided in ZD-291.
 - **Status:** CONFIRMED — OWNER-APPROVED
 - **Affected Product Areas:** Production billing data (1 draft invoice)
 - **Dependencies:** ZD-282
@@ -3860,6 +3861,22 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
 - **Dependencies:** NP-LAUNCH-03A
 - **Owner:** Owner
 - **Review Trigger:** Monthly custody review; any incident; counsel advice (Q-C6)
+
+### ZD-291 — Zenward Mobility's draft invoice becomes read-only at the FIN-P1 / P1G release (Z-1)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Real-data protection
+- **Decision:**
+  - The existing production draft invoice of Zenward Mobility (`627a9fa6-8399-4b1a-b77f-d7e7df6deda4`) may become read-only when FIN-P1 / P1G is released. It stays visible and printable; it cannot be edited, issued or discarded while the organization is disabled.
+  - The draft is preserved WITHOUT modification: no migration, script or operator action changes or deletes it.
+  - Zenward Mobility stays DISABLED for all financial writes. It is a REAL tenant and must never be classified or enabled as `synthetic`.
+  - Any future billing enablement for Zenward is a LIVE enablement and requires the NP-LAUNCH-02 GO, the ZD-287 correction-only capability (or an approved equivalent control), and its own explicit authorization.
+- **Reason:** It applies ZD-282 / ZD-283 to the verified owner of the draft. Real-tenant financial use stays behind the launch gate (ZD-280).
+- **Status:** CONFIRMED — OWNER-APPROVED (Z-1, 2026-10-29)
+- **Affected Product Areas:** Production billing data (Zenward Mobility draft invoice); `billing_write_enablements`
+- **Dependencies:** ZD-280, ZD-282, ZD-283, ZD-287, NP-LAUNCH-02
+- **Owner:** Owner
+- **Review Trigger:** The NP-LAUNCH-02 GO decision; any request to enable Zenward Mobility
 
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place. ZD-284 has been SUPERSEDED IN PART by ZD-288 (release packaging / branch merging only).
 
