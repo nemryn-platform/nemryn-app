@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowCounterClockwise, CurrencyDollar, Receipt, ShieldCheck } from "@phosphor-icons/react/dist/ssr";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getReceipt, listOpenInvoices } from "@/lib/billing/billing";
+import { getBillingWriteStatus, getReceipt, listOpenInvoices } from "@/lib/billing/billing";
 import {
   ASSURANCE_EXPLANATION,
   REVERSAL_REASON_LABELS,
@@ -22,6 +22,7 @@ import {
   todayInTimezone,
   type ReversalReasonCode,
 } from "@/lib/billing/billing-core";
+import { BillingWriteNotice } from "@/components/billing/BillingWriteNotice";
 import { AddEvidenceButton, ApplyCreditButton, RefundButton, ReverseReceiptButton, ReverseRefundButton } from "@/components/billing/ReceiptActions";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { DefinitionList } from "@/components/ui/DefinitionList";
@@ -42,7 +43,8 @@ const PAYER_KIND_LABELS: Record<string, string> = { passenger: "Passenger", requ
  * Billing -> Payment (NP-FIN-P1). Organization Admin only; billing_get_receipt re-checks (unknown / foreign -> 404).
  * One receipt = money received: where it was applied, the payer credit left, refunds recorded from it, and its
  * assurance facts (recorded / evidence -- never "provider confirmed" from a typed reference). Corrections are new
- * entries (unapply, refund correction, reversal); nothing is edited or deleted.
+ * entries (unapply, refund correction, reversal); nothing is edited or deleted. NP-FIN-P1G: read-only (no actions)
+ * while the organization's financial writes are not enabled.
  */
 export default async function ReceiptPage({ params, searchParams }: { params: Promise<{ receiptId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { receiptId } = await params;
@@ -54,8 +56,10 @@ export default async function ReceiptPage({ params, searchParams }: { params: Pr
   const tz = organization.organizationTimezone;
   const today = todayInTimezone(tz);
   const reversed = r.reversal !== null;
+  const writeStatus = await getBillingWriteStatus(organization.organizationId);
+  const canWrite = writeStatus.enabled;
   const state = receiptState({ grossCents: r.grossCents, allocatedCents: r.allocatedCents, refundedCents: r.refundedCents, reversed });
-  const open = !reversed && r.unallocatedCents > 0 ? await listOpenInvoices(organization.organizationId, { receiptId: r.id }) : [];
+  const open = canWrite && !reversed && r.unallocatedCents > 0 ? await listOpenInvoices(organization.organizationId, { receiptId: r.id }) : [];
   const invoices = open.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber, billToName: i.billToName, passengerName: i.passengerName, issueDate: i.issueDate, balanceCents: i.balanceCents, version: i.version, samePayer: i.samePayer }));
   const activeRefunds = r.refunds.filter((f) => !f.reversed);
   const reverseBlocked = reversed
@@ -77,12 +81,13 @@ export default async function ReceiptPage({ params, searchParams }: { params: Pr
             <LinkButton href={`/receipt-print/${r.id}`} variant="outline" data-testid="billing-receipt-print">
               Print receipt
             </LinkButton>
-            {!reversed && <ApplyCreditButton organizationId={organization.organizationId} receiptId={r.id} availableCents={r.unallocatedCents} invoices={invoices} />}
-            {!reversed && <RefundButton organizationId={organization.organizationId} receiptId={r.id} refundableCents={r.unallocatedCents} today={today} receivedOn={r.receivedOn} />}
-            <ReverseReceiptButton organizationId={organization.organizationId} receiptId={r.id} disabledReason={reverseBlocked} />
+            {canWrite && !reversed && <ApplyCreditButton organizationId={organization.organizationId} receiptId={r.id} availableCents={r.unallocatedCents} invoices={invoices} />}
+            {canWrite && !reversed && <RefundButton organizationId={organization.organizationId} receiptId={r.id} refundableCents={r.unallocatedCents} today={today} receivedOn={r.receivedOn} />}
+            {canWrite && <ReverseReceiptButton organizationId={organization.organizationId} receiptId={r.id} disabledReason={reverseBlocked} />}
           </div>
         }
       />
+      <BillingWriteNotice status={writeStatus} />
       {query.recorded === "1" && (
         <p role="status" className={cn(typography.bodySmall, "text-text-secondary")} data-testid="billing-receipt-recorded">
           Payment recorded{r.unallocatedCents > 0 ? `. ${formatCents(r.unallocatedCents)} is kept as payer credit.` : "."}
@@ -176,7 +181,7 @@ export default async function ReceiptPage({ params, searchParams }: { params: Pr
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {f.reversed ? <StatusBadge label="Corrected" category="cancelled" /> : <StatusBadge label={assuranceLabel(f.assurance)} category={assuranceTone(f.assurance)} />}
-                  {!f.reversed && !reversed && (
+                  {canWrite && !f.reversed && !reversed && (
                     <ReverseRefundButton organizationId={organization.organizationId} receiptId={r.id} refundId={f.id} label={`${formatCents(f.amountCents)} refunded ${formatIsoDate(f.refundedOn)}`} />
                   )}
                 </div>
@@ -196,7 +201,7 @@ export default async function ReceiptPage({ params, searchParams }: { params: Pr
             </li>
           ))}
         </ul>
-        {!reversed && !r.events.some((e) => e.kind === "evidence_document_held") && <AddEvidenceButton organizationId={organization.organizationId} receiptId={r.id} />}
+        {canWrite && !reversed && !r.events.some((e) => e.kind === "evidence_document_held") && <AddEvidenceButton organizationId={organization.organizationId} receiptId={r.id} />}
         <p className={cn(typography.metadata, "text-text-muted")}>Provider confirmation and bank reconciliation are added only by a provider connection or a statement match; they can&apos;t be entered by hand.</p>
       </Panel>
     </div>

@@ -13,6 +13,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { sleep, newChromeSession, signIn, injectAxe } from "../plus-quotes/_harness.mjs";
 import { APP, SEED_PASSWORD, artifactDir, assertFictionalSeed, sql } from "../plus-quotes/_config.mjs";
+import { gateCleanupSql, gateEnableSql } from "./_gate.mjs";
 
 assertFictionalSeed();
 const ORG_A = "10000000-0000-0000-0000-0000000000a1";
@@ -50,11 +51,12 @@ function cleanup() {
     delete from billing_invoices where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from billing_invoice_counters where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from trips where pickup_description like 'LEDGERE2E-%';
-    delete from passengers where display_name like 'LEDGERE2E%';
+    delete from passengers where display_name like 'LEDGERE2E%';${gateCleanupSql([ORG_A, ORG_B])}
     set session_replication_role = origin;
   `);
 }
 cleanup();
+sql(gateEnableSql([ORG_A, ORG_B], "NP-FIN-P1G ledger E2E fixture (fictional)"));
 const P2 = one(`insert into passengers (organization_id, display_name, phone) values ('${ORG_A}', 'LEDGERE2E Second Rider', '(404) 555-0133') returning id`);
 const P1NAME = one(`select display_name from passengers where id = '${P1}'`);
 let tripN = 0;

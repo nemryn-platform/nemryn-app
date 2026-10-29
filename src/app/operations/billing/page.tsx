@@ -3,7 +3,7 @@ import { CheckCircle, ClockCountdown, FileText, Receipt, Wallet, WarningCircle }
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getOrganizationSettings } from "@/lib/operations/organization-settings";
-import { getBillingSummary, getLedgerSummary, listBillableTrips, listInvoices, listReceipts, type BillableTrip, type BillingSummary, type InvoiceListRow, type LedgerSummary, type ReceiptListRow } from "@/lib/billing/billing";
+import { getBillingSummary, getBillingWriteStatus, getLedgerSummary, listBillableTrips, listInvoices, listReceipts, type BillableTrip, type BillingSummary, type InvoiceListRow, type LedgerSummary, type ReceiptListRow } from "@/lib/billing/billing";
 import {
   BILLING_PAGE_SIZE,
   INVOICE_FILTERS,
@@ -26,6 +26,7 @@ import {
   receiptStateLabel,
   receiptStateTone,
 } from "@/lib/billing/billing-core";
+import { BillingWriteNotice } from "@/components/billing/BillingWriteNotice";
 import { BillableTripsTable, InvoicesTable, ReceiptsTable, type BillableTripRow, type InvoiceRow, type ReceiptRow } from "@/components/billing/BillingTables";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { Button } from "@/components/ui/Button";
@@ -96,6 +97,7 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
   const params = parseBillingParams(raw);
   const tz = organization.organizationTimezone;
 
+  const writeStatusPromise = getBillingWriteStatus(organization.organizationId);
   const [summaryResult, listResult, settingsResult, ledgerResult] = await Promise.allSettled([
     getBillingSummary(organization.organizationId),
     params.view === "ready"
@@ -106,6 +108,7 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
     getOrganizationSettings(organization.organizationId),
     getLedgerSummary(organization.organizationId),
   ]);
+  const writeStatus = await writeStatusPromise;
   const ledger: LedgerSummary | null = ledgerResult.status === "fulfilled" ? ledgerResult.value : null;
   // NP-PILOT-P2: invoices / receipts print the business phone and address only when saved -- say so before invoicing.
   // Unknown (failed read) shows nothing rather than a guess.
@@ -122,11 +125,14 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
         description="Invoice completed private-pay trips and record the payments you receive. Nemryn doesn't take card payments or send invoices; print or save them as PDF."
         breadcrumb={[{ label: "Billing" }]}
         actions={
-          <LinkButton href="/operations/billing/receipts/new" variant="outline" data-testid="billing-record-receipt">
-            Record payment received
-          </LinkButton>
+          writeStatus.enabled ? (
+            <LinkButton href="/operations/billing/receipts/new" variant="outline" data-testid="billing-record-receipt">
+              Record payment received
+            </LinkButton>
+          ) : undefined
         }
       />
+      <BillingWriteNotice status={writeStatus} />
       {businessDetailsMissing && (
         <div data-testid="billing-business-details-missing">
           <AttentionState
@@ -247,7 +253,7 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
       ) : (
         <>
           {params.view === "ready" ? (
-            <BillableTripsTable rows={(list.rows as BillableTrip[]).map((t) => tripRow(t, tz))} />
+            <BillableTripsTable rows={(list.rows as BillableTrip[]).map((t) => tripRow(t, tz))} canWrite={writeStatus.enabled} />
           ) : params.view === "receipts" ? (
             <ReceiptsTable rows={(list.rows as ReceiptListRow[]).map(receiptRow)} />
           ) : (

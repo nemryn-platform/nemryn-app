@@ -335,6 +335,8 @@ const RULE_MESSAGES: Record<string, string> = {
   illegal_transition: "That isn't possible in the invoice's current state. Reload the page.",
   invalid_trip_selection: "Choose between 1 and 31 completed trips.",
   invalid_idempotency_key: "Something went wrong. Reload the page and try again.",
+  // NP-FIN-P1G: the organization's financial writes are not enabled (deny-by-default gate). Nothing was saved.
+  billing_not_enabled: "Billing isn't enabled for this workspace yet, so nothing was saved. Invoices and payments can still be viewed.",
 };
 export function billingErrorMessage(code: string | undefined, message?: string): string {
   const rule = message?.match(/^[a-z_]+$/)?.[0] ?? message?.trim();

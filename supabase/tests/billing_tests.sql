@@ -12,6 +12,14 @@ begin;
 -- this test transaction's timezone to Org A's own makes current_date correct at every hour (the suite used to fail
 -- between 00:00 and 04:00 UTC, when the UTC date is already ahead of the organization's). Production code unchanged.
 select set_config('timezone', (select timezone from public.organizations where id = '10000000-0000-0000-0000-0000000000a1'), true);
+-- NP-FIN-P1G: financial writes are deny-by-default per organization. This suite's FICTIONAL seed organizations are
+-- explicitly enabled (data class synthetic) through the platform RPC, as the fictional seed platform admin -- the same
+-- path production uses. Deny-by-default itself is covered by supabase/tests/billing_write_gate_tests.sql.
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-0000000000d1', true);
+select (public.platform_set_billing_write_enablement('10000000-0000-0000-0000-0000000000a1', 'enabled', 'synthetic', null, 'NP-FIN-P1G test fixture: fictional seed organization', 0)).status;
+select (public.platform_set_billing_write_enablement('10000000-0000-0000-0000-0000000000b1', 'enabled', 'synthetic', null, 'NP-FIN-P1G test fixture: fictional seed organization', 0)).status;
+reset role;
 create temp table k_results (n serial, name text, ok boolean, detail text);
 create temp table k (name text primary key, v text);
 grant select on k to authenticated, anon;

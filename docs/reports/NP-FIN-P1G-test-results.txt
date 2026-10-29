@@ -1,0 +1,125 @@
+NP-FIN-P1G -- TEST RESULTS
+Date: 2026-10-29        Isolated stack only (NemrynS1Iso, 101 migrations, head 20261029120000; app :3100 built from
+the working tree). Fictional seed data only. Branch np-fin-p1g-billing-gate, uncommitted.
+
+======================================================================================================================
+1. NEW GATE TESTS
+======================================================================================================================
+supabase/tests/billing_write_gate_tests.sql (fresh reset) ..................................... 20 / 20 PASS
+  G0  the migrations enable no organization; G0b no row -> draft creation refused (ZW004 billing_not_enabled)
+  M1  Org Admin (own org), other-tenant admin, dispatcher, driver cannot enable (ZW002)
+  M2  anon 42501; unauthenticated ZW001
+  M3  no direct client write to the enablement table; history not client-readable
+  M4  live needs an NP-LAUNCH-02 reference (RPC ZW006; direct owner insert -> CHECK 23514)
+  M5  Platform Admin enables: version 1, history row, audit row without the free-text reason
+  M6  stale version ZW003; same state = no-op; no delete / truncate; history append-only
+  M7  live accepted with a reference (fictional org)
+  W0  fixtures while enabled (invoice, payment, receipt, refund)
+  D1  7 NP-BILL-P1 writes refused while disabled (draft create / update / discard, issue, void, both wrappers)
+  D2  7 FIN-P1 writes refused (receipt, allocate, unapply, refund, refund correction, receipt reversal, evidence)
+  D3  nothing changed (counts and every invoice version / status)
+  D4  reads unaffected (invoice, list, ledger, receipts, receipt detail, both summaries, trip status, write status)
+  B1  direct owner INSERT / UPDATE / DELETE refused on all 12 financial tables, by the gate first
+  B2  structural: every public.billing_* table has a_billing_write_gate (BEFORE ROW I/U/D, first)
+  B3  structural: every table a billing function writes is gated / a gate table / audit_events
+  R1  re-enable: writes work; history 1 enabled, 2 disabled, 3 enabled
+  T1  tenant isolation of state and status
+  T2  an active Plus entitlement does not enable billing (fictional org f1)
+Mutation check: dropping the gate trigger from billing_refunds -> 5 tests fail (D2 D3 B1 B2 B3). The suite detects
+a missing gate.
+
+Concurrency, supabase/tests/billing_ledger_concurrency_test.sh K12 (as fictional Platform Admin d1):
+  pay-first      payment committed, then the disable (applied 3000) ........................................ PASS
+  disable-first  payment refused ZW004 billing_not_enabled (applied 0) ........................................ PASS
+  RESULT: ALL PASS (K1-K12 + K5b); billing_concurrency_test.sh (S1-S8): ALL PASS
+
+E2E tests/e2e/billing/billing-gate.e2e.mjs .................................................. 27 / 27 PASS
+  FX0 deny by default; S0-S2 a payment dialog opened while enabled, submitted after the disable -> plain message, no
+  code, nothing recorded; D1-D12 billing list / ready / payments / issued invoice / draft / payment page / receipt
+  print / create-invoice URL / record-payment URL / Trip Detail / mobile 390 px: notice, records visible, no write
+  action, no horizontal scroll, database unchanged; T1-T2 tenant isolation; R1 re-enable; Z1 audit without reason.
+  axe: 0 serious / critical on 6 pages (one "page-has-heading-one" moderate on mobile, as on other pages).
+
+======================================================================================================================
+2. REGRESSION -- SQL
+======================================================================================================================
+  billing_tests.sql 67 / 67; billing_ledger_tests.sql 70 / 70 (fixtures enable Org A / B via the platform RPC)
+  privilege_contract_tests.sql 0 / 29 violations
+  Plus guard suites: plus_access_helpers 170, plus_contacts_activities 85, plus_member_grants 76 -- all pass
+  Full differential: 75 suites run sequentially on one database, P1G vs baseline (FIN-P1 = HEAD test files, the P1G
+  migration removed, fresh reset):
+    Only differences: billing_write_gate_tests.sql (new, clean) and platform_admin_foundation EX-1 (function count
+    14 -> 15, updated; now PASS).
+    Pre-existing, identical in baseline and P1G (not caused by P1G): notifications_activity ACT-1 / PAGE-1 and
+    website_request_form_publication PU4a (sequential-order effects; pass on a fresh database);
+    website_requests_form A1 / A2 / F5 (fail on a fresh database too) and P7 (sequential); and
+    request_decision_expand_compat (by design after the contract migration).
+    Regressions: 0.
+
+======================================================================================================================
+3. REGRESSION -- APP
+======================================================================================================================
+  Unit 962 / 962 (incl. new billing_not_enabled message assertions); release tests 28 / 28
+  tsc 0 errors; eslint 0 errors (113 baseline warnings); next build PASS
+
+======================================================================================================================
+4. REGRESSION -- E2E (isolated app :3100)
+======================================================================================================================
+  billing.e2e 50 / 50; billing-ledger.e2e 44 / 44; handoff.e2e 35 / 35; legacy-api 5 / 5
+  getting-started 26 / 26; ui-foundations p1b 52 / 52 (fresh database)
+  plus-inquiries staff 74 / 74; inquiries (mode off) 5 / 5; consents 49 / 49
+  QA2 strict: 5 / 5 suites (requests 25, trips-dispatch 44, records 28, growth 23, auth-access 79)
+  Quotes strict: 7 / 7 suites (s2 33, s3a 31, s3b 32, s3c 54, o1 27, s4-integrated 69, s4-a11y 26), no unexpected
+  failures
+  Pilot demo: prepare -> billing writes enabled (synthetic, v1); status; reset -> 0 enablement / history rows,
+  "not enabled".
+
+======================================================================================================================
+5. INCIDENTS DURING THE RUN (recorded for completeness)
+======================================================================================================================
+  - billing-ledger.e2e E4b failed once (first run straight after a rebuild). It passed on a fresh database (44 / 44)
+    and in sequence after billing.e2e (44 / 44). Timing flake, not reproducible.
+  - A batch of browser suites failed at sign-in ("Welcome back") when started right after a database reset, before
+    auth was ready. All passed once auth answered /health.
+  - The host restarted mid-run (Docker Desktop stopped, scratchpad cleared). Docker and the :3100 app were restarted;
+    the working tree was intact. Every result above was produced after the restart, except billing / ledger /
+    handoff / gate E2E and the unit / build checks: the code they cover has not changed since, apart from two test
+    files (platform EX-1 count, demo status line).
+
+======================================================================================================================
+6. REVERSAL REHEARSAL (isolated stack)
+======================================================================================================================
+  Refusal: a LIVE enablement record present -> NP-FIN-P1G-emergency-reversal.sql refused; 12 triggers, tables and
+    101 migrations unchanged.                                                                                PASS
+  Case (a) full rollback: P1G reversal, then NP-FIN-P1-emergency-reversal.sql -> 98 migrations, head 20261028100000
+    (production today); no P1G / FIN-P1 objects; the audit row kept; origin/main's billing_tests 67 / 67 and privilege
+    contract 0 / 29.                                                                                         PASS
+    (The local `main` ref is stale at PR #41; the comparison uses origin/main = 85f2042.)
+  Case (b) gate removed alone with a receipt in the ledger -> 100 migrations, head 20261029110000; the receipt kept;
+    the FIN-P1 reversal then refuses (ledger holds rows); FIN-P1's (0ded235) privilege contract 0 / 29; its ledger
+    suite 70 / 70 once the rehearsal receipt was removed (with it, C2 "Org B numbering starts at 1" fails only
+    because the rehearsal used number 1).                                                                    PASS
+  The database was reset to the P1G state afterwards.
+
+======================================================================================================================
+7. FINAL-REFINEMENT REGRESSION (2026-10-29, after ZD-286 visibility change, atomic package, combined rollback)
+======================================================================================================================
+  Gate suite 21 / 21 (new V1: status columns exactly enabled / version / set_at; no reason / class text; platform read
+    ZW002 for tenants, 42501 for anon, full row for the Platform Admin; T1: every tenant role 42501 on the table)
+  Full SQL differential vs the FIN-P1 baseline (75 suites, sequential): the only difference is the new gate suite.
+    BILL 67 / 67; ledger 70 / 70; privilege contract 0 / 29; platform_admin_foundation 58 / 58 (EX-1 count 14 -> 16);
+    Plus guard suites 170 / 85 / 76.
+  Concurrency: billing_concurrency_test.sh ALL PASS; billing_ledger_concurrency_test.sh ALL PASS incl. K12 both orders.
+  Unit 962 / 962; release 28 / 28; tsc 0; eslint 0 errors (113 baseline warnings); next build PASS (:3100 rebuilt).
+  E2E: billing-gate 28 / 28 (new D1b: the tenant page never shows the reason, approval reference or data class);
+    billing 50 / 50; billing-ledger 44 / 44; handoff 35 / 35; legacy-api 5 / 5; QA2 strict 5 / 5 suites; Quotes
+    strict 7 / 7 suites.
+  Atomic release rehearsal R0-R9: all PASS (NP-FIN-P1G-atomic-release-rehearsal.txt).
+  Equivalence: the schema fingerprint after the atomic package equals the fingerprint after CLI-applied migrations
+    (51cf5698d7f37657e2b4f9b3a151d079, history included).
+  Not re-run after the refinements (their code paths are unchanged; they passed in §4): getting-started, p1b,
+    inquiries (staff / off), consents, pilot demo.
+  Section 6 (reversal rehearsal with the earlier gate-only script) is SUPERSEDED by the combined rollback rehearsal
+    (R6-R9).
+
+STATUS: FIN-P1G FINAL REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

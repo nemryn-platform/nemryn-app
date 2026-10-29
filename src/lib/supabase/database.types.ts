@@ -873,6 +873,91 @@ export type Database = {
           },
         ]
       }
+      billing_write_enablement_history: {
+        Row: {
+          approval_ref: string | null
+          changed_at: string
+          changed_by: string | null
+          data_class: string
+          id: number
+          organization_id: string
+          reason: string
+          status: string
+          version: number
+        }
+        Insert: {
+          approval_ref?: string | null
+          changed_at?: string
+          changed_by?: string | null
+          data_class: string
+          id?: never
+          organization_id: string
+          reason: string
+          status: string
+          version: number
+        }
+        Update: {
+          approval_ref?: string | null
+          changed_at?: string
+          changed_by?: string | null
+          data_class?: string
+          id?: never
+          organization_id?: string
+          reason?: string
+          status?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_write_enablement_history_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_write_enablements: {
+        Row: {
+          approval_ref: string | null
+          data_class: string
+          organization_id: string
+          reason: string
+          set_at: string
+          set_by: string | null
+          status: string
+          version: number
+        }
+        Insert: {
+          approval_ref?: string | null
+          data_class: string
+          organization_id: string
+          reason: string
+          set_at?: string
+          set_by?: string | null
+          status: string
+          version?: number
+        }
+        Update: {
+          approval_ref?: string | null
+          data_class?: string
+          organization_id?: string
+          reason?: string
+          set_at?: string
+          set_by?: string | null
+          status?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_write_enablements_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       driver_invites: {
         Row: {
           accepted_at: string | null
@@ -3817,12 +3902,20 @@ export type Database = {
       }
       _billing_require_key: { Args: { p_key: string }; Returns: string }
       _billing_require_reason: { Args: { p: string }; Returns: string }
+      _billing_require_write_enabled: {
+        Args: { p_organization_id: string }
+        Returns: undefined
+      }
       _billing_trip_line_description: {
         Args: {
           p_organization_id: string
           p_trip: Database["public"]["Tables"]["trips"]["Row"]
         }
         Returns: string
+      }
+      _billing_write_enabled: {
+        Args: { p_organization_id: string }
+        Returns: boolean
       }
       _create_public_request: {
         Args: {
@@ -4784,6 +4877,14 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      billing_write_status: {
+        Args: { p_organization_id: string }
+        Returns: {
+          enabled: boolean
+          set_at: string
+          version: number
+        }[]
+      }
       cancel_staff_invite: { Args: { p_invite_id: string }; Returns: boolean }
       cancel_transportation_request: {
         Args: {
@@ -5468,6 +5569,19 @@ export type Database = {
               isSetofReturn: false
             }
           }
+      platform_get_billing_write_enablement: {
+        Args: { p_organization_id: string }
+        Returns: {
+          approval_ref: string
+          data_class: string
+          organization_id: string
+          reason: string
+          set_at: string
+          set_by: string
+          status: string
+          version: number
+        }[]
+      }
       platform_get_organization: {
         Args: { p_organization_id: string }
         Returns: {
@@ -5593,6 +5707,23 @@ export type Database = {
           total_count: number
           trip_count: number
         }[]
+      }
+      platform_set_billing_write_enablement: {
+        Args: {
+          p_approval_ref: string
+          p_data_class: string
+          p_expected_version: number
+          p_organization_id: string
+          p_reason: string
+          p_status: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["billing_write_enablement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "billing_write_enablement_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       platform_set_organization_module:
         | {
@@ -7439,6 +7570,13 @@ export type Database = {
         invoice_id: string | null
         paid_cents: number | null
         balance_cents: number | null
+        version: number | null
+        changed: boolean | null
+      }
+      billing_write_enablement_result: {
+        organization_id: string | null
+        status: string | null
+        data_class: string | null
         version: number | null
         changed: boolean | null
       }

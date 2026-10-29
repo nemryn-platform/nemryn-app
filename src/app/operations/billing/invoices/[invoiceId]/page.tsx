@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { CurrencyDollar, FileText, Path, Receipt, User } from "@phosphor-icons/react/dist/ssr";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getInvoice, listInvoiceCreditSources } from "@/lib/billing/billing";
+import { getBillingWriteStatus, getInvoice, listInvoiceCreditSources } from "@/lib/billing/billing";
 import {
   ASSURANCE_EXPLANATION,
   BILL_TO_KIND_LABELS,
@@ -24,6 +24,7 @@ import {
 } from "@/lib/billing/billing-core";
 import { DiscardDraftButton, InvoiceDraftEditor, IssueInvoicePanel } from "@/components/billing/InvoiceDraftEditor";
 import { IssuedInvoiceActions, ReversePaymentButton, UnapplyPaymentButton } from "@/components/billing/InvoiceActions";
+import { BillingWriteNotice } from "@/components/billing/BillingWriteNotice";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { DefinitionList } from "@/components/ui/DefinitionList";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -42,6 +43,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Billing -> Invoice (NP-BILL-P1). Organization Admin only; billing_get_invoice re-checks (unknown / foreign -> 404).
  * Draft: edit bill-to, charges, discount, terms; issue or discard. Issued: frozen charges, record / reverse payments,
  * void while nothing is paid, print the invoice and per-payment receipts. Void: read-only history.
+ * NP-FIN-P1G: while the organization's financial writes are not enabled the page is read-only (a draft shows its saved
+ * contents; no actions). The database refuses the writes regardless.
  */
 export default async function InvoicePage({ params, searchParams }: { params: Promise<{ invoiceId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { invoiceId } = await params;
@@ -54,8 +57,10 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
   const today = todayInTimezone(tz);
   const shared = { organizationId: organization.organizationId, invoiceId: inv.id, version: inv.version };
   const isDraft = inv.status === "draft";
+  const writeStatus = await getBillingWriteStatus(organization.organizationId);
+  const canWrite = writeStatus.enabled;
   // NP-FIN-P1: the same payer's unapplied money (authoritative identity only), offered as "Apply payer credit"
-  const creditSources = inv.status === "issued" && inv.balanceCents > 0 ? await listInvoiceCreditSources(organization.organizationId, inv.id) : [];
+  const creditSources = canWrite && inv.status === "issued" && inv.balanceCents > 0 ? await listInvoiceCreditSources(organization.organizationId, inv.id) : [];
   const tripLabel = (tripId: string | null) => {
     const t = inv.trips.find((x) => x.tripId === tripId);
     return t ? `Trip ${formatInstantDate(t.scheduledPickupAt ?? t.completedAt, tz)}` : "";
@@ -74,12 +79,13 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
                 Print invoice
               </LinkButton>
             )}
-            {inv.status === "issued" && <IssuedInvoiceActions shared={shared} balanceCents={inv.balanceCents} paidCents={inv.paidCents} today={today} creditSources={creditSources} />}
-            {isDraft && <DiscardDraftButton {...shared} />}
+            {canWrite && inv.status === "issued" && <IssuedInvoiceActions shared={shared} balanceCents={inv.balanceCents} paidCents={inv.paidCents} today={today} creditSources={creditSources} />}
+            {canWrite && isDraft && <DiscardDraftButton {...shared} />}
           </div>
         }
       />
-      {query.created === "1" && isDraft && (
+      <BillingWriteNotice status={writeStatus} />
+      {query.created === "1" && isDraft && canWrite && (
         <p role="status" className={cn(typography.bodySmall, "text-text-secondary")} data-testid="billing-created">
           Draft created. Check the charges and prices, save, then issue the invoice.
         </p>
@@ -131,7 +137,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
         </ul>
       </Panel>
 
-      {isDraft ? (
+      {isDraft && canWrite ? (
         <>
           <Panel surface="raised" className="flex flex-col gap-zw-md">
             <SectionHeader title="Bill to and charges" icon={<FileText />} description={`Billing: ${BILL_TO_KIND_LABELS[inv.billToKind as BillToKind] ?? inv.billToKind}. Prices are entered by you; nothing is sent to anyone.`} />
@@ -245,8 +251,8 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
                         <Link href={`/receipt-print/${p.receiptId}`} className={cn(typography.bodySmall, "text-text-link hover:underline")} data-testid="billing-receipt-link">
                           Receipt
                         </Link>
-                        {counted && inv.status === "issued" && p.simplePayment && <ReversePaymentButton shared={shared} payment={{ id: p.id, label }} />}
-                        {counted && inv.status === "issued" && <UnapplyPaymentButton shared={shared} payment={{ id: p.id, label }} />}
+                        {canWrite && counted && inv.status === "issued" && p.simplePayment && <ReversePaymentButton shared={shared} payment={{ id: p.id, label }} />}
+                        {canWrite && counted && inv.status === "issued" && <UnapplyPaymentButton shared={shared} payment={{ id: p.id, label }} />}
                       </div>
                     </li>
                   );

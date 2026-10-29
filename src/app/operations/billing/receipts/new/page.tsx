@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { listOpenInvoices, listPayers } from "@/lib/billing/billing";
+import { getBillingWriteStatus, listOpenInvoices, listPayers } from "@/lib/billing/billing";
 import { BILL_TO_KIND_LABELS, formatCents, todayInTimezone, type BillToKind } from "@/lib/billing/billing-core";
+import { BillingWriteNotice } from "@/components/billing/BillingWriteNotice";
 import { RecordReceiptForm } from "@/components/billing/ReceiptActions";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -21,12 +22,28 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * one payment covering several invoices, or a prepayment kept as payer credit. Step 1 chooses the payer -- a party with
  * an organization-scoped identity (from open invoices) or "someone else" (typed, never matched by name); step 2 records
  * the amount and applies it to that payer's invoices, oldest first. The database re-checks everything.
+ * NP-FIN-P1G: no form while the organization's financial writes are not enabled.
  */
 export default async function NewReceiptPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const organization = await requireOrganizationAdminAccess(await getCurrentPathname("/operations/billing/receipts/new"));
   const raw = await searchParams;
   const payerParam = typeof raw.payer === "string" ? raw.payer : "";
   const tz = organization.organizationTimezone;
+  const writeStatus = await getBillingWriteStatus(organization.organizationId);
+  if (!writeStatus.enabled) {
+    return (
+      <div className="flex flex-col gap-zw-lg">
+        <PageHeader
+          title="Record payment received"
+          breadcrumb={[{ label: "Billing", href: "/operations/billing?view=receipts" }, { label: "Record payment received" }]}
+        />
+        <BillingWriteNotice status={writeStatus} />
+        <Link href="/operations/billing?view=receipts" className="text-text-link hover:underline">
+          Back to payments
+        </Link>
+      </div>
+    );
+  }
   const payers = await listPayers(organization.organizationId);
   const options = payers.map((p) => ({ value: `${p.kind}:${p.id}`, label: `${p.name} · ${BILL_TO_KIND_LABELS[p.kind as BillToKind] ?? p.kind}` }));
   const [kind, id = ""] = payerParam.split(":");

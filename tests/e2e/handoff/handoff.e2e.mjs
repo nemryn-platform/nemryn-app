@@ -10,6 +10,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { sleep, newChromeSession, signIn, injectAxe } from "../plus-quotes/_harness.mjs";
 import { APP, SEED_PASSWORD, artifactDir, assertFictionalSeed, sql } from "../plus-quotes/_config.mjs";
+import { gateCleanupSql, gateEnableSql } from "../billing/_gate.mjs";
 
 assertFictionalSeed();
 const ORG_A = "10000000-0000-0000-0000-0000000000a1", ORG_B = "10000000-0000-0000-0000-0000000000b1";
@@ -59,10 +60,12 @@ function cleanup() {
     delete from plus_inquiry_public_access where organization_id = '${ORG_A}';
     delete from plus_contacts where organization_id = '${ORG_A}' and display_name like '${TAG}%';
     delete from passengers where display_name like '${TAG}%';
+    ${gateCleanupSql([ORG_A])}
     set session_replication_role = origin;
   `);
 }
 cleanup();
+sql(gateEnableSql([ORG_A], "NP-FIN-P1G handoff E2E fixture (fictional)"));
 sql(`delete from organization_modules where organization_id in ('${ORG_A}', '${ORG_B}');
      insert into organization_modules (organization_id, module, status, status_reason) values ('${ORG_A}', 'plus', 'active', 'handoff e2e');
      update membership_module_grants set revoked_at = now(), revoked_by = '${U.a1}' where organization_id = '${ORG_A}' and revoked_at is null;`);

@@ -9,6 +9,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { sleep, newChromeSession, signIn, injectAxe } from "../plus-quotes/_harness.mjs";
 import { APP, SEED_PASSWORD, artifactDir, assertFictionalSeed, sql } from "../plus-quotes/_config.mjs";
+import { gateCleanupSql, gateEnableSql } from "./_gate.mjs";
 
 assertFictionalSeed();
 const ORG_A = "10000000-0000-0000-0000-0000000000a1";
@@ -51,11 +52,12 @@ function cleanup() {
     delete from plus_contacts where organization_id = '${ORG_A}' and display_name like 'BILLE2E%';
     delete from trips where pickup_description like 'BILLE2E-%';
     delete from transportation_requests where pickup_description like 'BILLE2E-%';
-    delete from passengers where display_name like 'BILLE2E%';
+    delete from passengers where display_name like 'BILLE2E%';${gateCleanupSql([ORG_A, ORG_B])}
     set session_replication_role = origin;
   `);
 }
 cleanup();
+sql(gateEnableSql([ORG_A, ORG_B], "NP-FIN-P1G billing E2E fixture (fictional)"));
 sql(`delete from organization_modules where organization_id in ('${ORG_A}', '${ORG_B}');
      insert into organization_modules (organization_id, module, status, status_reason) values ('${ORG_A}', 'plus', 'active', 'billing e2e (quote import only)');`);
 const P2 = one(`insert into passengers (organization_id, display_name, phone) values ('${ORG_A}', 'BILLE2E Second Rider', '(404) 555-0122') returning id`);

@@ -62,6 +62,10 @@ function reset() {
     delete from billing_invoice_lines where invoice_id in (select id from demo_inv);
     delete from billing_invoice_trips where invoice_id in (select id from demo_inv);
     delete from billing_invoices where id in (select id from demo_inv);
+    -- NP-FIN-P1G: remove ONLY a billing enablement the demo created (synthetic, reason "DEMO ..."); any other is kept
+    delete from billing_write_enablement_history where organization_id = '${ORG}'
+      and exists (select 1 from billing_write_enablements e where e.organization_id = '${ORG}' and e.data_class = 'synthetic' and e.reason like '${TAG}%');
+    delete from billing_write_enablements where organization_id = '${ORG}' and data_class = 'synthetic' and reason like '${TAG}%';
     set session_replication_role = origin;
   `);
   sql(`
@@ -91,6 +95,7 @@ function status() {
   const r = (q) => one(q) || "0";
   console.log(`app:            ${APP}  (sign in as org-a-admin@example.test / the fictional seed password)`);
   console.log(`plus:           ${r(`select status from organization_modules where organization_id = '${ORG}' and module = 'plus'`) || "none (Core-only)"}`);
+  console.log(`billing writes: ${one(`select status || ' (' || data_class || ', v' || version || ')' from billing_write_enablements where organization_id = '${ORG}'`) || "not enabled"}`);
   console.log(`business:       ${r(`select coalesce(business_phone, '-') from organizations where id = '${ORG}'`)}`);
   console.log(`demo contact:   ${r(`select count(*) from plus_contacts where display_name like '${TAG}%'`)}`);
   console.log(`opportunity:    ${r(`select stage from plus_opportunities where title like '${TAG}%' limit 1`) || "-"}`);
@@ -100,12 +105,18 @@ function status() {
   console.log(`public access:  ${r(`select count(*) from plus_inquiry_public_access where organization_id = '${ORG}'`)} row(s) (must be 0 after prepare)`);
 }
 
-if (mode === "reset") { reset(); console.log("demo reset: DEMO rows removed, Org A back to Core-only (if the demo enabled Plus)."); status(); process.exit(0); }
+if (mode === "reset") { reset(); console.log("demo reset: DEMO rows removed, Org A back to Core-only and billing not enabled (if the demo enabled them)."); status(); process.exit(0); }
 if (mode === "status") { status(); process.exit(0); }
 
 // ---------------------------------------------------------------- prepare
 reset();
 sql(`insert into organization_modules (organization_id, module, status, status_reason) values ('${ORG}', 'plus', 'active', 'pilot demo') on conflict (organization_id, module) do nothing;`);
+// NP-FIN-P1G: billing writes are denied by default; the demo enables fictional Org A as SYNTHETIC through the platform
+// RPC (fictional platform admin), only when no enablement exists yet. reset removes it again.
+if (one(`select count(*) from billing_write_enablements where organization_id = '${ORG}'`) === "0") {
+  one(`begin; set local role authenticated; set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000d1';
+       select (public.platform_set_billing_write_enablement('${ORG}', 'enabled', 'synthetic', null, '${TAG} pilot demo (fictional, isolated stack)', 0)).status; commit;`);
+}
 sql(`update organizations set business_phone = '${DEMO_BUSINESS.phone}', business_address = ${pgText(DEMO_BUSINESS.address)} where id = '${ORG}' and business_phone is null and business_address is null;`);
 // the rider who will ride (a returning passenger the "same phone" hint finds -- the requester is her daughter)
 sql(`insert into passengers (organization_id, display_name, phone, assistance_notes) values ('${ORG}', '${TAG} Rose Fictional', '404-555-0123', 'Fictional: uses a walker');`);

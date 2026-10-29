@@ -15,6 +15,7 @@
 #   K9  BILL-P1 wrapper: two payments from equal forms                                -> one + ZW003
 #   K10 deadlock probe: allocate R -> [A, B] vs allocate S -> [B, A]                 -> both succeed (ascending lock order), no 40P01
 #   K11 refund correction vs a new refund on a fully refunded receipt (both orders) -> active refunds never exceed it
+#   K12 NP-FIN-P1G: disabling the organization vs recording a payment (both orders) -> serialized; never a write after a committed disable
 #   INVARIANTS: 0 <= paid <= total; money only on issued invoices; allocated + refunded <= gross; reversed receipts at net 0;
 #               billing_payments empty.
 #
@@ -62,6 +63,8 @@ delete from public.billing_invoice_lines where organization_id='$ORG';
 delete from public.billing_invoice_trips where organization_id='$ORG';
 delete from public.billing_invoices where organization_id='$ORG';
 delete from public.billing_invoice_counters where organization_id='$ORG';
+delete from public.billing_write_enablement_history where organization_id='$ORG';
+delete from public.billing_write_enablements where organization_id='$ORG';
 set session_replication_role = origin;
 delete from public.audit_events where organization_id='$ORG';
 delete from public.trips where organization_id='$ORG';
@@ -82,6 +85,8 @@ insert into public.passengers (organization_id, display_name) values ('$ORG', 'F
 SQL
 )
 [[ "$PAS" =~ $UUID_RE ]] || refuse "fixture passenger was not created"
+# NP-FIN-P1G: financial writes are deny-by-default -- enable the throwaway FICTIONAL organization (synthetic)
+$PSQL -c "insert into public.billing_write_enablements (organization_id, status, data_class, reason, version) values ('$ORG', 'enabled', 'synthetic', 'NP-FIN-P1G concurrency fixture (fictional)', 1)" >/dev/null
 trip() { $PSQL -c "insert into public.trips (organization_id, passenger_id, state, pickup_description, destination_description, completed_at) values ('$ORG', '$PAS', 'completed', 'Fictional pickup', 'Fictional destination', now()) returning id" | head -1; }
 FAIL=0
 pass() { echo "PASS $1"; }
@@ -250,6 +255,26 @@ for order in correct-first refund-first; do
     pass "K11 refund correction vs new refund ($order): active refunds never exceed the receipt (active=$ACT credit=$U; correct=$C refund=$N)"
   else fail "K11 $order" "correct=$C refund=$N active=$ACT credit=$U"; fi
 done
+
+# ---------------------------------------------------------------- K12 NP-FIN-P1G: DISABLE the organization vs record a payment (both orders)
+# Platform calls run as the fictional seed platform admin. The gate share-locks the enablement row, so the two serialize:
+# payment-first -> the payment commits, then the disable; disable-first -> the payment is refused billing_not_enabled.
+PLAT="20000000-0000-0000-0000-0000000000d1"
+for order in pay-first disable-first; do
+  $PSQL -c "update public.billing_write_enablements set status = 'enabled', reason = 'K12 re-enable (fictional)', version = version + 1 where organization_id = '$ORG' and status <> 'enabled'" >/dev/null
+  R=$(credit "k12-$order" 3000); X=$(issued "k12x-$order" 5000)
+  V=$($PSQL -c "select version from public.billing_write_enablements where organization_id = '$ORG'")
+  AL=$(alloc_call "$R" "$(A1 "$X" 3000)" "k12-$order")
+  DIS="select (r).status || ':' || (r).changed from (select public.platform_set_billing_write_enablement('$ORG', 'disabled', 'synthetic', null, 'K12 disable race (fictional)', $V) r) s"
+  if [ "$order" = pay-first ]; then run_as "$OUT/k12p" "$AD1" "$AL" & sleep 0.3; run_as "$OUT/k12d" "$PLAT" "$DIS" & wait
+  else run_as "$OUT/k12d" "$PLAT" "$DIS" & sleep 0.3; run_as "$OUT/k12p" "$AD1" "$AL" & wait; fi
+  P=$(res "$OUT/k12p"); D=$(res "$OUT/k12d"); NX=$(net "$X")
+  ST=$($PSQL -c "select status from public.billing_write_enablements where organization_id = '$ORG'")
+  if [ "$ST" = disabled ] && [[ "$D" == disabled:true ]] && { { [ "$order" = pay-first ] && [ "$NX" = 3000 ] && [[ "$P" == *:true ]]; } || { [ "$order" = disable-first ] && [ "$NX" = 0 ] && [[ "$P" == *billing_not_enabled* ]]; }; }; then
+    pass "K12 disable vs payment ($order): serialized -- pay=$P disable=$D applied=$NX"
+  else fail "K12 $order" "pay=$P disable=$D applied=$NX status=$ST"; fi
+done
+$PSQL -c "update public.billing_write_enablements set status = 'enabled', reason = 'K12 restore (fictional)', version = version + 1 where organization_id = '$ORG' and status <> 'enabled'" >/dev/null
 
 # ---------------------------------------------------------------- invariants
 BAD=$($PSQL -c "select count(*) from public.billing_invoices i where i.organization_id='$ORG' and (public._billing_invoice_net(i.id) < 0 or public._billing_invoice_net(i.id) > i.total_cents or (i.status <> 'issued' and public._billing_invoice_net(i.id) <> 0))")

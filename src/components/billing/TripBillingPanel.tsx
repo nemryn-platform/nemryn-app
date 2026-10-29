@@ -12,9 +12,10 @@ import { cn } from "@/lib/cn";
 /**
  * Trip Detail -> Billing (NP-BILL-P1). Rendered only for Organization Admins on a COMPLETED trip (the page decides);
  * billing_trip_status re-checks. Either the invoice the trip is on, or "Create invoice". Nothing else on Trip Detail
- * changes, and the trip itself is never modified by billing.
+ * changes, and the trip itself is never modified by billing. NP-FIN-P1G: no "Create invoice" while the organization's
+ * financial writes are not enabled.
  */
-export function TripBillingPanel({ tripId, status }: { tripId: string; status: TripBillingStatus | null }) {
+export function TripBillingPanel({ tripId, status, canWrite }: { tripId: string; status: TripBillingStatus | null; canWrite: boolean }) {
   return (
     <Panel surface="raised" className="flex flex-col gap-zw-md" data-testid="trip-billing-panel">
       <SectionHeader title="Billing" icon={<Receipt />} />
@@ -34,10 +35,14 @@ export function TripBillingPanel({ tripId, status }: { tripId: string; status: T
         </div>
       ) : status.billable ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className={cn(typography.bodySmall, "text-text-secondary")}>Not invoiced yet.</p>
-          <LinkButton href={`/operations/billing/new?trip=${tripId}`} size="sm" variant="outline" data-testid="trip-billing-create">
-            Create invoice
-          </LinkButton>
+          <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="trip-billing-not-invoiced">
+            {canWrite ? "Not invoiced yet." : "Not invoiced yet. Billing isn't enabled for this workspace yet."}
+          </p>
+          {canWrite && (
+            <LinkButton href={`/operations/billing/new?trip=${tripId}`} size="sm" variant="outline" data-testid="trip-billing-create">
+              Create invoice
+            </LinkButton>
+          )}
         </div>
       ) : (
         <p className={cn(typography.bodySmall, "text-text-secondary")}>This trip can&apos;t be invoiced.</p>

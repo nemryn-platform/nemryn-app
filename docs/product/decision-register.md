@@ -3700,6 +3700,115 @@ Builds on NP-BILL-P1 D1–D6 and R1–R4 (`docs/reports/NP-BILL-P1-contract-and-
 - **Owner:** Owner
 - **Review Trigger:** The NP-LAUNCH-02 GO decision
 
+---
+
+## NP-FIN-P1G — Financial-write gate (locked 2026-10-29 from OD-G1 to OD-G6 and EC-1 to EC-6)
+
+Common status for ZD-281 to ZD-287:
+- Approved by the owner in the NP-FIN-P1G final-refinements authorization (2026-10-29).
+- No commit, production migration, deployment or production enablement is authorized by these entries.
+
+Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-implementation.txt`, `docs/reports/NP-FIN-P1G-release-compatibility.txt`.
+
+### ZD-281 — Financial writes are gated at the table level (OD-G1)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Data integrity
+- **Decision:**
+  - A BEFORE INSERT / UPDATE / DELETE trigger (`a_billing_write_gate`) on every financial table refuses any write for an organization that is not enabled (ZW004 `billing_not_enabled`).
+  - It replaces the proposal's per-RPC re-definitions: no billing RPC body or signature is changed.
+  - Required coverage: structural tests (every `billing_*` table is gated; every table a billing function writes is gated) and adversarial tests (every write RPC, direct owner writes, concurrency with a disable).
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** `20261029120000_core_billing_write_gate.sql`, all NP-BILL-P1 / FIN-P1 write paths
+- **Dependencies:** ZD-268, ZD-280
+- **Owner:** Engineering
+- **Review Trigger:** Any new financial table or billing write path
+
+### ZD-282 — No organization is enabled by the migration; synthetic enablement is a separate action (OD-G2)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Privacy
+- **Decision:**
+  - The migration enables no organization (no row = disabled).
+  - The synthetic "Nemryn Pilot Simulation" tenant may be enabled only by a separately authorized Platform Admin action, after release verification.
+  - Live enablement (including Zenward Mobility) requires the NP-LAUNCH-02 GO and the capability in ZD-287.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** `billing_write_enablements`, `platform_set_billing_write_enablement`
+- **Dependencies:** ZD-280, ZD-287, NP-LAUNCH-02
+- **Owner:** Owner
+- **Review Trigger:** The NP-LAUNCH-02 GO decision
+
+### ZD-283 — The existing production draft invoice's organization stays disabled pending verification (OD-G3)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Privacy
+- **Decision:**
+  - The organization owning the one production draft invoice stays disabled (its draft is read-only; nothing is lost).
+  - Its ownership and purpose may be verified only by an authorized, minimum-necessary read (organization id only).
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** Production billing data (1 draft invoice)
+- **Dependencies:** ZD-282
+- **Owner:** Owner
+- **Review Trigger:** The authorized verification read
+
+### ZD-284 — P1G ships as a separate PR stacked on the reviewed FIN-P1 commit (OD-G4)
+
+- **Date:** 2026-10-29
+- **Category:** Release process
+- **Decision:**
+  - P1G is a separate PR based on the reviewed FIN-P1 commit (0ded235).
+  - PR #44 is not modified.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** PR #44, the P1G PR
+- **Dependencies:** ZD-285
+- **Owner:** Owner
+- **Review Trigger:** Any change to PR #44 before merge
+
+### ZD-285 — FIN-P1 and P1G migrations are released as one rehearsed atomic transaction (OD-G5)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Data integrity
+- **Decision:**
+  - M1 (20261029100000), M2 (20261029110000) and M3 (20261029120000) are applied in ONE transaction: all succeed or nothing changes, so there is no interval with ungated ledger writes.
+  - The FIN-P1 zero-row gate stays mandatory. The package must fail closed and leave the migration history consistent (exactly the three versions, or none).
+  - The package is rehearsed on the isolated stack before any production use.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** Production release procedure
+- **Dependencies:** ZD-281
+- **Owner:** Engineering / Owner
+- **Review Trigger:** Any change to M1, M2 or M3
+
+### ZD-286 — Tenants see only the enabled / disabled state (OD-G6)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Privacy
+- **Decision:**
+  - Tenant-facing reads expose only whether billing is enabled, plus non-sensitive operational state (version, last change time).
+  - The internal reason, approval_ref, data class, actor and history are readable only through Platform Admin administration.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** `billing_write_status`, `billing_write_enablements` grants, `platform_get_billing_write_enablement`
+- **Dependencies:** ZD-281
+- **Owner:** Engineering
+- **Review Trigger:** Any tenant-facing billing administration UI
+
+### ZD-287 — Emergency corrections: no temporary enablement; a scoped correction-only capability before live use (EC-1 to EC-6)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Financial operations
+- **Decision (approved principles):**
+  - EC-1: No general-purpose temporary billing enablement to make corrections in a disabled organization. Default-deny stays.
+  - EC-2: A future correction-only capability is scoped by organization, operation, record and expiry.
+  - EC-3: It requires Platform Admin approval and complete audit evidence (request, approval, the correction, expiry).
+  - EC-4: Corrections of sensitive live data need an additional approval unless an explicitly approved emergency exception exists.
+  - EC-5: The full feature is not built in P1G.
+  - EC-6: Before the first LIVE organization is enabled, this capability or a separately approved equivalent control must exist.
+- **Remaining implementation decisions:** approvers and two-person rule; maximum expiry; the exact operation list (void, unapply, refund correction, receipt reversal); how the authorization is presented to the tenant; the emergency-exception criteria.
+- **Status:** CONFIRMED — OWNER-APPROVED (principles); implementation PROVISIONAL
+- **Affected Product Areas:** Future correction-only capability; the live-enablement procedure
+- **Dependencies:** ZD-282, NP-LAUNCH-02
+- **Owner:** Owner / Engineering
+- **Review Trigger:** Planning of the first live enablement
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

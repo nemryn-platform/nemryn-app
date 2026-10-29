@@ -82,6 +82,9 @@ test("error messages explain the rule and never expose codes", () => {
   assert.match(b.billingErrorMessage("ZW006", "amount_exceeds_balance"), /more than the balance/);
   assert.match(b.billingErrorMessage("ZW006", "mixed_customers"), /same passenger/);
   assert.match(b.billingErrorMessage("ZW003"), /Reload/);
+  // NP-FIN-P1G: the write gate's refusal is explained, never shown as a state error or a raw code
+  assert.match(b.billingErrorMessage("ZW004", "billing_not_enabled"), /isn't enabled for this workspace/);
+  assert.match(b.billingErrorMessage("ZW004", "billing_not_enabled"), /nothing was saved/);
   for (const code of ["ZW001", "ZW002", "ZW003", "ZW004", "ZW006", undefined, "42501"]) {
     assert.doesNotMatch(b.billingErrorMessage(code), /ZW\d|SQL|exception/i);
   }

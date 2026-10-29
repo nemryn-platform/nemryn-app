@@ -15,8 +15,9 @@ export interface BillableTripRow {
   linkedTo: string;
 }
 
-/** Billing -> Ready to invoice (NP-BILL-P1): completed trips not yet on a draft or issued invoice. */
-export function BillableTripsTable({ rows }: { rows: BillableTripRow[] }) {
+/** Billing -> Ready to invoice (NP-BILL-P1): completed trips not yet on a draft or issued invoice. NP-FIN-P1G: no
+ * "Create invoice" action while the organization's financial writes are not enabled. */
+export function BillableTripsTable({ rows, canWrite = true }: { rows: BillableTripRow[]; canWrite?: boolean }) {
   const columns: DataTableColumn<BillableTripRow>[] = [
     {
       key: "passenger",
@@ -31,16 +32,20 @@ export function BillableTripsTable({ rows }: { rows: BillableTripRow[] }) {
     { key: "date", header: "Completed", render: (r) => r.date },
     { key: "route", header: "Route", render: (r) => <span className="line-clamp-2">{r.route}</span> },
     { key: "linked", header: "Requested by / facility", render: (r) => r.linkedTo },
-    {
-      key: "action",
-      header: "",
-      align: "right",
-      render: (r) => (
-        <LinkButton href={`/operations/billing/new?trip=${r.tripId}`} size="sm" variant="outline" data-testid="billing-create-invoice">
-          Create invoice
-        </LinkButton>
-      ),
-    },
+    ...(canWrite
+      ? [
+          {
+            key: "action",
+            header: "",
+            align: "right",
+            render: (r: BillableTripRow) => (
+              <LinkButton href={`/operations/billing/new?trip=${r.tripId}`} size="sm" variant="outline" data-testid="billing-create-invoice">
+                Create invoice
+              </LinkButton>
+            ),
+          } satisfies DataTableColumn<BillableTripRow>,
+        ]
+      : []),
   ];
   return <DataTable columns={columns} rows={rows} getRowId={(r) => r.tripId} />;
 }

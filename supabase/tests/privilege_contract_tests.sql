@@ -94,7 +94,11 @@ c_tables(tbl) as (values
   ('billing_refunds'),
   ('billing_refund_reversals'),
   ('billing_receipt_reversals'),
-  ('billing_assurance_events')
+  ('billing_assurance_events'),
+  -- NP-FIN-P1G financial-write gate: per-organization enablement and its append-only version history (class A: no
+  -- privilege for any role -- tenants read only billing_write_status, Platform Admins the platform_* RPCs; ZD-286)
+  ('billing_write_enablements'),
+  ('billing_write_enablement_history')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -546,7 +550,16 @@ c_fn(sig, roles) as (values
   ('billing_get_receipt(uuid,uuid)', 'u'),
   ('billing_list_open_invoices(uuid,uuid,text,uuid)', 'u'),
   ('billing_invoice_credit_sources(uuid,uuid)', 'u'),
-  ('billing_ledger_summary(uuid)', 'u')
+  ('billing_ledger_summary(uuid)', 'u'),
+  -- NP-FIN-P1G financial-write gate: gate trigger + helpers + enablement guard (owner only); platform-admin management
+  -- RPCs (authenticated; _require_platform_admin inside) and the read-only status RPC (authenticated; 'view')
+  ('_billing_write_enablement_guard()', ''),
+  ('_billing_write_enabled(uuid)', ''),
+  ('_billing_require_write_enabled(uuid)', ''),
+  ('_billing_write_gate()', ''),
+  ('platform_set_billing_write_enablement(uuid,text,text,text,text,integer)', 'u'),
+  ('platform_get_billing_write_enablement(uuid)', 'u'),
+  ('billing_write_status(uuid)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

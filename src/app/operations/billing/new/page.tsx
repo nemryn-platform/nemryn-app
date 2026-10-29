@@ -3,9 +3,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireOrganizationAdminAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getTripBillingStatus, listBillableTrips, listImportableQuotes } from "@/lib/billing/billing";
+import { getBillingWriteStatus, getTripBillingStatus, listBillableTrips, listImportableQuotes } from "@/lib/billing/billing";
 import { formatInstantDate, invoiceNumberLabel } from "@/lib/billing/billing-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { BillingWriteNotice } from "@/components/billing/BillingWriteNotice";
 import { NewInvoiceForm, type BillToOption } from "@/components/billing/NewInvoiceForm";
 import { AttentionState } from "@/components/ui/AttentionState";
 import { LinkButton } from "@/components/ui/LinkButton";
@@ -20,6 +21,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Billing -> Create invoice for a completed trip (NP-BILL-P1). Organization Admin only. Offers the same passenger's
  * other uninvoiced completed trips, bill-to choices that come from those trips (passenger, requester, facility) or a
  * typed name, and -- when Plus is readable -- a sent / accepted quote linked to the trip's request. Creates a DRAFT only.
+ * NP-FIN-P1G: no form while the organization's financial writes are not enabled.
  */
 export default async function NewInvoicePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const organization = await requireOrganizationAdminAccess(await getCurrentPathname("/operations/billing/new"));
@@ -41,6 +43,18 @@ export default async function NewInvoicePage({ searchParams }: { searchParams: P
       breadcrumb={[{ label: "Billing", href: "/operations/billing" }, { label: "Create invoice" }]}
     />
   );
+  const writeStatus = await getBillingWriteStatus(organization.organizationId);
+  if (!writeStatus.enabled) {
+    return (
+      <div className="flex flex-col gap-zw-lg">
+        {header}
+        <BillingWriteNotice status={writeStatus} />
+        <Link href={`/operations/trips/${tripId}`} className="text-text-link hover:underline">
+          Back to the trip
+        </Link>
+      </div>
+    );
+  }
   if (!anchor) {
     const status = await getTripBillingStatus(organization.organizationId, tripId);
     return (

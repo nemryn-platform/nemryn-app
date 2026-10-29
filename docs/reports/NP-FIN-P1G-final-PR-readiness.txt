@@ -1,0 +1,102 @@
+NP-FIN-P1G -- FINAL PR READINESS
+Date: 2026-10-29        Prepared for: owner commit authorization. Nothing committed, pushed or opened.
+
+======================================================================================================================
+1. DECISIONS RECORDED
+======================================================================================================================
+  docs/product/decision-register.md, section "NP-FIN-P1G — Financial-write gate":
+    ZD-281 table-level enforcement (OD-G1)           ZD-285 atomic rehearsed 3-migration release (OD-G5)
+    ZD-282 no enablement by migration (OD-G2)        ZD-286 tenants see enabled / disabled only (OD-G6)
+    ZD-283 draft-invoice org stays disabled (OD-G3)  ZD-287 emergency corrections, EC-1..EC-6 (principles approved;
+    ZD-284 separate stacked PR (OD-G4)                      implementation decisions listed as remaining)
+  Detail: NP-FIN-P1G-decision-lock.txt.
+
+======================================================================================================================
+2. CHANGES IN THIS FINAL ROUND
+======================================================================================================================
+  - ZD-286 implemented: no client privilege on the enablement tables; billing_write_status returns enabled / version /
+    set_at only; new platform_get_billing_write_enablement (Platform Admin only). Tests T1, V1, E2E D1b; contract and
+    EX-1 updated (14 -> 16 platform_* functions).
+  - ZD-285: generated atomic release package with preconditions, EXCLUSIVE write locks (closes the M1 zero-row race,
+    F-7), byte-identical M1 / M2 / M3, CLI-identical history rows, and postconditions. Rehearsed R0-R9.
+  - Rollback: the gate-only reversal is withdrawn. The new script is one guarded transaction removing P1G + FIN-P1
+    together.
+  - Generators, harness, fingerprint and log saved under docs/reports/NP-FIN-P1G-rehearsal/.
+  Exact file list: NP-FIN-P1G-final-review.txt §2.
+
+======================================================================================================================
+3. TEST RESULTS (final)
+======================================================================================================================
+  SQL: gate 21 / 21; BILL 67 / 67; ledger 70 / 70; privilege contract 0 / 29; platform_admin 58 / 58; Plus guards
+       170 / 85 / 76; 75-suite differential vs FIN-P1: only the new suite differs (0 regressions).
+  Concurrency: S1-S8 ALL PASS; K1-K12 + K5b ALL PASS (K12 disable vs payment, both orders).
+  App: unit 962 / 962; release 28 / 28; tsc 0; eslint 0 errors (113 baseline warnings); build PASS.
+  E2E: billing-gate 28 / 28; billing 50 / 50; ledger 44 / 44; handoff 35 / 35; legacy-api 5 / 5; QA2 strict 5 / 5;
+       Quotes strict 7 / 7. Earlier in P1G and unchanged since: getting-started 26, p1b 52, inquiries 74 + 5,
+       consents 49, pilot demo prepare / reset.
+  Verified specifically:
+    tenant-facing approval details not disclosed ................ T1, V1, D1b
+    disabled financial writes refused ............................ D1-D3, B1, E2E S2, R3f / R3g, R4e
+    synthetic billing works after authorized enablement .......... W0, gate-suite R1 (re-enable), rehearsal R7c / R7d, billing / ledger E2E
+    original FIN-P1 functionality preserved ...................... ledger 70, ledger E2E 44, K1-K11
+    invoice / receipt reads preserved ............................ D4, E2E D1-D7
+    no accidental enablement during migrations ................... G0, package postcondition, R3i
+    no new regressions ........................................... differential + E2E above
+
+======================================================================================================================
+4. MIGRATION ATOMICITY EVIDENCE (NP-FIN-P1G-atomic-release-rehearsal.txt)
+======================================================================================================================
+  Failing M3 -> schema fingerprint identical to before (R1). Zero-row gate still refuses (R2). Held-open package: no
+  intermediate state visible; old-app writes wait, then are refused by the gate (R3). History: the CLI reports "up to
+  date" and the fingerprint equals CLI-applied migrations (R4). Re-run refused (R5). Combined rollback returns the
+  exact pre-release fingerprint (R6) and is refused with ledger rows (R7) or a live record (R8). FIN-P1's own reversal
+  can't strip FIN-P1 under the gate (R9).
+  Transport: psql -f only. `supabase db query -f` refuses multi-statement files (R1b); the SQL Editor is not rehearsed.
+
+======================================================================================================================
+5. SECURITY REVIEW SUMMARY
+======================================================================================================================
+  No HIGH. F-7 (MEDIUM) mitigated only by the package -- release FIN-P1 only through it. F-1 and F-6 resolved.
+  F-9 (rollback time-of-check / time-of-use) and F-10 (rollback deadlock) RESOLVED. F-2..F-5 and F-8 informational.
+  Detail: NP-FIN-P1G-security-review.txt.
+
+======================================================================================================================
+6. REMAINING PRODUCTION BLOCKERS
+======================================================================================================================
+  B1 merge approvals (#44, P1G); B3 / B6 encrypted backup, custody, restore rehearsal; B5 Vercel confirmation;
+  B8 production psql transport and the migration window; B9 the ZD-283 identification read; B10 (live only):
+  NP-LAUNCH-02 GO + the ZD-287 correction-only capability.
+
+======================================================================================================================
+7. GIT WORKING TREE
+======================================================================================================================
+  Branch np-fin-p1g-billing-gate at 0ded235ba4e997c70132abf8e2c16d641481e190 (no new commits).
+  Tracked: 23 files modified, +455 / -49. P1G untracked: the 14 new files plus docs/reports/NP-FIN-P1G-rehearsal/ and
+  this report.
+  Also untracked but NOT P1G (exclude from the commit): tests/e2e/fixtures/, .tmp-qa/, gate-report.txt, and the older
+  reports / screenshots (447 untracked paths overall). Stage by explicit path, never `git add -A`.
+  PR #44: OPEN, head 0ded235, MERGEABLE -- unchanged.
+  Local `main` is stale (PR #41); origin/main = 85f2042.
+
+======================================================================================================================
+7a. ROLLBACK CONCURRENCY FIX (owner review, 2026-10-29)
+======================================================================================================================
+  The rollback checked before locking (time-of-check / time-of-use). Fixed in the generator
+  (docs/reports/NP-FIN-P1G-rehearsal/build_reversal.py) and regenerated: ACCESS EXCLUSIVE locks on all financial,
+  enablement and migration-history tables FIRST, then every check; live check extended to the history.
+  Rollback sha256 4df2569c1a3992bb713fccd8f9cf3958538caf0b34e16e315d684965c2713f75. Evidence S0-S8 (incl. the
+  reproduced loss with the pre-fix script and a deadlock found and fixed): NP-FIN-P1G-rollback-concurrency-fix.txt.
+  New files: docs/reports/NP-FIN-P1G-rollback-concurrency-fix.txt, docs/reports/NP-FIN-P1G-rehearsal/
+  rollback-concurrency.sh and rollback-concurrency-log.txt. The release package is unchanged.
+
+======================================================================================================================
+8. RECOMMENDATION
+======================================================================================================================
+  READY FOR COMMIT on owner authorization:
+    1. Stage exactly the P1G paths (final-review §2) and commit on np-fin-p1g-billing-gate.
+    2. Push as the nemryn account; open a PR with base np-fin-p1-ledger (stacked on #44). Do not enable auto-merge.
+    3. Wait for CI and review it (db-compat / gate-tests were not run against this branch yet; release-db-compat stays
+       report-only).
+  Do not merge either PR or touch production until B1 / B3 / B5 / B8 are cleared and the window is authorized.
+
+STATUS: P1G ROLLBACK CONCURRENCY REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

@@ -1,0 +1,112 @@
+NP-FIN-P1G -- ATOMIC THREE-MIGRATION RELEASE: PACKAGE AND REHEARSAL (ZD-285 / OD-G5)
+Date: 2026-10-29        Isolated stack only (supabase_db_NemrynS1Iso, fictional seed). NOT executed against production.
+
+======================================================================================================================
+1. RESULT
+======================================================================================================================
+  Atomic packaging is DEMONSTRATED for one transport: psql -f over a direct / session-mode connection. All 7
+  requirements are met (§4). No blocker.
+  One transport is RULED OUT: `supabase db query -f` (local, and by extension the CLI path the FIN-P1 reversal header
+  suggests for --linked). It sends the file as a prepared statement, and Postgres refuses multi-statement SQL
+  ("cannot insert multiple commands into a prepared statement"). It refused cleanly and changed nothing (R1b).
+  The Supabase SQL Editor / Management API path was not rehearsed and is not recommended.
+
+======================================================================================================================
+2. ARTIFACTS
+======================================================================================================================
+  docs/reports/NP-FIN-P1G-atomic-release-package.sql (GENERATED; sha256 8c194b8d7df8bc6c0e1ab19eef97251ad695b3520545f109449e66e348cdc0b0)
+    BEGIN; lock_timeout 15 s, statement_timeout 10 min
+    PRECONDITIONS: current_user postgres; target = Nemryn production (Pilot Simulation org) or the isolated fictional
+      seed; history table shape; head = 20261028100000; none of the 3 versions recorded; no FIN-P1 / P1G object
+    WRITE LOCKS: EXCLUSIVE on billing_invoice_counters, billing_invoices, billing_invoice_trips, billing_invoice_lines,
+      billing_payments (blocks writers until COMMIT; reads continue)
+    M1, M2, M3 byte-identical (verified by substring check), each followed by its CLI history row
+      M1 20261029100000 sha256 7a90b2712a553d889af4161da4134d0d15ada62dcfdd7c0eaffd129641ecbc77  85 statements
+      M2 20261029110000 sha256 88243e5d0973ed038201c1d62715b427091a51cc3d1bfa291f8e15a61f810f72  87 statements
+      M3 20261029120000 sha256 6715c0b6d0dcd0ece136d7411c3d2ca77b2ece3bcaeaf518881ec3f711f20259  38 statements
+    POSTCONDITIONS: head + exactly the 3 rows (name, statement count); billing_payments and all ledger / enablement
+      tables empty; 12 gate triggers; no client read on the enablement tables; anon cannot execute the new RPCs
+    COMMIT
+  docs/reports/NP-FIN-P1G-emergency-reversal.sql (GENERATED; sha256 4df2569c1a3992bb713fccd8f9cf3958538caf0b34e16e315d684965c2713f75)
+    The combined FIN-P1 + P1G rollback (§6), regenerated after the rollback concurrency fix (locks before checks).
+  docs/reports/NP-FIN-P1G-rehearsal/: the generators (build_package.py, build_reversal.py = source of truth for the
+    rollback), the harnesses (rehearse.sh, rollback-concurrency.sh), the schema fingerprint (fingerprint.sql) and the
+    logs (rehearsal-log.txt, rollback-concurrency-log.txt).
+  History rows are copied from the CLI-applied rows on the isolated stack, so they are exactly what
+  `supabase db push` (CLI 2.109.0) writes. Evidence: the schema fingerprint after the package equals the fingerprint
+  after CLI-applied migrations (51cf5698d7f37657e2b4f9b3a151d079), history statements included.
+
+======================================================================================================================
+3. FINDING THE PACKAGE CLOSES (also relevant to a plain `db push` of PR #44)
+======================================================================================================================
+  M1's zero-row gate (section 0) reads billing_payments without a write-blocking lock. billing_payments is only
+  retired near the end of M1 (section 13). An old-app payment that commits between those two points would leave
+  billing_payments non-empty after the release, violating ZD-268. The package takes EXCLUSIVE locks before M1 and
+  re-asserts zero payments at the end. M1 itself is unchanged.
+
+======================================================================================================================
+4. REHEARSAL (rehearse.sh; schema fingerprint = functions + comments, relations + ACLs, columns, triggers, policies,
+   constraints, types, migration history)
+======================================================================================================================
+  R0  baseline: 98 / 20261028100000 (production's head); F98 = c020587ada8bfef35477795b6239e9d7
+  R1  M3 deliberately failing (injected at the end of M3, after M1 / M2 / most of M3 ran): ERROR "REHEARSAL: injected
+      M3 failure"; head 98, fingerprint = F98, no FIN-P1 / P1G object .................................... PASS  (req 1, 4)
+  R1b same file through `supabase db query --local -f`: refused (prepared statement); fingerprint = F98  PASS  (transport ruled out)
+  R2  zero-row gate: a BILL-P1 payment present -> "billing_payments is not empty -- STOP"; fingerprint = F98;
+      payment untouched ................................................................................ PASS  (req 5)
+  R3  concurrency, package held open 25 s before COMMIT:
+        outside: head still 98, no new object visible, invoice read within 5 s ........................... PASS
+        an old-app payment (billing_record_payment) and a draft creation WAIT on the locks (2 sessions) .. PASS
+        package commits: 101 / 20261029120000 ............................................................ PASS
+        the two waiting writes then fail: ERROR billing_not_enabled (both) ................................ PASS
+        nothing slipped in (payments 0, receipts 0, invoices unchanged); no organization enabled ......... PASS  (req 2)
+  R4  after release: `supabase db push --dry-run` "Local database is up to date"; privilege contract (branch) 0 / 29;
+      12 gate triggers; a disabled receipt write -> billing_not_enabled ................................ PASS  (req 3, 6)
+  R5  package run again -> precondition refuses (head is 20261029120000); fingerprint unchanged ......... PASS
+  R6  combined rollback with an empty ledger -> COMMIT; 98 / 20261028100000; fingerprint = F98 exactly ... PASS
+  R7  package again (psql -f) -> COMMIT; fingerprint = first release; authorized synthetic enablement (fictional
+      Org A, Platform Admin) -> enabled; synthetic receipt recorded; rollback now refused "the FIN-P1 ledger holds
+      rows -- forward-fix only"; nothing changed ....................................................... PASS  (req 7)
+  R8  rollback refused while a LIVE record exists (ledger empty); nothing changed ........................ PASS  (req 7)
+  R9  FIN-P1's standalone reversal under the gate -> "cannot drop function _billing_ledger_append_only()";
+      the whole transaction rolled back; nothing changed ............................................... PASS
+  The isolated stack was restored to 101 / 20261029120000 afterwards.
+  RE-RUN after the rollback concurrency fix (same harness, the regenerated rollback): 28 checks PASS, 0 FAIL; R6
+  COMMIT with fingerprint = F98, R7e / R8 / R9 refusals unchanged. The rollback's boundary cases (in-flight receipt,
+  writes during the rollback, in-flight live enablement, historical live record, legacy payment, moved head, failure
+  after locking) are in NP-FIN-P1G-rollback-concurrency-fix.txt (S0-S8).
+  Three earlier harness runs were invalid because of harness bugs (a shell function shadowing `head`, variants built
+  at the wrong state, a too-short idempotency key, a JSON parse). They were fixed; the run above is complete and clean.
+
+======================================================================================================================
+5. PRODUCTION PROCEDURE (for the authorized window; NOT executed)
+======================================================================================================================
+  1. Re-run docs/reports/NP-FIN-P1-readonly-preflight.sql (G1-G6) immediately before.
+  2. psql "<direct or session-mode connection, user postgres>" -X -v ON_ERROR_STOP=1 \
+       -f docs/reports/NP-FIN-P1G-atomic-release-package.sql
+     Expect COMMIT. Any ERROR = nothing changed; STOP and report.
+  3. Verify, read-only: `supabase migration list` shows the 3 versions local = remote; privilege contract with this
+     branch's file 0 / 29; 12 gate triggers; both enablement tables empty.
+  Prerequisites: the production database password / connection string (owner-held), a session that is not the
+  transaction pooler, and the encrypted backup of the FIN-P1 release plan.
+
+======================================================================================================================
+6. ROLLBACK REVIEW (section 4 of the authorization)
+======================================================================================================================
+  Removing the gate while leaving FIN-P1 writable is no longer possible with the prepared scripts:
+    - the gate-only reversal is withdrawn;
+    - NP-FIN-P1G-emergency-reversal.sql removes P1G and FIN-P1 together in ONE transaction. Order (after the
+      rollback concurrency fix): schema-only structure check -> ACCESS EXCLUSIVE locks on the 12 financial tables,
+      both enablement tables and supabase_migrations.schema_migrations -> every data / head check -> drops;
+    - NP-FIN-P1-emergency-reversal.sql alone fails under the gate (R9).
+  Exact safe conditions for the combined rollback (1-3 enforced by its guard):
+    1. the FIN-P1 ledger is empty;  2. no LIVE enablement record, current or historical;  3. billing_payments empty;
+       (plus migration head = 20261029120000) -- all evaluated UNDER the locks;
+    4. explicit owner authorization;  5. the app rolled back to the pre-release build in the same window;
+    6. the owner accepts the end state: NP-BILL-P1 exactly as before the release, with NO financial-write gate
+       (invoice writes open to every organization's Organization Admins, i.e. production's state today).
+  Incident response is DISABLE (one Platform Admin RPC call), never gate removal.
+  Note: the header of NP-FIN-P1-emergency-reversal.sql (PR #44, not modified per ZD-284) suggests
+  `supabase db query --linked -f`. That transport is unverified for multi-statement files (R1b); use psql.
+
+STATUS: P1G ROLLBACK CONCURRENCY REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

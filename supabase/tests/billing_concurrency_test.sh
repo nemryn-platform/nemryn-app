@@ -59,6 +59,8 @@ delete from public.billing_invoice_lines where organization_id='$ORG';
 delete from public.billing_invoice_trips where organization_id='$ORG';
 delete from public.billing_invoices where organization_id='$ORG';
 delete from public.billing_invoice_counters where organization_id='$ORG';
+delete from public.billing_write_enablement_history where organization_id='$ORG';
+delete from public.billing_write_enablements where organization_id='$ORG';
 set session_replication_role = origin;
 delete from public.audit_events where organization_id='$ORG';
 delete from public.trips where organization_id='$ORG';
@@ -80,6 +82,8 @@ insert into public.passengers (organization_id, display_name) values ('$ORG', 'F
 SQL
 )
 [[ "$PAS" =~ $UUID_RE ]] || refuse "fixture passenger was not created"
+# NP-FIN-P1G: financial writes are deny-by-default -- enable the throwaway FICTIONAL organization (synthetic)
+$PSQL -c "insert into public.billing_write_enablements (organization_id, status, data_class, reason, version) values ('$ORG', 'enabled', 'synthetic', 'NP-FIN-P1G concurrency fixture (fictional)', 1)" >/dev/null
 trip() { $PSQL -c "insert into public.trips (organization_id, passenger_id, state, pickup_description, destination_description, completed_at) values ('$ORG', '$PAS', 'completed', 'Fictional pickup', 'Fictional destination', now()) returning id" | head -1; }
 TRIP_STATES0=$($PSQL -c "select count(*) from public.trips where organization_id='$ORG'")
 FAIL=0

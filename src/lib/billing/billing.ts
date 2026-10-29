@@ -42,6 +42,23 @@ export async function getBillingSummary(organizationId: string): Promise<Billing
   };
 }
 
+/**
+ * NP-FIN-P1G financial-write gate. Deny-by-default: an organization can create or change financial records only after
+ * the platform enables it (synthetic or launch-approved live). The database enforces it on every financial table; the
+ * app only uses this to hide write actions and explain why. A failed read is treated as "not enabled" (fail closed).
+ */
+export interface BillingWriteStatus {
+  enabled: boolean;
+  /** false when the status couldn't be read; the UI then says actions are unavailable rather than "not enabled". */
+  known: boolean;
+}
+export const getBillingWriteStatus = cache(async (organizationId: string): Promise<BillingWriteStatus> => {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_write_status", { p_organization_id: organizationId });
+  if (error) return { enabled: false, known: false };
+  return { enabled: data?.[0]?.enabled === true, known: true };
+});
+
 export interface BillableTrip {
   tripId: string;
   passengerId: string;

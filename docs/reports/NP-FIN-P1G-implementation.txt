@@ -1,0 +1,168 @@
+NP-FIN-P1G -- TECHNICAL FINANCIAL-WRITE GATE -- IMPLEMENTATION
+Date: 2026-10-29        Branch: np-fin-p1g-billing-gate (based on 0ded235 = PR #44 head; PR #44 untouched)
+Environment: isolated stack only (NemrynS1Iso, 127.0.0.1:54362, app on :3100), fictional seed data only.
+Nothing committed, pushed, merged, deployed or applied to production. No organization enabled outside the isolated
+stack. Zenward Mobility is not enabled anywhere.
+
+======================================================================================================================
+1. WHAT WAS BUILT
+======================================================================================================================
+One migration, supabase/migrations/20261029120000_core_billing_write_gate.sql (281 lines). It requires the two FIN-P1
+migrations and changes no existing function, signature, table or policy.
+
+1.1 Enablement state (deny by default)
+  public.billing_write_enablements -- one row per organization
+    status        enabled | disabled
+    data_class    synthetic | live
+    approval_ref  required for live + enabled: must name NP-LAUNCH-02 (12-200 chars) -- CHECK constraint, so even a
+                  direct owner insert cannot create a live enablement without it
+    reason        3-500 chars; version >= 1; set_by; set_at
+    NO ROW = DISABLED. The migration inserts no rows.
+  public.billing_write_enablement_history -- append-only, one row per version, written by trigger (so even a direct
+    owner change is recorded); unique (organization_id, version).
+  Guard trigger: rows are never deleted (ZW004 enablement_rows_are_kept); every change must be exactly version + 1
+    (ZW003); a new row must be version 1; TRUNCATE refused on both tables; history UPDATE / DELETE refused.
+  RLS on, and NO client privilege on either table (ZD-286, final refinements): tenants read only billing_write_status;
+    reasons, approval references, data class, actor and history are Platform-Admin-only.
+
+1.2 The gate
+  _billing_require_write_enabled(org): reads the enablement row FOR SHARE; raises ZW004 billing_not_enabled unless it
+    says enabled. FOR SHARE serializes with the platform RPC's FOR UPDATE: a disable committed first is always seen,
+    and a disable waits for in-flight financial transactions.
+  _billing_write_gate(): BEFORE INSERT / UPDATE / DELETE row trigger, named a_billing_write_gate so it fires before
+    every other row trigger, on ALL 12 financial tables:
+      billing_invoice_counters, billing_invoices, billing_invoice_trips, billing_invoice_lines, billing_payments,
+      billing_receipt_counters, billing_receipts, billing_allocations, billing_refunds, billing_refund_reversals,
+      billing_receipt_reversals, billing_assurance_events
+    It checks NEW.organization_id (and OLD.organization_id on DELETE, or on an UPDATE that changes it).
+  Because the gate sits on the tables rather than in each RPC, it covers every write path at once:
+    - the 7 NP-BILL-P1 RPCs and the 7 FIN-P1 RPCs;
+    - the compatibility wrappers billing_record_payment / billing_reverse_payment;
+    - nested SECURITY DEFINER calls (e.g. _billing_record_receipt_core, _billing_apply_allocations);
+    - older application builds (main and PR #44) calling the unchanged RPC signatures;
+    - direct table writes, including by the table owner. Only a superuser in session_replication_role = replica
+      bypasses triggers (the existing test-cleanup / demo-reset path).
+  Reads are not gated: list, detail, ledger, summaries, print pages and billing_trip_status keep working.
+
+1.3 Platform management and status
+  platform_set_billing_write_enablement(org, status, data_class, approval_ref, reason, expected_version)
+    - _require_platform_admin(): Platform Admins only (ZW001 / ZW002). Organization Admins cannot enable their own
+      organization or any other.
+    - Validates status / class / reason; live + enabled without an NP-LAUNCH-02 reference ->
+      ZW006 live_requires_launch_approval.
+    - Optimistic version: expected 0 / null for a new row, the current version otherwise (ZW003 when stale). Repeating
+      the same state is a no-op (changed = false, no new version, no audit row).
+    - One audit_events row per change: action platform_billing_write_enablement_changed, before / after = status,
+      data_class, version, has_approval_ref. The free-text reason is NOT copied into the audit row.
+  billing_write_status(org) -> (enabled, version, set_at): authorized with the existing 'view' permission; used by
+    the UI. Never returns the reason, approval_ref or data class (ZD-286).
+  platform_get_billing_write_enablement(org): Platform Admin only; the full row incl. reason and approval_ref.
+
+1.4 Design change from the approved proposal (owner review requested)
+  The gate proposal (NP-FIN-P1-release-gate-resolution.txt §4.7) said "re-define the 14 write RPCs with the check
+  (CREATE OR REPLACE, same signatures)" plus a structural test that every write function calls the helper.
+  Implemented instead: one table-level trigger on every financial table. Reasons:
+    - zero RPC bodies re-defined: PR #44's reviewed function bodies stay byte-identical, so no regression surface;
+    - it also covers direct table writes, nested definer calls and any FUTURE billing RPC with no extra code;
+    - the structural tests are stronger: every public.billing_* table must carry the gate trigger (B2), and every
+      table any billing function writes must be gated, a gate table or audit_events (B3). Both fail if a future
+      migration adds an ungated financial table.
+  Cost: one FOR SHARE lookup per financial row written (a primary-key read on a tiny table).
+
+1.5 Application (read-only UX when disabled)
+  - src/lib/billing/billing.ts: getBillingWriteStatus(org), request-cached; fails closed (a read error = not
+    enabled, shown as "actions are unavailable right now" rather than "not enabled").
+  - src/components/billing/BillingWriteNotice.tsx: "Billing isn't enabled for this workspace yet" (info), or the
+    unknown-state warning.
+  - Hidden while disabled:
+      Billing page        "Record payment received"; "Create invoice" in Ready to invoice
+      Invoice page        record payment, apply credit, void, reverse, unapply, discard. A draft shows its saved
+                          bill-to and charges read-only instead of the editor and Issue panel. Print stays.
+      Payment page        apply, refund, reverse, refund correction, add evidence. Print stays.
+      Create invoice / Record payment received URLs   notice + back link; no form
+      Trip Detail panel   "Not invoiced yet. Billing isn't enabled for this workspace yet." and no Create invoice
+  - billing-core.ts: billing_not_enabled -> "Billing isn't enabled for this workspace yet, so nothing was saved.
+    Invoices and payments can still be viewed." Covers a tab opened before a disable (proven in E2E S2).
+  - The UI is convenience only; the database refuses regardless (D3, B1, S2).
+
+1.6 Tests and fixtures changed or added
+  New
+    supabase/tests/billing_write_gate_tests.sql (20 tests)
+    tests/e2e/billing/billing-gate.e2e.mjs (27 checks: disabled-tenant UI, stale tab, isolation, axe)
+    tests/e2e/billing/_gate.mjs (shared fixture SQL)
+    K12 in supabase/tests/billing_ledger_concurrency_test.sh
+  Fixture enablement only (no assertion weakened)
+    billing_tests.sql and billing_ledger_tests.sql enable fictional Org A / B through the platform RPC as the
+    fictional platform admin (d1); both concurrency scripts enable their throwaway organization; billing / ledger /
+    handoff E2E enable through the platform RPC and remove the rows in their replica cleanup.
+  Catalogue updates
+    privilege_contract_tests.sql: +2 tables, +1 table grant, +6 functions.
+    platform_admin_foundation_tests.sql EX-1: platform_* function count 14 -> 15 (the new RPC is authenticated-only,
+    which the same test asserts).
+    database.types.ts regenerated (additions only).
+  Demo (tests/e2e/demo/pilot-demo.mjs): prepare enables fictional Org A as synthetic with a "DEMO ..." reason only
+    when no row exists; reset removes only that demo-created row; status prints the state.
+
+1.7 Prepared, not executed (final refinements)
+  docs/reports/NP-FIN-P1G-atomic-release-package.sql: M1 + M2 + M3 in one transaction (ZD-285).
+  docs/reports/NP-FIN-P1G-emergency-reversal.sql: ONE guarded transaction that removes P1G and FIN-P1 together
+    (empty ledger, no live record, billing_payments empty). There is no gate-only removal.
+  Both are generated, and rehearsed in NP-FIN-P1G-atomic-release-rehearsal.txt.
+
+======================================================================================================================
+2. REFINEMENT A -- EMERGENCY CORRECTION PROCEDURE (DOCUMENTED, NOT IMPLEMENTED)
+   SUPERSEDED IN PART by ZD-287 (final refinements): §2.1's temporary-enablement window is NOT adopted (EC-1). §2.2 is
+   the approved direction (scoped by organization, operation, record and expiry), to be built before the first live
+   enablement (EC-6). See NP-FIN-P1G-decision-lock.txt.
+======================================================================================================================
+Problem: the gate refuses every financial write, corrections included (unapply, refund correction, receipt reversal,
+void). A disabled organization that holds a wrong record can't be corrected through the product.
+
+2.1 Procedure possible with what exists today (no new code)
+  1. Request: the Organization Admin reports the record by number only (e.g. INV-000123 / RCPT-000045). No customer
+     details over email or chat.
+  2. Owner approval: record ticket id, organization, record numbers, the correction (one of: unapply, reverse refund,
+     reverse receipt, void), and the time window.
+  3. Platform Admin opens the window: platform_set_billing_write_enablement(org, 'enabled', <current class>,
+     <current approval_ref>, 'EMERGENCY CORRECTION <ticket>: <records>', <current version>).
+  4. The Organization Admin makes ONLY the approved correction through the normal UI. Every correction is already an
+     append-only, reasoned, audited entry; no record is edited or deleted.
+  5. Platform Admin closes the window immediately: disable with the new expected version.
+  6. Verify: history shows exactly enable -> disable; audit_events shows only the approved actions between those
+     two versions.
+  Limitation: during the window the organization can make ANY financial write, not only the approved correction.
+  Steps 5 and 6 detect extra writes; they do not prevent them. The procedure never has platform staff make the
+  correction inside the tenant (no impersonation path exists, and none is proposed).
+
+2.2 Narrower option for later (needs code; NOT built)
+  A third status, 'correction_only': the four correction RPCs set a transaction-local flag before writing, and the
+  gate allows a write under correction_only only when that flag is set. Creating invoices, receipts, payments or
+  refunds stays refused. Estimate: one migration, the gate function plus 4 RPC preambles, about 10 SQL tests.
+
+2.3 Owner decisions needed for refinement A
+  EC-1 Adopt 2.1 as the interim procedure, or forbid corrections on disabled organizations until 2.2 exists.
+  EC-2 Who may approve a window (owner only?) and whether a second person must confirm (two-person rule).
+  EC-3 Maximum window length (proposal: 30 minutes, closed by the same Platform Admin, same day).
+  EC-4 Whether a LIVE organization suspended under NP-LAUNCH-02 may be corrected at all, and under which reference.
+  EC-5 Whether to build 2.2 before the first live enablement.
+  EC-6 Records to keep: ticket, approval, the two versions, and the audit ids of the corrections.
+
+======================================================================================================================
+3. OWNER DECISIONS FOR RELEASE -- LOCKED 2026-10-29 as ZD-281..ZD-287 (NP-FIN-P1G-decision-lock.txt); list kept
+   for history
+======================================================================================================================
+  OD-G1 Accept the design change in §1.4 (table triggers, not RPC re-definitions).
+  OD-G2 Production enablement at release: proposal = none at migration time; afterwards, separately authorized,
+        "Nemryn Pilot Simulation" as synthetic only. Zenward stays disabled until the NP-LAUNCH-02 GO.
+  OD-G3 The one existing production draft invoice becomes read-only for its organization (not lost). Decide whether
+        its organization is enabled as synthetic (only if it is the simulation tenant) or stays disabled.
+        Identifying the organization needs an authorized read of the organization id only.
+  OD-G4 Packaging: a stacked PR on np-fin-p1-ledger (recommended), merged in the same window as PR #44, or fold P1G
+        into PR #44 before merging.
+  OD-G5 Apply the 3 migrations in one transaction (recommended), or accept the gap between FIN-P1 and P1G that a
+        normal multi-file db push leaves.
+  OD-G6 The Organization Admins of an organization can read its enablement reason and approval_ref (RLS 'view').
+        Accept, or restrict to status only. Recommendation: accept, and keep reasons free of sensitive text.
+  EC-1..EC-6 (§2.3).
+
+STATUS: FIN-P1G FINAL REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

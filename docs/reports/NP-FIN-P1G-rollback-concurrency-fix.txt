@@ -1,0 +1,74 @@
+NP-FIN-P1G -- ROLLBACK CONCURRENCY FIX
+Date: 2026-10-29        Isolated stack only. Production not accessed. Nothing committed.
+
+======================================================================================================================
+1. DEFECT (confirmed by reproduction)
+======================================================================================================================
+  The previous docs/reports/NP-FIN-P1G-emergency-reversal.sql ran its safety checks (empty ledger, no live record,
+  no legacy payment, migration head) BEFORE taking its EXCLUSIVE locks.
+  Reproduced with the pre-fix script (rollback-concurrency.sh S0, S4c):
+    S0  a receipt in flight when the rollback started: the check did not see it (uncommitted), the lock waited, the
+        receipt committed, and the rollback then dropped billing_receipts -- a COMMITTED FINANCIAL RECORD WAS LOST.
+    S4c a LIVE enablement in flight: same sequence -- the live record was dropped with the table.
+  A second defect appeared when testing the fix: with EXCLUSIVE locks, the later DROP statements must upgrade to
+  ACCESS EXCLUSIVE. A writer that was already waiting on the rollback while holding a read lock produced a DEADLOCK
+  (first S2 run). Postgres aborted the rollback -- safe, nothing changed -- but under concurrent use it could not
+  complete.
+
+======================================================================================================================
+2. EXACT CHANGES
+======================================================================================================================
+  Source of truth: docs/reports/NP-FIN-P1G-rehearsal/build_reversal.py (generator). Regenerated:
+    docs/reports/NP-FIN-P1G-emergency-reversal.sql   sha256 4df2569c1a3992bb713fccd8f9cf3958538caf0b34e16e315d684965c2713f75
+  New statement order (one transaction; lock_timeout 15 s):
+    0. STRUCTURE  schema-only check that the FIN-P1 / P1G tables exist (no data read)
+    1. LOCKS      ACCESS EXCLUSIVE, taken once, on all 12 financial tables, billing_write_enablements,
+                  billing_write_enablement_history and supabase_migrations.schema_migrations
+                  (previously EXCLUSIVE on 13 tables, after the checks; the history table and the migration history
+                  were not locked)
+    2. GUARD      under the locks: ledger empty; no LIVE record in the current rows OR the history (stricter: a
+                  past live enablement now also blocks); billing_payments empty; head = 20261029120000
+    3. P1G removal, FIN-P1 restoration (verbatim NP-FIN-P1-emergency-reversal.sql §1-3, sha256 53de4f4c…), history
+       delete of all three versions, POSTCONDITIONS, COMMIT
+  Unchanged: atomicity (one transaction, fail closed), the empty-ledger and live-data refusals (live made stricter),
+  FIN-P1 and P1G removed together -- there is no gate-only path.
+  Generator flags for rehearsal only: --hold-after-guard N, --inject-failure, --out (never in the committed file;
+  verified: the committed script contains no REHEARSAL marker).
+  New harness: docs/reports/NP-FIN-P1G-rehearsal/rollback-concurrency.sh; log rollback-concurrency-log.txt.
+  Trade-off: during the few seconds of a rollback, billing READS also wait (ACCESS EXCLUSIVE). It is an owner-run
+  maintenance operation, done with the app rolled back.
+  The release package is NOT changed: its only data check (M1's zero-row gate) already runs after its locks, and
+  every DDL statement in M1-M3 on the BILL-P1 tables needs at most SHARE ROW EXCLUSIVE, which its EXCLUSIVE locks
+  already cover -- no upgrade, no deadlock (rehearsal R3 ran under concurrent writes).
+
+======================================================================================================================
+3. TEST EVIDENCE (rollback-concurrency.sh; every scenario from a fresh reset at 101 / 20261029120000;
+   schema fingerprint F101 = 51cf5698d7f37657e2b4f9b3a151d079, pre-release F98 = c020587ada8bfef35477795b6239e9d7)
+======================================================================================================================
+  S1 receipt committed immediately before lock acquisition: the rollback WAITS for it (pg_stat_activity), then
+     refuses "the FIN-P1 ledger holds rows"; receipt kept; schema F101; head 101 ....................... PASS
+  S2 receipt AND enablement change attempted while the rollback holds its locks: both WAIT; the rollback COMMITs;
+     both then fail ("could not open relation" -- their tables were dropped), so nothing is recorded; head 98, schema
+     F98, the BILL-P1 draft invoice preserved ........................................................... PASS
+  S3 the same, but the rollback fails after locking (injected): both waiting writes then commit normally (receipt 1,
+     2 enablement rows); schema F101; head 101 ........................................................... PASS
+  S4 LIVE enablement in flight when the rollback starts: the rollback WAITS, then refuses (live record); live row
+     kept; schema F101 ................................................................................... PASS
+  S5 a historical LIVE record (current row synthetic): refused; schema + data unchanged ................... PASS
+  S6 a legacy billing_payments row (owner bypass): refused "billing_payments is not empty"; unchanged ...... PASS
+  S7 a later migration version recorded: refused "migration head is not 20261029120000"; unchanged ......... PASS
+  S8 success path (empty ledger, synthetic enablement, a BILL-P1 draft): COMMIT; head 98; schema F98; draft kept PASS
+  Every failure path: schema fingerprint, data fingerprint (counts of invoices, receipts, allocations, refunds,
+  payments, enablements, history, migration history, audit_events) and migration history unchanged.
+  No committed financial record can be lost: the only data the rollback drops is in the FIN-P1 ledger and P1G tables,
+  and they are proven empty under locks that stop any new row. BILL-P1 invoice rows are kept (S2, S8).
+  The privilege contract after the run: 0 / 29.
+  The main atomic-release rehearsal was re-run with the new rollback: see NP-FIN-P1G-atomic-release-rehearsal.txt.
+
+======================================================================================================================
+4. READINESS
+======================================================================================================================
+  The reported time-of-check / time-of-use defect is fixed and proven; the deadlock found while testing is fixed.
+  P1G is ready for owner commit authorization (file list: NP-FIN-P1G-final-PR-readiness.txt).
+
+STATUS: P1G ROLLBACK CONCURRENCY REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION
