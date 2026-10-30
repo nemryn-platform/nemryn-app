@@ -3842,6 +3842,10 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
   - ~~Vercel Preview deployments must point at a separate NON-PRODUCTION Supabase project that holds fictional data only.~~ (now optional)
   - No Preview deployment may be used to read or test production data. (retained)
   - Until Preview is verified to be isolated, any Preview that points at production is a release BLOCKER for the FIN-P1 / P1G production merge. (retained)
+- **Verification (2026-10-30) — K1 CONDITIONAL PASS:**
+  - Owner-verified in Vercel: Production tracks `main`; Preview tracks the other branches; Ignored Build Step is Automatic; the Preview project variables and the shared variables are EMPTY; no integrations are installed.
+  - Repository: no hardcoded, inherited or fallback production connection; a build with no Supabase variables succeeds and fails closed at runtime.
+  - Condition: Preview deployments built before the Preview variables were removed may still embed earlier production variables. That cannot be ruled out from available metadata; they are behind Vercel Authentication. Clear it by a spot-check or a Preview-only retirement before the production migration window (`docs/reports/NP-FIN-P1-P1G-preview-environment-audit.txt` §5).
 - **Not authorized by this entry:** creating a Preview database; changing Vercel environment variables, integrations or deployment settings. Each needs separate authorization.
 - **Status:** CONFIRMED — OWNER-APPROVED (original: D3 / P-1, 2026-10-29; revision 1: owner-approved 2026-10-30)
 - **Affected Product Areas:** Vercel Preview environment, Supabase projects
