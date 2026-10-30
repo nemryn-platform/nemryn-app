@@ -3828,20 +3828,26 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
 - **Owner:** Owner
 - **Review Trigger:** Any change to the combined release PR before its merge into `main`
 
-### ZD-289 — Preview deployments use a separate non-production Supabase project (P-1)
+### ZD-289 — Preview deployments are verifiably isolated from production Supabase (P-1, revised 2026-10-30)
 
-- **Date:** 2026-10-29
+- **Date:** 2026-10-29 (original); revised 2026-10-30
 - **Category:** Security / Privacy / Release
-- **Decision:**
-  - Vercel Preview deployments must point at a separate NON-PRODUCTION Supabase project that holds fictional data only.
+- **Decision (current, revision 1 — 2026-10-30):**
+  - Vercel Preview deployments must be VERIFIABLY ISOLATED from the production Supabase project: no effective production connection through environment variables (project-level, shared / team-level, or integration-synced), hardcoded configuration, server-side credentials, or deployment configuration.
+  - A separate cloud Preview database is OPTIONAL, not mandatory. Preview may run WITHOUT any database connection. Development and all SQL, RLS, concurrency and end-to-end testing continue on the isolated local Supabase environments.
+  - A dedicated non-production Preview database (fictional data only) may be introduced later, when cloud-based testing becomes necessary.
   - No Preview deployment may be used to read or test production data.
-  - Until Preview is verified to be isolated, any Preview that points at production is a release BLOCKER for the FIN-P1 / P1G production merge.
-- **Not authorized by this entry:** provisioning the non-production project, or changing Vercel environment variables or deployment settings. Each needs separate authorization.
-- **Status:** CONFIRMED — OWNER-APPROVED (D3 / P-1, 2026-10-29)
+  - Until Preview isolation is verified, a Preview with an effective production connection is a release BLOCKER for the FIN-P1 / P1G production merge (K1).
+- **Original decision (2026-10-29, superseded by revision 1, kept for history):**
+  - ~~Vercel Preview deployments must point at a separate NON-PRODUCTION Supabase project that holds fictional data only.~~ (now optional)
+  - No Preview deployment may be used to read or test production data. (retained)
+  - Until Preview is verified to be isolated, any Preview that points at production is a release BLOCKER for the FIN-P1 / P1G production merge. (retained)
+- **Not authorized by this entry:** creating a Preview database; changing Vercel environment variables, integrations or deployment settings. Each needs separate authorization.
+- **Status:** CONFIRMED — OWNER-APPROVED (original: D3 / P-1, 2026-10-29; revision 1: owner-approved 2026-10-30)
 - **Affected Product Areas:** Vercel Preview environment, Supabase projects
 - **Dependencies:** ZD-280, ZD-288
 - **Owner:** Owner
-- **Review Trigger:** Any change to Vercel environment variables or Supabase projects
+- **Review Trigger:** Any change to Vercel environment variables, integrations or Supabase projects; the first need for cloud-based Preview testing
 
 ### ZD-290 — Production backup custody policy v1 (encrypted only; owner-controlled; escrowed keys)
 
