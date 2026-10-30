@@ -3871,7 +3871,13 @@ Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-i
 - **Affected Product Areas:** Production backups, release procedures
 - **Dependencies:** NP-LAUNCH-03A
 - **Owner:** Owner
-- **Review Trigger:** Monthly custody review; any incident; counsel advice (Q-C6)
+- **Recovery context (owner-confirmed 2026-10-30, K2 L2 / L3):**
+  - The production project is on the Supabase Free plan, with NO managed platform database backups and NO point-in-time recovery (PITR).
+  - Production Storage has no buckets: no Storage-object backup is required for the FIN-P1 / P1G release.
+  - The independently verified encrypted logical export plus its encrypted off-machine copy and escrowed key are therefore MANDATORY release safeguards, not a backstop.
+  - A logical export is a single point-in-time copy taken before the release. It is NOT equivalent to PITR: changes after the export are not recoverable from it.
+  - No plan upgrade is decided or implied.
+- **Review Trigger:** Monthly custody review; any incident; counsel advice (Q-C6); any change of the Supabase plan or of Storage use
 
 ### ZD-291 — Zenward Mobility's draft invoice becomes read-only at the FIN-P1 / P1G release (Z-1)
 
