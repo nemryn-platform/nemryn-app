@@ -32,7 +32,7 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
   } catch {
     business = null;
   }
-  const payments = inv.payments.filter((p) => p.entryKind === "payment");
+  const payments = inv.payments;
 
   return (
     <main className="mx-auto max-w-[800px] bg-white px-6 py-8 text-black md:my-zw-xl md:rounded-lg md:border md:border-border-subtle md:px-zw-xl md:shadow-panel print:my-0 print:max-w-none print:rounded-none print:border-0 print:px-0 print:py-0 print:shadow-none" data-testid="invoice-print" data-status={inv.status}>
@@ -131,8 +131,8 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
           <ul className="text-sm">
             {payments.map((p) => (
               <li key={p.id}>
-                {formatIsoDate(p.receivedOn)} · {paymentMethodLabel(p.method)} · {formatCents(p.amountCents)} · receipt {receiptNumberLabel(inv.invoiceNumber, p.sequence ?? 0)}
-                {p.reversedBy ? ` · REVERSED (${p.reversedBy.reason ?? "corrected"}) — not counted` : ""}
+                {formatIsoDate(p.receivedOn)} · {paymentMethodLabel(p.method)} · {formatCents(p.amountCents)} · receipt {receiptNumberLabel(p.receiptNumber)}
+                {p.receiptReversed ? ` · REVERSED (${p.receiptReversalReason ?? "corrected"}) — not counted` : p.unapplied ? ` · REMOVED from this invoice (${p.unapplyReason ?? "corrected"}) — not counted` : ""}
               </li>
             ))}
           </ul>

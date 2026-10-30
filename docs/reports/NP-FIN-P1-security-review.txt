@@ -1,0 +1,130 @@
+NEMRYN — NP-FIN-P1 SECURITY REVIEW — payment ledger re-foundation
+Date: 2026-10-29. Branch np-fin-p1-ledger (uncommitted). Isolated stack, synthetic data only.
+Reviewer: the implementing engineer (self-review against docs/reports/NP-FIN-P1-security-and-test-plan.md). An independent
+review is recommended at PR time.
+
+======================================================================================================================
+1. REQUIREMENT -> CONTROL -> EVIDENCE
+======================================================================================================================
+Deny-by-default RLS
+  Control:
+    - RLS enabled on all 7 new tables.
+    - Only SELECT is granted to authenticated, through the policy billing_can(organization_id, 'view').
+    - The counter table is revoked from every client role.
+    - anon gets nothing.
+  Evidence:
+    - ledger SQL A1, A5, X4.
+    - Privilege contract: 0 violations of 29 checks with every new object listed explicitly.
+Organization isolation in the database
+  Control:
+    - Composite (id, organization_id) FKs on receipt, allocation, invoice, refund, reversal and event links.
+    - An explicit cross_organization row-guard check.
+    - RPCs always filter by p_organization_id and re-authorize.
+  Evidence:
+    - X1 (RPC ZW002), I11 (owner bypass refused + composite FKs present), X2, X3, X5.
+    - E2E E8d / E8e (Org B cannot open an Org A payment, receipt or list).
+No cross-tenant allocation or refund
+  Evidence: X1, X2, I11, concurrency invariants.
+No unauthorized reads or writes
+  Control:
+    - _billing_authorize goes through the permission catalogue (ZD-272).
+    - SENSITIVE actions are Organization Admin only: void, unapply, reverse, refund, refund_reverse,
+      cross_payer_allocate.
+    - Internal _billing_* functions are revoked from every client role.
+  Evidence:
+    - A2 / A3 / A4 / A6 / A7 / P1.
+    - E2E E8a-c (dispatcher and driver redirected, no data on payment / print / record pages).
+No duplicate receipts from retries
+  Control:
+    - An idempotency key per receipt, allocation request, unapply, refund and reversal.
+    - An advisory lock on the key.
+    - Replay compares the money facts and the allocation set.
+  Evidence: D1, D4, R3, concurrency K3 (same key in parallel -> one receipt), BILL S5.
+No over-allocation, refund above refundable, or concurrent double-spend
+  Control:
+    - Checks in the RPC.
+    - BEFORE INSERT guards that lock receipt then invoice and re-read committed state.
+    - DEFERRED invariants at commit.
+    - A fixed lock order.
+  Evidence:
+    - I1, I2, I9, R1.
+    - Concurrency K1, K2, K4 (both orders), K7, K10 (no deadlock), INV.
+Simultaneous invoice void and allocation (refinement B)
+  Control: void locks the invoice; allocation locks receipt then invoice; the deferred invariant on billing_invoices
+    status changes.
+  Evidence:
+    - K5, both orders through the RPCs: exactly one wins.
+    - K5b, BYPASS, both orders, direct owner INSERT vs direct owner UPDATE without any RPC: the database kept the
+      invariant. In insert-first, the owner's void waited for the lock and was refused at COMMIT by the deferred
+      check ("ledger_invariant_violation"). In void-first, the insert was refused by the row guard (invoice_not_open).
+    - SQL I10: a deferred check catches an owner void of a paid invoice.
+Immutable financial records
+  Control:
+    - UPDATE / DELETE / TRUNCATE are refused on every ledger table for everyone, the owner included.
+    - The retired billing_payments refuses INSERT as well.
+    - Corrections are new rows.
+  Evidence: M1, M2, M3, BILL D9 (retargeted + legacy INSERT refused).
+Payer credit identity (refinement A)
+  Control:
+    - Matching is by organization-scoped ids only.
+    - "Other" payers are never matched by name.
+    - Cross or unverified payers require Admin + an explicit confirmation + a reason, audited with
+      different_payer=true.
+  Evidence:
+    - P2, P3, P4, C4, C5.
+    - E2E E2a-c (others hidden until asked, reason required, flagged "Other payer").
+Refund status integrity (refinement C)
+  Control:
+    - A refund is a RECORD only.
+    - Assurance events: provider_confirmed / reconciled are impossible with source 'staff' (CHECK) and have no FIN-P1
+      writer.
+    - The UI labels refunds "Recorded by staff".
+  Evidence:
+    - V2, V3, V4.
+    - E2E E3c, E7 ("Provider confirmed" never shown).
+Receipt numbering
+  Control: per-organization counter locked first (lock order step 1), RCPT-000123.
+  Evidence: C2 (per organization), K6 (five at once: consecutive, unique, no gaps), E2E E1e / E5a / E9.
+Backward compatible NP-BILL-P1 RPCs
+  Control: same signatures, result type, check order, codes and idempotency; reversing a reversal is still ZW006.
+  Evidence: BILL SQL 67 / 67; BILL concurrency S1-S8; W1-W4; BILL E2E 50 / 50.
+Dispatchers and drivers see no financial information
+  Control: catalogue view = Organization Admin; pages guarded by requireOrganizationAdminAccess.
+  Evidence: A2, X4; E2E E8a-c; BILL E2E A1-A5.
+No medical information in financial audit data
+  Control: audit after_data holds only ids, amounts, kinds, method / provider, dates and statuses. The reason column
+    is null for ledger actions. No ledger read returns service type or notes.
+  Evidence: Y1 (allow-list + regex for names, references, reasons), Y3 (function source scan), E2E Z1.
+No card data stored
+  Control: the Luhn-based _billing_looks_like_pan in CHECK constraints on reference / note / reason, mirrored in the UI.
+  Evidence: Y2, W3, unit tests.
+No client-exposed service role
+  Control: only the cookie-based publishable-key client is used (server actions + RPCs); no service-role code added.
+  Evidence: code review (src/lib/billing, src/app/operations/billing).
+
+======================================================================================================================
+2. RESIDUAL RISKS AND LIMITS (FIN-P1)
+======================================================================================================================
+  R1 Superuser / replica-mode bypass.
+     - session_replication_role = replica disables all triggers for a superuser.
+     - That is outside the threat model; the test cleanups use it on fictional data only.
+     - Production access is owner-only.
+  R2 Manual refunds are records, not money movement.
+     - Nemryn cannot know a refund was actually paid until FIN-P5 / P6 reconciliation.
+     - Shown as "Recorded by staff".
+  R3 Payer identity for requester-kind payers is the specific request id.
+     - The same family member across two requests counts as a different payer, so applying credit needs Admin
+       confirmation.
+     - This is conservative by design (no name matching).
+  R4 billing_payments SELECT is kept for one transition release (ZD-268). Revoke in the next release.
+  R5 The NP-BILL-P1 invoice tables' RLS policies still use has_org_role(admin) directly. Consistent with FIN-P1
+     (admin-only); they move to the catalogue in FIN-P4.
+  R6 Pre-existing, not caused by FIN-P1: three Plus guard suites flag the NP-BILL-P1 function
+     billing_create_invoice_draft (it calls plus_can_read for the approved R3 quote import).
+     - Identical on the baseline without FIN-P1.
+     - Follow-up: add it to those suites' allow-list in a separate change.
+  R7 Audit reason text: the NP-BILL-P1 wrapper still writes its legacy billing_payment_reversed audit row with the
+     reason in audit_events.reason (as NP-BILL-P1 always did; reasons are staff text, not medical data). New ledger
+     actions write no reason text.
+
+VERDICT: no open security finding blocks owner code review. R4 and R6 are tracked follow-ups.

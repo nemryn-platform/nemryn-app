@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { BILLING_PAGE_SIZE, type InvoiceFilter } from "./billing-core";
+import { BILLING_PAGE_SIZE, type InvoiceFilter, type ReceiptFilter } from "./billing-core";
 
 /**
  * Core billing reads (NP-BILL-P1). Every call uses the ordinary per-request, cookie-based client -- never the
@@ -41,6 +41,23 @@ export async function getBillingSummary(organizationId: string): Promise<Billing
     readyTripCount: Number(r?.ready_trip_count ?? 0),
   };
 }
+
+/**
+ * NP-FIN-P1G financial-write gate. Deny-by-default: an organization can create or change financial records only after
+ * the platform enables it (synthetic or launch-approved live). The database enforces it on every financial table; the
+ * app only uses this to hide write actions and explain why. A failed read is treated as "not enabled" (fail closed).
+ */
+export interface BillingWriteStatus {
+  enabled: boolean;
+  /** false when the status couldn't be read; the UI then says actions are unavailable rather than "not enabled". */
+  known: boolean;
+}
+export const getBillingWriteStatus = cache(async (organizationId: string): Promise<BillingWriteStatus> => {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_write_status", { p_organization_id: organizationId });
+  if (error) return { enabled: false, known: false };
+  return { enabled: data?.[0]?.enabled === true, known: true };
+});
 
 export interface BillableTrip {
   tripId: string;
@@ -146,20 +163,32 @@ export interface InvoiceTrip {
   destination: string;
   released: boolean;
 }
+/**
+ * NP-FIN-P1: one payment applied to the invoice = one apply allocation of a receipt (billing_get_invoice_ledger). The
+ * receipt may also pay other invoices or hold payer credit; "simplePayment" = the whole receipt went to this invoice
+ * only (reversible from the invoice page through the NP-BILL-P1 compatibility RPC).
+ */
 export interface InvoicePayment {
+  /** the allocation id (what billing_reverse_payment / billing_unapply_allocation take) */
   id: string;
-  entryKind: "payment" | "reversal";
+  receiptId: string;
+  receiptNumber: number;
   amountCents: number;
   receivedOn: string;
   method: string | null;
+  provider: string | null;
   reference: string | null;
   note: string | null;
-  reversesPaymentId: string | null;
-  reason: string | null;
-  recordedAt: string;
-  /** payments only: 1-based order among this invoice's payments (receipt number), and the reversal correcting it, if any */
-  sequence: number | null;
-  reversedBy: { id: string; reason: string | null; recordedAt: string } | null;
+  createdAt: string;
+  differentPayer: boolean;
+  unapplied: boolean;
+  unapplyReason: string | null;
+  receiptReversed: boolean;
+  receiptReversalReason: string | null;
+  receiptReversalCode: string | null;
+  receiptReversedAt: string | null;
+  assurance: string;
+  simplePayment: boolean;
 }
 export interface InvoiceDetail {
   id: string;
@@ -217,34 +246,31 @@ export const getInvoice = cache(async (organizationId: string, invoiceId: string
       .select("trip_id, released_at, trips!billing_invoice_trips_trip_fkey(scheduled_pickup_at, completed_at, pickup_description, destination_description)")
       .eq("organization_id", organizationId)
       .eq("invoice_id", invoiceId),
-    supabase
-      .from("billing_payments")
-      .select("id, entry_kind, amount_cents, received_on, method, reference, note, reverses_payment_id, reason, recorded_at")
-      .eq("organization_id", organizationId)
-      .eq("invoice_id", invoiceId)
-      .order("recorded_at"),
+    supabase.rpc("billing_get_invoice_ledger", { p_organization_id: organizationId, p_invoice_id: invoiceId }),
   ]);
   if (lines.error || links.error || payments.error) throw new BillingError(lines.error?.code ?? links.error?.code ?? payments.error?.code);
 
-  const reversals = new Map((payments.data ?? []).filter((p) => p.entry_kind === "reversal").map((p) => [p.reverses_payment_id as string, p]));
-  let seq = 0;
-  const ledger: InvoicePayment[] = (payments.data ?? []).map((p) => {
-    const rev = p.entry_kind === "payment" ? reversals.get(p.id) : undefined;
-    return {
-      id: p.id,
-      entryKind: p.entry_kind === "reversal" ? "reversal" : "payment",
-      amountCents: Number(p.amount_cents),
-      receivedOn: p.received_on,
-      method: p.method,
-      reference: p.reference,
-      note: p.note,
-      reversesPaymentId: p.reverses_payment_id,
-      reason: p.reason,
-      recordedAt: p.recorded_at,
-      sequence: p.entry_kind === "payment" ? ++seq : null,
-      reversedBy: rev ? { id: rev.id, reason: rev.reason, recordedAt: rev.recorded_at } : null,
-    };
-  });
+  const ledger: InvoicePayment[] = (payments.data ?? []).map((p) => ({
+    id: p.allocation_id,
+    receiptId: p.receipt_id,
+    receiptNumber: p.receipt_number,
+    amountCents: Number(p.amount_cents),
+    receivedOn: p.received_on,
+    method: n(p.method),
+    provider: n(p.provider),
+    reference: n(p.reference),
+    note: n(p.note),
+    createdAt: p.created_at,
+    differentPayer: Boolean(p.different_payer),
+    unapplied: Boolean(p.unapplied),
+    unapplyReason: n(p.unapply_reason),
+    receiptReversed: Boolean(p.receipt_reversed),
+    receiptReversalReason: n(p.receipt_reversal_reason),
+    receiptReversalCode: n(p.receipt_reversal_code),
+    receiptReversedAt: n(p.receipt_reversed_at),
+    assurance: p.assurance ?? "recorded",
+    simplePayment: Boolean(p.simple_payment),
+  }));
   type TripEmbed = { scheduled_pickup_at: string | null; completed_at: string | null; pickup_description: string; destination_description: string };
   const trips: InvoiceTrip[] = (links.data ?? []).map((l) => {
     const t = (Array.isArray(l.trips) ? l.trips[0] : l.trips) as TripEmbed | null;
@@ -325,6 +351,249 @@ export async function getTripBillingStatus(organizationId: string, tripId: strin
     paymentState: n(r.payment_state),
     balanceCents: r.balance_cents === null || r.balance_cents === undefined ? null : Number(r.balance_cents),
   };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-FIN-P1 ledger reads (receipts, allocations, refunds, payer credit). RPC-only; every call re-checks the permission
+// catalogue (Organization Admin in FIN-P1). Nothing here logs payer names, references, notes or reasons.
+// ---------------------------------------------------------------------------------------------------------------------
+export interface LedgerSummary {
+  creditCents: number;
+  creditReceiptCount: number;
+  receiptsThisMonth: number;
+  refundsThisMonthCents: number;
+}
+export async function getLedgerSummary(organizationId: string): Promise<LedgerSummary> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_ledger_summary", { p_organization_id: organizationId });
+  if (error) throw new BillingError(error.code);
+  const r = data?.[0];
+  return {
+    creditCents: Number(r?.credit_cents ?? 0),
+    creditReceiptCount: Number(r?.credit_receipt_count ?? 0),
+    receiptsThisMonth: Number(r?.receipts_this_month ?? 0),
+    refundsThisMonthCents: Number(r?.refunds_this_month_cents ?? 0),
+  };
+}
+
+export interface ReceiptListRow {
+  id: string;
+  receiptNumber: number;
+  payerKind: string;
+  payerName: string;
+  receivedOn: string;
+  method: string;
+  provider: string | null;
+  grossCents: number;
+  feeCents: number;
+  allocatedCents: number;
+  refundedCents: number;
+  unallocatedCents: number;
+  reversed: boolean;
+  assurance: string;
+}
+export async function listReceipts(organizationId: string, p: { filter: ReceiptFilter; search: string; page: number }): Promise<{ rows: ReceiptListRow[]; total: number }> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_list_receipts", {
+    p_organization_id: organizationId,
+    p_filter: p.filter,
+    p_search: (p.search || null) as string,
+    p_limit: BILLING_PAGE_SIZE,
+    p_offset: (p.page - 1) * BILLING_PAGE_SIZE,
+  });
+  if (error) throw new BillingError(error.code);
+  const rows = (data ?? []).map((r) => ({
+    id: r.receipt_id,
+    receiptNumber: r.receipt_number,
+    payerKind: r.payer_kind,
+    payerName: r.payer_name,
+    receivedOn: r.received_on,
+    method: r.method,
+    provider: n(r.provider),
+    grossCents: Number(r.gross_cents),
+    feeCents: Number(r.fee_cents),
+    allocatedCents: Number(r.allocated_cents),
+    refundedCents: Number(r.refunded_cents),
+    unallocatedCents: Number(r.unallocated_cents),
+    reversed: Boolean(r.reversed),
+    assurance: r.assurance ?? "recorded",
+  }));
+  return { rows, total: Number(data?.[0]?.total_count ?? 0) };
+}
+
+export interface ReceiptAllocation {
+  id: string;
+  invoiceId: string;
+  invoiceNumber: number | null;
+  invoiceStatus: string;
+  amountCents: number;
+  createdAt: string;
+  differentPayer: boolean;
+  differentPayerReason: string | null;
+  unapplied: boolean;
+  unapplyReason: string | null;
+  unappliedAt: string | null;
+}
+export interface ReceiptRefund {
+  id: string;
+  refundSeq: number;
+  amountCents: number;
+  refundedOn: string;
+  method: string;
+  provider: string | null;
+  reference: string | null;
+  reason: string;
+  recordedAt: string;
+  assurance: string;
+  reversed: boolean;
+  reversalReason: string | null;
+  reversedAt: string | null;
+}
+export interface ReceiptDetail {
+  id: string;
+  receiptNumber: number;
+  payerKind: string;
+  payerId: string | null;
+  payerName: string;
+  sourceInvoiceId: string | null;
+  grossCents: number;
+  feeCents: number;
+  netCents: number;
+  receivedOn: string;
+  method: string;
+  provider: string | null;
+  reference: string | null;
+  note: string | null;
+  recordedAt: string;
+  allocatedCents: number;
+  refundedCents: number;
+  unallocatedCents: number;
+  assurance: string;
+  reversal: { reasonCode: string; reason: string; reversedAt: string } | null;
+  allocations: ReceiptAllocation[];
+  refunds: ReceiptRefund[];
+  events: { kind: string; source: string; occurredAt: string }[];
+}
+type J = Record<string, unknown>;
+const s = (v: unknown) => (typeof v === "string" ? v : null);
+const num = (v: unknown) => Number(v ?? 0);
+
+/** One receipt with its allocations, refunds, reversal and assurance facts, or null when it isn't this organization's. */
+export const getReceipt = cache(async (organizationId: string, receiptId: string): Promise<ReceiptDetail | null> => {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_get_receipt", { p_organization_id: organizationId, p_receipt_id: receiptId });
+  if (error) {
+    if (error.code === "ZW002") return null;
+    throw new BillingError(error.code);
+  }
+  const root = (data ?? {}) as J;
+  const r = (root.receipt ?? {}) as J;
+  const rev = root.reversal as J | null;
+  return {
+    id: String(r.id),
+    receiptNumber: num(r.receipt_number),
+    payerKind: String(r.payer_kind),
+    payerId: s(r.payer_id),
+    payerName: String(r.payer_name),
+    sourceInvoiceId: s(r.source_invoice_id),
+    grossCents: num(r.gross_cents),
+    feeCents: num(r.fee_cents),
+    netCents: num(r.net_cents),
+    receivedOn: String(r.received_on),
+    method: String(r.method),
+    provider: s(r.provider),
+    reference: s(r.reference),
+    note: s(r.note),
+    recordedAt: String(r.recorded_at),
+    allocatedCents: num(r.allocated_cents),
+    refundedCents: num(r.refunded_cents),
+    unallocatedCents: num(r.unallocated_cents),
+    assurance: s(r.assurance) ?? "recorded",
+    reversal: rev ? { reasonCode: String(rev.reason_code), reason: String(rev.reason), reversedAt: String(rev.reversed_at) } : null,
+    allocations: ((root.allocations ?? []) as J[]).map((a) => ({
+      id: String(a.id),
+      invoiceId: String(a.invoice_id),
+      invoiceNumber: a.invoice_number === null || a.invoice_number === undefined ? null : num(a.invoice_number),
+      invoiceStatus: String(a.invoice_status),
+      amountCents: num(a.amount_cents),
+      createdAt: String(a.created_at),
+      differentPayer: Boolean(a.different_payer),
+      differentPayerReason: s(a.different_payer_reason),
+      unapplied: Boolean(a.unapplied),
+      unapplyReason: s(a.unapply_reason),
+      unappliedAt: s(a.unapplied_at),
+    })),
+    refunds: ((root.refunds ?? []) as J[]).map((f) => ({
+      id: String(f.id),
+      refundSeq: num(f.refund_seq),
+      amountCents: num(f.amount_cents),
+      refundedOn: String(f.refunded_on),
+      method: String(f.method),
+      provider: s(f.provider),
+      reference: s(f.reference),
+      reason: String(f.reason),
+      recordedAt: String(f.recorded_at),
+      assurance: s(f.assurance) ?? "recorded",
+      reversed: Boolean(f.reversed),
+      reversalReason: s(f.reversal_reason),
+      reversedAt: s(f.reversed_at),
+    })),
+    events: ((root.events ?? []) as J[]).map((e) => ({ kind: String(e.kind), source: String(e.source), occurredAt: String(e.occurred_at) })),
+  };
+});
+
+export interface OpenInvoice {
+  id: string;
+  invoiceNumber: number | null;
+  billToKind: string;
+  billToName: string;
+  passengerName: string;
+  issueDate: string | null;
+  dueDate: string | null;
+  totalCents: number;
+  balanceCents: number;
+  version: number;
+  samePayer: boolean;
+}
+/** Issued invoices with a balance, oldest first, flagged same_payer by authoritative identity (never by name). */
+export async function listOpenInvoices(organizationId: string, p: { receiptId?: string | null; payerKind?: string | null; payerId?: string | null }): Promise<OpenInvoice[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_list_open_invoices", {
+    p_organization_id: organizationId,
+    p_receipt_id: (p.receiptId ?? null) as string,
+    p_payer_kind: (p.payerKind ?? null) as string,
+    p_payer_id: (p.payerId ?? null) as string,
+  });
+  if (error) throw new BillingError(error.code);
+  return (data ?? []).map((r) => ({
+    id: r.invoice_id,
+    invoiceNumber: n(r.invoice_number),
+    billToKind: r.bill_to_kind,
+    billToName: r.bill_to_name,
+    passengerName: r.passenger_name,
+    issueDate: n(r.issue_date),
+    dueDate: n(r.due_date),
+    totalCents: Number(r.total_cents),
+    balanceCents: Number(r.balance_cents),
+    version: r.version,
+    samePayer: Boolean(r.same_payer),
+  }));
+}
+
+/** The same payer's receipts with credit, for "Apply payer credit" on an invoice. */
+export async function listInvoiceCreditSources(organizationId: string, invoiceId: string): Promise<{ receiptId: string; receiptNumber: number; receivedOn: string; unallocatedCents: number }[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_invoice_credit_sources", { p_organization_id: organizationId, p_invoice_id: invoiceId });
+  if (error) return [];
+  return (data ?? []).map((r) => ({ receiptId: r.receipt_id, receiptNumber: r.receipt_number, receivedOn: r.received_on, unallocatedCents: Number(r.unallocated_cents) }));
+}
+
+/** Payers with an authoritative identity and open invoices (choices for a receipt that isn't tied to one invoice). */
+export async function listPayers(organizationId: string): Promise<{ kind: string; id: string; name: string; openInvoiceCount: number; balanceCents: number }[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("billing_list_payers", { p_organization_id: organizationId });
+  if (error) throw new BillingError(error.code);
+  return (data ?? []).map((r) => ({ kind: r.payer_kind, id: r.payer_id, name: r.payer_name, openInvoiceCount: Number(r.open_invoice_count), balanceCents: Number(r.balance_cents) }));
 }
 
 export interface QuoteOption {

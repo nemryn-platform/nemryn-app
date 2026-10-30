@@ -1,0 +1,199 @@
+NEMRYN — NP-FIN-P1 IMPLEMENTATION — Payment ledger re-foundation (receipts, allocations, payer credit, refunds, reversals)
+Date: 2026-10-29
+Branch: np-fin-p1-ledger, created from origin/main 85f2042 (verified current; all other branches merged; no open PRs).
+State: UNCOMMITTED, local only. Tested only on the isolated NemrynS1Iso stack with synthetic data.
+  - No production migration, merge, deploy or real customer financial data.
+Authority:
+  - docs/product/decision-register.md ZD-264..ZD-280;
+  - docs/reports/NP-FIN-P0-decision-lock.txt;
+  - NP-FIN-P1 implementation / security-and-test plans;
+  - owner decisions OD-1..OD-5.
+
+======================================================================================================================
+1. WHAT WAS BUILT
+======================================================================================================================
+Money received is now separated into four append-only records:
+  - receipts: money received;
+  - allocations: money applied to (apply) or removed from (unapply) ONE issued invoice;
+  - refunds: money returned, recorded by staff;
+  - receipt reversals: entered by mistake, returned check, or duplicate.
+Plus a correction record for a refund entered in error, and staff evidence facts.
+
+Confirmed by design and by tests:
+  ✓ One receipt can be allocated to several invoices: one allocation row per invoice; their sum is at most the receipt.
+  ✓ Excess funds stay as payer credit: unallocated = gross − net applied − recorded refunds. A receipt may be recorded
+    with no allocation at all.
+  ✓ Refunds never exceed refundable funds: refundable = the receipt's unallocated amount, checked under the receipt
+    lock and again by a deferred invariant.
+
+UI (Concept B, extends the existing Billing area; Organization Admin only):
+  Billing page
+    - "Record payment received" action.
+    - A third view, "Payments received" (receipts list: number, payer, date, method, amount, payer credit, status +
+      verification badge), with filters All / With credit / Reversed and search by RCPT number or payer.
+    - A "payer credit" tile.
+  Record payment received (/operations/billing/receipts/new)
+    - Step 1, choose the payer: payers with an organization-scoped identity (from open invoices, labelled from their own
+      record), or "Someone else" (typed, flagged as not verified).
+    - Step 2, record the money: amount, date, method, provider, reference, processing fee (the agency's expense, OD-5),
+      note, "I have the document".
+    - Allocation editor with an oldest-first suggestion over the payer's own invoices. The rest is shown as "kept as
+      payer credit".
+    - Other or unverified payers' invoices are hidden until asked; using one requires a confirmation box plus a reason
+      (OD-2).
+  Payment page (/operations/billing/receipts/[id])
+    - Summary: amount, payer credit, applied, refunded, payer, method / provider, reference, fee + net, note.
+    - Applied-to list (Removed / Other payer marks), refunds (with Corrected), verification history.
+    - Actions:
+        Apply credit;
+        Record refund (Admin; maximum = refundable);
+        Correct refund (Admin);
+        Reverse payment (Admin; reason code + details; disabled with an explanation while money is applied or refunded);
+        "I have the document" (evidence).
+  Invoice page
+    - Record payment: the payer is the invoice bill-to.
+      - Paying more than the balance is still REFUSED (NP-BILL-P1 behaviour) unless "keep the extra as payer credit" is
+        ticked.
+      - A likely duplicate (same method + reference + amount + date) asks for an explicit "not a duplicate"
+        confirmation.
+    - Apply payer credit: the same payer's credit, by identity only.
+    - Payments list: RCPT number, assurance badge, Reversed / Removed / Other payer, links to the payment page and the
+      receipt print.
+    - Reverse: simple whole-receipt payments, through the NP-BILL-P1 compatible RPC.
+    - Remove from invoice: unapply, Admin; the money becomes payer credit.
+  Printing
+    - /receipt-print/[receiptId]: RCPT-000123 (OD-4), invoices paid, credit kept, refunds, the REVERSED banner. Moved
+      from /receipt-print/[paymentId]; there are no production payments, so no old links exist.
+    - Invoice print: payments listed with RCPT numbers; reversed / removed entries marked "not counted".
+  Copy rules
+    - "Provider confirmed" / "Reconciled" never appear for staff entries.
+    - A typed reference shows as "Reference noted".
+    - Refunds read "Recorded by staff" and are explained as not provider or bank confirmation.
+  Forms
+    - Every ledger dialog dispatches by hand (keepValues): React 19 resets a <form action> after a refused submit and
+      would otherwise erase what the person typed. This is the same fix as NP-PILOT-P1, found by the new E2E (E3).
+
+Not built (out of scope): FIN-P2 pre-trip invoices, FIN-P3 clearance / dispatch, provider webhooks, accounting sync,
+statement import, billing grant delegation (FIN-P4).
+
+======================================================================================================================
+2. DATABASE — two additive migrations (isolated stack only)
+======================================================================================================================
+supabase/migrations/20261029100000_core_billing_ledger_foundation.sql (715 lines)
+  0  Zero-row gate: raises "billing_payments is not empty -- STOP" if the retired table holds any row (ZD-268, D).
+  1  _billing_looks_like_pan(text): a Luhn check on 13-19 digit runs, spaces / dashes allowed. Used in CHECKs so card
+     numbers are never stored in references, notes or reasons.
+  2  Tables, each with composite (id, organization_id) FKs:
+       billing_receipt_counters;
+       billing_receipts (gross, fee, generated net, method, provider, reference + normalized reference,
+         provider_txn_id reserved, payer kind + scoped ids + snapshot name, source_invoice_id);
+       billing_allocations (apply / unapply; an unapply mirrors exactly one apply of the same receipt and invoice;
+         different_payer + reason);
+       billing_refunds;
+       billing_refund_reversals;
+       billing_receipt_reversals;
+       billing_assurance_events.
+     The CHECK on billing_assurance_events: provider_confirmed / reconciled can NEVER have source 'staff'.
+     Uniqueness:
+       - idempotency keys per organization;
+       - (organization, provider, provider_txn_id);
+       - one unapply per apply, one reversal per receipt / refund, one evidence kind per receipt.
+  3  Append-only: UPDATE / DELETE / TRUNCATE are refused on every ledger table, the owner included.
+  4  Immediate BEFORE INSERT guards, locking parent rows in the global order (receipt → invoice):
+       allocation: same organization (cross_organization), invoice issued, same currency, receipt not reversed,
+         apply <= balance and <= unallocated, unapply mirrors its apply;
+       refund: <= unallocated, not reversed, not before the receipt;
+       receipt reversal: only at net zero (no allocation, no refund).
+  5  DEFERRED constraint triggers, re-checked at COMMIT:
+       - invoice: 0 <= paid <= total; money only on issued invoices; void / draft at net 0;
+       - receipt: allocated + refunded <= gross; a reversed receipt is fully unapplied and unrefunded.
+       These also fire on billing_invoices status updates, so a direct owner void of a paid invoice is refused.
+  6  Permission catalogue (ZD-272): _billing_action_roles(action) and billing_can(org, action).
+       - SENSITIVE actions (void, unapply, reverse, refund, refund_reverse, cross_payer_allocate) are Organization
+         Admin only.
+       - In FIN-P1 every action is Organization Admin.
+       - RLS on each ledger table: SELECT through billing_can(..., 'view'); no client write grants.
+  7  billing_payments retired: its guard now refuses INSERT too ("billing_payments_retired"). SELECT and its policy
+     are kept for one transition release (ZD-268); the table is not dropped.
+supabase/migrations/20261029110000_core_billing_ledger_rpcs.sql (1,420 lines)
+  Write RPCs (SECURITY DEFINER, search_path pinned, catalogue-authorized, idempotent, audited):
+    billing_record_receipt, billing_allocate_receipt, billing_unapply_allocation, billing_record_refund,
+    billing_reverse_refund, billing_reverse_receipt, billing_add_receipt_evidence.
+  Read RPCs:
+    billing_get_invoice_ledger, billing_list_receipts, billing_get_receipt, billing_list_open_invoices,
+    billing_invoice_credit_sources, billing_list_payers, billing_ledger_summary.
+  NP-BILL-P1 re-defined with the SAME signatures:
+    _billing_paid_cents (now from allocations, so get_invoice / list / trip status / void are unchanged);
+    billing_record_payment (wrapper: receipt + allocation; same checks, order, codes and idempotency; returns the
+      allocation id);
+    billing_reverse_payment (wrapper: unapply + receipt reversal; a reversal id given as payment id is still ZW006;
+      shared or refunded receipts -> ZW004 use_receipt_page);
+    billing_summary (collected = receipts not reversed − refunds not reversed, this month).
+  Global lock order:
+    advisory key -> receipt counter -> receipts ↑id -> invoices ↑id; void locks only the invoice.
+  Payer identity (refinement A):
+    _billing_payer_identity_matches matches only on the invoice the receipt was recorded from, or on kind + same
+    passenger / request / facility id. Typed "other" payers are never matched by name. A non-matching invoice needs
+    cross_payer_allocate (Admin) + a reason, audited with different_payer=true.
+
+======================================================================================================================
+3. FILES
+======================================================================================================================
+New
+  supabase/migrations/20261029100000_core_billing_ledger_foundation.sql
+  supabase/migrations/20261029110000_core_billing_ledger_rpcs.sql
+  supabase/tests/billing_ledger_tests.sql                          70 tests (66 + R10-R13 from the code review)
+  supabase/tests/billing_ledger_concurrency_test.sh                K1-K11 + K5b, isolation-guarded
+  tests/e2e/billing/billing-ledger.e2e.mjs                         44 checks
+  src/app/operations/billing/receipts/[receiptId]/page.tsx         payment page
+  src/app/operations/billing/receipts/new/page.tsx                 record payment received
+  src/components/billing/ReceiptActions.tsx                        allocation editor + receipt dialogs
+  docs/reports/NP-FIN-P1-readonly-preflight.sql, NP-FIN-P1-emergency-reversal.sql (prepared, not run on production)
+  docs/reports/NP-FIN-P1-*.txt (these reports)
+Moved
+  src/app/receipt-print/[paymentId]/page.tsx -> src/app/receipt-print/[receiptId]/page.tsx (rewritten)
+Modified
+  src/lib/billing/billing-core.ts (+ billing-core.test.mjs: 2 assertions updated for OD-4 / the new view, 5 tests added)
+  src/lib/billing/billing.ts (ledger reads; the direct billing_payments read removed)
+  src/app/operations/billing/{actions.ts, page.tsx, invoices/[invoiceId]/page.tsx}
+  src/app/invoice-print/[invoiceId]/page.tsx
+  src/components/billing/{InvoiceActions.tsx, BillingTables.tsx}
+  src/lib/supabase/database.types.ts (regenerated from the isolated DB: +821 lines, 0 removed)
+  supabase/tests/billing_tests.sql (D2 / D7 / D9 retargeted, G1 / G2 extended; no assertion removed or relaxed)
+  supabase/tests/billing_concurrency_test.sh (7 evidence queries + cleanup retargeted; scenarios unchanged)
+  supabase/tests/privilege_contract_tests.sql (+7 tables, +6 SELECT grants, +38 functions: 23 internal, 15
+    authenticated)
+  tests/e2e/billing/billing.e2e.mjs (evidence queries retargeted; R3 now expects RCPT-000001 = OD-4)
+  tests/e2e/handoff/handoff.e2e.mjs, tests/e2e/demo/pilot-demo.mjs (cleanups include the ledger tables; the demo still
+    bypasses triggers only for its own invoices' rows)
+  docs/product/decision-register.md (ZD-264..ZD-280, from the decision-lock task)
+Size: 2,135 lines of SQL migrations; about 1,250 lines of app code; about 1,000 lines of tests.
+  git diff of tracked files: 18 files, +2,463 / −192.
+
+======================================================================================================================
+4. DEVIATIONS FROM THE APPROVED PLAN (all additive or stricter)
+======================================================================================================================
+  V1 billing_refund_reversals added.
+     - Without it, a refund entered by mistake could never be corrected in an append-only ledger.
+     - It is SENSITIVE (Admin), reason required, once only.
+  V2 Card-number detection uses the Luhn check on 13-19 digit runs, not "any 13+ digits".
+     - That avoids refusing legitimate 15-digit ACH trace numbers while still refusing card numbers.
+     - It is mirrored in the UI.
+  V3 billing_record_payment with a card-like reference now fails (ZW006 invalid_input). NP-BILL-P1 would have stored it.
+     This is an intended tightening.
+  V4 Invoice-page "Record payment" now calls billing_record_receipt with the payer derived from the invoice, plus the
+     optional "keep the extra as payer credit".
+     - The wrapper RPC stays for compatibility (older app build, tests) and is still exercised by the reverse path and
+       the SQL / concurrency suites.
+     - The overpayment refusal is preserved by default (E2E P3 and E7b-1).
+  V5 _billing_require_admin and the existing NP-BILL-P1 invoice RLS policies are unchanged (still admin-only).
+     - New code authorizes through the catalogue; the BILL-P1 policies move to the catalogue in FIN-P4 with the
+       billing grant.
+  V6 Possible-duplicate confirmation applies to staff references (method + normalized reference + amount + date,
+     receipts that were not reversed). The wrapper skips it to keep NP-BILL-P1 behaviour.
+  V7 The receipt print route segment was renamed ([paymentId] -> [receiptId]). With 0 production payments there are no
+     external links to break.
+  V8 billing_list_payers labels payers from their own record (passenger / requester / facility name), not from an
+     invoice's bill-to snapshot. This was found by the E2E (E1b).
+
+STATUS: FIN-P1 IMPLEMENTED LOCALLY — AWAITING OWNER CODE REVIEW

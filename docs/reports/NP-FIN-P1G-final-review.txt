@@ -1,0 +1,82 @@
+NP-FIN-P1G -- FINAL REVIEW (updated after the final refinements, 2026-10-29)
+Branch: np-fin-p1g-billing-gate (based on 0ded235 = PR #44 head; uncommitted). PR #44 unchanged (head 0ded235, OPEN).
+
+======================================================================================================================
+1. REQUIREMENTS CHECK
+======================================================================================================================
+  Deny by default (no row = disabled); no enablement by migration ............... MET  G0, package postcondition, R3i
+  Synthetic / live; live needs an NP-LAUNCH-02 reference ........................ MET  M4 M7 (RPC + CHECK)
+  Platform-Admin-only management, versioned, audited ............................ MET  M1-M6, E2E S1 R1 Z1
+  Table-level enforcement with structural + adversarial coverage (ZD-281) ........ MET  B1-B3, mutation check, K12
+  Reads preserved ............................................................... MET  D4, E2E D1-D7
+  Tenants see only enabled / disabled state (ZD-286) ............................ MET  T1, V1, E2E D1b
+  FIN-P1 functionality and BILL-P1 compatibility preserved ...................... MET  67 / 70, billing 50, ledger 44
+  Atomic three-migration release, rehearsed (ZD-285) ............................ MET  R0-R9
+  Rollback cannot leave FIN-P1 writable without the gate ........................ MET  R6-R9
+  Emergency corrections: principles locked, not built (ZD-287) .................. MET  decision lock §2
+  No regressions ................................................................ MET  test-results §2-§4, §7
+
+======================================================================================================================
+2. FILES (exact)
+======================================================================================================================
+  New (14)
+    supabase/migrations/20261029120000_core_billing_write_gate.sql
+    supabase/tests/billing_write_gate_tests.sql
+    src/components/billing/BillingWriteNotice.tsx
+    tests/e2e/billing/_gate.mjs
+    tests/e2e/billing/billing-gate.e2e.mjs
+    docs/reports/NP-FIN-P1G-implementation.txt
+    docs/reports/NP-FIN-P1G-security-review.txt
+    docs/reports/NP-FIN-P1G-test-results.txt
+    docs/reports/NP-FIN-P1G-release-compatibility.txt
+    docs/reports/NP-FIN-P1G-final-review.txt
+    docs/reports/NP-FIN-P1G-decision-lock.txt
+    docs/reports/NP-FIN-P1G-atomic-release-rehearsal.txt
+    docs/reports/NP-FIN-P1G-atomic-release-package.sql            (generated)
+    docs/reports/NP-FIN-P1G-emergency-reversal.sql                (generated)
+    + docs/reports/NP-FIN-P1G-rehearsal/ (build_package.py, build_reversal.py, rehearse.sh, fingerprint.sql,
+      rehearsal-log.txt) and docs/reports/NP-FIN-P1G-final-PR-readiness.txt
+  Modified (23)
+    docs/product/decision-register.md (ZD-281..ZD-287)
+    src/lib/billing/billing.ts, billing-core.ts, billing-core.test.mjs; src/lib/supabase/database.types.ts
+    src/app/operations/billing/page.tsx, new/page.tsx, invoices/[invoiceId]/page.tsx, receipts/[receiptId]/page.tsx,
+      receipts/new/page.tsx; src/app/operations/trips/[tripId]/page.tsx
+    src/components/billing/BillingTables.tsx, TripBillingPanel.tsx
+    supabase/tests/billing_tests.sql, billing_ledger_tests.sql, billing_concurrency_test.sh,
+      billing_ledger_concurrency_test.sh, privilege_contract_tests.sql, platform_admin_foundation_tests.sql
+    tests/e2e/billing/billing.e2e.mjs, billing/billing-ledger.e2e.mjs, handoff/handoff.e2e.mjs, demo/pilot-demo.mjs
+  Tracked diff: 23 files, +455 / -49.
+  NOT part of P1G (must not be committed with it): tests/e2e/fixtures/, .tmp-qa/, gate-report.txt, the older
+  untracked reports and screenshots (447 untracked paths in total).
+
+======================================================================================================================
+3. SECURITY POSITION (detail: NP-FIN-P1G-security-review.txt)
+======================================================================================================================
+  No HIGH findings. F-1 (tenant disclosure) and F-6 (gate-only reversal) RESOLVED.
+  F-7 (MEDIUM): the M1 zero-row race. Mitigated only by the atomic package -- a release by plain `db push` is not
+  acceptable. F-8: `supabase db query -f` can't run the package; psql only.
+
+======================================================================================================================
+4. REMAINING PRODUCTION BLOCKERS
+======================================================================================================================
+  B1  Owner approval to merge PR #44 and the P1G PR (P1G commit / push / PR not yet authorized).
+  B3  Encrypted production backup + custody decisions, and the restore rehearsal (D-REH / B6).
+  B5  Vercel confirmation (production branch, Ignored Build Step, auto-deploy).
+  B8  Production transport for the package: a direct / session-mode connection string for user postgres (owner-held),
+      psql available, and the authorized migration window. Re-run the read-only preflight immediately before.
+  B9  ZD-283: the authorized minimum-necessary read identifying the draft invoice's organization (it stays disabled
+      until then).
+  B10 Live enablement (any real tenant, including Zenward): the NP-LAUNCH-02 GO AND the ZD-287 correction-only
+      capability (EC-6). Not a blocker for the synthetic release.
+  Post-release, separately authorized: enabling "Nemryn Pilot Simulation" as synthetic (ZD-282).
+
+======================================================================================================================
+5. RECOMMENDATION
+======================================================================================================================
+  Ready for owner commit authorization. Then: one commit of exactly the files in §2 on np-fin-p1g-billing-gate, push,
+  and a PR with base np-fin-p1-ledger (stacked on #44, ZD-284). FIN-P1 production release stays NO-GO until
+  B1 / B3 / B5 / B8 are cleared.
+  Not done (as instructed): no commit, push, PR, merge, deploy, production migration, production access, enablement,
+  or FIN-P2 work.
+
+STATUS: FIN-P1G FINAL REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

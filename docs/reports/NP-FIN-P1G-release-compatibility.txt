@@ -1,0 +1,107 @@
+NP-FIN-P1G -- RELEASE COMPATIBILITY AND ROLLOUT ORDER (refinement C)
+Date: 2026-10-29        Analysis only. Nothing was applied, merged or deployed. No production read was made for P1G;
+production facts below come from the authorized 2026-10-29 FIN-P1 read-only preflight.
+
+Production today: 98 migrations, head 20261028100000. App = main (85f2042). Billing = NP-BILL-P1: 1 draft invoice,
+0 issued, 0 payments. FIN-P1 (PR #44) and P1G not applied. Merging into main auto-deploys production (Vercel; no
+Ignored Build Step).
+
+======================================================================================================================
+1. COMPONENTS
+======================================================================================================================
+  M1 20261029100000 FIN-P1 foundation (zero-row gate: aborts at its first statement if billing_payments has rows)
+  M2 20261029110000 FIN-P1 RPCs (BILL-P1 payment RPCs become compatibility wrappers; signatures unchanged)
+  M3 20261029120000 P1G gate (needs M1 + M2: _billing_ledger_append_only, billing_can, _billing_authorize, ledger tables)
+  A0 app = main             BILL-P1 UI; no ledger pages; no gate awareness
+  A1 app = PR #44           FIN-P1 UI; needs M1 + M2; no gate awareness
+  A2 app = P1G branch       FIN-P1 UI + gate notice; needs M1 + M2 + M3 (fails closed without M3)
+
+======================================================================================================================
+2. APP x DATABASE MATRIX
+======================================================================================================================
+                    DB = 98 (today)        DB = M1+M2 (no gate)           DB = M1+M2+M3 (gate, nobody enabled)
+  A0 main           works (today)          works via wrappers; NO GATE   reads OK; every billing write refused;
+                                           (any tenant can write)        generic "isn't possible in the current
+                                                                         state" message; nothing written
+  A1 PR #44         BROKEN: calls ledger   works; NO GATE                reads OK; writes refused; same generic
+                    RPCs that don't exist                                message; nothing written
+  A2 P1G            BROKEN (ledger RPCs    reads OK; billing_write_      CORRECT: notice, no write actions; an
+                    missing)               status missing -> fails       enabled synthetic tenant works normally
+                                           closed: actions hidden,
+                                           "unavailable" warning
+
+======================================================================================================================
+3. THE PROPOSED 7-STEP ORDER, EVALUATED
+======================================================================================================================
+  Proposed: 1 M1 -> 2 M2 -> 3 M3 -> 4 synthetic enablement -> 5 DB security verification -> 6 merge / deploy #44 ->
+            7 merge / deploy P1G
+  Step 1 -> 2  SAFE. M1 alone: BILL-P1 unchanged for A0 (the ledger tables exist but nothing writes them).
+  After 2, before 3   UNSAFE (STOP-2). FIN-P1 is live without the gate: under A0, any tenant (Zenward included) can
+               write ledger entries through the wrappers. With separate `db push` transactions this window is short,
+               but it exists. If M3 fails here (e.g. lock timeout), the window stays open until fixed.
+  Step 3       SAFE (deny-by-default). From now on every tenant is refused, including the organization that owns
+               the existing draft invoice (read-only; nothing lost). A0 shows the generic message (F-5).
+  Step 4 before 5   ORDER ISSUE: enabling before verifying means the verification checks a non-clean state.
+               Verify first, then enable.
+  Step 4 before 6/7  WORKS, but the synthetic tenant then uses A0 (BILL-P1 UI) on a FIN-P1 database. That is
+               compatible (wrappers), but it is not the UI being piloted. Enabling after the A2 deploy is cleaner.
+  Step 6 alone (A1 deployed, P1G not yet)  SAFE but degraded: disabled tenants see write actions that fail with the
+               generic message. The window lasts until step 7. Acceptable if 6 and 7 happen in the same session.
+  Step 7       SAFE: final state.
+  Verdict: there is no data-safety STOP if steps 1-3 run as one unit. The proposed order otherwise has one unsafe
+  transition (STOP-2) and two ordering improvements (verify before enable; enable after the final deploy).
+
+======================================================================================================================
+4. STOP CONDITIONS
+======================================================================================================================
+  STOP-1 Any merge (#44 or P1G) before M1 + M2 are applied: the production app breaks (A1 / A2 on DB 98).
+  STOP-2 M1 + M2 applied without M3 for longer than the same release transaction: ungated financial writes for every
+         tenant, including Zenward (real customers).
+  STOP-3 M3 applied before M1 / M2: it fails (missing functions). Atomic, so nothing changes, but the release must
+         stop and be re-planned.
+  STOP-4 The M1 zero-row gate refuses (billing_payments has rows): stop; that is a FIN-P1 re-plan, not a P1G issue.
+  STOP-5 Any enablement of Zenward Mobility, or any LIVE enablement, without the NP-LAUNCH-02 GO reference and a
+         separate owner authorization.
+  STOP-8 Any attempt to run the package or the rollback through `supabase db query -f` or the SQL Editor (not
+         rehearsed; the CLI path refuses multi-statement files).
+  STOP-6 Post-migration verification not clean: privilege contract != 0 / 29 (this branch's file); gate triggers
+         != 12; billing_write_enablements not empty before step 8 below; any unexpected migration.
+  STOP-7 The P1G PR merged while its base still points at np-fin-p1-ledger with unmerged FIN-P1 commits (it would
+         carry FIN-P1 into main unreviewed in a second PR). Merge #44 first, or fold P1G into #44 by decision.
+
+======================================================================================================================
+5. REVISED ORDER (RECOMMENDED)
+======================================================================================================================
+  0. Prerequisites (unchanged from the FIN-P1 release-gate resolution): owner approvals of #44 and P1G; encrypted
+     backup + custody decisions; Vercel confirmation; re-run the read-only preflight right before step 1.
+  1. Apply M1 + M2 + M3 IN ONE TRANSACTION (ZD-285; closes STOP-2 and F-7): run
+       psql "<direct or session-mode connection, user postgres>" -X -v ON_ERROR_STOP=1 \
+         -f docs/reports/NP-FIN-P1G-atomic-release-package.sql
+     Rehearsed in NP-FIN-P1G-atomic-release-rehearsal.txt. Not `supabase db query -f` (it refuses multi-statement
+     files) and not a multi-file `db push` (it leaves the STOP-2 window and the F-7 race).
+  2. Database security verification, read-only: privilege contract (this branch's file) 0 / 29; 12 gate triggers;
+     both enablement tables empty; migration list = 101; expected signatures. Nobody can write billing yet.
+  3. Merge PR #44, then immediately merge the P1G PR (or one combined merge if P1G is folded into #44, OD-G4). Each
+     merge deploys; between them the A1 degraded window applies (§3, step 6).
+  4. App verification on production, read-only: Billing shows the "isn't enabled" notice for the operator's own
+     organization; no write actions; print and lists work.
+  5. Separately authorized production write: enable "Nemryn Pilot Simulation" as SYNTHETIC through
+     platform_set_billing_write_enablement (Platform Admin, reason recorded, expected_version 0). Confirm history v1
+     plus one audit row.
+  6. Synthetic smoke test on that tenant only (fictional records), per the existing pilot-simulation procedure.
+  7. Zenward and any live tenant stay disabled until the NP-LAUNCH-02 GO plus a separate authorization (STOP-5).
+
+======================================================================================================================
+6. ROLLBACK AT EACH STEP (revised after the final refinements)
+======================================================================================================================
+  After 1-2: docs/reports/NP-FIN-P1G-emergency-reversal.sql = ONE transaction removing P1G + FIN-P1 together ->
+             back to 98 / BILL-P1. Guarded: empty ledger, no live record, billing_payments empty. Rehearsed (R6:
+             schema fingerprint identical to the pre-release schema).
+  After 3-4: revert the merges (redeploys the pre-release app), then the combined rollback if the ledger is still
+             empty. If the problem is app-only, revert the app only: A0 on M1+M2+M3 is safe (writes refused, reads
+             fine).
+  After 5-6: the ledger may hold synthetic rows, so the combined rollback refuses (forward-fix only). Incident control =
+             DISABLE the tenant (one Platform Admin RPC call). Gate-only removal is not offered (it would re-open
+             billing writes for every organization).
+
+STATUS: FIN-P1G FINAL REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

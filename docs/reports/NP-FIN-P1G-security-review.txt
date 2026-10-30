@@ -1,0 +1,108 @@
+NP-FIN-P1G -- FINANCIAL-WRITE GATE -- SECURITY REVIEW
+Date: 2026-10-29        Scope: 20261029120000_core_billing_write_gate.sql + the UI changes + the prepared reversal.
+Method: line-by-line review of the migration, then adversarial SQL tests (billing_write_gate_tests.sql), a removal
+mutation test, concurrency K12, and browser E2E. Isolated stack only, fictional data only.
+
+======================================================================================================================
+1. THREAT MODEL AND RESULTS
+======================================================================================================================
+T1 An organization enables its own billing
+   Only platform_set_billing_write_enablement writes the table; it calls _require_platform_admin() first.
+   Organization Admin (own org), other-tenant admin, dispatcher, driver -> ZW002; unauthenticated -> ZW001; anon has
+   no EXECUTE (42501). Clients have no INSERT / UPDATE on the table (42501).                       TESTS M1 M2 M3  PASS
+T2 Live use without the launch decision
+   CHECK constraint on the table plus an RPC check: live + enabled needs an approval_ref naming NP-LAUNCH-02. The
+   CHECK also stops a direct owner insert (23514). Note: this proves a reference was recorded, not that the GO was
+   actually given -- the owner must only supply a real one.                                         TESTS M4 M7     PASS
+T3 Bypass through a path the gate does not see
+   The gate is a BEFORE row trigger on every financial table: RPCs, wrappers, nested definer calls, old app builds and
+   direct writes (owner included) are all refused with ZW004 billing_not_enabled.
+   - All 14 write RPCs refused while disabled, with no change to any row             TESTS D1 D2 D3        PASS
+   - Direct owner INSERT / UPDATE / DELETE on all 12 tables refused, by the gate first TEST B1             PASS
+   - Every public.billing_* table carries the gate, firing first, for INSERT / UPDATE / DELETE  TEST B2  PASS
+   - Every table a billing function writes is gated (or is a gate table / audit_events)  TEST B3        PASS
+   - Mutation test: dropping the trigger from ONE table (billing_refunds) fails 5 tests (D2 D3 B1 B2 B3)  PASS
+   Remaining bypass: a superuser using session_replication_role = replica (or dropping the trigger). That is
+   database-owner access, outside the application threat model; the same holds for every FIN-P1 guard. In this
+   repository replica mode is used only by isolated-stack test cleanups and the guarded demo reset.
+T4 Race between a disable and an in-flight payment
+   The financial write takes FOR SHARE on the enablement row; the platform RPC takes FOR UPDATE. K12, both orders:
+   pay-first -> the payment commits, then the disable; disable-first -> the payment is refused, applied = 0.
+   No write ever commits after a committed disable.                                             K12 (both)       PASS
+   Deadlock review: the platform RPC locks only the enablement row (then writes history / audit_events, which hold
+   no financial locks), so there is no lock cycle with the FIN-P1 order (advisory -> counter -> receipts -> invoices
+   -> enablement row FOR SHARE).
+T5 Tampering with history
+   Enablement rows are never deleted; each update must be exactly version + 1; history is append-only; TRUNCATE is
+   refused on both tables; history is written by trigger, so even direct owner updates are recorded.  TEST M6  PASS
+T6 Cross-tenant leakage or effect, and disclosure to tenants (ZD-286)
+   Enabling Org B never enables another organization (T1, E2E T1 / T2). No tenant role can read either enablement
+   table (42501). billing_write_status for another org -> ZW002 and returns only enabled / version / set_at.
+   Reason, approval_ref and data class are readable only through platform_get_billing_write_enablement (Platform
+   Admin; tenants ZW002, anon 42501). The disabled-tenant page shows none of them (E2E D1b).  TESTS T1 T2 V1  PASS
+T7 Commercial entitlement mistaken for the safety gate
+   An ACTIVE Plus module row does not enable billing (fictional org f1: still refused). organization_modules is not
+   referenced by the gate.                                                                      TEST T2         PASS
+T8 Sensitive data in audit
+   The audit row stores status, class, version and has_approval_ref only -- no free-text reason (M5, E2E Z1).  PASS
+T9 Accidental enablement by the release
+   The migration inserts no rows; a fresh reset has 0 rows (G0). Test fixtures enable fictional organizations only,
+   through the audited RPC; cleanups remove them; the demo removes only a row it created ("DEMO" reason, synthetic).
+T10 Privilege surface
+   Privilege contract 0 / 29 with the new objects declared (no table grant on either enablement table); anon gets
+   nothing; internal helpers have no EXECUTE for any client role; all seven new SECURITY DEFINER functions pin
+   search_path (check 19).                                                                                     PASS
+T11 Release-window exposure (ZD-285)
+   The atomic package applies M1 + M2 + M3 in one transaction. Outside sessions see no intermediate state; old-app
+   writes wait on EXCLUSIVE locks and are then refused by the gate (rehearsal R3). A failure anywhere rolls
+   everything back (R1, R2).                                                                                  PASS
+T12 Rollback re-opening writes
+   No prepared script removes the gate alone. The combined rollback runs only with an empty ledger and no live record
+   (R6-R8), and FIN-P1's own reversal fails under the gate (R9).                                             PASS
+T13 Rollback time-of-check / time-of-use (owner review, fixed)
+   The rollback now takes ACCESS EXCLUSIVE locks on all 12 financial tables, both enablement tables and the migration
+   history BEFORE any check. In-flight writes are waited for and then seen; writes during the rollback wait and fail
+   after it (or proceed if it fails). Evidence: NP-FIN-P1G-rollback-concurrency-fix.txt S1-S8.               PASS
+
+======================================================================================================================
+2. FINDINGS
+======================================================================================================================
+F-1 RESOLVED (ZD-286) Tenants could read the enablement reason / approval_ref through RLS. The client grant and
+    policy are removed; the status RPC returns enabled / version / set_at only; full details are Platform-Admin-only.
+F-2 (INFO) The approval_ref check is syntactic. It proves a reference to NP-LAUNCH-02 was entered, not that the GO
+    exists. It is a guardrail against accidental live enablement, not an authorization system.
+F-3 (INFO, ZD-287) A disabled organization can't make corrections either. Intended: no temporary enablement for
+    corrections (EC-1). A scoped correction-only capability, or an approved equivalent, is required before the first
+    live enablement (EC-6).
+F-4 (INFO) billing_write_status errors fail closed in the UI (actions hidden, "unavailable" warning). No path shows
+    write actions on an unknown state.
+F-5 (INFO) Old app builds (main, PR #44) show write actions for a disabled organization. A refused write shows their
+    generic ZW004 message ("isn't possible in the invoice's current state"). Misleading, but safe: nothing is written.
+    Closed by deploying the P1G app (release-compatibility report).
+F-6 RESOLVED The gate-only reversal is withdrawn. The combined rollback is guarded (empty ledger, no live record,
+    billing_payments empty) and locks all billing tables first.
+F-7 (MEDIUM, closed by the package; open for any non-package release) M1's zero-row check takes no write-blocking
+    lock, so a BILL-P1 payment could commit before billing_payments is retired later in M1. The package locks the
+    BILL-P1 tables first and re-asserts zero payments. Do not release FIN-P1 with a plain `db push` while the app can
+    still record payments.
+F-8 (INFO) `supabase db query -f` cannot run multi-statement files (prepared statement). The package and rollback
+    must be run with psql -f. The FIN-P1 reversal header's `supabase db query --linked -f` suggestion is unverified.
+F-9 RESOLVED (HIGH before the fix, owner-reported) The rollback checked for financial records before locking. Reproduced:
+    a receipt (S0) and a live enablement (S4c) committed during the window were dropped with their tables. Fixed:
+    locks first, then all checks; the live check now also covers the history.
+F-10 RESOLVED (found while testing F-9) EXCLUSIVE locks plus later DROPs (ACCESS EXCLUSIVE) deadlocked against a
+    waiting writer. Fixed by taking ACCESS EXCLUSIVE once, up front. Trade-off: billing reads wait during the
+    seconds-long rollback.
+No open HIGH findings; the one MEDIUM finding (F-7) is mitigated by the required release procedure.
+
+======================================================================================================================
+3. CONSTRAINTS RESPECTED
+======================================================================================================================
+  - Plus organization_modules not used as the gate (T7).
+  - No unapproved bypass implemented; the emergency correction path is documented only.
+  - Zenward Mobility not enabled; no production read or write was made for P1G.
+  - No test weakened: fixtures enable explicitly; the one catalogue count change (EX-1 14 -> 15) keeps its privilege
+    assertion.
+  - Existing RPC signatures and bodies unchanged; PR #44 unchanged.
+
+STATUS: P1G ROLLBACK CONCURRENCY REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

@@ -1,0 +1,81 @@
+NEMRYN — NP-FIN-P1 MIGRATION PREFLIGHT, RELEASE AND ROLLBACK PLAN (PREPARED — NOT EXECUTED)
+Date: 2026-10-29.
+Nothing in this document has been run against production. Each production step needs explicit owner authorization.
+
+Migrations (apply in order, nothing else):
+  20261029100000_core_billing_ledger_foundation.sql    tables, guards, invariants, RLS, catalogue; retires billing_payments
+  20261029110000_core_billing_ledger_rpcs.sql          ledger RPCs + NP-BILL-P1-compatible re-definitions
+Expected production base: 98 migrations, head 20261028100000 (last verified 2026-10-28; re-verify at preflight).
+
+======================================================================================================================
+1. GATES (all must pass; any failure = STOP)
+======================================================================================================================
+  G1 billing_payments = 0 rows (ZD-268 zero-row gate).
+     - Last known production state (2026-10-28 read-only): 0 payments, 1 draft invoice.
+     - The foundation migration also re-asserts this inside its own transaction, so it aborts with "STOP" if a row
+       appeared in between.
+  G2 Record invoice status counts. No data migration is needed: the migration creates no allocation.
+  G3 Migration head = 98 / 20261028100000, or the head approved at release time.
+  G4 No FIN-P1 object names exist.
+  G5 The NP-BILL-P1 functions being re-defined exist with the expected signatures.
+  G6 No exclusive locks on billing_* tables.
+  G7 A fresh encrypted backup per the custody policy (NP-LAUNCH-03A §7), verified by decrypt-to-hash, BEFORE applying.
+  G8 Privilege contract on production before the release: 0 violations (with main's contract file).
+  G9 The PR is reviewed and approved. The branch is rebased on the then-current main, and tests are re-run if main
+     moved.
+  Tool: docs/reports/NP-FIN-P1-readonly-preflight.sql (one SELECT; G1-G6).
+    - Validated on the isolated stack.
+    - Run against production only when the owner authorizes the release.
+
+======================================================================================================================
+2. RELEASE ORDER (established process; database before app)
+======================================================================================================================
+  1. Read-only preflight (G1-G6) and the privilege contract (G8).
+  2. Fresh encrypted backup + verification (G7).
+  3. Owner authorization of the two migrations.
+  4. Apply (supabase db push / migration up). Each file is one transaction; the foundation aborts on G1.
+  5. Post-migration read-only checks:
+       - 100 migrations, head 20261029110000;
+       - 7 new tables present and EMPTY;
+       - billing_payments still 0 rows; its guard function body contains "billing_payments_retired";
+       - privilege contract (this branch's file): 0 violations;
+       - invoice count / statuses unchanged vs G2;
+       - grants: no INSERT / UPDATE / DELETE for authenticated on any ledger table.
+  6. Merge the PR -> Vercel production deploy -> confirm the served build id.
+  7. Read-only UI verification on the synthetic Pilot Simulation tenant:
+       - Billing loads with the "Payments received" view and the payer-credit tile;
+       - an invoice page loads;
+       - "Record payment received" loads.
+     NO receipt, refund or allocation is recorded in production.
+  8. Transition: the previous app build stays compatible while the database is ahead.
+       - It still reads billing_payments (SELECT kept; always empty).
+       - Its "Record payment" calls the compatible wrapper, which writes the new ledger.
+       - Payments recorded in that window only show in the new UI.
+       - Keep the window short (deploy right after step 5).
+  9. Follow-up release (FIN-P1+1): revoke SELECT on billing_payments and drop its policy. Dropping the table needs a
+     separate approval.
+
+======================================================================================================================
+3. RISK NOTES
+======================================================================================================================
+  - The table changes are additive, apart from replaced function bodies (same signatures) and the retired table's
+    guard. Existing BILL-P1 invoices, lines and trip links are untouched.
+  - The deferred constraint trigger on billing_invoices (status) adds a cheap check per status change.
+  - No production data is migrated. Real financial use stays gated by ZD-280 / NP-LAUNCH-02 GO, including for
+    Zenward.
+
+======================================================================================================================
+4. ROLLBACK
+======================================================================================================================
+  A. Database, ONLY while the ledger is EMPTY (no real receipts yet): docs/reports/NP-FIN-P1-emergency-reversal.sql.
+     - It refuses if any ledger row exists.
+     - It restores the five NP-BILL-P1 definitions verbatim, drops every FIN-P1 object and removes the two migration
+       versions, in one transaction.
+     - Rehearsed on the isolated stack: refusal with data OK; restore -> main's billing_tests 67 / 67 and main's
+       privilege contract 0 / 29.
+     - The first rehearsal found and fixed a script defect.
+  B. After any real receipt: FORWARD-FIX ONLY. Never delete ledger rows. Correct with reversals, unapply and refund
+     corrections.
+  C. App: redeploy the previous Vercel build. It remains functional against the new database during the transition
+     (see 2.8).
+  Owner authorization is required for A or C.

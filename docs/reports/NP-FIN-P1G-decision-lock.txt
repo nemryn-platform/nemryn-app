@@ -1,0 +1,61 @@
+NP-FIN-P1G -- DECISION LOCK
+Date: 2026-10-29        Source: owner authorization "NP-FIN-P1G Final Refinements & PR Preparation" (2026-10-29)
+Recorded in: docs/product/decision-register.md, new section "NP-FIN-P1G — Financial-write gate", ZD-281 to ZD-287.
+These entries authorize no commit, production migration, deployment or production enablement.
+
+======================================================================================================================
+1. OWNER DECISIONS
+======================================================================================================================
+  ZD-281 (OD-G1) Table-level trigger enforcement (a_billing_write_gate on every financial table), with structural and
+                 adversarial coverage. Replaces the proposal's per-RPC re-definitions; no RPC body or signature changes.
+  ZD-282 (OD-G2) The migration enables no organization. "Nemryn Pilot Simulation" may be enabled as synthetic only by
+                 a separately authorized Platform Admin action after release verification.
+  ZD-283 (OD-G3) The organization owning the existing production draft invoice stays disabled until an authorized,
+                 minimum-necessary read (organization id only) verifies ownership and purpose.
+  ZD-284 (OD-G4) P1G is a separate PR stacked on the reviewed FIN-P1 commit 0ded235. PR #44 is not modified.
+  ZD-285 (OD-G5) M1 + M2 + M3 are released as one rehearsed atomic transaction: fail closed, migration history
+                 consistent, zero-row gate mandatory.
+  ZD-286 (OD-G6) Tenants see only enabled / disabled plus non-sensitive operational state (version, last change time).
+                 Reason, approval_ref, data class, actor and history are Platform-Admin-only.
+
+======================================================================================================================
+2. EMERGENCY CORRECTIONS -- ZD-287 (EC-1 to EC-6)
+======================================================================================================================
+  Approved principles
+    EC-1 No general-purpose temporary billing enablement to correct records in a disabled organization. Default-deny
+         stays. (This withdraws the interim "open a window" procedure of NP-FIN-P1G-implementation.txt §2.1.)
+    EC-2 A future correction-only capability is scoped by organization, operation, record and expiry.
+    EC-3 It requires Platform Admin approval and complete audit evidence: request, approval, the correction, expiry.
+    EC-4 Corrections of sensitive live data need an additional approval, unless an explicitly approved emergency
+         exception exists.
+    EC-5 The full feature is not built in P1G.
+    EC-6 Before the first LIVE organization is enabled, this capability or a separately approved equivalent control
+         must exist. This is a blocker for live enablement, not for the synthetic release.
+  Remaining implementation decisions (to be taken when the capability is planned)
+    - who approves, and whether a second person must confirm (two-person rule);
+    - maximum expiry;
+    - the exact operation list (candidates: void, unapply, refund correction, receipt reversal);
+    - how the scoped authorization is presented to the tenant;
+    - the criteria and the approver of an emergency exception (EC-4).
+  Design direction already sketched (implementation report §2.2): a correction-only authorization row (org,
+  operation, record, expiry, approver) that the four correction RPCs consume. The gate admits only that write, only
+  before expiry.
+
+======================================================================================================================
+3. WHAT CHANGED IN THE IMPLEMENTATION BECAUSE OF THESE DECISIONS
+======================================================================================================================
+  ZD-286  20261029120000_core_billing_write_gate.sql:
+            - client SELECT on billing_write_enablements and its RLS policy removed: no client privilege on either
+              enablement table;
+            - billing_write_status returns only (enabled, version, set_at) -- no data_class;
+            - new platform_get_billing_write_enablement(org): Platform Admin only, the full row incl. reason and
+              approval_ref.
+          Tests: gate suite T1 (all tenant roles get 42501 on the table), new V1 (status columns exactly
+          enabled / version / set_at; no reason or class text; platform read ZW002 for tenants, 42501 for anon, full
+          row for the Platform Admin); privilege contract (no table grant; +1 function); EX-1 14 -> 16.
+  ZD-285  docs/reports/NP-FIN-P1G-atomic-release-package.sql (generated) and its rehearsal.
+  ZD-287 / EC-1 + the rollback review: the gate-only removal path is withdrawn.
+          docs/reports/NP-FIN-P1G-emergency-reversal.sql is now ONE guarded transaction removing P1G and FIN-P1
+          together (empty ledger, no live record, billing_payments empty).
+
+STATUS: FIN-P1G FINAL REVIEW COMPLETE — AWAITING OWNER COMMIT AUTHORIZATION

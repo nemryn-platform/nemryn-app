@@ -1,0 +1,101 @@
+NEMRYN — NP-FIN-P1 FINAL PR READINESS
+Date: 2026-10-29. Branch np-fin-p1-ledger. Base origin/main 85f2042 (re-fetched at PR preparation: it has NOT moved,
+merge-base = 85f2042, so no reconciliation was needed).
+Production: UNTOUCHED.
+  - No production migration, write, deployment or provider connection.
+  - The one attempted read-only production query (the FIN-P1 preflight) was blocked by the permission system and never
+    ran.
+
+======================================================================================================================
+1. READINESS CHECKS
+======================================================================================================================
+  ZD-264..ZD-280 preserved .................................................. YES (NP-FIN-P1-code-review.txt §2)
+  billing_payments zero-row requirement mandatory ........................... YES, three layers:
+      - preflight G1;
+      - the foundation migration's FIRST statement raises "STOP" if any row exists;
+      - PROVEN through the real CLI path (`supabase migration up --local` on a baseline with one planted fictional
+        legacy row): aborted at statement 0, head unchanged (98 / 20261028100000), 0 FIN-P1 tables / functions, the
+        second migration not applied.
+  Migration ordering ........................................................ 20261029100000 (foundation) then 20261029110000 (rpcs);
+                                                                               the rpcs file depends on the foundation's
+                                                                               objects, and the timestamps enforce the order
+  Transactional protection .................................................. The gate precedes every DDL statement, so a
+      gate failure creates nothing (proven above). For a failure later in a file, the established owner-run release
+      procedure applies (backup G7 + the post-migration checks + the emergency reversal, valid while the ledger is
+      empty). Recommendation for the release: apply with the CLI and verify the post-migration checks before any app
+      deploy.
+  BILL-P1 compatibility ..................................................... YES: BILL SQL 67 / 67 · BILL concurrency S1-S8 ·
+                                                                               BILL E2E 50 / 50 · W1-W4 · emergency reversal
+                                                                               restores BILL-P1 exactly (rehearsed)
+  Financial invariants (refunds / allocations / reversals) ................. YES: row guards + deferred commit-time checks ·
+                                                                               ledger 70 / 70 · K1-K11 + K5b
+  Deny-by-default RLS ....................................................... YES: SELECT-only via billing_can; no client
+                                                                               writes; contract 0 / 29
+  Cross-tenant financial operations prohibited ............................. YES: composite FKs + explicit guard
+                                                                               (X1-X5, I11, E8)
+  Provider confirmation cannot be fabricated by staff ...................... YES: CHECK (non-staff source + source_ref),
+                                                                               no FIN-P1 writer (V2 / V3, E7)
+  Synthetic data only in fixtures .......................................... YES: fictional seed organizations,
+                                                                               "Fictional" / LEDGERE2E / DEMO labels; the
+                                                                               concurrency throwaway organizations are
+                                                                               removed on exit
+  Emergency reversal rehearsed .............................................. YES (refuses with data; restores when empty)
+  Old-app compatibility window documented .................................. YES (migration-preflight §2.8)
+  FIN-P1+1 legacy SELECT revocation tracked ................................ YES (FU-1 / CR-5)
+  Production release needs separate owner authorization .................... YES (migration-preflight §1-2)
+
+======================================================================================================================
+2. TEST RESULTS (final, real runs)
+======================================================================================================================
+  SQL
+    - billing_tests 67 / 67 · billing_ledger_tests 70 / 70 (timezone-safe: UTC, UTC+14, UTC−11, inside the 00-04 UTC
+      window).
+    - Plus guard suites 170 / 170, 85 / 85, 76 / 76 · privilege contract 0 / 29.
+    - 54-suite differential: 0 FIN-P1 regressions (remaining failures pre-existing; FU-7 recurring-care UTC window
+      proven identical without FIN-P1).
+  Concurrency: billing S1-S8 ALL PASS · ledger K1-K11 + K5b ALL PASS.
+  Unit / static: npm test 962 / 962 · test:release 28 / 28 · tsc 0 · eslint 0 errors (113 baseline warnings, none
+    added) · next build PASS.
+  E2E (rebuilt app)
+    - ledger 44 / 44 (7 AXE) · billing 50 / 50 (8 AXE) · handoff 35 / 35 · getting-started 26 / 26 ·
+      p1b 52 / 52 (fresh DB) · inquiries staff 74 / 74 · inquiries OFF 5 / 5 · consents ALL PASS.
+    - QA2 strict 5 / 5 suites (25 / 44 / 28 / 23 / 79).
+    - Quotes strict 7 / 7 suites (33 / 31 / 32 / 54 / 27 / 69 / 26, a11y included).
+  Baseline (not FIN-P1) failures observed:
+    - p1b link-name on /operations/growth only when run after other suites in the same DB (pre-existing ordering);
+    - recurring-care UTC-window failures (FU-7);
+    - the expand-window compat suite (not applicable).
+
+======================================================================================================================
+3. RESIDUAL RISKS
+======================================================================================================================
+  CR-1 Medium (procedural): refund-correction misuse could restore credit for money really paid out.
+  CR-2 Low: no duplicate warning for refunds.
+  CR-3 Info: the receipt duplicate check is advisory.
+  CR-4 Info: requester identity per request.
+  CR-5 / FU-1: billing_payments SELECT transition (revoke in FIN-P1+1).
+  FU-4: manual refunds are records until FIN-P5 / P6.
+  FU-7: recurring-care UTC-window test flake (pre-existing).
+
+======================================================================================================================
+4. DEVIATIONS FROM APPROVED DECISIONS
+======================================================================================================================
+  None contrary to ZD-264..ZD-280. Additive / stricter items: V1-V8 (NP-FIN-P1-implementation.txt §4).
+  Review additions: FU-2 / FU-3 test maintenance, R10-R13, K11.
+
+======================================================================================================================
+5. COMMIT SCOPE
+======================================================================================================================
+  Included
+    - FIN-P0 decision documentation, and the decision-register ZD-264..ZD-280.
+    - FIN-P1 planning reports, the two migrations, application code, regenerated types and tests (SQL / concurrency /
+      unit / E2E).
+    - FIN-P1 release reports + the preflight / emergency-reversal SQL.
+  Excluded
+    - .tmp-qa/, tests/e2e/fixtures/ (pre-existing untracked), gate-report.txt.
+    - Unrelated untracked reports (NP-LAUNCH-*, NP-PILOT-*, earlier phases).
+    - Scratchpad logs, the isolated-stack workdir, any secrets.
+  Secret scan of the committed FIN files: no keys, tokens or passwords.
+
+VERDICT: READY for commit and PR review (owner-authorized in NP-FIN-P1 Commit & PR Handoff). Merge and production
+release remain separate owner decisions.

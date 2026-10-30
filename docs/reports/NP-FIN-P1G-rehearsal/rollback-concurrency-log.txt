@@ -1,0 +1,41 @@
+fresh state: 101 / 20261029120000; schema fingerprint F101 = 51cf5698d7f37657e2b4f9b3a151d079
+=== S0 RACE DEMONSTRATION with the PRE-FIX rollback: a receipt in flight when the rollback starts
+S0 receipt session: t; pre-fix rollback: COMMIT; head now 98 / 20261028100000
+S0 => the receipt COMMITTED, then the pre-fix rollback dropped billing_receipts: a committed financial record was LOST (the reported defect)
+=== S1 FIXED: a receipt committed immediately before the rollback's lock acquisition
+PASS S1a the rollback WAITS for the in-flight receipt (lock) :: 1
+S1 receipt session: t; rollback: psql:<stdin>:78: ERROR:  NP-FIN-P1G rollback refused: the FIN-P1 ledger holds rows -- forward-fix only
+PASS S1b receipt kept; schema and history unchanged :: 1|51cf5698d7f37657e2b4f9b3a151d079|101 / 20261029120000
+=== S2 a receipt AND an enablement change attempted while the rollback holds its locks (rollback commits)
+PASS S2 fixture: a BILL-P1 draft invoice exists (not ledger) :: 1
+PASS S2a the receipt and the enablement change both WAIT on the rollback's locks :: 2
+S2 rollback: COMMIT
+S2 waiting receipt: ERROR:  could not open relation with OID 20547
+S2 waiting enablement: ERROR:  could not open relation with OID 20889
+PASS S2b rolled back to 98, schema identical to pre-release, BILL-P1 draft invoice preserved :: 98 / 20261028100000|c020587ada8bfef35477795b6239e9d7|1
+=== S3 same boundary, but the rollback FAILS after taking its locks (injected) -> the waiting writes then proceed normally
+PASS S3a both writes WAIT :: 2
+S3 rollback: psql:<stdin>:424: ERROR:  REHEARSAL: injected rollback failure
+S3 receipt after the failed rollback: t; enablement: enabled
+PASS S3b schema + history unchanged; the two writes committed afterwards (receipt 1, enablement rows 2) :: 51cf5698d7f37657e2b4f9b3a151d079|101 / 20261029120000|1|2
+=== S4 a LIVE enablement in flight when the rollback starts
+PASS S4a the rollback WAITS for the in-flight enablement :: 1
+S4 enablement: enabled; rollback: psql:<stdin>:78: ERROR:  NP-FIN-P1G rollback refused: an organization has (or had) a LIVE enablement record -- owner decision first
+PASS S4b live record kept; schema and history unchanged :: live:enabled|51cf5698d7f37657e2b4f9b3a151d079|101 / 20261029120000
+=== S4c the same with the PRE-FIX rollback (for comparison)
+S4c enablement: enabled; pre-fix rollback: COMMIT; head now 98 / 20261028100000
+=== S5 a historical LIVE record (current row synthetic) -> refused (stricter rule)
+S5 rollback: psql:<stdin>:78: ERROR:  NP-FIN-P1G rollback refused: an organization has (or had) a LIVE enablement record -- owner decision first
+PASS S5 nothing changed :: 51cf5698d7f37657e2b4f9b3a151d079|0|0|0|0|0|1|2|101|2
+=== S6 a legacy billing_payments row (owner bypass) -> refused
+PASS S6 fixture: one legacy payment :: 1
+S6 rollback: psql:<stdin>:78: ERROR:  NP-FIN-P1G rollback refused: billing_payments is not empty
+PASS S6 nothing changed :: 51cf5698d7f37657e2b4f9b3a151d079|1|0|0|0|1|1|1|101|2
+=== S7 migration head moved (a later version recorded) -> refused
+S7 rollback: psql:<stdin>:78: ERROR:  NP-FIN-P1G rollback refused: migration head is not 20261029120000
+PASS S7 nothing changed :: c60a9675a28ed62d55aed05bec7ce40b|0|0|0|0|0|0|0|102|0
+=== S8 success path (empty ledger, synthetic enablement, a BILL-P1 draft) -> COMMIT, pre-release schema, draft kept
+S8 rollback: COMMIT
+PASS S8 98 / pre-release schema / draft invoice kept :: 98 / 20261028100000|c020587ada8bfef35477795b6239e9d7|1
+=== restored: 101 / 20261029120000; privilege contract: violations = 0 of 29
+DONE

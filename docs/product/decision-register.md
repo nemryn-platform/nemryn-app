@@ -3412,6 +3412,489 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A decision to add airport transportation to Plus opportunities
 
-No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
+---
+
+## NP-FIN — Financial architecture (locked 2026-10-28 from NP-FIN-P0 FD-01 to FD-17)
+
+Common status for ZD-264 to ZD-280:
+- The decisions are approved at the ARCHITECTURE level only.
+- No migration, deployment or mandatory dispatch blocking is authorized by these entries.
+- Each implementation phase (FIN-P1, P2, P3a…) needs its own owner authorization and production release.
+
+Sources:
+- `docs/reports/NP-FIN-P0-decision-register.md` (options and rationale);
+- `docs/reports/NP-FIN-P0-decision-lock.txt` (refinements).
+
+Builds on NP-BILL-P1 D1–D6 and R1–R4 (`docs/reports/NP-BILL-P1-contract-and-decisions.txt`).
+
+### ZD-264 — Pre-trip invoices are created manually from an ACCEPTED request (FD-01)
+
+- **Date:** 2026-10-28
+- **Category:** Product / Billing
+- **Decision:**
+  - Billing staff create a pre-trip invoice explicitly from a Core request in state `accepted`.
+  - Request acceptance never creates an invoice automatically.
+  - Pending, declined and cancelled requests are not eligible.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture; NP-FIN-P0 decision lock)
+- **Affected Product Areas:** FIN-P2; Billing; Request Detail
+- **Dependencies:** ZD-265
+- **Owner:** Product
+- **Review Trigger:** A request for automatic invoicing
+
+### ZD-265 — Request-basis invoices with a two-way double-billing guard (FD-02)
+
+- **Date:** 2026-10-28
+- **Category:** Data / Billing
+- **Decision:**
+  - `billing_invoices` gains a basis: `trips` (the BILL-P1 post-trip path, unchanged) or `request` (pre-trip).
+  - A request-basis invoice links to exactly one request through a dedicated link table. That table allows at most one active (non-void) link per request.
+  - A trip whose request is on an active request-basis invoice cannot be put on a trips-basis invoice.
+  - A request cannot be pre-invoiced while any of its trips is on an active trips-basis invoice.
+  - Both checks run under row locks and are re-checked by triggers.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P2; `billing_create_invoice_draft`; billable-trip lists
+- **Dependencies:** NP-BILL-P1 R1
+- **Owner:** Engineering
+- **Review Trigger:** Consolidated billing (ZD-275)
+
+### ZD-266 — Issued financial documents are immutable; separate number sequences (FD-03)
+
+- **Date:** 2026-10-28
+- **Category:** Billing / Audit
+- **Decision:**
+  - Issued invoices stay frozen (BILL-P1 D4).
+  - Corrections happen only by void (net zero), credit note or adjustment invoice. A credit note or adjustment invoice is a new document.
+  - Numbering, per organization and gap-free:
+    - `INV-` shared by the trips and request bases;
+    - `CN-` for credit notes;
+    - `RCPT-` for receipts.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P1 (RCPT-), FIN-P2, FIN-P4 (CN-)
+- **Dependencies:** NP-BILL-P1 D4
+- **Owner:** Product / Finance
+- **Review Trigger:** An accounting-system numbering requirement
+
+### ZD-267 — Deposits are fields of the request-basis invoice (FD-04)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - A request-basis invoice may carry `deposit_required_cents` (0..total) and `deposit_due_date`. Both are frozen at issue.
+  - There are no separate deposit invoices.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P2; clearance (FIN-P3a); invoice print
+- **Dependencies:** ZD-265, ZD-270
+- **Owner:** Product
+- **Review Trigger:** Multi-instalment plans
+
+### ZD-268 — Ledger: receipts, allocations, refunds and receipt reversals are separate append-only records (FD-05, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Data / Billing / Security
+- **Decision:**
+  - Four separate append-only records:
+    - **receipts** (money received);
+    - **allocations** (money applied to or removed from an invoice: apply / unapply);
+    - **refunds** (money returned);
+    - **receipt reversals** (a receipt recorded in error).
+  - BILL-P1 compatibility is preserved:
+    - `billing_record_payment` and `billing_reverse_payment` keep their signatures and observable behaviour;
+    - they act as wrappers over the new records.
+  - The old `billing_payments` table is **frozen and revoked**, not dropped:
+    - inserts are refused by trigger;
+    - SELECT stays for one transition release so an older app build keeps loading;
+    - it is revoked in the following release;
+    - it is dropped only by a later, separately approved migration.
+  - Production preflight must show **0 rows** in `billing_payments`, and the migration itself asserts this. Any unexpected data is a STOP.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 1)
+- **Affected Product Areas:** FIN-P1; `billing_payments`; billing RPCs; receipt print
+- **Dependencies:** NP-BILL-P1 D5, R2
+- **Owner:** Engineering / Owner
+- **Review Trigger:** Any non-zero `billing_payments` count before FIN-P1 release
+
+### ZD-269 — Allocation is explicit with an oldest-first suggestion; excess becomes payer credit (FD-06)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - Staff choose the invoices and amounts. The UI suggests oldest-first.
+  - Money not allocated stays on the receipt as **payer credit**.
+  - Credit may be applied only within the same organization (database-enforced), to invoices of the same payer. Applying it to a different payer needs an explicit confirmation and reason (audited).
+  - Allocations never exceed an invoice's balance or a receipt's unallocated amount.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P1
+- **Dependencies:** ZD-268
+- **Owner:** Product / Finance
+- **Review Trigger:** Automatic allocation requests
+
+### ZD-270 — Payment assurance is four separate facts; clearance rules are configurable (FD-07, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Billing / Dispatch
+- **Decision:**
+  - A receipt carries four independent assurance facts:
+    1. **staff-recorded** (always);
+    2. **evidence** (none, reference noted, or document held, as stated by staff);
+    3. **provider confirmation** (set ONLY by a provider integration or a provider-settlement import, never by manual entry);
+    4. **reconciliation** (matched to a bank or statement line, FIN-P5).
+  - A manually entered reference is evidence, NOT provider verification.
+  - Clearance (FIN-P3a) uses per-organization rules: for each method class (cash, check, card / ACH / transfer / digital wallet), the minimum assurance that counts toward clearance.
+  - Defaults:
+    - cash counts when recorded;
+    - check counts when recorded with the check number, with an option to require reconciliation;
+    - card, ACH, transfer and digital wallet count with a reference noted, with options to require provider confirmation (once available) or reconciliation.
+  - Organization default policy, payer credit terms, deposits and exceptions apply as in NP-FIN-P0.
+  - Policies never depend on service type.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 2); default values are confirmed at FIN-P3a
+- **Affected Product Areas:** FIN-P1 (facts recorded), FIN-P3a (rules), FIN-P5 / P6
+- **Dependencies:** ZD-268
+- **Owner:** Product / Finance
+- **Review Trigger:** Bounced-check or chargeback incidents
+
+### ZD-271 — Dispatch clearance is advisory; enforcement only by separate approval (FD-08)
+
+- **Date:** 2026-10-28
+- **Category:** Dispatch / Safety
+- **Decision:**
+  - FIN-P3a shows status-only clearance badges. Dispatchers see status, never amounts.
+  - `assign_trip` is not changed.
+  - Opt-in enforcement (FIN-P3b) needs its own owner approval, a rider-safety review and an exception path.
+  - Mandatory blocking is not authorized.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture; P3b NOT authorized)
+- **Affected Product Areas:** FIN-P3a / P3b; Dispatch; Trip Detail
+- **Dependencies:** ZD-270
+- **Owner:** Owner / Operations
+- **Review Trigger:** A request for enforcement
+
+### ZD-272 — Billing permission matrix; sensitive actions default to Organization Admin (FD-09, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Security / Authorization
+- **Decision:**
+  - A billing module grant (`membership_module_grants`, module `billing`, access `read` or `write`) is introduced in FIN-P4. It follows the Plus grant pattern.
+  - Ordinary **billing write** covers drafts, issue, recording receipts, allocating, applying credit, adding evidence and adjustment invoices.
+  - **Sensitive actions** are refunds, credit notes, payment or receipt reversals, unapplying allocations, voids, dispatch exceptions, payer credit terms and billing settings. They are authorized separately and remain **Organization Admin only** until a later approved decision.
+  - Dispatchers see clearance status only. Drivers see nothing.
+  - From FIN-P1 on, every RPC authorizes through one action catalogue. Today every action maps to Organization Admin, so later delegation changes the catalogue, not the call sites.
+  - The full matrix is in `docs/reports/NP-FIN-P0-decision-lock.txt`.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 3)
+- **Affected Product Areas:** All billing RPCs and RLS; FIN-P4 grant
+- **Dependencies:** NP-BILL-P1 D2, ZD-209
+- **Owner:** Security / Owner
+- **Review Trigger:** Any delegation of a sensitive action
+
+### ZD-273 — Post-trip adjustments: manual documents only; no automatic fees; never a silent refund or change (FD-10, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - There are no automatic cancellation or no-show fees.
+  - Every financial change is an explicit staff action producing a new auditable record: void, unapply, refund, credit note or adjustment invoice. An issued invoice is never changed, and money is never refunded without a recorded refund action.
+  - Before FIN-P4, the minimum handling (FIN-P2) for a cancelled request with a pre-trip invoice is:
+    - nothing paid: void, with a reason;
+    - paid: unapply (Admin), then void at net zero (Admin), leaving the funds as payer credit, which may be refunded (Admin) or kept for rebooking.
+  - Retaining a cancellation fee waits for FIN-P4 credit notes or adjustment invoices, unless the owner approves an interim method.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture, with refinement 4)
+- **Affected Product Areas:** FIN-P2, FIN-P4
+- **Dependencies:** ZD-266, ZD-268, ZD-272
+- **Owner:** Product / Finance
+- **Review Trigger:** A fee-policy request
+
+### ZD-274 — Accepted Plus quotes inform Core invoices read-only (FD-11)
+
+- **Date:** 2026-10-28
+- **Category:** Architecture / Plus
+- **Decision:**
+  - A request-basis invoice may import the latest **accepted** quote, found through `plus_request_attributions`. The number, kind and components are snapshotted.
+  - Plus tables and RPCs are not modified.
+  - Plus may later display the invoice status read-only, gated by billing read.
+  - A quote revised after import never changes an issued invoice.
+  - Plus never keeps a ledger.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P2, FIN-P4
+- **Dependencies:** NP-BILL-P1 R3, ZD-212–ZD-225
+- **Owner:** Product
+- **Review Trigger:** Any Plus write into Core billing
+
+### ZD-275 — Consolidated facility billing is deferred; later as statements (FD-12)
+
+- **Date:** 2026-10-28
+- **Category:** Scope
+- **Decision:**
+  - One passenger per invoice stays (BILL-P1 R1).
+  - Facility consolidation will later be periodic statements over existing invoices, never multi-passenger invoices.
+- **Status:** CONFIRMED — OWNER-APPROVED (deferral)
+- **Affected Product Areas:** Future
+- **Dependencies:** NP-BILL-P1 R1
+- **Owner:** Product
+- **Review Trigger:** A facility customer requirement
+
+### ZD-276 — Nemryn is the financial source of truth; accounting is one-way downstream (FD-13)
+
+- **Date:** 2026-10-28
+- **Category:** Integration
+- **Decision:**
+  - Invoices, receipts, allocations, credit notes and refunds originate in Nemryn.
+  - Accounting systems receive one-way exports, and their external ids are stored.
+  - There is no two-way editing.
+  - Nemryn is never the merchant of record or custodian of funds.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P6
+- **Dependencies:** none
+- **Owner:** Product / Finance
+- **Review Trigger:** An accounting-integration design
+
+### ZD-277 — No tax until needed; then a manual tax line after CPA review (FD-14)
+
+- **Date:** 2026-10-28
+- **Category:** Billing / Compliance
+- **Decision:**
+  - No tax calculation.
+  - A manual tax line is added only when a customer needs it, after CPA or counsel confirms the rules for that state.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** Future
+- **Dependencies:** none
+- **Owner:** Owner
+- **Review Trigger:** A taxable customer
+
+### ZD-278 — Refunds are recorded manually; reconciliation matches them later (FD-15)
+
+- **Date:** 2026-10-28
+- **Category:** Billing
+- **Decision:**
+  - Refunds are recorded by an authorized user (ZD-272) against a receipt's refundable funds.
+  - They are matched to statement lines in FIN-P5.
+  - Provider webhooks (FIN-P6) may only PROPOSE refunds.
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture)
+- **Affected Product Areas:** FIN-P1, P5, P6
+- **Dependencies:** ZD-268
+- **Owner:** Finance
+- **Review Trigger:** A provider integration
+
+### ZD-279 — Financial records carry no medical information (FD-16)
+
+- **Date:** 2026-10-28
+- **Category:** Privacy
+- **Decision:** No service type, assistance notes, diagnoses or trip notes appear in:
+  - invoice lines (generic descriptions);
+  - receipts, references or notes;
+  - exports, provider metadata or reconciliation lines;
+  - audit rows (ids, amounts and statuses only).
+- **Status:** CONFIRMED — OWNER-APPROVED (architecture; counsel to confirm, NP-LAUNCH-02 Q-C2)
+- **Affected Product Areas:** All NP-FIN phases
+- **Dependencies:** PD-10, PD-11
+- **Owner:** Privacy / Engineering
+- **Review Trigger:** Counsel advice; any export format
+
+### ZD-280 — Synthetic data only for NP-FIN development and tests (FD-17, refined)
+
+- **Date:** 2026-10-28
+- **Category:** Privacy / Process
+- **Decision:**
+  - NP-FIN development, tests, demos and screenshots use synthetic data only.
+  - No owner-operated-tenant exemption applies.
+  - Real financial use by any tenant, including Zenward Mobility, remains subject to the NP-LAUNCH-02 production GO gate and to the unresolved legal and privacy decisions (PD-10, PD-11, counsel questions).
+- **Status:** CONFIRMED — OWNER-APPROVED (refinement 5)
+- **Affected Product Areas:** All NP-FIN phases
+- **Dependencies:** NP-LAUNCH-02, PD-10, PD-11
+- **Owner:** Owner
+- **Review Trigger:** The NP-LAUNCH-02 GO decision
+
+---
+
+## NP-FIN-P1G — Financial-write gate (locked 2026-10-29 from OD-G1 to OD-G6 and EC-1 to EC-6)
+
+Common status for ZD-281 to ZD-291:
+- Approved by the owner in the NP-FIN-P1G final-refinements authorization (2026-10-29).
+- No commit, production migration, deployment or production enablement is authorized by these entries.
+
+Sources: `docs/reports/NP-FIN-P1G-decision-lock.txt`, `docs/reports/NP-FIN-P1G-implementation.txt`, `docs/reports/NP-FIN-P1G-release-compatibility.txt`.
+
+### ZD-281 — Financial writes are gated at the table level (OD-G1)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Data integrity
+- **Decision:**
+  - A BEFORE INSERT / UPDATE / DELETE trigger (`a_billing_write_gate`) on every financial table refuses any write for an organization that is not enabled (ZW004 `billing_not_enabled`).
+  - It replaces the proposal's per-RPC re-definitions: no billing RPC body or signature is changed.
+  - Required coverage: structural tests (every `billing_*` table is gated; every table a billing function writes is gated) and adversarial tests (every write RPC, direct owner writes, concurrency with a disable).
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** `20261029120000_core_billing_write_gate.sql`, all NP-BILL-P1 / FIN-P1 write paths
+- **Dependencies:** ZD-268, ZD-280
+- **Owner:** Engineering
+- **Review Trigger:** Any new financial table or billing write path
+
+### ZD-282 — No organization is enabled by the migration; synthetic enablement is a separate action (OD-G2)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Privacy
+- **Decision:**
+  - The migration enables no organization (no row = disabled).
+  - The synthetic "Nemryn Pilot Simulation" tenant may be enabled only by a separately authorized Platform Admin action, after release verification.
+  - Live enablement (including Zenward Mobility) requires the NP-LAUNCH-02 GO and the capability in ZD-287.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** `billing_write_enablements`, `platform_set_billing_write_enablement`
+- **Dependencies:** ZD-280, ZD-287, NP-LAUNCH-02
+- **Owner:** Owner
+- **Review Trigger:** The NP-LAUNCH-02 GO decision
+
+### ZD-283 — The existing production draft invoice's organization stays disabled pending verification (OD-G3)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Privacy
+- **Decision:**
+  - The organization owning the one production draft invoice stays disabled (its draft is read-only; nothing is lost).
+  - Its ownership and purpose may be verified only by an authorized, minimum-necessary read (organization id only).
+- **Verification (2026-10-29, authorized read-only lookup):** the draft belongs to organization `627a9fa6-8399-4b1a-b77f-d7e7df6deda4` (the real Zenward Mobility tenant), `is_pilot_simulation_tenant = false`, 1 draft. Outcome decided in ZD-291.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** Production billing data (1 draft invoice)
+- **Dependencies:** ZD-282
+- **Owner:** Owner
+- **Review Trigger:** The authorized verification read
+
+### ZD-284 — P1G ships as a separate PR stacked on the reviewed FIN-P1 commit (OD-G4)
+
+- **Date:** 2026-10-29
+- **Category:** Release process
+- **Decision:**
+  - P1G is a separate PR based on the reviewed FIN-P1 commit (0ded235).
+  - PR #44 is not modified.
+- **Status:** SUPERSEDED IN PART by ZD-288 (2026-10-29) — only the release packaging / branch-merge strategy ("PR #44 is not modified"). The separation of P1G as its own reviewed commit and PR stands.
+- **Affected Product Areas:** PR #44, the P1G PR
+- **Dependencies:** ZD-285
+- **Owner:** Owner
+- **Review Trigger:** Any change to PR #44 before merge
+
+### ZD-285 — FIN-P1 and P1G migrations are released as one rehearsed atomic transaction (OD-G5)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Data integrity
+- **Decision:**
+  - M1 (20261029100000), M2 (20261029110000) and M3 (20261029120000) are applied in ONE transaction: all succeed or nothing changes, so there is no interval with ungated ledger writes.
+  - The FIN-P1 zero-row gate stays mandatory. The package must fail closed and leave the migration history consistent (exactly the three versions, or none).
+  - The package is rehearsed on the isolated stack before any production use.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** Production release procedure
+- **Dependencies:** ZD-281
+- **Owner:** Engineering / Owner
+- **Review Trigger:** Any change to M1, M2 or M3
+
+### ZD-286 — Tenants see only the enabled / disabled state (OD-G6)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Privacy
+- **Decision:**
+  - Tenant-facing reads expose only whether billing is enabled, plus non-sensitive operational state (version, last change time).
+  - The internal reason, approval_ref, data class, actor and history are readable only through Platform Admin administration.
+- **Status:** CONFIRMED — OWNER-APPROVED
+- **Affected Product Areas:** `billing_write_status`, `billing_write_enablements` grants, `platform_get_billing_write_enablement`
+- **Dependencies:** ZD-281
+- **Owner:** Engineering
+- **Review Trigger:** Any tenant-facing billing administration UI
+
+### ZD-287 — Emergency corrections: no temporary enablement; a scoped correction-only capability before live use (EC-1 to EC-6)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Financial operations
+- **Decision (approved principles):**
+  - EC-1: No general-purpose temporary billing enablement to make corrections in a disabled organization. Default-deny stays.
+  - EC-2: A future correction-only capability is scoped by organization, operation, record and expiry.
+  - EC-3: It requires Platform Admin approval and complete audit evidence (request, approval, the correction, expiry).
+  - EC-4: Corrections of sensitive live data need an additional approval unless an explicitly approved emergency exception exists.
+  - EC-5: The full feature is not built in P1G.
+  - EC-6: Before the first LIVE organization is enabled, this capability or a separately approved equivalent control must exist.
+- **Remaining implementation decisions:** approvers and two-person rule; maximum expiry; the exact operation list (void, unapply, refund correction, receipt reversal); how the authorization is presented to the tenant; the emergency-exception criteria.
+- **Status:** CONFIRMED — OWNER-APPROVED (principles); implementation PROVISIONAL
+- **Affected Product Areas:** Future correction-only capability; the live-enablement procedure
+- **Dependencies:** ZD-282, NP-LAUNCH-02
+- **Owner:** Owner / Engineering
+- **Review Trigger:** Planning of the first live enablement
+
+### ZD-288 — Combined release: PR #45 merges into np-fin-p1-ledger; PR #44 becomes the single release PR (M-1; supersedes ZD-284)
+
+- **Date:** 2026-10-29 (approved)
+- **Category:** Release process
+- **Decision:**
+  - PR #45 merges into `np-fin-p1-ledger`, preferably as a fast-forward to b254039 so the reviewed commit ids are kept. This deploys nothing to production: the base is not `main`, and Vercel builds a preview only.
+  - PR #44 then carries FIN-P1 + P1G and becomes the combined release PR.
+  - There is exactly ONE merge into `main` and ONE production deployment.
+  - The three migrations (20261029100000, 20261029110000, 20261029120000) are applied atomically with `docs/reports/NP-FIN-P1G-atomic-release-package.sql` (psql) and verified BEFORE that merge (ZD-285).
+  - CI on PR #44 after the merge is informational: gate-tests tests the release-gate script; db-compat is report-only (NP-RELEASE-01C). Neither replaces the isolated SQL, RLS and concurrency suites, and a check that has not run is never reported as passing.
+- **Reason:** It removes the degraded-UI window and the release-gate DRIFT finding (scenario D) that two sequential deploys would create (`docs/reports/NP-FIN-P1-P1G-joint-release-readiness.txt` §2.2, §7).
+- **Scope of supersession:** replaces ZD-284 ONLY for release packaging and branch merging. Unchanged: every security requirement (ZD-281 to ZD-287), the migration order M1 -> M2 -> M3, the atomic package (ZD-285), the recorded test evidence, and every explicit production authorization gate.
+- **Status:** CONFIRMED — OWNER-APPROVED (D1, 2026-10-29). Authorizes the development-branch update only. The merge into `main`, the production migration window, the deployment and any enablement each still require their own explicit authorization.
+- **Affected Product Areas:** PR #44, PR #45, branch `np-fin-p1-ledger`, the production release procedure
+- **Dependencies:** ZD-284 (superseded on approval), ZD-285
+- **Owner:** Owner
+- **Review Trigger:** Any change to the combined release PR before its merge into `main`
+
+### ZD-289 — Preview deployments are verifiably isolated from production Supabase (P-1, revised 2026-10-30)
+
+- **Date:** 2026-10-29 (original); revised 2026-10-30
+- **Category:** Security / Privacy / Release
+- **Decision (current, revision 1 — 2026-10-30):**
+  - Vercel Preview deployments must be VERIFIABLY ISOLATED from the production Supabase project: no effective production connection through environment variables (project-level, shared / team-level, or integration-synced), hardcoded configuration, server-side credentials, or deployment configuration.
+  - A separate cloud Preview database is OPTIONAL, not mandatory. Preview may run WITHOUT any database connection. Development and all SQL, RLS, concurrency and end-to-end testing continue on the isolated local Supabase environments.
+  - A dedicated non-production Preview database (fictional data only) may be introduced later, when cloud-based testing becomes necessary.
+  - No Preview deployment may be used to read or test production data.
+  - Until Preview isolation is verified, a Preview with an effective production connection is a release BLOCKER for the FIN-P1 / P1G production merge (K1).
+- **Original decision (2026-10-29, superseded by revision 1, kept for history):**
+  - ~~Vercel Preview deployments must point at a separate NON-PRODUCTION Supabase project that holds fictional data only.~~ (now optional)
+  - No Preview deployment may be used to read or test production data. (retained)
+  - Until Preview is verified to be isolated, any Preview that points at production is a release BLOCKER for the FIN-P1 / P1G production merge. (retained)
+- **Verification (2026-10-30) — K1 CONDITIONALLY ACCEPTED (see the last bullet):**
+  - Owner-verified in Vercel: Production tracks `main`; Preview tracks the other branches; Ignored Build Step is Automatic; the Preview project variables and the shared variables are EMPTY; no integrations are installed.
+  - Repository: no hardcoded, inherited or fallback production connection; a build with no Supabase variables succeeds and fails closed at runtime.
+  - Condition: Preview deployments built before the Preview variables were removed may still embed earlier production variables. That cannot be ruled out from available metadata; they are behind Vercel Authentication. Clear it by a spot-check or a Preview-only retirement before the production migration window (`docs/reports/NP-FIN-P1-P1G-preview-environment-audit.txt` §5).
+  - Owner runtime verification (2026-10-30): the newest and the oldest available Preview deployments both log "Missing required environment variable: NEXT_PUBLIC_SUPABASE_URL"; no production record or credential was accessed. **K1 is CONDITIONALLY ACCEPTED for release planning.** Residual uncertainty: the intermediate historical previews were not individually verified, and no claim is made that every historical deployment was. If exhaustive isolation assurance is required, the condition stays open until a separately approved Preview-only cleanup or a complete inventory (audit §6).
+- **Not authorized by this entry:** creating a Preview database; changing Vercel environment variables, integrations or deployment settings. Each needs separate authorization.
+- **Status:** CONFIRMED — OWNER-APPROVED (original: D3 / P-1, 2026-10-29; revision 1: owner-approved 2026-10-30)
+- **Affected Product Areas:** Vercel Preview environment, Supabase projects
+- **Dependencies:** ZD-280, ZD-288
+- **Owner:** Owner
+- **Review Trigger:** Any change to Vercel environment variables, integrations or Supabase projects; the first need for cloud-based Preview testing
+
+### ZD-290 — Production backup custody policy v1 (encrypted only; owner-controlled; escrowed keys)
+
+- **Date:** 2026-10-29
+- **Category:** Security / Privacy / Operations
+- **Decision (approved principles; policy text: `docs/reports/NP-LAUNCH-03A-backup-containment.txt` §7, as amended here):**
+  - Production backups are encrypted only; no uncontrolled plaintext copy may exist.
+  - Primary storage is owner-controlled (`~/NemrynBackups`, FileVault Mac, owner account).
+  - Off-machine copies are ENCRYPTED sets on an owner-controlled encrypted external drive (not iCloud).
+  - One random encryption key per set, kept in the login Keychain; the recovery key is escrowed in an owner-controlled password manager.
+  - Every set is verified by decrypt-to-hash against its MANIFEST.
+  - Restores happen only into controlled, disposable environments, torn down the same day.
+  - The restore rehearsal (D-REH) is approved IN PRINCIPLE as a future procedure under these safeguards.
+- **Not authorized by this entry:** creating, restoring, moving, copying or deleting any backup; deleting the legacy plaintext sets (NP-LAUNCH-03A A1 remains a separate approval); executing the restore rehearsal; accessing password-manager secrets.
+- **Status:** CONFIRMED — OWNER-APPROVED (D4 C1 / C2 / C3 / C4 / C6, 2026-10-29)
+- **Affected Product Areas:** Production backups, release procedures
+- **Dependencies:** NP-LAUNCH-03A
+- **Owner:** Owner
+- **Recovery context (owner-confirmed 2026-10-30, K2 L2 / L3):**
+  - The production project is on the Supabase Free plan, with NO managed platform database backups and NO point-in-time recovery (PITR).
+  - Production Storage has no buckets: no Storage-object backup is required for the FIN-P1 / P1G release.
+  - The independently verified encrypted logical export plus its encrypted off-machine copy and escrowed key are therefore MANDATORY release safeguards, not a backstop.
+  - A logical export is a single point-in-time copy taken before the release. It is NOT equivalent to PITR: changes after the export are not recoverable from it.
+  - No plan upgrade is decided or implied.
+- **Review Trigger:** Monthly custody review; any incident; counsel advice (Q-C6); any change of the Supabase plan or of Storage use
+
+### ZD-291 — Zenward Mobility's draft invoice becomes read-only at the FIN-P1 / P1G release (Z-1)
+
+- **Date:** 2026-10-29
+- **Category:** Release / Real-data protection
+- **Decision:**
+  - The existing production draft invoice of Zenward Mobility (`627a9fa6-8399-4b1a-b77f-d7e7df6deda4`) may become read-only when FIN-P1 / P1G is released. It stays visible and printable; it cannot be edited, issued or discarded while the organization is disabled.
+  - The draft is preserved WITHOUT modification: no migration, script or operator action changes or deletes it.
+  - Zenward Mobility stays DISABLED for all financial writes. It is a REAL tenant and must never be classified or enabled as `synthetic`.
+  - Any future billing enablement for Zenward is a LIVE enablement and requires the NP-LAUNCH-02 GO, the ZD-287 correction-only capability (or an approved equivalent control), and its own explicit authorization.
+- **Reason:** It applies ZD-282 / ZD-283 to the verified owner of the draft. Real-tenant financial use stays behind the launch gate (ZD-280).
+- **Status:** CONFIRMED — OWNER-APPROVED (Z-1, 2026-10-29)
+- **Affected Product Areas:** Production billing data (Zenward Mobility draft invoice); `billing_write_enablements`
+- **Dependencies:** ZD-280, ZD-282, ZD-283, ZD-287, NP-LAUNCH-02
+- **Owner:** Owner
+- **Review Trigger:** The NP-LAUNCH-02 GO decision; any request to enable Zenward Mobility
+
+No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place. ZD-284 has been SUPERSEDED IN PART by ZD-288 (release packaging / branch merging only).
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)
