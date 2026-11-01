@@ -180,3 +180,57 @@ export function currentLeg(state: string): "pickup" | "destination" | "none" {
   }
   return "none";
 }
+
+/** Shown in place of a stop that has no usable address (NP-DRIVER-UX-02). Navigate is never offered for it. */
+export const ADDRESS_MISSING_MESSAGE = "Address missing — contact dispatch.";
+
+/**
+ * A Trip the Driver has started and not finished (NP-DRIVER-UX-02): any state between "Start to Pickup" and
+ * "Complete Trip". Same five states as `ELIGIBLE_LOCATION_TRACKING_STATES`, kept under its own name because the two
+ * answer different questions.
+ */
+export const DRIVER_IN_PROGRESS_STATES: ReadonlySet<string> = new Set([
+  "en_route_to_pickup",
+  "arrived_at_pickup",
+  "passenger_onboard",
+  "en_route_to_destination",
+  "arrived_at_destination",
+]);
+
+export function isTripInProgress(state: string): boolean {
+  return DRIVER_IN_PROGRESS_STATES.has(state);
+}
+
+/**
+ * Driver Today's trips in display order (NP-DRIVER-UX-02). A Trip already IN PROGRESS always appears and always comes
+ * first — whatever day it was scheduled for, and even with no scheduled time — so the dominant "next trip" card never
+ * points past a ride the Driver is still on. Every other Trip appears only when scheduled for TODAY in the
+ * organization's timezone (a Trip with no time has no honest "is this today" answer and stays on the Trips tab).
+ * Within each group: earliest scheduled pickup first, untimed last, original order otherwise (stable).
+ */
+export function selectTodayTrips<T extends { state: string; scheduledPickupAt: string | null }>(
+  trips: readonly T[],
+  now: Date,
+  timezone: string,
+): T[] {
+  const time = (t: T) => {
+    const ms = t.scheduledPickupAt ? new Date(t.scheduledPickupAt).getTime() : Number.NaN;
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+  };
+  return trips
+    .map((trip, index) => ({ trip, index }))
+    .filter(({ trip }) => {
+      if (isTripInProgress(trip.state)) return true;
+      if (!trip.scheduledPickupAt) return false;
+      const at = new Date(trip.scheduledPickupAt);
+      return !Number.isNaN(at.getTime()) && isSameOperationalDay(at, now, timezone);
+    })
+    .sort((a, b) => {
+      const progress = Number(isTripInProgress(b.trip.state)) - Number(isTripInProgress(a.trip.state));
+      if (progress !== 0) return progress;
+      const ta = time(a.trip), tb = time(b.trip);
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      return a.index - b.index;
+    })
+    .map(({ trip }) => trip);
+}

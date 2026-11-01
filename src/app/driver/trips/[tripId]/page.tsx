@@ -87,8 +87,10 @@ export default async function DriverTripDetailPage({ params }: { params: Promise
 
   const state = data.state ?? "scheduled";
   const passengerName = data.passenger_display_name ?? "Passenger";
-  const pickupAddress = data.pickup_description ?? "Pickup location not available";
-  const destinationAddress = data.destination_description ?? "Destination not available";
+  // NP-DRIVER-UX-02: passed through as recorded (possibly null). DriverActiveTripLegs shows "Address missing — contact
+  // dispatch." for a missing stop and never builds a Navigate link from placeholder text.
+  const pickupAddress = data.pickup_description;
+  const destinationAddress = data.destination_description;
   const notes = parseDriverNotes(data.driver_notes);
   const nextAction = DRIVER_NEXT_ACTION[state];
 

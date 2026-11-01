@@ -10,14 +10,21 @@ import { DriverNextTripCard } from "@/components/driver/DriverNextTripCard";
 import { DriverTripCard } from "@/components/driver/DriverTripCard";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
-import { driverTripStateLabel, formatTripTime, formatLongDate, isSameOperationalDay } from "@/lib/driver/trip-presentation";
+import {
+  ADDRESS_MISSING_MESSAGE,
+  driverTripStateLabel,
+  formatTripTime,
+  formatLongDate,
+  isTripInProgress,
+  selectTodayTrips,
+} from "@/lib/driver/trip-presentation";
 import type { Database } from "@/lib/supabase/database.types";
 
 type RawActiveTrip = Database["public"]["CompositeTypes"]["driver_active_trip_summary"];
 
 interface TodayTrip {
   tripId: string;
-  scheduledPickupAt: string;
+  scheduledPickupAt: string | null;
   appointmentAt: string | null;
   passengerDisplayName: string;
   pickupDescription: string;
@@ -27,27 +34,26 @@ interface TodayTrip {
 
 /**
  * Narrows + presents one `driver_active_trip_summary` row for the Today
- * screen, scoped to today's calendar date IN THE ORGANIZATION'S OWN
- * OPERATIONAL TIMEZONE (P1-E3-S2C — never the Next.js server's own
- * timezone; work item §13 of P1-E3-S2 — every rendered field is mapped to
- * an actual RPC output; see docs/product/driver-today-data-map.md and
- * docs/product/operational-timezone.md). A trip with no
- * `scheduled_pickup_at` (optional at creation — docs/data/mutation-api.md
- * `create_trip`) has no unambiguous "is this today" answer and is
- * deliberately excluded here, not guessed into either bucket — it remains
- * visible on the (not-yet-built) Trips screen instead.
+ * screen (every rendered field maps to an actual RPC output; see
+ * docs/product/driver-today-data-map.md). WHICH rows appear and in what
+ * order is decided separately by `selectTodayTrips` (NP-DRIVER-UX-02): a Trip
+ * already in progress always appears first, whatever day it was scheduled
+ * for and even with no `scheduled_pickup_at`; any other Trip appears only
+ * when scheduled for today IN THE ORGANIZATION'S OWN OPERATIONAL TIMEZONE
+ * (P1-E3-S2C, docs/product/operational-timezone.md). An untimed Trip that has
+ * not started has no unambiguous "is this today" answer and stays on the
+ * Trips screen instead.
  */
-function toTodayTrip(trip: RawActiveTrip, now: Date, timezone: string): TodayTrip | null {
-  if (!trip.trip_id || !trip.scheduled_pickup_at) return null;
-  if (!isSameOperationalDay(new Date(trip.scheduled_pickup_at), now, timezone)) return null;
+function toTodayTrip(trip: RawActiveTrip): TodayTrip | null {
+  if (!trip.trip_id) return null;
 
   return {
     tripId: trip.trip_id,
     scheduledPickupAt: trip.scheduled_pickup_at,
     appointmentAt: trip.appointment_at,
     passengerDisplayName: trip.passenger_display_name ?? "Passenger",
-    pickupDescription: trip.pickup_description ?? "Pickup location not available",
-    destinationDescription: trip.destination_description ?? "Destination not available",
+    pickupDescription: trip.pickup_description ?? ADDRESS_MISSING_MESSAGE,
+    destinationDescription: trip.destination_description ?? ADDRESS_MISSING_MESSAGE,
     state: trip.state ?? "scheduled",
   };
 }
@@ -99,10 +105,11 @@ export default async function DriverTodayPage() {
 
   const timezone = access.organization.organizationTimezone;
   const now = new Date();
-  const todayTrips = (data ?? [])
-    .map((trip) => toTodayTrip(trip, now, timezone))
-    .filter((trip): trip is TodayTrip => trip !== null)
-    .sort((a, b) => new Date(a.scheduledPickupAt).getTime() - new Date(b.scheduledPickupAt).getTime());
+  const todayTrips = selectTodayTrips(
+    (data ?? []).map(toTodayTrip).filter((trip): trip is TodayTrip => trip !== null),
+    now,
+    timezone,
+  );
 
   const [nextTrip, ...laterTrips] = todayTrips;
 
@@ -132,7 +139,7 @@ export default async function DriverTodayPage() {
         <>
           {nextTrip && (
             <section className="flex flex-col gap-2">
-              <SectionLabel text="Next Trip" />
+              <SectionLabel text={isTripInProgress(nextTrip.state) ? "In Progress" : "Next Trip"} />
               <DriverNextTripCard
                 time={formatTripTime(nextTrip.scheduledPickupAt, timezone)}
                 passengerName={nextTrip.passengerDisplayName}
