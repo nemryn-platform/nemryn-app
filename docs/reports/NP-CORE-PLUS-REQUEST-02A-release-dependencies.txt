@@ -1,0 +1,105 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02A — RELEASE DEPENDENCIES
+Date: 2026-11-02
+Scope: what any future release of this branch depends on, and what it affects. Nothing here is authorized: no commit,
+push, merge, deploy, production migration or enablement has been made or is requested by this report.
+
+======================================================================================================================
+1. MIGRATION ORDERING
+======================================================================================================================
+  The new file is 20261102100000_plus_create_contact_for_request.sql.
+  - It sorts after origin/main's head (20261028100000) and after the parked FIN files (20261029100000 / 110000 /
+    120000).
+  - Production head: 20261028100000. This comes from the FIN postponement handoff and has NOT been re-verified (no
+    production access was authorized). Before any release, run a read-only `supabase migration list --linked`
+    (owner-run; see the prod-db-cli-access note).
+
+  Dependencies, verified in source and by applying the migration on the isolated stack:
+  - It depends only on objects already on origin/main / production: organizations, auth.users, audit_events
+    (including its reason column), _require_platform_admin, _plus_staff_name, plus_can_read, _require_plus_write,
+    _plus_require_core_request_read, plus_create_contact, plus_link_request, plus_contact_write_result,
+    plus_request_attribution_result, plus_request_attributions and transportation_requests.
+  - It references no FIN or billing-ledger object, and the FIN migrations reference none of its objects. The two sets
+    are independent.
+
+  If this ships BEFORE FIN-P1 / P1G (ZD-301):
+    - The FIN package's preflight, which hard-requires production head 20261028100000, fails safely and must be
+      re-prepared.
+    - At FIN resume, re-timestamp the three unreleased FIN migrations to after 20261102100000 (approved R3). The
+      alternative, `--include-all`, is safe by independence but not preferred.
+    - FIN timestamps are NOT changed now.
+  If FIN ships first: no action needed for ordering.
+
+  Release gate (scripts/release/db-compat-core.mjs, NP-RELEASE-01): a production (deploy-mode) build is allowed ONLY
+  when every repository migration is recorded as applied in production. Consequences:
+    - Merging this migration to main before applying it in production would make the gate refuse every production
+      build. This is a safe failure, but it blocks unrelated releases. The migration must be applied to production
+      (separately authorized) in the same release window as the merge, or before it.
+    - The gate also flags a repository migration OLDER than the production head that was never applied. If this
+      feature ships first, FIN's 20261029* files would be flagged at resume, which independently confirms that they
+      must be re-timestamped then (R3).
+    - CI's db-compat verdict is UNVERIFIABLE (no CI Supabase token). The owner-run read-only preflight is the real
+      check.
+
+  FIN compatibility summary:
+    - No FIN file is modified, renamed or re-timestamped by this branch, and PR #44 is unchanged at 44e66cd.
+    - The schemas are independent (no shared objects).
+    - The only coupling is migration ordering (above) and the mechanical test / register conflicts (section 2).
+    - If this deploys first, the FIN release package must be re-prepared.
+
+======================================================================================================================
+2. EXPECTED MERGE CONFLICTS WITH PR #44 (mechanical; resolve at whichever merge comes second)
+======================================================================================================================
+  C1  supabase/tests/platform_admin_foundation_tests.sql EX-1: both branches change the platform_* inventory from 14
+      to 16, on the same line. Combined value: 18, keeping both comment lines.
+  C2  supabase/tests/privilege_contract_tests.sql: both branches append entries to c_tables and c_fn. Keep both sets.
+      The production run must list both.
+  C3  docs/product/decision-register.md: FIN holds ZD-264 .. ZD-293 (ZD-292 / 293 are still uncommitted in the FIN
+      worktree). This branch appends ZD-294 .. ZD-301 after ZD-263, with a numbering note. Keep both in numeric order.
+  C4  src/lib/supabase/database.types.ts (Stage B): both regenerate it. Regenerate again after merging.
+  C5  plus_access_helpers / plus_member_grants / plus_contacts_activities tests: FIN's FU-2 fix lands with PR #44.
+      This branch does not touch those files, so there is no conflict. Until one of them merges to main, those three
+      tests fail on main (pre-existing).
+
+======================================================================================================================
+3. ACTIVATION (separate authorization required; none performed or requested)
+======================================================================================================================
+  - The migration enables no organization in any environment. Production stays disabled after a release.
+  - Enabling a synthetic tenant (e.g. "Nemryn Pilot Simulation") is one call by a Platform Admin session:
+      platform_set_plus_request_contact_enablement(<org>, true, 'synthetic', '<reason>')
+    It needs its own owner approval. There is no UI for it, matching the inquiry allowlist.
+  - Real tenants, including Zenward Mobility: never, while PD-10 / PD-11 are open (ZD-299). The table CHECK makes
+    'live' impossible, and enabling a real tenant would require a reviewed migration.
+  - Disabling is one call with p_enabled = false and a reason. It takes effect at once and waits for in-flight
+    creations.
+
+======================================================================================================================
+4. RELEASE PRECONDITIONS (for a future release decision)
+======================================================================================================================
+  R-1  Stages B (UI, server action, types, doc amendments) and C (browser E2E incl. 1440 / 1024 / 768) complete and
+       reviewed.
+  R-2  Owner authorization to commit, push and open a PR from np-core-plus-request-01 into main.
+       - The push account must be nemryn (see the GitHub push account note).
+       - CI's db-compat check is not production verification: its verdict is UNVERIFIABLE because there is no CI
+         Supabase token.
+  R-3  Read-only production preflight: confirm head 20261028100000, then run privilege_contract_tests.sql before and
+       after.
+  R-4  Owner decision on order relative to FIN (section 1), and acceptance of FIN re-preparation if this goes first.
+  R-5  Post-release: the privilege contract shows 0 violations; plus_request_contact_enablements is empty; a read-only
+       smoke check confirms the function exists and refuses with ZW004 for an authorized writer of a non-enabled
+       synthetic organization. Any write smoke needs separate approval.
+  R-6  Rollback: forward-only. If needed, a follow-up migration revoking EXECUTE on plus_create_contact_for_request
+       disables the feature for all tenants without touching data. With no enablement rows, the feature is already
+       inert.
+
+======================================================================================================================
+5. LOCAL ENVIRONMENT STATE LEFT BEHIND
+======================================================================================================================
+  - Worktree /Users/datamatics/Nemryn-core-plus-request on branch np-core-plus-request-01 at 85f2042, with
+    uncommitted changes (implementation report section 1).
+  - ~/NemrynS1Iso/supabase/migrations now also contains 20261102100000_plus_create_contact_for_request.sql. The
+    isolated DB is at that head, freshly reset and then used by the suites; enablement rows = 0.
+      * Before any FIN work on the isolated stack, remove this file from that directory and reset. It must not
+        accompany the FIN migrations in a FIN rehearsal unless sequencing is intended.
+      * Run `node tests/e2e/fixtures/local-plus-demo.mjs enable` before demos or E2E.
+  - The everyday ZenWard stack and production were not touched. Docker Desktop was started to run the isolated
+    stack.

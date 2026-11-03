@@ -85,7 +85,9 @@ c_tables(tbl) as (values
   ('billing_invoices'),
   ('billing_invoice_trips'),
   ('billing_invoice_lines'),
-  ('billing_payments')
+  ('billing_payments'),
+  -- NP-CORE-PLUS-REQUEST-02A "Add contact from a Request" activation guard (class A: no privilege for any role)
+  ('plus_request_contact_enablements')
 ),
 -- authenticated: direct TABLE-level privileges (anything not listed is NOT granted)
 c_auth_tbl(tbl, priv) as (values
@@ -492,7 +494,12 @@ c_fn(sig, roles) as (values
   ('billing_summary(uuid)', 'u'),
   ('billing_trip_status(uuid,uuid)', 'u'),
   ('billing_update_invoice_draft(uuid,uuid,integer,text,text,text,text,jsonb,bigint,text)', 'u'),
-  ('billing_void_invoice(uuid,uuid,integer,text)', 'u')
+  ('billing_void_invoice(uuid,uuid,integer,text)', 'u'),
+  -- NP-CORE-PLUS-REQUEST-02A: Platform Admin activation guard, tenant visibility helper, atomic create-and-link
+  ('platform_set_plus_request_contact_enablement(uuid,boolean,text,text)', 'u'),
+  ('platform_get_plus_request_contact_enablement(uuid)', 'u'),
+  ('plus_request_contact_enabled(uuid)', 'u'),
+  ('plus_create_contact_for_request(uuid,uuid,text,text,text,text,text,boolean,uuid,boolean)', 'u')
 ),
 -- TRANSITIONAL (expand -> contract): functions a release deliberately keeps ONLY while the previously deployed app
 -- may still call them. Tolerated by checks 13 / 16-18 (their ACL must match the roles given here) and NOT required

@@ -1,0 +1,132 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02D — MANUAL ACCESSIBILITY CHECKLIST (macOS SAFARI + VOICEOVER)
+Date: 2026-11-03
+For: the owner, before or alongside PR review. Estimated time: 10–15 minutes.
+Status of this check today: NOT RUN. Nothing in this file is a PASS until a person has heard it in VoiceOver.
+The automated equivalents already pass in Chrome:
+  - axe 0 violations
+  - focus targets and the status-region text sequence asserted
+  - 123 / 123 checks (02C-R1-test-results §1)
+This checklist confirms what a real screen reader speaks, which the suite cannot hear.
+
+======================================================================================================================
+0. SETUP (isolated stack only, fictional data only)
+======================================================================================================================
+  Never run this against production, Zenward Mobility or any real organization.
+  You need:
+    - the isolated app (NemrynS1Iso stack and a local build of this branch)
+    - the synthetic "Fictional Org A" with Plus active and Add contact enabled through the Platform Admin RPC (data
+      class 'synthetic')
+    - a pending fictional request with a requester name and phone
+  The browser suite creates and removes all of this by itself, but it leaves nothing behind for manual use.
+  Recommended: authorize a short, separate step in which Claude prepares this session and tears it down afterward.
+  That step would:
+    - serve the build on http://localhost:3120
+    - enable Org A
+    - create one "RC02D … Fictional" request
+    - after your walkthrough: disable Org A, delete the fixture and confirm the enablement table is empty
+  Sign-in: org-a-admin@example.test with the fictional seed password (tests/e2e/plus-quotes/_config.mjs).
+
+  Safari and VoiceOver settings (one-time):
+    a. Safari > Settings > Advanced > "Press Tab to highlight each item on a webpage": ON.
+       Without it, Tab skips buttons and links in Safari.
+    b. Turn VoiceOver on and off with Cmd+F5. VO = Control+Option.
+    c. Use Tab / Shift+Tab to move, and Space or Enter to activate. VO+A reads from the cursor, if useful.
+    d. Optional: VoiceOver Utility > Verbosity > Announcements, so you can confirm that status messages are spoken.
+  Width: test at least one wide window (about 1440) and one narrower one (about 1024). At 1024 the form has two columns,
+  and focus order must still go left to right, then down.
+
+======================================================================================================================
+1. CHECKS — record PASS / FAIL / NOT RUN and a note for each
+======================================================================================================================
+  Open the fictional request's Request Details page. Tab to the Growth panel.
+
+  V1  Add contact button
+      Do:     Tab to "Add contact".
+      Expect: "Add contact, button".
+      Result: ______
+
+  V2  Open the form (focus)
+      Do:     Press Enter.
+      Expect: Focus moves to Name. VoiceOver says "Name", required, and the prefilled requester name.
+      Result: ______
+
+  V3  Reading / Tab order
+      Do:     Tab through the whole form.
+      Expect: Name, Phone, Email, Contact type, Preferred channel, Owner, Do not contact, Add and link contact,
+              Cancel. Nothing is skipped. Order matches what you see, including at 1024 in two columns.
+      Result: ______
+
+  V4  A1 — Cancel
+      Do:     Tab to Cancel and press Enter.
+      Expect: The form closes. Focus lands on "Add contact" and VoiceOver says "Add contact, button".
+              It must not fall silent or restart from the top of the page.
+      Result: ______
+
+  V5  A2 — field error
+      Do:     Reopen the form. Type "call after 5pm" in Phone and submit (Enter in the field, or the button).
+      Expect: Focus goes to Phone. VoiceOver reads Phone, "invalid data" (or similar), and the message "Enter a phone
+              number using digits, spaces and + ( ) . - (an extension like x12 is fine)." The message is spoken once
+              (not also as an alert). The typed value "call after 5pm" is still there.
+      Result: ______
+
+  V6  A2 — phone-or-email rule
+      Do:     Clear Phone and Email and submit.
+      Expect: Focus goes to Phone. VoiceOver reads Phone as invalid and "A phone number or an email address is
+              required." Tab to Email: the same hint is read and Email is also invalid.
+      Result: ______
+
+  V7  A2 — first invalid field wins
+      Do:     Clear Name too (Name, Phone and Email all empty) and submit.
+      Expect: Focus goes to Name (the first invalid field), and Name's error is read.
+      Result: ______
+
+  V8  A4 — pending, then success
+      Do:     Fill in a valid fictional name and phone (e.g. "(404) 555-0123") and submit.
+      Expect: During the save, VoiceOver says "Adding the contact…". This can be brief or skipped on a fast machine;
+              note what you hear.
+              Then it says "Contact added and linked in Growth. The request itself is unchanged." exactly once.
+      Result: ______
+
+  V9  A3 — focus after success
+      Do:     Right after V8, without moving.
+      Expect: Focus is on the new contact's name link. VoiceOver says "<contact name>, link". It must not be on the
+              page body or the top of the page. Tab next reaches "Open in Plus".
+      Result: ______
+
+  V10 A2 — possible duplicate (optional; uses a second fictional request)
+      Do:     On another fictional request whose requester matches the contact just created (same email or phone),
+              open Add contact and submit.
+      Expect: Focus goes to the amber explanation, read once ("This may be someone who is already in your
+              contacts…"). Tab reaches the match and "Link this contact". "Create a separate contact" is the footer
+              button.
+      Result: ______
+
+  V11 No double announcements
+      Throughout V5–V10, listen for any message spoken twice in a row.
+      Expect: none.
+      Result: ______
+
+  V12 Read-only user (optional)
+      Do:     Sign in as the fictional Dispatcher with a Plus read grant.
+      Expect: The Growth panel is read as "Not linked to a Growth contact or opportunity." There are no Add contact /
+              Link buttons to reach.
+      Result: ______
+
+======================================================================================================================
+2. HOW TO RECORD THE RESULT
+======================================================================================================================
+  - Overall PASS only if V1–V9 and V11 pass. V10 and V12 are recommended but optional.
+  - V8: hearing the success message without "Adding the contact…" is acceptable on a fast save. Record it as "pending
+    not heard (fast)". Do not count it as a failure.
+  - On any FAIL, note:
+      * what was spoken
+      * where focus was (VO+F3 describes the focused item)
+      * the Safari and macOS versions
+    A FAIL is a fix-before-release finding for a narrowly scoped R2 pass. It is not a reason to change the approved
+    wording.
+  - Afterward, the enablement must be removed and the table confirmed empty (setup step 0).
+
+  Result summary (fill in):
+    Date ______   Tester ______   macOS ______   Safari ______   Width(s) ______
+    V1 __ V2 __ V3 __ V4 __ V5 __ V6 __ V7 __ V8 __ V9 __ V10 __ V11 __ V12 __
+    Overall VoiceOver: PASS / FAIL / NOT RUN

@@ -1,0 +1,71 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02C-R1 — VISUAL REVIEW
+Date: 2026-11-02
+Screenshots: docs/design/concept-b/reviews/np-core-plus-request-02c-r1/ (24 PNG files, 5.2 MB; the 12 panel crops are
+0.8 MB). Captured by the repository suite (run R1-b) on the isolated app with fictional "RC02C … Fictional" data only.
+02D addendum: 12 more files from the same run R1-b were added to this folder (01-unlinked and 06-read-only, 1440 /
+1024 / 768, page and panel), unchanged byte for byte. The folder is now the complete six-state R1 set: 36 files,
+7.0 MB, of which the 18 panel crops are 0.9 MB.
+Complete captures: the viewport is grown until nothing scrolls, so nothing is cut off at any width.
+  <state>-<width>-panel.png   the Growth panel alone, full height, at 1:1 scale (best for reviewing)
+  <state>-<width>-page.png    the whole Request Details page
+The 02C set (np-core-plus-request-02c/) is kept for before / after comparison.
+
+======================================================================================================================
+1. SCREENSHOTS
+======================================================================================================================
+  02-form-{1440,1024,768}
+      Add contact form, Name focused.
+        - 1024 / 768: Name full width; Phone | Email; hint; Contact type | Preferred channel; Owner full width;
+          Do not contact card full width.
+        - 1440: single column, as before, with tighter 8 px spacing.
+  03-validation-{1440,1024,768}
+      Phone "call after 5pm" refused. Phone has the red border and its message, plus the focus ring (A2). Values kept.
+  04-duplicates-{1440,1024,768}
+      Amber box with the focus ring on the explanation (A2). The match has "Link this contact". The footer action is
+      "Create a separate contact". Fields are in two columns at 1024 / 768.
+  05-success-{1440,1024,768}
+      Contact link with the focus ring (A3); Open in Plus; Opportunity None; the Link line; the success notice (inside
+      the status region); Correct link.
+
+======================================================================================================================
+2. FORM HEIGHT — BEFORE AND AFTER
+======================================================================================================================
+  Add contact editor (measured in the browser, without the duplicate box):
+                 02C before   R1 after   change
+      1440       873 px       793 px     −80 px    (SP-2 only; the 360 px column stays single)
+      1024       772 px       550 px     −222 px   (SP-1 + SP-2)
+      768        772 px       550 px     −222 px   (SP-1 + SP-2)
+  Whole Request Details page, same states (complete captures, px):
+                         1440            1024            768
+      form               2194 -> 2114    2756 -> 2534    2830 -> 2608
+      validation error   2336 -> 2256    2865 -> 2660    2939 -> 2734
+      duplicates         2534 -> 2446    2984 -> 2754    3058 -> 2828
+      success            1709 = 1709     2270 = 2270     2344 = 2344     (the linked state is unchanged; the status
+                                                                          region adds no space)
+  At 1024 / 768 the 02C estimate for SP-1 + SP-2 (540–580 px) was met at 550 px. At 1440 the reduction is smaller
+  than estimated (−80 px vs −130 to −170), because only SP-2 applies there.
+
+======================================================================================================================
+3. CONFORMANCE
+======================================================================================================================
+  - Existing tokens only: gap-zw-sm / gap-zw-md, plus the container-query variant already used by Growth → Quotes.
+    No new component, colour or primitive change.
+  - No horizontal overflow at 1440 / 1024 / 768 in any state (asserted every run).
+  - Field order, labels, required markers and every approved sentence are unchanged:
+      * the requester notice
+      * the phone-or-email hint
+      * the Owner help
+      * the Do-not-contact help
+      * the scope / consent notice
+  - The focus rings shown are the existing global focus style. The focused messages (error, duplicate explanation)
+    use tabIndex -1, and the ring makes the moved focus visible to sighted keyboard users.
+
+======================================================================================================================
+4. REMAINING OBSERVATIONS (no change made)
+======================================================================================================================
+  O1  The Link line still reads "Linked to an existing request by …" for contacts created here. It can't be
+      distinguished without an API or schema change (implementation report §5).
+  O2  "Open in Plus" sits next to the contact name, which links to the same contact (unchanged since 02B; kept as
+      requested).
+  O3  At 1440 the single column is still the tallest layout (793 px). The remaining 02C options SP-3 to SP-5 are copy
+      changes, and stay available if the owner wants them.

@@ -2008,6 +2008,38 @@ export type Database = {
           },
         ]
       }
+      plus_request_contact_enablements: {
+        Row: {
+          data_class: string
+          enabled_at: string
+          enabled_by: string
+          organization_id: string
+          reason: string
+        }
+        Insert: {
+          data_class: string
+          enabled_at?: string
+          enabled_by: string
+          organization_id: string
+          reason: string
+        }
+        Update: {
+          data_class?: string
+          enabled_at?: string
+          enabled_by?: string
+          organization_id?: string
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plus_request_contact_enablements_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       plus_tasks: {
         Row: {
           assignee_user_id: string | null
@@ -4722,6 +4754,17 @@ export type Database = {
           reason: string
         }[]
       }
+      platform_get_plus_request_contact_enablement: {
+        Args: { p_organization_id: string }
+        Returns: {
+          data_class: string
+          enabled: boolean
+          enabled_at: string
+          enabled_by_name: string
+          organization_id: string
+          reason: string
+        }[]
+      }
       platform_list_activity: {
         Args: { p_before_at?: string; p_before_id?: string; p_limit?: number }
         Returns: {
@@ -4828,6 +4871,21 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_inquiry_public_access_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      platform_set_plus_request_contact_enablement: {
+        Args: {
+          p_data_class: string
+          p_enabled: boolean
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_request_contact_enablement_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_request_contact_enablement_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -4987,6 +5045,27 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "plus_contact_write_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plus_create_contact_for_request: {
+        Args: {
+          p_confirm_possible_duplicate: boolean
+          p_contact_kind: string
+          p_display_name: string
+          p_do_not_contact: boolean
+          p_email: string
+          p_organization_id: string
+          p_owner_membership_id: string
+          p_phone: string
+          p_preferred_channel: string
+          p_request_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["plus_request_contact_result"]
+        SetofOptions: {
+          from: "*"
+          to: "plus_request_contact_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -5908,6 +5987,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      plus_request_contact_enabled: {
+        Args: { p_organization_id: string }
+        Returns: boolean
       }
       plus_revise_quote: {
         Args: {
@@ -6872,6 +6955,20 @@ export type Database = {
         opportunity_id: string | null
         updated_at: string | null
         changed: boolean | null
+      }
+      plus_request_contact_enablement_result: {
+        organization_id: string | null
+        enabled: boolean | null
+        data_class: string | null
+        changed: boolean | null
+      }
+      plus_request_contact_result: {
+        outcome: string | null
+        request_id: string | null
+        contact_id: string | null
+        opportunity_id: string | null
+        possible_duplicates: number | null
+        updated_at: string | null
       }
       plus_task_write_result: {
         task_id: string | null

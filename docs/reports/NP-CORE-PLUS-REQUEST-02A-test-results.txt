@@ -1,0 +1,138 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02A — TEST RESULTS (ISOLATED STACK, FICTIONAL DATA)
+Date: 2026-11-02
+Environment:
+  - Isolated Supabase stack NemrynS1Iso (~/NemrynS1Iso, DB container supabase_db_NemrynS1Iso, port 54362).
+  - Migration set identical to origin/main 85f2042, plus 20261102100000. 99 migrations; head 20261102100000.
+  - The FIN migrations are set aside in ~/NemrynS1Iso/migrations-aside-fin-20261101 and were not applied.
+  - Seed: the repository's fictional seed (identical to supabase/seed.sql).
+  - Verified once more by a final clean run after every edit: `supabase db reset --local`, then the suites below, in
+    order.
+No production database, real tenant or real personal data was touched. Every name in the tests is "…Fictional"; phones
+are 555-01xx and emails example.test.
+
+======================================================================================================================
+1. FINAL CLEAN RUN (fresh reset)
+======================================================================================================================
+  Post-reset state: head=20261102100000, enablement rows=0 (the migration enables nothing).
+
+  NEW
+    plus_create_contact_for_request_tests.sql              43 / 43 PASS
+    plus_create_contact_for_request_concurrency_test.sh     9 / 9 PASS (8 scenarios + invariant), exit 0
+    privilege_contract_tests.sql                           SUMMARY violations = 0 of 29 checks
+  REGRESSION (unchanged suites unless noted)
+    platform_admin_foundation_tests.sql (EX-1 updated)     58 PASS, 0 FAIL
+    plus_entitlement_tests                                 150 / 150
+    plus_entitlement_versioned_tests                        17 / 17
+    plus_access_helpers_tests                              169 / 170 — P6 FAIL (pre-existing; see 4)
+    plus_member_grants_tests                                75 / 76  — C1 FAIL (pre-existing; see 4)
+    plus_contacts_activities_tests                          84 / 85  — C2 FAIL (pre-existing; see 4)
+    plus_opportunities_tests                                75 / 75
+    plus_tasks_tests                                        58 / 58
+    plus_growth_agent_tests                                 40 / 40
+    plus_request_attributions_tests                         73 / 73
+    plus_conversion_rebooking_tests                         44 / 44
+    plus_booking_service_type_tests                         27 / 27
+    plus_booking_passenger_handoff_tests                    15 / 15
+    plus_quotes_tests / _directory / _lifecycle             83 / 83, 34 / 34, 41 / 41
+    plus_communication_consents_tests                       78 / 78
+    plus_inquiries_tests                                    65 / 65
+    billing_tests                                           67 / 67
+    function_privilege / security_definer_exposure / client_privilege_surface / privilege_baseline_behavior
+                                                            7, 20, 21, 30 PASS; 0 FAIL
+    request_mutation_privilege / request_decision_workflow / rls_adversarial
+                                                            22, 59, 32 PASS; 0 FAIL
+    plus_request_attributions_concurrency_test.sh (retargeted copy)   6 / 6 PASS
+    plus_contacts_concurrency_test.sh (retargeted copy)               4 / 4 PASS
+  After all runs: enablement rows = 0. Every concurrency fixture was removed by its own cleanup.
+
+  APPLICATION CHECKS (worktree; node_modules symlinked from the FIN tree for the run only — package-lock.json is
+  byte-identical to origin/main's; the symlink was gitignored and has been removed)
+    tsc --noEmit                    exit 0, 0 errors
+    eslint                          exit 0, 0 errors, 13 warnings. All pre-existing: this branch changes no TS / JS file.
+    npm test (unit)                 957 / 957 pass
+    npm run test:release (db-compat) 28 / 28 pass
+
+======================================================================================================================
+2. REQUIRED TESTS → EVIDENCE
+======================================================================================================================
+  Successful create-and-link             A1, A2, A3, A6, V3; CONC-1
+  Disabled organization refusal          G1, G2, X3, DIS1, DIS2; CONC-8
+  Read-only and no-Plus access denial    A7, A8 (read_only Admin ZW001; read-grant ZW001; locked / no Plus /
+                                         suspended ZW002)
+  Cross-tenant access denial             X1, X2 (nothing written in either organization), G6 (helper)
+  Duplicate detection and confirmation   D1:
+                                           - email, case-insensitive
+                                           - phone digits
+                                           - name, case-insensitive
+                                           - archived match
+                                           → possible_duplicates, NOTHING written
+                                         D2: confirmed → a new contact, never merged
+                                         D3: confirmed replay → already_linked
+  Double submissions and concurrency     A5 / D3 (sequential replay → already_linked, same contact)
+                                         CONC-1 (simultaneous, unconfirmed), CONC-2 (simultaneous, confirmed):
+                                         exactly one contact, attribution, activity and provenance audit; the loser
+                                         gets ZW004 and its contact is rolled back
+  Link-existing vs create-new race       CONC-3 (Add first: the link is refused)
+                                         CONC-4 (Link first: Add refused, new contact rolled back)
+  Enablement revocation race             CONC-7 (creation holds the gate: it commits, then the disable applies)
+                                         CONC-8 (disable first: creation refused, nothing written)
+                                         CONC-6 (two enables at once: one row, one audit)
+  No orphaned contacts                   CONC-INV (0 orphans across all scenarios, 0 deadlocks)
+                                         V2 (no partial write on invalid input)
+  No passenger information copied       N1 (linked Passenger + a different requested passenger name: the contact
+                                         holds only the staff values), N2 (Request requester values not copied),
+                                         N3 (no passenger / address / health column; Passenger rows unchanged),
+                                         S5 (static: no requester / passenger column in the function source)
+  No consent inferred or created         C1 (no consent row; resolver no_consent_on_record on all 6 pairs)
+                                         C2 (staff-ticked DNC stored → suppressed_do_not_contact, still no consent
+                                         row)
+                                         C3 (DNC never set by the function)
+  No opportunity or Core mutation        O1 (no opportunity / task / quote; no attribution with an opportunity)
+                                         O2 (Core fingerprint unchanged: Requests incl. ctid / state / updated_at /
+                                         passenger / requester fields, events, acquisition, Passengers, Trips,
+                                         assignments, Recurring Care, billing)
+                                         CONC-5 (racing a Core Accept: both succeed)
+  Correct audit events                   A4 (plus_contact_created + plus_request_linked +
+                                         plus_contact_created_from_request {request_id} only; no contact value in
+                                         any audit row)
+                                         G5 / DIS2 (enablement changes audited with the reason)
+                                         D2 (possible_duplicates_confirmed recorded)
+  Privilege-contract verification        privilege_contract 0 / 29 violations; S1, S2, S4; EX-1
+  Existing relevant regression tests     Section 1 (all pass except the 3 pre-existing failures in section 4)
+
+======================================================================================================================
+3. TEST-QUALITY CHECKS (mutation testing)
+======================================================================================================================
+  M1  The function with the activation gate removed (injected into the transaction):
+      8 tests FAIL (G1, G2, A1, A3, A5, X3, DIS1, DIS2) → the gate is genuinely exercised.
+  M2  The function with a no-op `UPDATE transportation_requests SET state = state` added:
+      - Initially NOT detected, because now() is constant inside the test transaction, so updated_at did not change.
+      - FIXED: the Core fingerprint now includes ctid, which changes on every UPDATE. After the fix, N3 and O2 FAIL
+        under M2, and the clean run passes.
+  M3  The platform function using FOR UPDATE instead of FOR NO KEY UPDATE (applied to the isolated DB, then
+      restored and verified):
+      - The concurrency script still passed. No deadlock was reproduced; the theoretical window is too narrow for
+        the scripted timing.
+      - Recorded honestly: the lock-mode choice rests on conflict analysis, not on a reproduced deadlock.
+
+======================================================================================================================
+4. FAILURES AND NON-RESULTS
+======================================================================================================================
+  F1  plus_access_helpers P6, plus_member_grants C1 and plus_contacts_activities C2. These are PRE-EXISTING on
+      origin/main:
+        - The only function matching their patterns is billing_create_invoice_draft (NP-BILL-P1, migration
+          20261027110000), which calls plus_can_read. Confirmed by catalogue query.
+        - None of the new functions match.
+        - The parked FIN branch fixes exactly these three tests (NP-FIN-P1 FU-2). Not changed here.
+  F2  During the investigation, a SECOND run of platform_admin_foundation_tests on an already-used database showed
+      RM-2, RM-6 and TM-2 failing.
+        - That suite is not rollback-only, and those checks depend on fresh-reset counts.
+        - On every fresh reset (two runs) they PASS. Not a defect of this work.
+  F3  An early regression tally counted the completion banner "review PASS/FAIL lines above" as a FAIL for three Core
+      suites. The final tally excludes the banner; those suites have 0 failing tests.
+  N1  Not run:
+        - No browser E2E (Stage C).
+        - No production smoke.
+        - No PostgREST HTTP call (the SQL tests call the RPC as the `authenticated` role, which is the same path).
+        - No full Core-suite sweep beyond section 1. Most remaining Core suites mutate state and predate Plus; this
+          change touches no Core object.

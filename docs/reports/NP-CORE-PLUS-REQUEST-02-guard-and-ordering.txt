@@ -1,0 +1,214 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02 — PRODUCTION GUARD, DESIGN DELTA AND MIGRATION ORDERING (PRE-STAGE-A)
+Date: 2026-11-02
+Base: origin/main 85f2042 (fetched today, no newer commits). Migration head on origin/main: 20261028100000.
+Follows: docs/reports/NP-CORE-PLUS-REQUEST-01-design-review.txt (D1–D8 as proposed in the -02 handoff).
+Status: STOP for owner review before Stage A. No branch, code, migration, test run, commit, push or production
+access has been made. This report is the only file written.
+
+======================================================================================================================
+1. PROPOSED PRODUCTION GUARD (D7)
+======================================================================================================================
+1.1 Pattern
+  - The guard reuses the released public-inquiry activation allowlist pattern: plus_inquiry_public_access (ZD-262),
+    with platform_set_ / platform_get_plus_inquiry_public_access.
+  - The allowlist is a Platform-Admin-managed, per-organization table with NO ROW = DISABLED. It is checked inside
+    the database function itself, so no UI, server action, older build or direct RPC call can bypass it.
+  - The only addition is a data class that the database restricts to 'synthetic'. Enabling a real tenant is
+    therefore impossible without a later, reviewed migration.
+
+1.2 Objects (all in the single Stage A migration; additive)
+  a) Table public.plus_request_contact_enablements
+       organization_id uuid PRIMARY KEY references organizations(id)
+       data_class      text not null  CHECK (data_class = 'synthetic')        -- 'live' cannot be stored
+       reason          text not null  CHECK (reason = btrim(reason) and length between 1 and 500)
+       enabled_by      uuid not null references auth.users(id)
+       enabled_at      timestamptz not null default now()
+     - Class A: RLS on, no policy, and no privilege for anon, authenticated or service_role. It is read and written
+       only by the SECURITY DEFINER functions below. The privilege contract is extended accordingly.
+     - Migration content: no INSERT. The migration enables NO organization, in any environment.
+
+  b) platform_set_plus_request_contact_enablement(p_organization_id uuid, p_enabled boolean, p_data_class text,
+     p_reason text)
+     - Callable by Platform Admins only, via _require_platform_admin. Without a uid it returns ZW001; any other
+       caller, including an Organization Admin of the target organization, gets ZW002. An organization can never
+       enable itself.
+     - Enabling requires p_data_class = 'synthetic'; anything else returns ZW006. This is an explicit attestation in
+       the call, backed by the table CHECK.
+     - A reason of 1 to 500 characters is required in both directions (ZW006 otherwise). An unknown organization
+       returns ZW002.
+     - Locks the organization row FOR UPDATE. Enable inserts the row; disable deletes it. If nothing changes, it
+       returns changed=false and writes nothing.
+     - Each change writes one audit_events row: action platform_plus_request_contact_enablement_changed, with
+       before / after {enabled, data_class} and the reason.
+
+  c) platform_get_plus_request_contact_enablement(p_organization_id uuid)
+     - Platform Admins only. Returns enabled, data_class, enabled_at, enabled_by display name and reason.
+
+  d) plus_request_contact_enabled(p_organization_id uuid) returns boolean
+     - Authenticated callers; never raises.
+     - Returns false unless plus_can_read(org) is true. Otherwise it returns whether a row exists.
+     - It has no reason or actor output and gives no oracle to non-Plus callers. It is used only to decide whether
+       the "Add contact" button is shown.
+
+1.3 Enforcement inside plus_create_contact_for_request (order matters)
+  1. _require_plus_write(org)              → ZW001 / ZW002 as released
+  2. _plus_require_core_request_read(org)  → ZW002
+  3. GATE: `select 1 from plus_request_contact_enablements where organization_id = org FOR SHARE`. If no row, raise
+     ZW004 'request_contact_not_enabled'. Nothing is written, and no duplicate or request-existence information is
+     returned.
+  4. Request existence → attribution check → plus_create_contact → plus_link_request → provenance audit
+     (unchanged from the -01 design)
+  - The gate runs after authorization, so only authorized Plus writers ever learn the enablement state.
+  - FOR SHARE conflicts with the platform function's DELETE. A disable and an in-flight creation therefore
+    serialize: the creation either commits fully before the disable, or waits and is then refused with nothing
+    written.
+
+1.4 What the guard does and does not cover (stated plainly)
+  Covers:
+    - Every call of the new function, from any build or client.
+    - The Request Details "Add contact" path.
+  Does not cover:
+    - The released, unchanged Growth → Contacts → New form and plus_link_request ("Link existing contact"). Any
+      Plus-write tenant can already use those today.
+    - So the guard stops this feature from copying requester data into Plus for real tenants. It does not stop staff
+      from typing a contact in by hand in Growth, which is pre-existing released behaviour.
+    - Restricting that path too would change released contracts and is outside this approval (observation O1,
+      section 4).
+
+1.5 Activation procedure (separately authorized; not part of Stage A, B or C)
+  - Local / isolated stack: tests enable only throwaway organizations they create, and remove them on exit.
+  - Production: nothing is enabled by the migration or by any release step.
+  - Enabling the synthetic "Nemryn Pilot Simulation" tenant later would be one Platform-Admin RPC call, made only
+    after its own owner authorization and recorded with a reason.
+  - Zenward Mobility and every other real tenant: never. The database refuses data_class 'live', and the owner must
+    not attest 'synthetic' for a real tenant (the same rule as ZD-289's billing classification).
+  - There is no Platform Admin UI for this, matching the inquiry allowlist. Adding one would be separate scope.
+
+1.6 Alternatives considered and rejected
+  - Environment-variable kill switch only: this is server-side but not database-enforced, and a direct RPC call
+    bypasses it. If the owner wants one, it can be added as a second, global layer (default OFF). Not recommended
+    as the main control.
+  - Billing-style live class with an approval_ref CHECK (as in 20261029120000): it would put an approval-reference
+    route to "live" in place before the privacy decisions exist. Synthetic-only is stricter, and a later migration
+    can widen it once PD-10 / PD-11 are resolved.
+  - A table-level trigger on plus_contacts (billing-gate style): it would also block the released Growth contact
+    form, which changes a released contract.
+  - Hard-coding a denylist of real organization ids in a migration: brittle, and it puts real-tenant identifiers
+    into the repository.
+
+======================================================================================================================
+2. CHANGES TO THE PREVIOUSLY REVIEWED DESIGN (-01)
+======================================================================================================================
+  C1  The migration grows from one function to:
+        - one function (plus_create_contact_for_request)
+        - one result type
+        - one class-A table
+        - three guard functions (platform set / get, tenant read)
+      It is still a single, additive, forward-only file. No existing table, column, constraint, policy, grant,
+      function or signature changes.
+  C2  New gate step 3 in the function (1.3) adds the error ZW004 'request_contact_not_enabled'. The server action
+      maps it, by message, to "Adding contacts from a request isn't enabled for this organization."
+      attributionErrorMessage already accepts the message, so no contract changes.
+  C3  UI visibility (D8 refined). "Add contact" shows only when ALL of these hold:
+        - the request is unlinked
+        - canWriteGrowth
+        - plus_request_contact_enabled(org) is true
+      If it is disabled, writers see only "Link existing contact", which is today's behaviour relabelled, with no
+      extra notice. This avoids advertising a disabled feature to real tenants.
+  C4  Audit vocabulary (D5) is now two new actions:
+        - plus_contact_created_from_request: {request_id} only
+        - platform_plus_request_contact_enablement_changed
+      There is still no new plus_activities type, so the activity CHECK is unchanged.
+  C5  Tests added for the guard (in addition to -01 §6):
+        G1  No row: an Admin with Plus write gets ZW004 request_contact_not_enabled. Contacts, attributions,
+            activities and audit are all unchanged.
+        G2  An enabled synthetic organization behaves exactly as -01 T1 to T11.
+        G3  Enabling with data_class 'live', NULL or another value returns ZW006. A direct owner INSERT of 'live'
+            fails the CHECK.
+        G4  An Organization Admin calling set / get for their own organization gets ZW002. A dispatcher, anon, or a
+            foreign Platform-Admin-less user is refused.
+        G5  plus_request_contact_enabled returns false for no-Plus, foreign, driver and anon callers even when a row
+            exists (no oracle).
+        G6  Concurrency: a disable racing an in-flight creation (parallel psql, ~1s hold) ends in either a complete
+            commit before the disable or a refusal with nothing written. No partial state.
+        G7  Privilege contract: the table is class A, and the functions carry exactly the intended EXECUTE grants.
+        G8  E2E: the button is absent while disabled, and present after a test-only enablement of the fixture
+            organization on the isolated stack.
+  C6  Branch mechanics (new): the working tree at /Users/datamatics/Nemryn is on np-fin-p1-ledger. It holds
+      uncommitted ZD-292 / ZD-293 register edits and untracked K-reports. A plain `git checkout -b` would carry the
+      modified decision-register.md onto the new branch.
+      Stage A will therefore use a separate worktree, which leaves the FIN tree and PR #44 untouched:
+        git worktree add ../Nemryn-core-plus-request -b np-core-plus-request-01 origin/main
+  C7  Decision numbering: the approvals will be recorded as ZD-294 and later on the new branch. ZD-292 / ZD-293 exist
+      only as uncommitted edits in the FIN tree, so the numbers are skipped, not reused. Expect a textual register
+      merge when FIN resumes.
+  C8  Unchanged from -01: no read of transportation_requests.requester_* in the database, no consent rows, DNC only
+      as staff tick it, no passenger fields, no opportunity, and no Core mutation.
+
+======================================================================================================================
+3. MIGRATION ORDERING
+======================================================================================================================
+3.1 Facts
+  - origin/main head: 20261028100000_plus_booking_passenger_handoff.sql.
+  - Production head: 20261028100000, per the FIN-P1 postponement handoff (2026-10-30) and project memory. NOT
+    re-verified today, because no production access was authorized. A read-only `supabase migration list --linked`
+    is a required pre-release step.
+  - Parked FIN-P1 / P1G migrations (PR #44, not on main, not in production): 20261029100000, 20261029110000 and
+    20261029120000.
+  - The new migration will be timestamped on the day Stage A starts, for example 20261103100000. That is later
+    than every existing file, so it sorts after origin/main and after the parked FIN files.
+
+3.2 Dependency check (verified in source)
+  - The new migration depends only on objects already on origin/main and in production: organizations, auth.users,
+    audit_events (including its reason column), _require_platform_admin, plus_can_read, _require_plus_write,
+    _plus_require_core_request_read, plus_create_contact, plus_link_request, plus_request_attributions and
+    transportation_requests.
+  - The three FIN migrations do not reference plus_contacts, plus_create_contact, plus_link_request,
+    plus_request_attributions, or the audit_events schema. The new migration references no billing object.
+  - The two sets are independent: applying them in either order produces the same schema.
+
+3.3 Is ordering safe? Yes. Both possible orders, with what each requires:
+  (a) FIN-P1 resumes and is released first (normal order). Nothing extra: the new file sorts after the FIN files and
+      applies cleanly on top.
+  (b) This feature is released first (allowed by D6):
+      - Production head becomes 2026110x. The FIN package's preflight, which hard-requires head 20261028100000, then
+        fails safely and must be re-prepared, as D6 acknowledges.
+      - `supabase db push` refuses to insert the older 20261029* files before an applied later migration. The FIN
+        resume must therefore do one of:
+          1) Re-timestamp the three unreleased FIN migrations to after 2026110x on PR #44. This is safe, because they
+             have never been applied anywhere persistent. RECOMMENDED: the history stays linear.
+          2) Use `supabase db push --include-all`. This is safe by 3.2, but out-of-order history is harder to audit.
+      - Expect textual merge conflicts at FIN resume in database.types.ts and privilege_contract_tests.sql. Both
+        branches add rows; the conflicts are mechanical, and the production privilege-contract run must include
+        both sets of rows.
+  Neither order changes data, and neither order is hazardous. The only cost is the FIN re-preparation in (b).
+
+3.4 Safeguards kept
+  - PR #44, np-fin-p1-ledger and its untracked files: untouched.
+  - No production migration, enablement or data change without separate authorization.
+  - No commit, push or merge without authorization (Stage A commits stay local until approved).
+
+======================================================================================================================
+4. OBSERVATIONS FOR THE OWNER (no action proposed in this scope)
+======================================================================================================================
+  O1  The released Growth → Contacts form already lets any Plus-write tenant store C2 contact data by hand.
+      Production Plus enablement for real tenants has not been checked here (no prod access). If no real tenant
+      holds Plus today, that exposure is theoretical. If one does, it predates this feature, and the -02 guard does
+      not change it.
+  O2  The guard is attestation-based. The database cannot know whether an organization's data is real. It relies on
+      the Platform Admin never attesting 'synthetic' for a real tenant, as with the billing data class.
+
+======================================================================================================================
+5. CONFIRMATIONS REQUESTED BEFORE STAGE A
+======================================================================================================================
+  R1  Approve the guard in section 1:
+        - a synthetic-only allowlist table
+        - Platform Admin set / get functions
+        - the tenant read helper
+        - the gate inside the function, holding FOR SHARE
+  R2  Approve changes C1 to C8. In particular C3: no notice is shown while disabled.
+  R3  Approve ordering approach 3.3(b)(1), re-timestamping the FIN migrations at FIN resume if this feature ships
+      first.
+  R4  Optional: add a global environment kill switch (default OFF) as a second layer. Recommendation: not needed.
+  After approval: create the worktree (C6), record ZD-294 onward, then start Stage A. The migration, SQL, privilege
+  and concurrency tests run on the isolated stack only. Stop again at the end of Stage A for review.

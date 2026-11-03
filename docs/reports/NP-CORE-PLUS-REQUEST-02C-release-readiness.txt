@@ -1,0 +1,102 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02C — RELEASE READINESS
+Date: 2026-11-02
+Scope: the "Add contact from Core Request Details" feature (Stages A + B + C) on np-core-plus-request-01
+(85f2042 + uncommitted changes). This report states readiness and blockers only. Nothing was committed, pushed, merged,
+deployed or run against production. Detailed results: NP-CORE-PLUS-REQUEST-02C-test-results.txt. Release mechanics
+and FIN ordering: NP-CORE-PLUS-REQUEST-02A-release-dependencies.txt (still current; summarised, not repeated).
+
+======================================================================================================================
+1. VERDICT
+======================================================================================================================
+  Functionally ready for an owner release decision, with no new product defects found in 02C.
+    - The repeatable browser suite passes 112 / 112 twice in a row on a freshly reset stack.
+    - Stage A SQL passes 43 / 43, concurrency 9 / 9, privilege contract 0 violations. The broader Plus, security and
+      request suites pass, apart from the three pre-existing exceptions.
+  NOT releasable yet: the blockers in section 2 need owner decisions or authorizations that 02C did not have.
+
+======================================================================================================================
+2. REMAINING PRODUCTION RELEASE BLOCKERS
+======================================================================================================================
+  B1  Owner review of the 02B / 02C reports and screenshots, and authorization to commit, push (nemryn account) and
+      open a PR from np-core-plus-request-01. Everything is uncommitted today.
+  B2  Migration and deploy gate (02A §1): 20261102100000 must be applied to production in the same release window as
+      the merge (or before it). Otherwise scripts/release/db-compat-core.mjs refuses every production build.
+      Production head 20261028100000 has NOT been re-verified. That needs an owner-run read-only
+      `supabase migration list --linked`. CI's db-compat verdict is UNVERIFIABLE (no CI token).
+  B3  Order relative to FIN-P1 / P1G (PR #44, parked):
+        - If this ships first, the FIN package must be re-prepared and its three migrations re-timestamped after
+          20261102100000 (approved R3; not done now).
+        - Mechanical conflicts at whichever merge is second:
+            * EX-1 inventory 16 + 16 -> 18
+            * privilege_contract c_tables / c_fn: keep both sets
+            * decision register ZD-264..293 vs ZD-294..301
+            * regenerate database.types.ts
+  B4  Pre-existing boundary failures on main (P6 / C1 / C2): billing_create_invoice_draft calls plus_can_read
+      (section 3). They do not come from this feature, but they make three Plus security suites red on main. Decide
+      before release whether to fix them independently on main or to wait for PR #44.
+  B5  Accessibility findings A1–A4 (02C visual review §4: focus lost after Cancel / error / success; live regions
+      inserted with content). axe is clean, so these are not automated failures. Owner decision: fix before release
+      (small, contained to RequestAddContactForm / RequestGrowthControls) or accept and track.
+  B6  Activation stays off. The release ships the feature dark: no enablement rows, and the table CHECK allows only
+      data_class 'synthetic'.
+        - Real tenants (including Zenward Mobility) cannot be enabled without a reviewed migration while PD-10 /
+          PD-11 are open (ZD-299).
+        - Any production smoke beyond the read-only checks of 02A R-5 (e.g. enabling "Nemryn Pilot Simulation")
+          needs separate approval.
+  B7  The new browser suite is local-only. It needs the isolated stack and a local build, like the quotes suites, and
+      no CI job runs it or the SQL suites. Release evidence is these local runs plus the owner-run production
+      preflight.
+
+======================================================================================================================
+3. INDEPENDENT PROPOSAL FOR THE P6 / C1 / C2 FAILURES ON MAIN (not implemented; PR #44 not consulted or copied)
+======================================================================================================================
+  Cause (verified in 02C): migration 20261027110000_core_billing_rpcs.sql (NP-BILL-P1, be6844e).
+  billing_create_invoice_draft line 313: `if not public.plus_can_read(p_organization_id) then raise … 'ZW002'` guards
+  the OPTIONAL p_source_quote_id. The three tests forbid any Core function from referencing Plus helpers or tables.
+  The dependency is real: Core billing reads Plus entitlement when an invoice is drafted from a quote.
+
+  Options for a separate, small main-only change (owner choice):
+    M1  (recommended) Record the dependency as an explicit, documented exception:
+          - a decision-register entry: "Core billing may read Plus entitlement only to validate an optional source
+            quote"
+          - add billing_create_invoice_draft by name to the allow-lists of P6 / C1 / C2, with a comment citing that
+            entry
+        Tests and documentation only; no function change. The boundary rule stays enforced for every other Core
+        function.
+    M2  Move the quote check into a Plus-owned helper (for example _plus_invoice_source_quote(org, quote_id)) that
+        billing calls. The regexes would then stop matching, but Core would still depend on Plus. That hides the
+        dependency rather than removing it, so it is NOT recommended unless the tests are extended to flag `_plus_`
+        calls from Core.
+    M3  Drop the entitlement check from billing. NOT recommended: it changes released billing behaviour.
+  Coordination: PR #44 changes billing in this area too. Whichever lands second must reconcile. A main fix should
+  be prepared as its own branch from origin/main, never from the FIN branch.
+
+======================================================================================================================
+4. WHAT IS PROVEN (summary)
+======================================================================================================================
+  Authorization:
+    - Add contact appears only for a writer, on an unlinked request, in an enabled organization.
+    - Read grants and organizations without Plus get no controls; direct database calls are refused (ZW001 / ZW004 /
+      cross-tenant).
+    - Disabling takes effect for a form that is already open.
+  Atomicity:
+    - Concurrent submissions (browser and SQL) leave exactly one attribution and no orphan contact.
+    - Duplicates are never merged. An archived match is never linked.
+  Integrity:
+    - Every Core row is byte-identical across the whole browser run.
+    - No opportunity, consent, task or quote is created.
+    - The provenance audit holds only the request id. No passenger data is used.
+  UX: complete screenshots at 1440 / 1024 / 768; no overflow; axe clean; keyboard operable (with A1–A4 noted).
+
+======================================================================================================================
+5. FILES THAT WOULD BE IN THE PR (all uncommitted)
+======================================================================================================================
+  Stage A: the migration, 2 new SQL test files, privilege_contract / platform_admin_foundation updates, decision
+  register ZD-294..301.
+  Stage B: database.types.ts, attribution-core.ts (+ tests), attribution.ts, attribution/actions.ts,
+  RequestAddContactForm.tsx (new), RequestGrowthControls.tsx, RequestGrowthPanel.tsx, requests/[requestId]/page.tsx,
+  LinkedRequestsPanel.tsx, plus-product-spec §7.4, plus-access-model §4.
+  Stage C: tests/e2e/request-contact/{request-contact.e2e.mjs, README.md}, package.json script.
+  Reports and screenshots: docs/reports/NP-CORE-PLUS-REQUEST-01 … 02C, and the screenshot folders 02b and 02c
+  (02c is 7.1 MB: the 18 full-page shots are 6.2 MB and the 18 panel crops 0.9 MB, so the owner may prefer to commit
+  only the panel crops).

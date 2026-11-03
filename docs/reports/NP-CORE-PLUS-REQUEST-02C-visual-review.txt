@@ -1,0 +1,118 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02C — VISUAL AND ACCESSIBILITY REVIEW
+Date: 2026-11-02
+Screenshots: docs/design/concept-b/reviews/np-core-plus-request-02c/ (36 PNG files, 7.1 MB, uncommitted). Captured by
+the repository suite (npm run test:e2e:request-contact, run 13) on the isolated app with fictional "RC02C … Fictional"
+data only. No UI was changed in 02C.
+
+======================================================================================================================
+1. SCREENSHOTS ARE NOW COMPLETE
+======================================================================================================================
+  The 02B crops at 1024 / 768 were cut off because the app scrolls inside its content area, not the window. The suite
+  now grows the browser viewport until neither the window nor any inner scroll container has hidden content, and only
+  then captures. Every state is captured twice at each width:
+    <state>-<width>-page.png    the whole Request Details page, top to bottom (1,353–3,058 px tall)
+    <state>-<width>-panel.png   the Growth panel alone, full height, at 1:1 scale (best for reading)
+  Each image was opened and checked: nothing is cut off at any width.
+
+  State            Files (each × 1440 / 1024 / 768 × page / panel)     What it shows
+  01-unlinked      01-unlinked-<w>-{page,panel}.png        "Not linked…" + Add contact (primary, filled) + Link
+                                                           existing contact (secondary, outline)
+  02-form          02-form-<w>-{page,panel}.png            requester notice; Name focused; Phone, Email, hint,
+                                                           Contact type (Family member / caregiver), Preferred channel,
+                                                           Owner (No owner), Do not contact card, scope notice, Add
+                                                           and link contact + Cancel
+  03-validation    03-validation-<w>-{page,panel}.png      Phone "call after 5pm" with a red border and the message
+                                                           "Enter a phone number using digits, spaces and + ( ) . -
+                                                           (an extension like x12 is fine)."; values kept
+  04-duplicates    04-duplicates-<w>-{page,panel}.png      amber box: explanation, the match ("Same email and name")
+                                                           with Link this contact; footer button becomes "Create a
+                                                           separate contact" (outline)
+  05-success       05-success-<w>-{page,panel}.png         Contact + Open in Plus; Opportunity None; Link line; success
+                                                           notice; Correct link
+  06-read-only     06-read-only-<w>-{page,panel}.png       Dispatcher with a read grant: "Not linked…" only, no
+                                                           controls
+
+  Layout correction to 02B: at 1024 the Request Details page is ALREADY single-column. The Growth panel sits full
+  width (705 px) below Request Details, as at 768 (657 px). The narrow right-hand column (360 px) exists only at
+  1440. 02B said the column was narrow at 1440 and 1024; that was wrong for 1024.
+  No horizontal overflow at any width, in any of the six states (automated check every run).
+
+======================================================================================================================
+2. THE TALL INLINE FORM (handoff section 4) — assessment only, nothing changed
+======================================================================================================================
+  Measured height of the Add contact editor (without duplicates; the duplicate box adds about 125–170 px):
+    1440   873 px in a 360 px column   (the viewport is 1000 px, so the editor nearly fills it)
+    1024   772 px at 705 px wide
+    768    772 px at 657 px wide
+  Where the height goes at 1440 (from 02-form-1440-panel.png): three text fields (~240), three selects (~240),
+  the Do not contact card with its three-line help (~120), the scope notice (~70 over four lines), the owner help
+  (~35), the requester notice (~40), plus gaps (the editor uses the panel's gap-zw-md between every block).
+
+  Practical spacing improvements, all inline, no modal, no new components (owner to choose; estimates are rough):
+    SP-1  Two-column field grid when the panel is wide (1024 / 768 are ~660–700 px): Phone | Email and
+          Contact type | Preferred channel side by side. About −160 px at 1024 / 768. 1440 stays single-column
+          (360 px is too narrow).
+    SP-2  Tighter gaps inside the editor only (gap-zw-sm between fields instead of gap-zw-md). About −50 to −60 px at
+          every width. Same tokens, no new style.
+    SP-3  Shorter helper copy:
+            - owner help on one line ("Needs Nemryn Plus write access")
+            - the Do not contact help reduced to one sentence
+          About −40 to −60 px at 1440. Copy change: owner approval needed, because the DNC help is approved wording
+          shared with Growth → Contacts → New.
+    SP-4  Shorter scope notice at the foot, e.g. "Adds and links one Growth contact. The request, trips, billing
+          and consent are unchanged." About −35 px at 1440. Copy change: the current text was approved in 02B.
+    SP-5  Put the "phone or email required" hint into the Phone / Email group description, instead of a separate
+          line. About −20 px.
+    Combined estimate: 1440 ≈ 873 → 700–740 px; 1024 / 768 ≈ 772 → 540–580 px.
+    Not recommended without a separate decision: hiding Owner / Do not contact behind a "More options" disclosure
+    (it would hide Do not contact) or a modal (explicitly out of scope).
+
+======================================================================================================================
+3. DESIGN-SYSTEM CONFORMANCE (unchanged from 02B; re-checked on the complete screenshots)
+======================================================================================================================
+  - Only existing primitives and tokens: Panel, Button (primary / outline / text), Input, Select, the bordered
+    sub-card, the warning-border box and the Do-not-contact card. No new colours or visual language.
+  - One primary action per state: Add contact (unlinked), Add and link contact (form). In the duplicate state the
+    footer action becomes outline ("Create a separate contact"), so no primary competes with "Link this contact".
+
+======================================================================================================================
+4. ACCESSIBILITY FINDINGS (handoff section 3) — reported, not fixed
+======================================================================================================================
+  axe-core 4.10.2: 0 violations on the panel and on the whole page in all five required states: unlinked, form,
+  validation errors, duplicate warning, linked.
+  Keyboard: everything is operable; the Tab order matches the visual order; Enter submits; Cancel works by keyboard.
+
+  A1  Focus is lost after Cancel (moderate; WCAG 2.4.3 Focus Order). Enter on Cancel unmounts the form, and focus
+      falls to <body>. A keyboard or screen-reader user must Tab from the top of the page.
+      Suggested change: return focus to the "Add contact" button.
+  A2  Focus is lost after a validation error (moderate; WCAG 3.3.1 / 2.4.3). The form re-mounts so that it can keep
+      the typed values, and that drops focus to <body>. The field error is linked by aria-describedby, but it is only
+      read when the field gains focus, so a screen-reader user may not hear which field is wrong.
+      Suggested change: focus the first invalid field after a refused submission.
+  A3  Focus is lost after success (minor; WCAG 2.4.3). The form closes, and focus falls to <body>.
+      Suggested change: move focus to the success notice (tabIndex -1) or to the new contact link.
+  A4  Live regions are inserted with their content (minor; WCAG 4.1.3 Status Messages). The success notice
+      (role="status") and errors (role="alert") are mounted at the moment they appear, not as regions that were
+      already on the page. Browsers and screen readers usually announce a newly inserted role="alert", but often
+      skip a newly inserted role="status". Combined with A3, the success may go unannounced. Pending has aria-busy
+      on the button, but no spoken "Saving…".
+      Suggested change: a persistent, initially empty role="status" region in the Growth panel that receives the
+      success / pending text.
+  Not done: a real screen-reader session (VoiceOver / NVDA). The checks above are structural. A manual VoiceOver pass
+  on macOS Safari is recommended before release if A1–A4 are fixed. The same focus pattern (focus not restored)
+  was the U2 finding in the quotes module, which was fixed there in NP-UI-P1a. A1–A3 could follow that approach.
+
+======================================================================================================================
+5. OTHER OBSERVATIONS (no change made)
+======================================================================================================================
+  O1  After "Add contact", the Link row reads "Linked to an existing request by <name>, <date>"
+      (05-success-*.png). The label comes from the released linkMethodLabel('linked_existing_request'), because the
+      new function links through the released plus_link_request. It is accurate (the request existed before the
+      link), but staff may read it as "an existing contact was linked". Possible copy: "Linked from Request Details".
+      That is a display-only change, with no database change and no new link method.
+  O2  "Open in Plus" sits next to the contact name, which links to the same contact (as in 02B). Kept as the explicit
+      action the handoff asked for.
+  O3  In a race, the losing session sees one of two correct messages, depending on timing:
+        - "linked … by someone else just now … Reload the page" (an error, with the form kept open), or
+        - "already linked, so no contact was added" (success, with the current link shown).
+      Both are accurate. The first asks the person to reload, and the second refreshes by itself.

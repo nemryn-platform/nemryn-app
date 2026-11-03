@@ -1,0 +1,129 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02C-R1 — FINAL ACCESSIBILITY & UX REFINEMENT: IMPLEMENTATION
+Date: 2026-11-02
+Authority: NP-CORE-PLUS-REQUEST-02C-R1 handoff (02C accepted; one narrowly scoped correction pass, local and isolated
+only). Nothing committed, pushed, merged or deployed. No production access. No real tenant activated.
+Companion reports: NP-CORE-PLUS-REQUEST-02C-R1-test-results.txt, NP-CORE-PLUS-REQUEST-02C-R1-visual-review.txt.
+
+======================================================================================================================
+1. ENVIRONMENT VERIFICATION (all PASS, before and after)
+======================================================================================================================
+  - Worktree /Users/datamatics/Nemryn-core-plus-request on np-core-plus-request-01 at 85f2042. Stage A–C changes are
+    intact and uncommitted. The migration md5 is unchanged (581b95b3…).
+  - Isolated stack only: supabase_db_NemrynS1Iso at head 20261102100000 / 99 migrations, fictional seed. No other
+    client on the database. No production variables in the shell. The app was built and served only with the
+    isolated env file, whose URL is checked before use (127.0.0.1:54361).
+  - PR #44 at 44e66cde4cc2 and PR #46 at 32beb5a are unchanged. The FIN tree has only its earlier register edit, and the
+    PR #46 tree is clean. No other worktree and no other workstream's environment was touched or reset.
+
+======================================================================================================================
+2. FILES CHANGED IN R1 (uncommitted)
+======================================================================================================================
+  MOD  src/components/growth/RequestAddContactForm.tsx   A2 / A4 focus and error semantics; SP-1 / SP-2 layout
+  MOD  src/components/growth/RequestGrowthControls.tsx   A1 / A3 focus; A4 persistent status region
+  MOD  src/components/growth/RequestGrowthPanel.tsx      the contact link gets a stable id (focus target for A3)
+  MOD  src/lib/plus/attribution-core.ts                  + contactLinkId(requestId); still import-free
+  MOD  src/lib/plus/attribution-core.test.mjs            + one unit test (02C-R1 accessibility in source)
+  MOD  tests/e2e/request-contact/request-contact.e2e.mjs + 11 checks (112 -> 123); focus checks now assertions
+  MOD  tests/e2e/request-contact/README.md               coverage table and notes updated
+  NEW  docs/design/concept-b/reviews/np-core-plus-request-02c-r1/*.png   24 screenshots
+  NEW  docs/reports/NP-CORE-PLUS-REQUEST-02C-R1-{implementation,test-results,visual-review}.txt
+  Not changed: any migration, RPC or database contract, server action, billing or financial code, shared UI primitive
+  (Button / Input / Select / Dialog), or any component outside the Request Growth panel. No wording was changed: the
+  Do-not-contact help, the requester notice and the consent / scope notice are byte-identical.
+
+======================================================================================================================
+3. ACCESSIBILITY FINDINGS A1–A4 — ALL RESOLVED
+======================================================================================================================
+  A1  Cancel -> focus returns to "Add contact".
+      The button now has a ref. Cancel sets a one-shot flag before closing the form, and an effect focuses the button
+      once the form has unmounted. Verified keyboard-only: Enter on Cancel, then Enter again re-opens the form from
+      the restored focus.
+
+  A2  Refused submission -> focus moves to what needs attention. The values are preserved; the fields still re-mount
+      with the echoed values.
+        - field errors: the first element with aria-invalid="true", in DOM order. Its error is already tied by
+          aria-describedby (the Input / Select primitives), so assistive technology reads label, "invalid" and the
+          message.
+        - "A phone number or an email address is required": no single field is wrong. BOTH Phone and Email now carry
+          aria-invalid plus aria-describedby pointing at that hint (previously the hint was an unattached
+          role="alert"). Focus goes to the first invalid field.
+        - server errors (not enabled, conflict, generic): focus moves to the error message (tabIndex -1).
+        - possible duplicates: focus moves to the duplicate explanation (tabIndex -1). Tab then reaches the match and
+          "Link this contact".
+      Errors are no longer role="alert" live regions. Each is announced once, when it receives focus. This avoids
+      the double announcement (live region plus focus) the handoff asked to prevent.
+
+  A3  Success -> focus moves to the linked contact link in the Growth panel. This uses id contactLinkId(requestId),
+      rendered by the server panel. Focus is moved only if it was lost (<body> or a removed node). It is retried for
+      up to 60 animation frames while the refreshed panel arrives, and never taken from somewhere the person has
+      since moved. This applies to "Add and link contact", "Create a separate contact" and "Link this contact" (all
+      inside the add-contact flow), and also to the released "Link existing contact" / "Correct link" saves, which
+      share the same success handler. Their focus was also lost before; there is no other behaviour change.
+
+  A4  One persistent status region (role="status", data-testid="growth-status") is always rendered at the top of the
+      controls, before anything is submitted:
+        - pending: a visually hidden "Adding the contact…" (or "Linking the request…" / "Saving the correction…")
+        - success: the visible success notice, which now lives INSIDE the region (one copy only; it lost its own
+          role)
+      The region keeps its node across the post-save server refresh, so the change is announced. A negative margin
+      cancels the column gap while it shows nothing visible, so the layout is unchanged when it is empty.
+      Link-editor errors keep role="alert" (released behaviour), outside the status region.
+  Approach reused from the quotes module (NP-UI-P1a, components/ui/Dialog.tsx):
+    - restore focus to the invoking control on close
+    - only when focus was actually lost, never stealing it
+    - never send it to a removed node
+  The inline form is not a dialog, so the logic lives in the controls instead of the Dialog primitive.
+
+======================================================================================================================
+4. FORM SPACING — SP-1 AND SP-2 ONLY
+======================================================================================================================
+  SP-1  The editor is a CSS container (@container). Its fields use `grid grid-cols-1 @lg:grid-cols-2`: two columns
+        when the EDITOR is at least 32rem (512 px) wide. This follows the panel width, not the window.
+          - 1440 (360 px column): single column, unchanged.
+          - 1024 / 768 (panel 705 / 657 px): Phone | Email and Contact type | Preferred channel side by side.
+          - Name, the phone-or-email hint, Owner and the Do-not-contact card span both columns.
+        DOM order is unchanged: Name, Phone, Email, hint, Contact type, Preferred channel, Owner, Do not contact.
+        Reading and Tab order equal visual order, left to right, top to bottom (asserted in the suite and a unit
+        test). Container queries are already used in the codebase (Growth → Quotes filters).
+  SP-2  Inside the editor only: the gaps go from gap-zw-md (16 px) to gap-zw-sm (8 px), using existing tokens, with
+        16 px between the two columns. Nothing else in the panel changed.
+  Not done (out of scope): SP-3 / SP-4 / SP-5 copy changes, a modal, or a disclosure. All fields remain visible.
+  Measured editor height (without duplicates):
+                 before (02C)   after (R1)   change
+      1440       873 px         793 px       −80 px   (SP-2 only; still single column)
+      1024       772 px         550 px       −222 px
+      768        772 px         550 px       −222 px
+
+======================================================================================================================
+5. LINK DESCRIPTION ("Linked from Request Details") — LEFT UNCHANGED (limitation)
+======================================================================================================================
+  The panel shows linkMethodLabel(link_method). Contacts created by this workflow are linked through the released
+  plus_link_request, so their link_method is 'linked_existing_request', identical to a manual link of an existing
+  contact. Provenance cannot be distinguished reliably without a schema or API change:
+    - plus_get_request_attribution (released contract) returns no provenance field.
+    - The only record is the audit row 'plus_contact_created_from_request'. `authenticated` has no SELECT privilege on
+      audit_events, so a client read would need a new grant or RPC.
+    - No plus_activities type records the creation.
+    - A heuristic (the contact's created_at close to linked_at) would mislabel a contact created in Growth and then
+      linked moments later.
+  Per the handoff, the wording is unchanged. Making it accurate later needs one of:
+    - a new optional field (e.g. created_from_request boolean) in plus_get_request_attribution, which is an RPC
+      contract change
+    - a new link_method value, which is a released contract change
+  Both need a migration and owner approval.
+
+======================================================================================================================
+6. READINESS
+======================================================================================================================
+  All four accessibility findings are resolved and asserted by the repeatable suite. SP-1 / SP-2 are in. No new
+  failures; the only failing tests are the three documented pre-existing P6 / C1 / C2 (billing on main).
+  Ready for CONTROLLED PR PREPARATION, subject to the owner review of these reports and the open release blockers
+  in NP-CORE-PLUS-REQUEST-02C-release-readiness.txt, which are unchanged:
+    B1  commit / PR authorization
+    B2  migration and deploy-gate window
+    B3  order relative to FIN
+    B4  the P6 / C1 / C2 decision
+    B5  the A1–A4 decision (now resolved)
+    B6  the feature ships dark
+    B7  local-only E2E
+  One manual item is outstanding: the Safari VoiceOver walkthrough was NOT RUN (test-results §5).

@@ -3412,6 +3412,120 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A decision to add airport transportation to Plus opportunities
 
+> **Numbering note (NP-CORE-PLUS-REQUEST-02A):** ZD-264 to ZD-293 are recorded on the unmerged NP-BILL / FIN-P1 / P1G branches (PR #44), not on this branch. ZD-294 onward continue after them, so no number is reused when the branches merge.
+
+### ZD-294 — Add contact from a Core Request: one atomic RPC in one additive migration (D1)
+
+- **Date:** 2026-11-02
+- **Category:** Architecture
+- **Decision:**
+  - `plus_create_contact_for_request` creates a Plus contact and links it to an existing Core Request in ONE transaction. It reuses the released `plus_create_contact` and `plus_link_request` unchanged.
+  - The `plus_request_attributions` primary key serializes concurrent submissions. The loser's new contact is rolled back, so no orphan or duplicate is left.
+  - Forward-only, additive migration `20261102100000_plus_create_contact_for_request.sql`. No existing object or contract changes.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D1, 2026-11-02)
+- **Affected Product Areas:** Plus contacts, request attribution
+- **Dependencies:** ZD-299
+- **Owner:** Product / Engineering
+- **Review Trigger:** Any change to `plus_create_contact` or `plus_link_request`
+
+### ZD-295 — Request Details → Growth offers "Add contact" and "Link existing contact" (D2)
+
+- **Date:** 2026-11-02
+- **Category:** Product
+- **Decision:**
+  - On an unlinked Request, writers see "Add contact" (primary) and "Link existing contact" (secondary; today's "Track in Plus").
+  - This amends the plus-product-spec §7.4 rule "Nothing is created or merged from here": creation is allowed, merging never. The spec text is amended with the Stage B UI.
+  - It never creates or converts an opportunity and never changes the Request's decision, trips or billing.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D2, 2026-11-02)
+- **Affected Product Areas:** `RequestGrowthPanel`, `RequestGrowthControls`
+- **Dependencies:** ZD-294, ZD-300
+- **Owner:** Product
+- **Review Trigger:** A request to create opportunities from the Request page
+
+### ZD-296 — Prefill from the Core page; the database never reads requester personal data (D3)
+
+- **Date:** 2026-11-02
+- **Category:** Security
+- **Decision:**
+  - The form is prefilled in the browser from Request facts the staff member can already read, and every field is reviewed and editable.
+  - The RPC takes only staff-submitted values. It reads the Request's existence (id, organization) and never reads `requester_*` or passenger columns. The plus-access-model §4 rule "Plus → Core read: never requester phone or email" stays unchanged.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D3, 2026-11-02)
+- **Affected Product Areas:** `plus_create_contact_for_request`
+- **Dependencies:** ZD-294
+- **Owner:** Security
+- **Review Trigger:** Any proposal for the database to copy Request fields into Plus
+
+### ZD-297 — Requester relationship → contact kind mapping (D4)
+
+- **Date:** 2026-11-02
+- **Category:** Data
+- **Decision:**
+  - The form's initial kind: self → individual; family → family_caregiver; caregiver → family_caregiver; facility_coordinator → facility_staff; other → other. This matches `plus_convert_inquiry`.
+  - It is editable. The relationship itself is not stored on the contact, and no column is added.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D4, 2026-11-02)
+- **Affected Product Areas:** Stage B form prefill
+- **Dependencies:** ZD-295
+- **Owner:** Product
+- **Review Trigger:** A change to either relationship vocabulary
+
+### ZD-298 — Provenance audit event; no new Growth activity type (D5)
+
+- **Date:** 2026-11-02
+- **Category:** Audit
+- **Decision:**
+  - A successful creation writes `plus_contact_created_from_request` with `{request_id}` only, in addition to the released `plus_contact_created` and `plus_request_linked` rows. No contact value is copied into audit.
+  - The released `request_linked` activity is reused. The `plus_activities` CHECK is unchanged.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D5, 2026-11-02)
+- **Affected Product Areas:** `audit_events`
+- **Dependencies:** ZD-294
+- **Owner:** Security
+- **Review Trigger:** An Activity-view requirement for this event
+
+### ZD-299 — Synthetic-only, default-disabled database activation guard (D7, R1, R4)
+
+- **Date:** 2026-11-02
+- **Category:** Security / Privacy
+- **Decision:**
+  - `plus_request_contact_enablements`: a class-A table with NO ROW = DISABLED. `data_class` is CHECKed to `synthetic`, so a real tenant cannot be enabled without a later, reviewed migration.
+  - It is written only by `platform_set_plus_request_contact_enablement` (Platform Admin only, explicit synthetic attestation, reason required, audited). An Organization Admin can never enable their own organization.
+  - The gate is enforced INSIDE `plus_create_contact_for_request`, after authorization, holding the row FOR SHARE. A direct RPC call cannot bypass it, and a disable serializes with in-flight creations.
+  - The migration enables no organization. Production enablement, even of the synthetic pilot tenant, is a separately authorized action. Zenward Mobility and every other real tenant: never, while PD-10 / PD-11 are open.
+  - No environment-variable kill switch (R4).
+  - Scope: the guard does not gate the released Growth → Contacts form or `plus_link_request`.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D7; -02A R1 / R4, 2026-11-02)
+- **Affected Product Areas:** `plus_request_contact_enablements`, Platform Admin RPCs
+- **Dependencies:** PD-10, PD-11, ZD-262 (pattern)
+- **Owner:** Security / Owner
+- **Review Trigger:** Resolution of PD-10 / PD-11, or any production enablement
+
+### ZD-300 — "Add contact" is offered only when unlinked, writable and enabled; no notice when disabled (D8, C3)
+
+- **Date:** 2026-11-02
+- **Category:** Product
+- **Decision:**
+  - The action is shown only when the Request has no attribution, the user can write Growth, and `plus_request_contact_enabled` is true.
+  - A linked Request keeps "Correct link". When the feature is disabled, writers see only "Link existing contact", with no notice.
+  - `plus_request_contact_enabled` returns a boolean to Plus readers only (no oracle) and is never the authorization control.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D8; -02 C3, 2026-11-02)
+- **Affected Product Areas:** Request Details → Growth
+- **Dependencies:** ZD-295, ZD-299
+- **Owner:** Product
+- **Review Trigger:** A request to show disabled-state guidance
+
+### ZD-301 — Progresses independently of FIN-P1 / P1G; FIN migrations re-prepared at resume (D6, R3)
+
+- **Date:** 2026-11-02
+- **Category:** Release
+- **Decision:**
+  - This feature may reach production before FIN-P1 / P1G.
+  - If it does, the parked FIN migrations (20261029100000 / 110000 / 120000) are re-timestamped after 20261102100000 when FIN resumes, and the FIN package is re-prepared. Nothing in FIN changes now.
+  - Work happens on `np-core-plus-request-01` in a separate worktree from origin/main 85f2042. PR #44 is never modified.
+- **Status:** CONFIRMED — OWNER-APPROVED (NP-CORE-PLUS-REQUEST-02, D6; -02A R3, 2026-11-02)
+- **Affected Product Areas:** Release sequencing
+- **Dependencies:** ZD-293 (FIN postponement, recorded on the FIN branch)
+- **Owner:** Owner
+- **Review Trigger:** FIN-P1 / P1G resume decision
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

@@ -1,0 +1,99 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02C-R1 — TEST RESULTS (LOCAL / ISOLATED, FICTIONAL DATA)
+Date: 2026-11-02
+Environment: worktree np-core-plus-request-01 (85f2042 + uncommitted A–C + R1). Isolated stack supabase_db_NemrynS1Iso
+(head 20261102100000 / 99, fictional seed). The app is a fresh `next build` served on http://localhost:3120 through
+the programmatic Next server (02C §6 E1: another local project ends `next start` processes). Chrome via the repository
+CDP harness.
+
+======================================================================================================================
+1. BROWSER E2E — npm run test:e2e:request-contact
+======================================================================================================================
+  run R1-a   123 / 123 PASS, 0 FAIL, 0 retries
+  run R1-b   123 / 123 PASS, 0 FAIL, 0 retries   (consecutive; screenshots come from this run)
+  Both runs passed the three CLEANUP checks: all 16 watched tables are back to their starting counts, there is no
+  enablement row, and the Org A / B modules were restored.
+
+  All 112 checks from 02C still pass. 11 checks were added (net), and two existing checks were rewritten for the new
+  semantics:
+    1   success notice is inside the status region that existed BEFORE the save (same node, role=status)   [rewritten]
+    1   A3: focus moves to the new contact link                                         -> request-growth-contact
+    5b  A2: focus moves to the server error message; it is not inside a live region     -> growth-add-error
+    9   A2: invalid phone -> focus on Phone                                              -> growth-add-phone
+    9   empty name + no phone / email:
+          - Name invalid
+          - Phone AND Email invalid, each described by "A phone number or an email address is required."   [rewritten]
+    9   A2: focus on the first invalid field (Name)                                     -> growth-add-name
+    6   duplicates: focus moves to the duplicate explanation                            -> growth-add-duplicates-message
+    6   after "Link this contact", focus moves to the linked contact
+    KEY A1: Enter on Cancel -> focus on Add contact; Enter re-opens the form (keyboard only)
+    KEY A2: Enter in Phone with an invalid value -> focus stays on the invalid Phone; corrected in place by keyboard
+    KEY A3: keyboard save -> focus on the linked contact
+    SR  A4: the status region announced "Adding the contact…"
+    SR  A4: the same region node then announced "Contact added and linked in Growth. The request itself is unchanged."
+            Observed sequence: ["Adding the contact…", "Contact added and linked in Growth. The request itself is unchanged."]
+    SR  A4: after success, exactly ONE live region in the panel, and the success text appears once (no duplicate)
+  The handoff's regression items are still asserted:
+    - duplicate handling: active match linkable, archived not, explicit separate contact, no merge (byte-identical
+      contacts)
+    - no horizontal overflow at 1440 / 1024 / 768 in every state
+    - Core integrity (byte-identical Core rows, request state unchanged)
+    - no consent, opportunity, task or quote
+    - concurrency (one attribution, no orphan)
+  axe-core 4.10.2: 0 violations, panel and whole page, in all five states (unlinked, form, validation errors,
+  duplicate warning, linked).
+
+======================================================================================================================
+2. APPLICATION CHECKS
+======================================================================================================================
+  tsc --noEmit                 0 errors
+  eslint .                     0 errors, 13 warnings (the same pre-existing 13; none in changed files)
+  npm test                     965 / 965 (964 + 1 new: "02C-R1 accessibility in source")
+  npm run test:release         28 / 28
+  next build                   success
+
+======================================================================================================================
+3. STAGE A SQL, CONCURRENCY AND PRIVILEGE (database counts identical before and after)
+======================================================================================================================
+  plus_create_contact_for_request_tests            43 / 43
+  plus_create_contact_for_request_concurrency      9 / 9 (CONC-1..8 + invariant; deadlocks 0, orphaned contacts 0)
+  privilege_contract_tests                         violations = 0 of 29
+  plus_request_attributions_tests                  73 / 73
+  plus_communication_consents_tests                78 / 78
+  KNOWN PRE-EXISTING EXCEPTIONS (unchanged; billing_create_invoice_draft on main, 02C-release-readiness §3):
+    plus_access_helpers_tests      169 / 170 — P6
+    plus_member_grants_tests        75 / 76  — C1
+    plus_contacts_activities_tests  84 / 85  — C2
+  R1 changed no SQL, so the state-dependent suites re-run in 02C on fresh resets were not repeated.
+
+======================================================================================================================
+4. FAILURES
+======================================================================================================================
+  New failures: none.
+  Existing failures: P6 / C1 / C2 only.
+  Gateway 502 retries: none in either R1 run.
+
+======================================================================================================================
+5. NOT RUN
+======================================================================================================================
+  - Manual macOS Safari + VoiceOver walkthrough: NOT RUN. This session has no way to operate the macOS desktop or hear
+    speech output. The announcement behaviour is verified structurally only:
+      * roles and focus targets
+      * aria-invalid / aria-describedby
+      * the status region's node identity and its text sequence
+    Recommended owner check (about 5 minutes):
+      1. Open a fictional request on the isolated app in Safari with VoiceOver on (Cmd+F5).
+      2. Add contact -> Cancel.
+      3. Add contact -> clear Phone and Email -> submit.
+      4. Fix it -> submit.
+      5. Confirm each step is spoken once, and focus lands as described in the implementation report §3.
+  - The quotes accessibility suite (tests/e2e/plus-quotes s4-a11y): not run. It needs a fresh-reset runner, and R1
+    changed no shared primitive or quotes component.
+  - Production: nothing.
+
+======================================================================================================================
+6. ENVIRONMENT AFTER TESTING
+======================================================================================================================
+  The app server is stopped (nothing listening on :3120). The isolated DB is at the clean seed:
+    - head 20261102100000 / 99
+    - 0 enablements, 2 requests, 0 contacts, 0 "RC02C" rows
+  No reset was needed or done in R1. PR #44, PR #46 and the other worktrees are unchanged.

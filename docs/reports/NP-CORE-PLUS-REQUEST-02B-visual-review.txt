@@ -1,0 +1,73 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02B — VISUAL REVIEW
+Date: 2026-11-02
+Screenshots: docs/design/concept-b/reviews/np-core-plus-request-02b/ (17 PNG files, uncommitted). Taken on the
+isolated app (:3100) with fictional seed identities and "Visual 02B … Fictional" Requests only. Panel crops show the
+Growth panel. 09-* files are full-viewport shots in page context.
+
+======================================================================================================================
+1. SCREENSHOT INDEX
+======================================================================================================================
+  01-disabled-unlinked-1440.png        Org not on the allowlist: "Link existing contact" only; no notice.
+  02-enabled-unlinked-1440 / -1024 / -768.png
+                                       "Add contact" (primary, filled) + "Link existing contact" (secondary,
+                                       outline), on one row.
+  03-form-prefilled-1440 / -1024 / -768.png
+                                       Inline form: requester notice; Name (focused), Phone, Email, the
+                                       phone-or-email hint, Contact type (Family member / caregiver), Preferred
+                                       channel (Phone), Owner (No owner), Do not contact (unticked), the
+                                       "no change / no opportunity / no consent" notice, "Add and link contact" +
+                                       Cancel.
+  04-validation-error-1440.png         Core phone "call after 5pm" refused: red border and the message under Phone;
+                                       Contact type Facility staff; typed values kept.
+  05-duplicates-1440 / -1024 / -768.png
+                                       Amber duplicates box above the fields: the explanation, the match ("Visual
+                                       02B Dup Pat Fictional", "Same email and name") with "Link this contact".
+                                       The 1024 and 768 crops are truncated by the capture tooling; see 09-*.
+  09-page-context-duplicates-1440 / -1024 / -768.png
+                                       The same state in the page viewport, scrolled to the duplicates box. 768 shows
+                                       the whole lower form ending in "Create a separate contact" + Cancel, with no
+                                       horizontal overflow.
+  06-success-linked-1440.png           Linked: Contact "Visual 02B Ann Reviewed Fictional" + "Open in Plus";
+                                       Opportunity None; "Linked to an existing request by org-a-admin, <date>";
+                                       success notice; "Correct link".
+  07-success-linked-768.png            Linked state at 768.
+  08-read-grant-1440.png               Dispatcher with a read grant: "Not linked…" with no controls.
+
+======================================================================================================================
+2. DESIGN-SYSTEM CONFORMANCE
+======================================================================================================================
+  - Only existing primitives and tokens: Panel, Button (primary / outline / text, size sm, loading), Input, Select,
+    the bordered sub-card pattern already used by the "Link existing contact" editor, the warning-border box, the
+    Growth form's Do-not-contact card, and typography tokens. No new colours, components or visual language.
+  - The inline editor matches the existing "Track in Plus" / "Correct link" editor: a rounded bordered card inside the
+    panel, with actions at the bottom left.
+  - The form is a single column, because the panel sits in the narrow right-hand column at 1440 and 1024. At 768 the
+    column stacks below the main content and the panel goes full width.
+
+======================================================================================================================
+3. RESPONSIVE AND ACCESSIBILITY CHECKS (automated in the browser run; section 3 of the test results)
+======================================================================================================================
+                                   1440    1024    768
+  horizontal overflow (buttons)     0       0       0
+  horizontal overflow (form)        0       0       0
+  horizontal overflow (duplicates)  0       —*      0       * 1024 was screenshot-only
+  horizontal overflow (linked)      —       —       0
+  - Labels: every input and select in the form has an associated <label> (checked at all three widths). The
+    checkbox's label wraps it.
+  - Errors: field errors use the Input component's aria-invalid + aria-describedby. Form-level and server errors
+    use role="alert". The duplicates explanation uses role="alert", and success notices use role="status".
+  - Focus: opening the form focuses Name, and DOM order matches visual order (Name → Phone → Email → Contact type →
+    Preferred channel → Owner → Do not contact → submit → Cancel). Duplicates come before the fields, so "Link this
+    contact" is reached first.
+  - Pending: while saving, the fields and buttons are disabled and the submit button shows its loading state
+    (verified: the button is disabled 60 ms after the click).
+
+======================================================================================================================
+4. OBSERVATIONS (no change made; owner may decide)
+======================================================================================================================
+  O1  At 1440 and 1024 the full form is tall in the narrow right column (about 1,000 px). It is usable and consistent
+      with the existing editor, but a dialog or a two-column field grid would be a design change. Not done; the
+      handoff asked for inline and no competing design.
+  O2  "Open in Plus" sits next to the contact name, which is itself already a link to the same contact. It is kept
+      as the explicit action the design asked for.
+  O3  Not done in Stage B: a keyboard-only walkthrough and an axe scan. Recommended for the Stage C suite.
