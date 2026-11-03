@@ -79,6 +79,102 @@ export function attributionErrorMessage(code: string | undefined, reason?: strin
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// NP-CORE-PLUS-REQUEST-02B: "Add contact" from Request Details (ZD-294 .. ZD-300). The database is the authority:
+// plus_create_contact_for_request re-checks Plus write, the Core request-read role, the synthetic-only activation
+// guard, tenancy, every value and duplicates, and creates + links in one transaction.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Shown above the form: the prefill is the REQUESTER, never the passenger (ZD-296). */
+export const REQUESTER_NOT_PASSENGER_NOTICE = "Requester — the person who contacted you. This is not necessarily the passenger.";
+
+export const ADD_CONTACT_NOTICE =
+  "This creates one Growth contact and links it to this request. It doesn't change the request, its decision, trips or billing, and it doesn't create an opportunity or record any communication consent.";
+
+/** ZD-297: Core requester_relationship -> plus_contacts.contact_kind (the same mapping as inquiry conversion). */
+const RELATIONSHIP_TO_CONTACT_KIND: Record<string, "individual" | "family_caregiver" | "facility_staff" | "other"> = {
+  self: "individual",
+  family: "family_caregiver",
+  caregiver: "family_caregiver",
+  facility_coordinator: "facility_staff",
+  other: "other",
+};
+export function contactKindForRelationship(relationship: string | null | undefined): string {
+  return (relationship && RELATIONSHIP_TO_CONTACT_KIND[relationship]) || "other";
+}
+
+/** The requester facts of a Core Request that may prefill the form. Deliberately has no passenger field. */
+export interface RequesterFacts {
+  requesterName: string;
+  requesterPhone: string;
+  requesterEmail: string | null;
+  requesterRelationship: string;
+}
+
+/**
+ * Initial form values (the same shape as the Growth contact form) from the requester ONLY. Values are copied as given
+ * -- never reformatted -- so staff see exactly what the request says and correct it where the contact rules differ.
+ * Preferences start at the Growth form's defaults: phone (email when there is no phone), Do not contact unticked,
+ * no owner. Nothing about consent is inferred.
+ */
+export function buildRequesterPrefill(r: RequesterFacts) {
+  const phone = (r.requesterPhone ?? "").trim();
+  const email = (r.requesterEmail ?? "").trim();
+  return {
+    displayName: (r.requesterName ?? "").trim(),
+    phone,
+    email,
+    contactKind: contactKindForRelationship(r.requesterRelationship),
+    jobTitle: "",
+    preferredChannel: phone || !email ? "phone" : "email",
+    doNotContact: false,
+    ownerHandle: "",
+  };
+}
+
+/**
+ * NP-CORE-PLUS-REQUEST-02C-R1 (A3): the DOM id of the Request Growth panel's contact link. The panel renders it and the
+ * controls move focus to it after a successful add or link.
+ */
+export function contactLinkId(requestId: string): string {
+  return `request-growth-contact-${requestId}`;
+}
+
+/** D8 / ZD-300: offered only for an unlinked Request, a Growth writer and an enabled (synthetic-only) organization. */
+export function canOfferAddContact(s: { linked: boolean; canWrite: boolean; enabled: boolean }): boolean {
+  return !s.linked && s.canWrite && s.enabled;
+}
+
+export type RequestContactOutcome = "linked" | "possible_duplicates" | "already_linked";
+
+export function requestContactOutcomeMessage(outcome: RequestContactOutcome): string {
+  switch (outcome) {
+    case "linked":
+      return "Contact added and linked in Growth. The request itself is unchanged.";
+    case "already_linked":
+      return "This request is already linked in Growth, so no contact was added. Its current link is shown.";
+    case "possible_duplicates":
+      return "This may be someone who is already in your contacts. Nothing has been created yet: link a match below, or create a separate contact if this is a different person.";
+  }
+}
+
+/** Errors from plus_create_contact_for_request. Never echoes submitted values or says why an organization is disabled. */
+export function requestContactErrorMessage(code: string | undefined, reason?: string): string {
+  switch (code) {
+    case "ZW004":
+      if (reason === "request_contact_not_enabled") return "Adding a contact from a request isn't available for this organization. You can still link an existing contact.";
+      return "This request was linked in Growth by someone else just now, so no contact was added. Reload the page to see the link.";
+    case "ZW006":
+      return "Check the details: a name and a valid phone number or email are required, and the owner must have Nemryn Plus write access.";
+    case "ZW001":
+      return "You can view Growth links but not add contacts. Ask an Organization Admin for write access.";
+    case "ZW002":
+      return "This request isn't available. It may not exist, or you may no longer have access.";
+    default:
+      return "The contact couldn't be added. Try again.";
+  }
+}
+
 /**
  * The Request's real Core status, as Growth shows it. Derived live from Core at read time (plus_get_request_summaries)
  * -- never inferred from the opportunity stage, and never labelled a sales conversion.

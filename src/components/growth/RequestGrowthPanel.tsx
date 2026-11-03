@@ -5,8 +5,17 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { RequestGrowthControls } from "@/components/growth/RequestGrowthControls";
 import { getPlusAccessState } from "@/lib/plus/access";
 import { canOpenGrowth, canWriteGrowth } from "@/lib/plus/access-core";
-import { getRequestAttribution, type RequestAttribution } from "@/lib/plus/attribution";
-import { CONVERSION_LINK_NOTE, isLinkCorrectable, linkMethodLabel } from "@/lib/plus/attribution-core";
+import { getRequestAttribution, isRequestContactEnabled, type RequestAttribution } from "@/lib/plus/attribution";
+import {
+  CONVERSION_LINK_NOTE,
+  buildRequesterPrefill,
+  canOfferAddContact,
+  contactLinkId,
+  isLinkCorrectable,
+  linkMethodLabel,
+  type RequesterFacts,
+} from "@/lib/plus/attribution-core";
+import { listOwnerOptions, type OwnerOption } from "@/lib/plus/contacts";
 import { formatContactTime } from "@/lib/plus/contacts-core";
 import { stageDisplayLabel } from "@/lib/plus/opportunities-core";
 import { typography } from "@/design/typography";
@@ -17,8 +26,22 @@ import { cn } from "@/lib/cn";
  * Rendered ONLY for people Growth admits (Plus entitlement + Organization Admin or a Dispatcher's named grant); for
  * everyone else it returns null -- no placeholder, no disabled control, no Growth data. Read-only Plus users see the
  * link without controls. The Request's own decision, passenger, trips and acquisition are never touched from here.
+ *
+ * NP-CORE-PLUS-REQUEST-02B: "Add contact" is offered only for an unlinked Request, a Growth writer and an organization
+ * on the synthetic-only activation allowlist (ZD-300). Its prefill is built from the REQUESTER facts only (the caller
+ * passes no passenger field; ZD-296), and the database re-checks everything when the form is submitted.
  */
-export async function RequestGrowthPanel({ organizationId, requestId, timezone }: { organizationId: string; requestId: string; timezone: string }) {
+export async function RequestGrowthPanel({
+  organizationId,
+  requestId,
+  timezone,
+  requester,
+}: {
+  organizationId: string;
+  requestId: string;
+  timezone: string;
+  requester: RequesterFacts;
+}) {
   const plus = await getPlusAccessState(organizationId);
   if (!canOpenGrowth(plus.state, plus.capability)) return null;
   const canWrite = canWriteGrowth(plus.state, plus.capability);
@@ -29,6 +52,20 @@ export async function RequestGrowthPanel({ organizationId, requestId, timezone }
     attribution = await getRequestAttribution(organizationId, requestId);
   } catch {
     failed = true;
+  }
+
+  let addContact: { initial: ReturnType<typeof buildRequesterPrefill>; owners: OwnerOption[] } | null = null;
+  if (!failed && canWrite && !attribution) {
+    const enabled = await isRequestContactEnabled(organizationId);
+    if (canOfferAddContact({ linked: false, canWrite, enabled })) {
+      let owners: OwnerOption[] = [];
+      try {
+        owners = await listOwnerOptions(organizationId);
+      } catch {
+        // The form still works without owner choices ("No owner").
+      }
+      addContact = { initial: buildRequesterPrefill(requester), owners };
+    }
   }
 
   return (
@@ -48,10 +85,22 @@ export async function RequestGrowthPanel({ organizationId, requestId, timezone }
                   label: "Contact",
                   value: attribution.contactId ? (
                     <span className="flex flex-wrap items-center gap-2">
-                      <Link href={`/operations/growth/contacts/${attribution.contactId}`} className="text-text-link hover:underline" data-testid="request-growth-contact">
+                      <Link
+                        id={contactLinkId(requestId)}
+                        href={`/operations/growth/contacts/${attribution.contactId}`}
+                        className="text-text-link hover:underline"
+                        data-testid="request-growth-contact"
+                      >
                         {attribution.contactName}
                       </Link>
                       {attribution.contactStatus === "archived" && <StatusBadge label="Archived" category="neutral" />}
+                      <Link
+                        href={`/operations/growth/contacts/${attribution.contactId}`}
+                        className={cn(typography.metadata, "text-text-link hover:underline")}
+                        data-testid="request-growth-open-in-plus"
+                      >
+                        Open in Plus
+                      </Link>
                     </span>
                   ) : (
                     "—"
@@ -104,7 +153,7 @@ export async function RequestGrowthPanel({ organizationId, requestId, timezone }
             <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="request-growth-unlinked">
               Not linked to a Growth contact or opportunity.
             </p>
-            {canWrite && <RequestGrowthControls organizationId={organizationId} requestId={requestId} current={null} />}
+            {canWrite && <RequestGrowthControls organizationId={organizationId} requestId={requestId} current={null} addContact={addContact} />}
           </>
         )}
       </div>

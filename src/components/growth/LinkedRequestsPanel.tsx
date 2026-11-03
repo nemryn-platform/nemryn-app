@@ -44,7 +44,7 @@ export async function LinkedRequestsPanel({
         <AttentionState level="critical" title="Linked requests couldn't be loaded" description="Reload the page to try again." />
       ) : rows.length === 0 ? (
         <p className={cn(typography.bodySmall, "text-text-secondary")} data-testid="linked-requests-empty">
-          No requests linked yet. Link one from Operations → Requests (“Track in Plus”).
+          No requests linked yet. Link one from Operations → Requests (“Link existing contact”).
         </p>
       ) : (
         <ul className="flex flex-col divide-y divide-border-subtle" aria-label="Linked requests">

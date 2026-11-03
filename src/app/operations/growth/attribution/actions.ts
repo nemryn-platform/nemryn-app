@@ -4,7 +4,17 @@ import { revalidatePath } from "next/cache";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { requirePlusAccess } from "@/lib/plus/access";
 import { canWriteGrowth } from "@/lib/plus/access-core";
-import { attributionErrorMessage, isUuid, parseAttributionChoice, validateCorrectionReason } from "@/lib/plus/attribution-core";
+import {
+  attributionErrorMessage,
+  isUuid,
+  parseAttributionChoice,
+  requestContactErrorMessage,
+  requestContactOutcomeMessage,
+  validateCorrectionReason,
+  type RequestContactOutcome,
+} from "@/lib/plus/attribution-core";
+import { findPossibleDuplicates } from "@/lib/plus/contacts";
+import { CONTACT_LIMITS, validateContactForm, type ContactFieldErrors, type ContactFormValues, type PossibleDuplicate } from "@/lib/plus/contacts-core";
 import { stageDisplayLabel } from "@/lib/plus/opportunities-core";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -45,7 +55,7 @@ function refresh(requestId: string) {
   revalidatePath("/operations/growth", "layout");
 }
 
-/** Active contacts matching a search, for the "Track in Plus" picker (never creates or merges contacts). */
+/** Active contacts matching a search, for the "Link existing contact" picker (never creates or merges contacts). */
 export async function searchLinkContactsAction(organizationId: string, query: string): Promise<{ options: LinkOption[]; error?: string }> {
   const g = await guard(organizationId, true);
   if ("error" in g) return { options: [], error: g.error };
@@ -132,4 +142,86 @@ export async function correctAttributionAction(_prev: AttributionActionState, fo
   }
   refresh(requestId);
   return { status: "success", message: data.changed ? "Link corrected. The request itself is unchanged." : "Nothing changed: the link already matches." };
+}
+
+export interface RequestContactFormState {
+  status: "idle" | "error" | "duplicates" | "success";
+  outcome?: RequestContactOutcome;
+  message?: string;
+  errors?: ContactFieldErrors;
+  /** Echoed back so a refused submission never wipes what was typed (never logged). */
+  values?: ContactFormValues;
+  duplicates?: PossibleDuplicate[];
+  contactId?: string;
+}
+
+function readContactValues(formData: FormData): ContactFormValues {
+  return {
+    displayName: text(formData, "displayName").slice(0, CONTACT_LIMITS.name + 50),
+    phone: text(formData, "phone").slice(0, CONTACT_LIMITS.phone + 20),
+    email: text(formData, "email").slice(0, CONTACT_LIMITS.email + 20),
+    contactKind: text(formData, "contactKind"),
+    jobTitle: "",
+    preferredChannel: text(formData, "preferredChannel"),
+    doNotContact: formData.get("doNotContact") === "on" || formData.get("doNotContact") === "true",
+    ownerHandle: text(formData, "ownerHandle"),
+  };
+}
+
+/**
+ * NP-CORE-PLUS-REQUEST-02B: "Add contact" from Request Details. ONE call to plus_create_contact_for_request, which creates
+ * the contact and links it to this Request atomically (ZD-294); there is deliberately no two-call fallback. The values
+ * are the staff-reviewed form fields only -- nothing is read from the Request here (ZD-296). Possible duplicates are
+ * listed and nothing is created until the person confirms; contacts are never merged. Logs error codes only.
+ */
+export async function createContactForRequestAction(_prev: RequestContactFormState, formData: FormData): Promise<RequestContactFormState> {
+  const values = readContactValues(formData);
+  const g = await guard(text(formData, "organizationId"), true);
+  if ("error" in g) return { status: "error", message: g.error, values };
+  const requestId = text(formData, "requestId");
+  if (!isUuid(requestId)) return { status: "error", message: "Reload the page and try again.", values };
+
+  const parsed = validateContactForm(values);
+  if (!parsed.ok) return { status: "error", errors: parsed.errors, message: parsed.errors.form, values };
+  const input = parsed.value;
+
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_create_contact_for_request", {
+    p_organization_id: g.context.organizationId,
+    p_request_id: requestId,
+    p_display_name: input.displayName,
+    p_phone: input.phone as string,
+    p_email: input.email as string,
+    p_contact_kind: input.contactKind,
+    p_preferred_channel: input.preferredChannel,
+    p_do_not_contact: input.doNotContact,
+    p_owner_membership_id: input.ownerHandle as string,
+    p_confirm_possible_duplicate: formData.get("confirmDuplicate") === "true",
+  });
+  if (error || !data) {
+    console.error("[plus] request contact create failed", error?.code ?? "no_data");
+    return { status: "error", message: requestContactErrorMessage(error?.code, error?.message), values };
+  }
+
+  const outcome = data.outcome as RequestContactOutcome;
+  if (outcome === "possible_duplicates") {
+    let duplicates: PossibleDuplicate[] = [];
+    try {
+      duplicates = await findPossibleDuplicates(g.context.organizationId, {
+        displayName: input.displayName,
+        phone: input.phone,
+        email: input.email,
+        excludeContactId: null,
+      });
+    } catch {
+      // The warning still stands (the database counted possible duplicates); the list is a convenience.
+    }
+    return { status: "duplicates", outcome, message: requestContactOutcomeMessage(outcome), duplicates, values };
+  }
+  refresh(requestId);
+  if (outcome === "linked" || outcome === "already_linked") {
+    return { status: "success", outcome, message: requestContactOutcomeMessage(outcome), contactId: data.contact_id ?? undefined };
+  }
+  console.error("[plus] request contact create failed", "unknown_outcome");
+  return { status: "error", message: requestContactErrorMessage(undefined), values };
 }

@@ -275,8 +275,19 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
               recurringSchedule={request.recurringSchedule}
             />
             <RequestAcquisitionPanel acquisition={acquisition} />
-            {/* NP-P2-S3: Growth link -- rendered only for people Growth admits; null (absent) for everyone else. */}
-            <RequestGrowthPanel organizationId={organization.organizationId} requestId={request.id} timezone={timezone} />
+            {/* NP-P2-S3: Growth link -- rendered only for people Growth admits; null (absent) for everyone else.
+                NP-CORE-PLUS-REQUEST-02B: the REQUESTER facts (never passenger fields) prefill "Add contact". */}
+            <RequestGrowthPanel
+              organizationId={organization.organizationId}
+              requestId={request.id}
+              timezone={timezone}
+              requester={{
+                requesterName: request.requesterName,
+                requesterPhone: request.requesterPhone,
+                requesterEmail: request.requesterEmail,
+                requesterRelationship: request.requesterRelationship,
+              }}
+            />
             <RequestActivityPanel events={activityEvents} timezone={timezone} />
           </div>
         </div>

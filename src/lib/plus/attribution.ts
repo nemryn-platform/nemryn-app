@@ -48,6 +48,18 @@ export async function getRequestAttribution(organizationId: string, requestId: s
   };
 }
 
+/**
+ * NP-CORE-PLUS-REQUEST-02B (ZD-300): whether "Add contact from a request" is enabled for the organization (the
+ * synthetic-only activation guard). For OFFERING the action only -- plus_create_contact_for_request enforces the gate
+ * itself. Fails closed: any error reads as disabled.
+ */
+export async function isRequestContactEnabled(organizationId: string): Promise<boolean> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("plus_request_contact_enabled", { p_organization_id: organizationId });
+  if (error) return false;
+  return data === true;
+}
+
 export interface RequestSummary {
   requestId: string;
   state: string;
