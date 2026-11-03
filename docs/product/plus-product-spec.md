@@ -59,7 +59,7 @@ A salesperson is **never** made an Organization Admin just to reach the CRM. Ful
 | Phone call ("how much to dialysis?", "do you do wheelchairs?") | Staff create **Contact + private-pay Opportunity** (`inquiry_type`, `source = phone`) | **No** |
 | Email inquiry | Same, `source = email` | No |
 | **Website question that is not a booking** (price, availability, wheelchair service) | **Plus inquiry form** (P2-S7, §4.2) → **Inquiries to review** → staff convert to Contact + Opportunity, or dismiss | **No** |
-| Website **booking** form (existing Core hosted / embed / developer API) | Unchanged: lands in the Request Hub as `pending` with its acquisition snapshot. A Plus user uses **Track in Plus** on the Request | Yes (by Core, as today) |
+| Website **booking** form (existing Core hosted / embed / developer API) | Unchanged: lands in the Request Hub as `pending` with its acquisition snapshot. A Plus user uses **Link existing contact** (formerly "Track in Plus") on the Request | Yes (by Core, as today) |
 | Referral (discharge planner, physician office, family) | Opportunity with `source = referral` and `source_detail`. From P3, also `referral_account_id` | No (until conversion) |
 | Advertising / landing page | Links to either form carry UTM parameters, which both capture. Phone leads: staff choose `source = advertising` and an optional `campaign_code` | Depends on the form |
 
@@ -208,7 +208,7 @@ Rules:
 | **Contract status** | None / Negotiating / Contracted / Expired / Terminated + start/end dates. No document storage in beta |
 | **Follow-ups** | Tasks on the account, contact or opportunity |
 | **Communication history** | Logged calls, emails, meetings and notes (activities timeline) |
-| **Referral attribution** | Requests linked with `referral_account_id` (via Track in Plus or at conversion) |
+| **Referral attribution** | Requests linked with `referral_account_id` (via Link existing contact, formerly "Track in Plus", or at conversion) |
 | **Onboarding** | When an account becomes Contracted, a suggested task set: confirm locations are linked, confirm the coordinator contacts, share the request link / phone line, schedule a 30-day review. These are created as ordinary tasks, not a workflow engine |
 | **Volume reporting** | (a) **Referred volume:** attributed Requests → accepted / declined / served counts. (b) **Location volume:** completed Trips with pickup or destination at a linked location. Reported side by side, **never summed**. Revenue is unavailable until pricing exists |
 
@@ -348,6 +348,10 @@ Every list page has these shared states:
 >   - The submit button shows a pending state and is disabled while saving.
 > - **After saving.** The form closes and the Growth panel shows the linked contact with **Open in Plus**.
 > - **What does not change.** The Request's decision, passenger, trips and billing are untouched. No opportunity, quote, Request, Passenger, Trip, invoice or consent record is created.
+> - **Activation and what every organization sees.** **Add contact** is offered only to organizations on the synthetic-only allowlist. The release enables none, and real organizations cannot be enabled (ZD-299), so Add contact stays disabled for every real organization. Three changes to the existing Growth panel are NOT gated by activation, and appear for every organization with Growth access:
+>   - the unlinked-state button is labelled **Link existing contact** (formerly "Track in Plus"), and the Linked requests empty state names it (ZD-295)
+>   - a linked contact shows an **Open in Plus** link next to its name, to the same contact page
+>   - after **Link existing contact** or **Correct link** is saved, keyboard focus moves to the linked contact, and the success message is announced once through a persistent status region (NP-CORE-PLUS-REQUEST-02C-R1). Error messages are unchanged.
 
 ### 7.5 Exports
 
@@ -431,7 +435,7 @@ Each slice ships independently: its own additive migration (if any), app change,
 | **P3-S1 Accounts + additive links** | `plus_accounts`; Accounts pages; additive `account_id` on contacts / tasks / activities, `account_id` + `referral_account_id` on opportunities and `referral_account_id` on attributions; checks replaced (domain model §3.2); RPCs extended with trailing defaulted parameters | 1 table + 6 additive columns | Every existing row validates; old RPC call shapes still work; T27 |
 | **P3-S2 Linked locations** | `plus_account_facilities` link/unlink; Account ↔ Facilities cross-links | 1 table | One location → at most one account |
 | **P3-S3 Facility opportunities** | Facility channel enabled (CHECK widened in P3-S1); Pipeline facility tab; optional primary decision-maker from the same account; onboarding task set on Contracted | none | Facility opportunity requires an account; contact/account consistency (ZW006); no stage change from trips |
-| **P3-S4 Referral & volume** | Referral account on Track in Plus / conversion; referred volume vs location volume panels | read RPCs | Never summed; counts reconcile |
+| **P3-S4 Referral & volume** | Referral account on Link existing contact (formerly "Track in Plus") / conversion; referred volume vs location volume panels | read RPCs | Never summed; counts reconcile |
 
 Excluded: facility portal, contract documents.
 
