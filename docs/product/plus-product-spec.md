@@ -314,20 +314,40 @@ Every list page has these shared states:
 ### 7.4 Request Hub touchpoints (Core pages, minimal additions)
 
 - **Request detail:** a small **Growth** panel, shown only to users with Plus access, next to the existing `RequestAcquisitionPanel`.
-  - Unattributed: **Track in Plus**.
+  - Unattributed: **Link existing contact** (formerly "Track in Plus"); for enabled organizations also **Add contact** (NP-CORE-PLUS-REQUEST-02B, below).
   - Attributed: the linked contact, opportunity and referring account.
   - Hidden entirely for everyone else.
 - No change to the Request Hub queue, its decisions or its permissions.
 
 > **NP-P2-S3 implementation notes (local):**
 > - **Request detail → Growth panel** (`RequestGrowthPanel`) sits under the existing Acquisition section. It renders only when Growth admits the person (Plus entitlement plus Organization Admin or a Dispatcher's named grant). For everyone else it is absent: no placeholder, no disabled control, no Growth data.
->   - **Unlinked:** "Not linked to a Growth contact or opportunity", plus **Track in Plus** for writers. Writers search existing **active** contacts, then optionally pick one of that contact's private-pay opportunities. Nothing is created or merged from here.
+>   - **Unlinked:** "Not linked to a Growth contact or opportunity", plus **Link existing contact** (formerly "Track in Plus") for writers. Writers search existing **active** contacts, then optionally pick one of that contact's private-pay opportunities. Linking never creates or merges anything. ~~Nothing is created or merged from here.~~ Amended by ZD-295: see **Add contact** below.
 >   - **Linked:** the contact and the opportunity (with its stage), linked to their Growth pages, and "Linked to an existing request by … , date". Writers get **Correct link**, which requires a reason.
 >   - **Read-only:** read-grant staff and an Organization Admin in read-only Plus see the link with no controls.
 >   - Request decisions (Accept / Decline / Cancel), passenger linking, trip and recurring-care creation, dispatch and the acquisition section are unchanged.
 > - **Contact and Opportunity detail → Linked requests.** Each attributed Request shows its **real Core status**, derived live at read time (pending / accepted / declined / cancelled, trip counts, recurring care, decline or cancel reason *code*), with a link to Operations. There is no copied Core text and no requester contact details.
 > - **Linking is not a conversion.** The opportunity stage never changes on link or correction. "Converted" stays reserved for the P2-S4 conversion workflow, and a linked Request is never labelled a sale.
 > - Timelines show "Operations request linked" and "Request link corrected" (with the staff reason).
+
+> **NP-CORE-PLUS-REQUEST-02B — Add contact from Request detail (ZD-294 .. ZD-301; local only, not released):**
+> - **Who and when.** Authorized staff can create a Growth contact from Request detail and link it to the Request in one step. **Add contact** (primary) appears next to **Link existing contact** only when ALL of these hold:
+>   - the Request is unlinked
+>   - Plus is in effective state write and the person can write Growth (an Organization Admin, or a Dispatcher with a write grant)
+>   - the organization is on the synthetic-only activation allowlist (`plus_request_contact_enabled`, ZD-299)
+>
+>   Otherwise only **Link existing contact** is shown, with no notice. Read-only users see no controls, as before.
+> - **Form.** An inline form inside the Growth panel, prefilled from the **requester** only: name, phone, email when present, and the contact type mapped from the relationship (ZD-297). Every field is editable, and nothing is sent until staff submit.
+>   - It carries the label "Requester — the person who contacted you. This is not necessarily the passenger."
+>   - No passenger field is read or prefilled.
+>   - The fields and rules are those of Growth → Contacts → New: preferred channel, optional owner, **Do not contact** (unticked by default), validation.
+>   - There are no consent fields. A transportation request is never treated as communication consent, and no consent row is written (the contact starts at "no consent on record").
+> - **Duplicates.** Possible duplicates (the released matching: email, phone digits, name) are listed before anything is created. Staff either link an **active** match (the released link action) or explicitly create a separate contact. Archived matches are shown but can't be linked. Contacts are never merged.
+> - **Atomic.** `plus_create_contact_for_request` creates and links in one database transaction (ZD-294).
+>   - A double submission or a concurrent link leaves exactly one linked contact and no orphan.
+>   - A Request that is already linked returns "already linked" and creates nothing.
+>   - The submit button shows a pending state and is disabled while saving.
+> - **After saving.** The form closes and the Growth panel shows the linked contact with **Open in Plus**.
+> - **What does not change.** The Request's decision, passenger, trips and billing are untouched. No opportunity, quote, Request, Passenger, Trip, invoice or consent record is created.
 
 ### 7.5 Exports
 

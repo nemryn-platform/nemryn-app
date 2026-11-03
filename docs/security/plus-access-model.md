@@ -173,6 +173,22 @@ create policy <t>_select_plus on … for select to authenticated
 > - The Growth Agent has no path to either RPC.
 > - Tests: `plus_conversion_rebooking_tests.sql` (T13 replay, T17 no passenger / Trip) and `plus_conversion_rebooking_concurrency_test.sh`.
 
+> **Implementation status (NP-CORE-PLUS-REQUEST-02A / 02B, migration `20261102100000`, local only, not released):**
+> - **Plus → Core link, now with contact creation.** Authorized staff can create a Growth contact from Request detail and link it to that Request: `plus_create_contact_for_request`. It requires:
+>   - Plus write
+>   - the Core request-read role
+>   - the synthetic-only activation allowlist `plus_request_contact_enablements`: a class-A table, Platform Admin managed, NO ROW = disabled, `data_class` CHECKed to `synthetic` (ZD-299)
+>
+>   It runs the released `plus_create_contact` and `plus_link_request` unchanged, in one transaction.
+> - **The "Plus → Core read" rule above is unchanged** (ZD-296). The function reads only the Request's existence (id, organization). It never reads `requester_*` or passenger columns.
+>   - The form is prefilled in the browser from Request facts the staff member can already read on the Core page.
+>   - The database receives only the staff-reviewed values.
+>   - C5 data (pickup / destination, assistance, notes, passenger record) is never copied.
+> - **Consent:** none is created or inferred. A Request is not consent. Do-not-contact is stored only as staff set it, and keeps its precedence.
+> - **Audit:** `plus_contact_created_from_request` ({request_id} only) and `platform_plus_request_contact_enablement_changed` (with the reason). No contact values are copied.
+> - **Real data:** no organization is enabled by the migration. Real tenants stay disabled while PD-10 / PD-11 are open. The released Growth → Contacts form is not gated by this allowlist.
+> - **Tests:** `plus_create_contact_for_request_tests.sql` and `plus_create_contact_for_request_concurrency_test.sh`.
+
 **Passenger identity:** Plus never matches a contact to a Passenger by name, phone or email. The Passenger link is made only by staff in Core (`link_request_passenger`) and is visible to Plus only as "a passenger is linked: yes/no".
 
 ## 5. Data categories
