@@ -1,0 +1,123 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02B — TEST RESULTS (LOCAL / ISOLATED, FICTIONAL DATA)
+Date: 2026-11-02
+Environment:
+  - Worktree np-core-plus-request-01 (85f2042 + uncommitted Stage A / B).
+  - Isolated stack NemrynS1Iso: head 20261102100000, 99 migrations.
+  - App: `next build` + `next start -p 3100` with ~/NemrynS1Iso/.env.isolated.local. The URL was verified as the
+    local isolated API before the build.
+  - Browser: system Chrome through the repository's CDP harness (tests/shared/cdp.mjs via plus-quotes/_harness.mjs),
+    with fictional seed identities.
+  - No production database, endpoint or real data was touched.
+
+======================================================================================================================
+1. APPLICATION CHECKS
+======================================================================================================================
+  tsc --noEmit                      exit 0, 0 errors
+  eslint                            exit 0, 0 errors, 13 warnings. These are the same 13 pre-existing warnings as on
+                                    the base; none is in a changed file.
+  npm test (all unit)               964 / 964 pass (957 before + 7 new)
+  npm run test:release              28 / 28 pass
+  next build                        success (first attempt with a symlinked node_modules was refused by Turbopack;
+                                    rebuilt after `npm ci` from the identical lockfile)
+
+======================================================================================================================
+2. NEW UNIT TESTS (src/lib/plus/attribution-core.test.mjs; 16 / 16 in file)
+======================================================================================================================
+  02B relationship → contact kind          all 5 Core relationships map to valid kinds; unknown / NULL → other
+  02B requester prefill                    requester values only, trimmed and not reformatted; Growth defaults
+                                           (channel, DNC off, no owner); email optional; the prefill passes
+                                           validateContactForm
+  02B passenger never used                 extra passenger properties are ignored; "Zed" / "passenger" never appear;
+                                           the notice text is exact
+  02B invalid requester phone / email      a Core phone like "call after 5pm" is prefilled as given and refused with
+                                           a phone field error; a bad email gets an email field error; no phone or
+                                           email → refused
+  02B canOfferAddContact                   true only for unlinked + writer + enabled (disabled, read-only and
+                                           linked → false)
+  02B outcome / error messages             linked / already_linked / possible_duplicates wording; the "not enabled"
+                                           message discloses nothing (no "synthetic", "allowlist", "privacy" or
+                                           "real"); every ZW code mapped; the notice says no opportunity or consent
+                                           is created
+  02B boundaries in source                 - the action makes ONE call, rpc("plus_create_contact_for_request"), with
+                                             NO plus_create_contact / plus_link_request fallback
+                                           - console lines carry codes only
+                                           - the organization comes from the session
+                                           - no consent handling in the action
+                                           - the page passes requester fields and no passenger field to the panel
+                                           - the form has no consent field and only ACTIVE matches can be linked
+                                           - the panel gates on isRequestContactEnabled + canOfferAddContact and
+                                             renders Open in Plus
+  Existing tests in the file (9) still pass, including the "runtime-import-free" rule for attribution-core.ts.
+
+======================================================================================================================
+3. BROWSER CHECKS (isolated app, one-off scratch script; 52 / 52 PASS)
+======================================================================================================================
+  V1  Disabled organization (Org A with Plus active, NOT on the allowlist):
+        - only "Link existing contact"; no Add contact
+        - no notice about the disabled feature
+  V2  After the Platform Admin RPC enables Org A (synthetic), at 1440, 1024 and 768: Add contact (primary) +
+      Link existing contact (secondary); no horizontal overflow.
+  V3  At 1440, 1024 and 768:
+        - exact requester prefill (name, phone, email, family → family_caregiver, channel phone, DNC off)
+        - the passenger ("Visual Passenger Zed Fictional" on a passenger-linked Request) never appears
+        - the requester notice is exact
+        - focus is on Name
+        - every input and select has a label
+        - no consent field
+        - no overflow
+  V4  A Core phone "call after 5pm" is prefilled as given and facility_coordinator → facility_staff. Submit → a phone
+      field error with aria-invalid="true", typed values preserved, no attribution written.
+  V5  Duplicates at 1440 and 768:
+        - the match is listed and nothing is created
+        - "Link this contact" and "Create a separate contact" are offered; no overflow
+        - "Link this contact" links the EXISTING contact; the contact count is unchanged
+  V6  Double click on submit: the button is disabled while pending; exactly one contact and one attribution.
+  V7  Success on a passenger-linked Request (Name edited by staff before submitting):
+        - the form closes; the panel shows the contact + Open in Plus (correct href)
+        - the notice survives the refresh; Add contact disappears and Correct link appears
+        - the stored values are the staff-reviewed ones
+        - no consent row and no opportunity
+        - the provenance audit holds exactly {"request_id": …}
+        - the Request rows and the linked Passenger are byte-identical (ctid / state / updated_at / passenger)
+        - no overflow at 768
+  V8  Dispatcher with a READ grant: the panel is visible with no Add contact or Link existing contact.
+
+======================================================================================================================
+4. STAGE A SUITES RE-RUN AFTER STAGE B (isolated DB)
+======================================================================================================================
+  plus_create_contact_for_request_tests.sql          43 / 43 PASS
+  plus_create_contact_for_request_concurrency_test.sh 9 / 9 PASS (exit 0)
+  privilege_contract_tests.sql                        violations = 0 of 29
+  plus_request_attributions_tests                     73 / 73
+  plus_communication_consents_tests                   78 / 78
+  DOCUMENTED PRE-EXISTING EXCEPTIONS (unchanged, not hidden; billing_create_invoice_draft on origin/main; fixed on
+  the FIN branch):
+    plus_contacts_activities_tests  84 / 85 — C2 FAIL
+    plus_access_helpers_tests      169 / 170 — P6 FAIL
+    plus_member_grants_tests        75 / 76 — C1 FAIL
+  No billing file or behaviour was changed.
+
+======================================================================================================================
+5. ISOLATED ENVIRONMENT RESTORED
+======================================================================================================================
+  Before the browser review, the shared isolated DB was:
+    organization_modules 0, active grants 0, requests 11, contacts 0, attributions 0, enablements 0, consents 0,
+    audit 6
+  The review wrote the following, all fictional and marked "Visual 02B":
+    - the Plus demo row via local-plus-demo `enable`
+    - 9 requests (5 in the main run + 2 in each of two screenshot retakes)
+    - 3 contacts, 3 attributions, 3 activities
+    - 1 read grant
+    - the enablement row
+    - 8 audit rows
+  All of it was removed (DELETE 9 / 3 / 3 / 3 / 1 / 1 / 8, then local-plus-demo `reset`). Afterwards the DB matched
+  the baseline exactly: 0 / 0 / 11 / 0 / 0 / 0 / 0 / 6. The app on :3100 was stopped (exit 144 is the pkill).
+
+======================================================================================================================
+6. FAILURES / NOT RUN
+======================================================================================================================
+  - No new failures.
+  - Screenshot tooling: Chrome's beyond-viewport clip truncates very tall panel crops at 768 and 1024. In-context
+    viewport screenshots cover the lower half of those states (visual-review report).
+  - Not run: a committed E2E suite (Stage C), an axe scan, cross-session browser concurrency (database-level only),
+    and production anything.

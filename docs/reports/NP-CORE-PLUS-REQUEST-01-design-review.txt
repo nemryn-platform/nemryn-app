@@ -1,0 +1,478 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-01 — ADD CONTACT FROM CORE REQUEST: DESIGN REVIEW
+Date: 2026-11-02
+Base reviewed: origin/main 85f2042 (PR #43 merged 2026-10-28; migration head 20261028100000, the same head as
+production). The local `main` ref is stale (679695e). The relevant files are identical on both, except that
+BookingRequestDialog.tsx is newer on origin/main, and that file is not touched by this work.
+Working tree: np-fin-p1-ledger (the parked FIN-P1 / P1G branch, PR #44 at 44e66cd). This report is the only file
+written. Nothing on that branch was modified, committed or pushed.
+Scope: design and implementation planning only. No code, migration, commit, push, deploy or production access.
+Status: STOP for owner review. Sections 7 and 8 list the decisions needed before coding starts.
+
+======================================================================================================================
+1. SUMMARY
+======================================================================================================================
+- The UX can be built with no change to Core and no change to any released Plus RPC.
+- It cannot be built safely with the released RPCs alone. Creating a contact and linking it are two separate RPC
+  calls (plus_create_contact, then plus_link_request), and PostgREST runs each in its own transaction. Two problems
+  follow:
+    (a) If the link fails, the new contact is left behind with no link. This happens when someone else links the
+        request first, on a stale page, or when access is revoked between the two calls.
+    (b) Two submissions at the same time both pass the duplicate check before either commits, so both create a
+        contact. No unique constraint exists on plus_contacts, and duplicates are allowed by design (warn, never
+        merge).
+  The requirement "prevent duplicate creation under concurrent submissions" therefore needs a database change.
+- Recommendation: ONE new additive RPC, plus_create_contact_for_request. It runs plus_create_contact and
+  plus_link_request, both unchanged, inside one transaction, following the pattern plus_convert_inquiry already uses
+  (it calls plus_create_contact unchanged). The primary key of plus_request_attributions (request_id) is what
+  serializes concurrent calls. The losing call raises an error, which rolls back its contact as well. No new table,
+  column, constraint, index, grant change on existing objects, or Core change.
+- Because this is a new migration, it needs a separate owner approval (decision D1) before coding.
+
+======================================================================================================================
+2. CURRENT ARCHITECTURE (findings, verified in source)
+======================================================================================================================
+2.1 Request Details → Growth section
+  - src/app/operations/requests/[requestId]/page.tsx renders RequestRequesterPanel, followed by RequestGrowthPanel,
+    in the right-hand column.
+  - src/components/growth/RequestGrowthPanel.tsx (server component):
+      * Returns null unless canOpenGrowth(state, capability). There is no placeholder or disabled control, and no
+        Growth data is shown.
+      * Write controls appear only when canWriteGrowth: state === "write" && capability === "write"
+        (src/lib/plus/access-core.ts:47).
+      * When the request is unlinked, it shows "Not linked to a Growth contact or opportunity." and, for writers,
+        RequestGrowthControls.
+      * When the request is linked, it shows the contact (a link to /operations/growth/contacts/[id]), the
+        opportunity and the link method. A correction control is offered unless the link came from a conversion,
+        which is immutable.
+  - src/components/growth/RequestGrowthControls.tsx (client): one "Track in Plus" button opens an inline editor. Staff
+    search ACTIVE contacts, optionally pick one of that contact's opportunities, then choose "Link request". When the
+    search finds nothing, it shows: "No active contact matches. Add the person in Growth → Contacts first; nothing is
+    created from here."
+  - src/app/operations/growth/attribution/actions.ts: server actions searchLinkContactsAction,
+    contactOpportunitiesAction, linkRequestAction and correctAttributionAction. Every action re-checks
+    requirePlusAccess, the form's organization binding (WRONG_ORGANIZATION) and canWriteGrowth before it calls an RPC.
+    Errors are logged as error codes only, never as values.
+  - Product spec docs/product/plus-product-spec.md:324 states the current rule: "Writers search existing active
+    contacts ... Nothing is created or merged from here." The new feature reverses this sentence (decision D2).
+
+2.2 Core request-to-Growth linking (migration 20261015130000_plus_request_attributions.sql)
+  - plus_request_attributions: request_id is the PRIMARY KEY, which allows at most one attribution per Request
+    (PD-06). It has composite FKs (id, organization_id) to transportation_requests, plus_contacts and
+    plus_opportunities. link_method is one of linked_existing_request | converted_from_opportunity | rebooking.
+    RLS: SELECT requires plus_can_read AND has_org_role(org, [organization_admin, dispatcher]). No client role can
+    insert, update or delete.
+  - plus_link_request(org, request, contact, opportunity):
+      * Checks _require_plus_write, then _plus_require_core_request_read.
+      * Confirms the Request exists in the organization. The Request is read only, never locked.
+      * _plus_resolve_attribution requires the contact to be ACTIVE in the same organization. It locks the contact
+        FOR SHARE.
+      * INSERT ... ON CONFLICT (request_id) DO NOTHING. If the existing link is identical, it returns changed=false.
+        If it differs, it raises ZW004 already_attributed.
+      * Writes one request_linked activity and one audit row, ids only.
+      * It never creates a contact, opportunity, Request, Passenger or Trip.
+  - Concurrency is covered by supabase/tests/plus_request_attributions_concurrency_test.sh, scenarios 1 to 6. These
+    include a link racing a Core Accept, where both succeed and the Core decision is untouched.
+
+2.3 Plus contact creation (migration 20261014100000_plus_contacts_activities.sql)
+  - plus_contacts columns: display_name, phone, email, contact_kind, job_title, preferred_channel, do_not_contact,
+    owner_user_id and status. The table has no passenger link and no address, health or trip fields.
+      * Phone CHECK: 7 to 20 digits, characters limited to [0-9+(). -], optional extension.
+      * Email CHECK: stored lower(btrim()).
+      * contact_kind: individual | family_caregiver | facility_staff | referral_source | other.
+      * At least one of phone or email is required.
+  - plus_create_contact(org, name, phone, email, kind, title, channel, dnc, owner_membership, confirm_dup):
+      * Checks _require_plus_write and trims inputs.
+      * A failed CHECK becomes ZW006.
+      * Duplicate detection uses _plus_contact_matches: same normalized email, same phone digits (7 or more), or same
+        name ignoring case. Up to 5 matches are considered, ACTIVE and ARCHIVED alike. If there are matches and
+        confirm is not set, NOTHING is written and the call returns contact_id=NULL, possible_duplicates=n.
+      * Writes an audit row plus_contact_created with no contact values.
+      * It has no idempotency key.
+  - plus_find_contact_matches (Plus READ) returns the match list (id, name, status, match_on) for the warning UI.
+    ContactForm.tsx already renders this list as "Possible duplicate", with an explicit "create anyway" button.
+  - src/lib/plus/contacts-core.ts: validateContactForm, normalizeEmail, phoneDigits, contactErrorMessage. These are
+    the existing client and server validation rules. The database CHECKs remain the authority.
+
+2.4 Duplicate matching precedent: plus_convert_inquiry (migration 20261024110000)
+  - In a single transaction under the inquiry row lock, plus_convert_inquiry calls plus_create_contact UNCHANGED. A
+    possible_duplicates result returns with nothing written, and staff then link an existing contact or confirm.
+  - It maps the requester relationship to a contact kind: family / caregiver → family_caregiver, facility_staff →
+    facility_staff, other → other, everything else → individual.
+  - It is the closest existing pattern for this feature. The proposal reuses its structure but does not create an
+    opportunity.
+
+2.5 Entitlement and access (migrations 20261013120000, 20261013160100)
+  - plus_can_read:
+      * Entitlement write: Organization Admin, or a Dispatcher with an active read or write grant.
+      * Entitlement read_only: Organization Admin only.
+      * locked / none: nobody.
+  - plus_can_write: entitlement write AND (Organization Admin, or a Dispatcher with an active WRITE grant).
+  - _require_plus_write:
+      * ZW001 when there is no uid.
+      * ZW002 when the caller cannot read (no oracle).
+      * ZW001 when the caller can read but not write (read_only entitlement, or a read grant).
+  - _plus_require_core_request_read: ZW002 unless has_org_role(org, [organization_admin, dispatcher]).
+  - plus_access_state / getPlusAccessState feed canOpenGrowth / canWriteGrowth in the UI. These are a mirror for
+    display only, not the authorization control.
+  - Disabled organization (organizations.status <> 'active'): has_org_role and _plus_member_access already return
+    false or none, so every Plus RPC refuses.
+
+2.6 Consent and Do-not-contact (migration 20261023100000_plus_communication_consents.sql)
+  - plus_communication_consents is an append-only ledger. Rows are written only by plus_record_consent,
+    plus_revoke_consent, the DNC switch in plus_update_contact (ZD-233) and inquiry conversion (web_form evidence).
+  - plus_create_contact writes NO consent row, so a new contact resolves to no_consent_on_record.
+  - The resolver: do_not_contact=true → suppressed_do_not_contact, which overrides every grant.
+  - plus_link_request does not read or change DNC or consent. Linking is not contacting.
+
+2.7 Boundary rules that constrain the design (docs/security/plus-access-model.md §4, §5)
+  - "Plus → Core read ... Never: requester phone or email." Plus RPCs must not read transportation_requests.requester_*.
+  - "Core → Plus: Nothing." Core code and Core RPCs never read or write Plus tables.
+  - "Passenger identity: Plus never matches a contact to a Passenger by name, phone or email."
+  - C2 consumer contact data (customer or caregiver name, phone, email) MAY live in plus_contacts, subject to PD-10
+    (HIPAA / BAA) and PD-11 (retention / redaction). Both are still open. Every Plus migration header says
+    "synthetic data only until PD-10 / PD-11".
+  - C5 (pickup, destination, assistance, notes, passenger record) is never copied into Plus.
+
+2.8 Audit pattern
+  - audit_events(organization_id, entity_type, entity_id, action, actor_user_id, before_data, after_data). Plus rows
+    carry ids, field NAMES and flags only, never contact values.
+  - plus_activities is the append-only Growth timeline. request_linked rows carry contact, opportunity and request
+    ids, with no body.
+
+2.9 Requester data available on the Core page
+  - transportation_requests has the following requester fields:
+      * requester_name (not null)
+      * requester_phone (not null; free text, with no format CHECK in Core)
+      * requester_email (nullable)
+      * requester_relationship: self | family | caregiver | facility_coordinator | other. This is the requester's
+        relationship TO THE PASSENGER.
+      * requester_user_id (portal requesters)
+  - Separate passenger fields: passenger_id, requested_passenger_name.
+  - Because Core phone values are unvalidated, some Core requester phones will fail the Plus phone CHECK. These must
+    be corrected in the form, never silently altered.
+
+======================================================================================================================
+3. PROPOSED IMPLEMENTATION (smallest safe change)
+======================================================================================================================
+3.1 Database: one forward-only, additive migration (requires owner approval D1)
+  File: supabase/migrations/2026110x100000_plus_create_contact_for_request.sql. It is timestamped after
+  20261029120000, which is the last FIN-P1 / P1G migration on the parked branch (see D6).
+
+  Result type plus_request_contact_result:
+    outcome text, one of:
+      'linked'               a contact was created and linked
+      'possible_duplicates'  nothing written; staff choose an existing contact or confirm
+      'already_linked'       the Request already has an attribution; nothing written
+    request_id, contact_id, opportunity_id, possible_duplicates integer, updated_at (attribution version token)
+
+  Signature:
+    plus_create_contact_for_request(p_organization_id uuid, p_request_id uuid, p_display_name text, p_phone text,
+      p_email text, p_contact_kind text, p_preferred_channel text, p_do_not_contact boolean,
+      p_owner_membership_id uuid, p_confirm_possible_duplicate boolean)
+  - SECURITY DEFINER; set search_path = public, pg_temp.
+  - Execute permissions: revoke all from public and anon; grant execute to authenticated only.
+
+  Body (one transaction):
+    1. Authorize:
+         perform _require_plus_write(org);
+         perform _plus_require_core_request_read(org);
+    2. Check the Request exists in org: `exists (select 1 from transportation_requests where id and org)`. Unknown or
+       foreign → ZW002. The Request is never locked or read beyond its existence.
+    3. Check for an existing attribution. If one exists, return outcome='already_linked' with its contact and
+       opportunity ids. Nothing is written. The UI re-renders the linked state.
+    4. Create the contact: r := plus_create_contact(org, name, phone, email, kind, NULL title, channel, dnc, owner,
+       confirm).
+         - This is the unchanged released contract: validation, ZW006, duplicate warning, owner eligibility, and the
+           plus_contact_created audit.
+         - If r.contact_id is null, return outcome='possible_duplicates'. Nothing has been written.
+    5. Link: l := plus_link_request(org, request, r.contact_id, NULL). This is also unchanged: it writes the
+       request_linked activity and the plus_request_linked audit, and ON CONFLICT (request_id) waits for any
+       concurrent attribution insert.
+         - If a concurrent caller attributed the Request first with a DIFFERENT contact (always the case here,
+           because our contact is new), plus_link_request raises ZW004.
+         - That error aborts the whole transaction, so the contact created in step 4 and its audit row roll back.
+           No orphaned contact is left and no duplicate exists.
+         - l.changed=false is impossible for a just-created contact. Treat it as a defensive ZW004.
+    6. Insert one extra audit row: action plus_contact_created_from_request, entity plus_contact. after_data holds
+       {request_id} only, so the provenance is auditable without copying values. Alternatively, fold the source into
+       step 4's row; see D5.
+    7. Return outcome='linked'.
+
+  What the function does not do:
+    - It does NOT read requester_* columns. The values come from staff, prefilled in the browser from the Core page
+      they are already authorized to see. This keeps the "Plus → Core read: never requester phone or email" rule
+      intact (D3).
+    - It does NOT create, convert or touch any opportunity, quote, task, consent row, Core Request, Passenger, Trip,
+      recurring arrangement, acquisition snapshot or billing row.
+    - It writes NO consent row, never sets do_not_contact on its own, and does not infer consent from the request.
+
+  Why no idempotency key: the attribution primary key already provides exactly-once linking per Request.
+    - A replay after a commit hits step 3 and returns 'already_linked'.
+    - Concurrent submissions are serialized at step 5, and the loser rolls back.
+    - This differs from conversion, where a key was needed because each call creates a NEW Request.
+
+3.2 Server action (no migration)
+  Add createContactForRequestAction to src/app/operations/growth/attribution/actions.ts.
+  - It follows the same guard(organizationId, write=true) path, which checks requirePlusAccess, the organization
+    binding and canWriteGrowth.
+  - It validates the form with validateContactForm from contacts-core.ts, the same rules as the Growth contact form.
+  - It calls the new RPC and maps outcomes:
+      linked → success, with the message "Contact added and linked. The request itself is unchanged."
+      possible_duplicates → state 'duplicates'. The action then calls plus_find_contact_matches (Plus read) to
+        return the up-to-5 matches, showing name, status and match_on only.
+      already_linked → an informational message, then refresh.
+  - Errors are mapped with contactErrorMessage / attributionErrorMessage.
+  - Logs are limited to console.error("[plus] request contact create failed", code). Form values are never logged.
+  - It calls refresh(requestId), which reuses the existing revalidatePath calls.
+  - It needs a regenerated database.types.ts entry for the new function.
+
+3.3 UI (RequestGrowthPanel / RequestGrowthControls)
+  Unlinked request, writer:
+    - Primary button "Add contact" (data-testid growth-add-contact) and secondary button "Link existing contact".
+      The secondary is today's "Track in Plus" editor, relabelled (D2).
+    - "Add contact" opens an inline form inside the Growth panel, consistent with the current inline "Track in Plus"
+      editor and with the requirement to stay on the page. It is not a modal.
+    - Prefill comes from the request props the page already has. Every field is editable, and nothing is submitted
+      without an explicit click. The page passes requester values to RequestGrowthPanel only when canWriteGrowth
+      is true.
+        Name ← requester_name
+        Phone ← requester_phone, shown as entered. If it fails the Plus phone rule, the field error appears and
+          staff fix it.
+        Email ← requester_email when present
+        Contact type ← mapped from requester_relationship (D4):
+          self → individual
+          family → family_caregiver
+          caregiver → family_caregiver
+          facility_coordinator → facility_staff
+          other → other
+        Preferred channel: the ContactForm default.
+        Do not contact: UNCHECKED, the same default as Growth → Contacts → New. Staff tick it only if the person
+          asked. No consent fields appear on this form.
+        Owner: optional, from plus_list_contact_owner_options, defaulting to none, as in ContactForm.
+    - Always show the label "Requester (the person who contacted you). This is not the passenger." When the
+      passenger is linked or named, show no passenger fields and offer no passenger prefill. requested_passenger_name
+      is never used.
+    - Notice: "This creates one Growth contact and links it to this request. It does not change the request, its
+      decision, trips or billing, and it does not create an opportunity."
+    - Possible duplicates: list the matches, each with "Link this contact" (calls the existing linkRequestAction for
+      active matches; archived matches are shown but cannot be selected), plus "Create new contact anyway", which
+      resubmits with confirm=true.
+    - Pending state: the submit button is disabled and shows a spinner (useActionState pending). This is
+      convenience only; the database is the double-submit guard.
+    - Success: the form closes, and the server re-render shows the linked contact. Add "Open in Plus"
+      (/operations/growth/contacts/[id]), next to the existing contact name link (data-testid
+      request-growth-open-in-plus).
+
+  Linked request: unchanged. "Correct link" is still offered unless the link came from a conversion. The "Open in
+  Plus" action is added here too.
+
+  Read-only / read grant: the linked or unlinked status shows with no buttons, as today.
+  no_access / no Plus / locked / disabled organization: the panel is absent (returns null), as today.
+
+  Layout: the panel sits in the right-hand column, which stacks below the main column at narrow widths. The form uses
+  the existing Input / Select / Button primitives in a single column, with no fixed widths. It must be verified at
+  1440, 1024 and 768 (the supported staff-console widths) with no horizontal scroll.
+
+3.4 Files expected to change (after approval)
+  supabase/migrations/2026110x100000_plus_create_contact_for_request.sql   (new)
+  supabase/tests/plus_create_contact_for_request_tests.sql                 (new)
+  supabase/tests/plus_create_contact_for_request_concurrency_test.sh       (new)
+  supabase/tests/privilege_contract_tests.sql                              (+1 function row, 'u')
+  src/lib/supabase/database.types.ts                                       (regenerated)
+  src/lib/plus/attribution-core.ts (+ .test.mjs)                           (relationship→kind mapping, outcome text)
+  src/app/operations/growth/attribution/actions.ts                         (+1 action)
+  src/components/growth/RequestGrowthControls.tsx                          (Add contact form; relabel)
+  src/components/growth/RequestGrowthPanel.tsx                             (requester props, Open in Plus)
+  src/app/operations/requests/[requestId]/page.tsx                         (pass requester props to the panel)
+  docs/product/plus-product-spec.md §7.4, docs/security/plus-access-model.md §4   (doc amendments, D2 / D3)
+  tests/e2e/... browser E2E for the new flow (isolated stack only)
+  Nothing in Core migrations, Core RPCs, billing or the FIN-P1 / P1G objects changes.
+
+3.5 Rejected alternative: no migration (two RPC calls from the server action)
+  - It can leave an orphaned contact when the link fails after the create (concurrent "Link existing", stale page,
+    grant revoked between calls).
+  - Concurrent double submissions can create two contacts, because duplicate detection only sees committed rows.
+    With confirm=true, even sequential double submissions create two.
+  - Compensating by archiving the orphan is not safe. Archiving is a visible, audited state change and not a
+    rollback, and a hard delete does not exist by design.
+  - It fails "prevent duplicate creation under concurrent submissions". It is acceptable only if the owner accepts
+    that risk (D1, option B).
+
+======================================================================================================================
+4. PERMISSIONS MATRIX (enforced in the database; the UI only mirrors it)
+======================================================================================================================
+  Caller / organization state                          Panel shown   Add contact   RPC result
+  ---------------------------------------------------  ------------  ------------  ----------------------------------
+  Org Admin, Plus write (trial or active)              yes           yes           linked / possible_duplicates /
+                                                                                   already_linked
+  Dispatcher + active Plus WRITE grant, Plus write     yes           yes           as above
+  Dispatcher + Plus READ grant                         yes (view)    no            ZW001
+  Org Admin, Plus read_only                            yes (view)    no            ZW001
+  Dispatcher with any grant, Plus read_only            no            no            ZW002
+  Plus locked / none (no entitlement)                  no            no            ZW002
+  Dispatcher without grant / driver / inactive member  no            no            ZW002
+  Organization suspended / disabled                    no            no            ZW002 (has_org_role false)
+  Foreign tenant (org id of another tenant)            no            no            ZW002 (no existence oracle)
+  Request id of another tenant, own org id             n/a           n/a           ZW002
+  Plus user without Core request role (simulated Z1)   no            no            ZW002
+  anon                                                 n/a           n/a           42501 (no EXECUTE)
+  Organization isolation:
+    - p_organization_id comes from the server session (context.organizationId), never from the browser alone.
+      The form's organizationId is only compared against it.
+    - Every row the function touches is checked against p_organization_id, and composite FKs make cross-tenant
+      references impossible.
+
+======================================================================================================================
+5. DATA AND PRIVACY
+======================================================================================================================
+  - Requester and passenger stay distinct.
+      * The new contact is the REQUESTER only.
+      * No passenger field is read, prefilled, copied or matched.
+      * No link to passengers is created.
+      * The "self" relationship maps to contact_kind=individual, but the contact still has no passenger link, and
+        Plus continues to see only "passenger linked: yes/no" through plus_get_request_summaries.
+  - Validation and normalization: these are the existing plus_contacts CHECKs plus validateContactForm. Email is
+    lower-cased and trimmed, and phone duplicate matching uses digits only. The Core phone value is never altered
+    silently.
+  - Consent and DNC:
+      * No consent row is written.
+      * The contact starts at no_consent_on_record.
+      * do_not_contact defaults to false and is only what staff tick.
+      * Linking an existing contact never changes its DNC or consent. A DNC contact in the match list shows its
+        "Do not contact" badge, but linking stays allowed, because linking is not contact.
+      * The existence of a transportation request is never treated as consent. Form copy must not suggest it.
+  - Logs, audit and tests:
+      * audit_events rows carry ids and counts only.
+      * Server logs carry error codes only.
+      * E2E and SQL tests use fictional names, the 555-01xx phone range and example.invalid email addresses.
+      * Screenshots come from the isolated stack only.
+      * .tmp-qa scripts must not print contact values.
+  - Real data (D7): this flow copies a real requester's name, phone and email into Plus for any tenant with Plus
+    write. PD-10 / PD-11 are still open, and Plus has so far been "synthetic data only". Approving the UX is not the
+    same as approving real C2 data in Plus.
+
+======================================================================================================================
+6. TEST REQUIREMENTS
+======================================================================================================================
+6.1 SQL (supabase/tests/plus_create_contact_for_request_tests.sql; isolated / local stack, synthetic org)
+  T1   Admin, Plus write: outcome linked. The test asserts:
+         - exactly one new plus_contacts row
+         - one plus_request_attributions row: link_method linked_existing_request, opportunity NULL
+         - one request_linked activity
+         - audit rows plus_contact_created and plus_request_linked (plus the provenance row), ids only
+  T2   Dispatcher with a write grant: linked. Dispatcher with a read grant: ZW001, nothing written.
+  T3   Admin with Plus read_only: ZW001. Grant holder with read_only: ZW002. locked / none: ZW002. Suspended
+       organization: ZW002. Driver / inactive / no-grant dispatcher: ZW002. anon: 42501.
+  T4   Cross-tenant:
+         - a foreign org id
+         - own org with a foreign request id
+         - a foreign owner_membership_id (ZW006)
+       In every case nothing is written in either tenant.
+  T5   Existing matches (email, phone digits, name, archived match):
+         - Without confirm: possible_duplicates, ZERO rows written (contacts, attributions, activities, audit).
+         - With confirm: linked.
+  T6   Request already attributed (same or different contact): already_linked, nothing written. A
+       conversion-linked request is not altered.
+  T7   Invalid input: no phone and no email, a bad email, a bad phone, a name over 200 characters, an unknown kind.
+       Each returns ZW006, nothing is written, and the request is unchanged.
+  T8   No Core mutation. Snapshot the Request row (state, decision fields, passenger_id, updated_at), its Trips,
+       recurring arrangements, acquisition row, billing rows and request audit count. Compare before and after for
+       every outcome.
+  T9   No opportunity, quote, task or consent row is created (count deltas = 0). The new contact resolves to
+       no_consent_on_record. With dnc=true it resolves to suppressed_do_not_contact, and no consent row is written.
+  T10  Requester vs passenger:
+         - On a request with a linked passenger and a different requested_passenger_name, the contact holds the
+           submitted requester values only.
+         - There is no passenger reference.
+         - plus_get_request_summaries still returns passenger linked = yes/no only.
+  T11  Privilege contract: the new function is listed with EXECUTE for authenticated only (privilege_contract_tests),
+       and no table grants changed.
+
+6.2 Concurrency (supabase/tests/plus_create_contact_for_request_concurrency_test.sh; parallel psql, ~1s holds)
+  C1   The same request, two "Add contact" submissions with identical values, both confirm=true: exactly ONE contact,
+       one attribution and one request_linked activity. The loser gets ZW004, or already_linked if it started after
+       the commit. Zero orphaned contacts.
+  C2   "Add contact" racing "Link existing" (plus_link_request to another contact) on the same request: exactly one
+       attribution. If the Add loses, its contact is rolled back (contact count delta = 0).
+  C3   "Add contact" racing a Core Accept / Decline on the same request: both succeed, and the Core decision is
+       unaltered. This mirrors attribution scenario 4.
+  C4   "Add contact" racing a grant revocation or a switch to read_only: either it commits before the revoke, or it
+       is refused with nothing written.
+
+6.3 Unit (node --test)
+  - Relationship → contact kind mapping (all five values).
+  - Outcome → message mapping.
+  - Prefill builder: email optional; the passenger name is never used.
+
+6.4 Browser E2E (isolated stack, http://localhost:3100, synthetic fixtures only)
+  - Admin with Plus write:
+      * Unlinked request shows "Add contact" as primary and "Link existing contact" as secondary.
+      * The prefill matches the requester and is editable.
+      * Submit → the Growth section shows the contact, and "Open in Plus" lands on the contact page.
+      * The request state, trips and billing badge are unchanged.
+  - Duplicate flow: the match list appears. "Link this contact" links the existing contact. "Create anyway" creates
+    and links.
+  - Double click and Enter-key double submit: one contact.
+  - Read-grant dispatcher and read_only Admin: view only, no buttons. No-Plus organization and no-grant dispatcher:
+    no Growth panel.
+  - A bad Core phone shows the field error, and the corrected value succeeds.
+  - Layout at 1440, 1024 and 768: no horizontal scroll, the form is usable, focus order is correct, and errors are
+    announced (role=alert).
+  - Production: per standing rules, no prod writes. After any release, a read-only smoke plus checks on the synthetic
+    "Nemryn Pilot Simulation" tenant, and only if the owner approves those separately. The role check is MANUAL.
+
+======================================================================================================================
+7. OWNER DECISIONS NEEDED BEFORE CODING
+======================================================================================================================
+D1  New RPC / migration.
+    A (recommended): approve one additive migration that adds plus_create_contact_for_request, composed of the
+      unchanged plus_create_contact and plus_link_request. No table, column or constraint changes.
+    B: no migration, two calls from the server action. This accepts the orphaned-contact and concurrent-duplicate
+      risks in 3.5 and does NOT meet the concurrency requirement.
+D2  Reverse the spec rule "Nothing is created or merged from here" (plus-product-spec.md:324).
+    - Amend §7.4: creation is allowed from Request Details. Merging is still never done.
+    - Relabel "Track in Plus" as "Link existing contact". Recommended: yes.
+D3  Data source for the prefill.
+    Recommended: the browser prefill comes from the Core page, which the staff member can already read. The RPC
+    takes staff-reviewed values and does NOT read transportation_requests.requester_*. This keeps the access-model §4
+    rule "Plus → Core read: never requester phone or email" unchanged. Add a note under §4 recording this.
+D4  Relationship → contact kind mapping:
+      self → individual
+      family / caregiver → family_caregiver
+      facility_coordinator → facility_staff
+      other → other
+    This matches plus_convert_inquiry. It is editable in the form. The relationship itself is not stored on the
+    contact, and no new column is added. Recommended: approve.
+D5  Audit provenance. Choose one:
+    (a) a separate audit row plus_contact_created_from_request {request_id} (recommended; plus_create_contact stays
+        untouched)
+    (b) no extra row (provenance is inferable from the same-transaction plus_request_linked row).
+    Also approve that no new plus_activities type is added. request_linked is reused, avoiding a CHECK change.
+D6  Migration sequencing with the parked FIN-P1 / P1G release (ZD-293).
+    - Production is at 20261028100000, and the FIN-P1 release package hard-requires that head. Shipping this
+      migration to production first invalidates that package. This is a safe failure, but the package must be
+      re-prepared.
+    - Because the new file is timestamped after 20261029120000, PR #44's older migrations would then apply out of
+      order and need re-timestamping or `--include-all`.
+    - Decide whether NP-CORE-PLUS-REQUEST-01 may reach production before FIN-P1 resumes. If yes, accept the
+      FIN-P1 re-prep. The work itself proceeds on a new branch from origin/main 85f2042, never on np-fin-p1-ledger
+      or PR #44.
+D7  Real-data gate.
+    - Should "Add contact" be available to real tenants (for example Zenward Mobility, if Plus is ever enabled for
+      it) while PD-10 / PD-11 are open?
+    - Recommended: build and test with synthetic data only. Production use stays limited to synthetic tenants until
+      the owner explicitly approves real C2 data in Plus.
+D8  Where the action appears. Recommended: show it only for an unlinked request. A linked request keeps "Correct
+    link". Creating a new contact while correcting a link is out of scope for this slice.
+
+======================================================================================================================
+8. OUT OF SCOPE / NOT DONE
+======================================================================================================================
+- No code, migration, type regeneration, test run, commit, push, merge, deploy or production access.
+- PR #44 and branch np-fin-p1-ledger were not modified. The uncommitted ZD-292 / ZD-293 register edits and the
+  untracked K-reports in the working tree were left untouched.
+- Not done: opportunity creation or conversion, passenger matching, consent capture, contact merging, editing
+  existing contacts from the request, and growth-only members (PD-18).
+
+Next step after approval of D1 to D8: record the approvals as ZD-294 onward in the decision register, then start on
+a new branch from origin/main with the migration and its SQL and concurrency tests, before any UI work.

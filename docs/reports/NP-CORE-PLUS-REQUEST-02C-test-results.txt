@@ -1,0 +1,233 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02C — INTEGRATED QA: TEST RESULTS (LOCAL / ISOLATED, FICTIONAL DATA)
+Date: 2026-11-02
+Authority: NP-CORE-PLUS-REQUEST-02C handoff (Stage B accepted, subject to screenshot review). Integrated local validation
+and focused test improvements only. Nothing committed, pushed, merged or deployed. No production access. No real tenant
+activated.
+Companion reports: NP-CORE-PLUS-REQUEST-02C-visual-review.txt, NP-CORE-PLUS-REQUEST-02C-release-readiness.txt.
+
+======================================================================================================================
+1. ENVIRONMENT VERIFICATION (handoff section 1; all PASS)
+======================================================================================================================
+  - Worktree /Users/datamatics/Nemryn-core-plus-request on np-core-plus-request-01 (85f2042). All Stage A and B
+    changes are present and uncommitted. The Stage A migration md5 is unchanged (581b95b3…).
+  - Isolated stack supabase_db_NemrynS1Iso: head 20261102100000, 99 migrations. The stack's migration directory is
+    byte-identical to the worktree's (diff -rq).
+  - Fictional data only: the organizations are the seed's "Fictional Org A", "Fictional Org B" and the demo "Harmony
+    Medical Transport" (seed.sql P1-E3-S8C). Every login is @example.test or @harmonytransport.test.
+  - No production credentials or endpoints:
+      * no SUPABASE_* / DATABASE_* / PG* / VERCEL* variables in the shell
+      * the stack was never linked
+      * the app env file (~/NemrynS1Iso/.env.isolated.local, values never printed) points
+        NEXT_PUBLIC_SUPABASE_URL at http://127.0.0.1:54361, and every build and server start refused to continue
+        otherwise
+      * the email provider key is unset
+  - PR #44 is OPEN at 44e66cde4cc2, and the FIN tree is at 44e66cd with only its pre-existing register edit. PR #46 is
+    OPEN at 32beb5a, and its worktree is clean. Checked at the start and again at the end.
+  - Other workstreams on the shared stack: only system connections (PostgREST, realtime, storage) were on the
+    database, and no other Nemryn suite was running. Re-checked before the database resets (section 5).
+    See section 6 for an unrelated local project that interfered with the app port.
+
+======================================================================================================================
+2. FILES MODIFIED IN 02C (all uncommitted)
+======================================================================================================================
+  NEW  tests/e2e/request-contact/request-contact.e2e.mjs   repeatable browser suite (112 checks), described in section 3
+  NEW  tests/e2e/request-contact/README.md                 usage, coverage table, shared-stack safety, local-stack notes
+  MOD  package.json                                        + "test:e2e:request-contact"
+  NEW  docs/design/concept-b/reviews/np-core-plus-request-02c/*.png   36 screenshots (visual-review report)
+  NEW  docs/reports/NP-CORE-PLUS-REQUEST-02C-{test-results,visual-review,release-readiness}.txt
+  No product source, migration, RPC, SQL test, billing file, FIN file, PR #44 or PR #46 file was changed in 02C.
+
+======================================================================================================================
+3. THE REPEATABLE E2E SUITE (handoff section 2)
+======================================================================================================================
+  Command:  npm run test:e2e:request-contact          (README: tests/e2e/request-contact/README.md)
+  Harness:  reuses the plus-quotes isolation configuration and guard (_config.mjs: local http app URL only, the
+            NemrynS1Iso container only, assertFictionalSeed, artifacts outside the repository) and the shared CDP
+            harness with pinned axe-core.
+  Extra guards:
+    - migration 20261102100000 must be applied
+    - plus_request_contact_enablements must be EMPTY at start (another run or workstream could be using it)
+    - the app must answer as Nemryn at the start AND the end
+  No reset: fixtures are fictional and stamped per run ("RC02C <label> <stamp> Fictional", @example.test). Org A is
+  enabled only through platform_set_plus_request_contact_enablement (data class 'synthetic'). The finally block
+  disables it through the same RPC, removes exactly the run's rows and FAILS unless all 16 watched tables are back to
+  their starting counts.
+
+  Coverage (check names prefixed by scenario number in the log):
+    1  Organization Admin, Plus write:
+         - Add contact (primary) + Link existing contact
+         - exact requester prefill (family -> family_caregiver)
+         - passenger never shown; no consent field
+         - name, email, type, channel and owner all edited
+         - one contact + one link with the reviewed values (owner = admin)
+         - provenance audit = {request_id}
+         - "Open in Plus" href correct, and clicking it opens that contact
+    2  Dispatcher with a WRITE grant: same flow (caregiver -> family_caregiver, edited name, Do not contact ticked);
+       created_by = the dispatcher; no consent row; Open in Plus opens the contact.
+    3  Dispatcher with a READ grant:
+         - unlinked panel visible with no controls (1440 / 1024 / 768)
+         - an existing link is visible (contact + Open in Plus) with no Correct link
+         - direct plus_create_contact_for_request -> ZW001; direct plus_link_request -> refused; nothing written
+    4  Organization without Plus (Org B Admin):
+         - own request renders with no Growth panel, heading or control
+         - an Org A request is not visible
+         - direct RPC into Org A and in Org B are both refused; nothing written
+    5  Feature disabled (default):
+         - Add contact hidden; Link existing contact kept and working; no disclosure notice
+         - direct RPC by an Org Admin -> ZW004 request_contact_not_enabled
+         - 5b: a form opened while enabled, then submitted after the Platform Admin disabled the feature -> the
+           non-disclosing message, typed values kept, nothing written
+    6  Duplicates:
+         - matches listed: an ACTIVE match with "Link this contact", an ARCHIVED match labelled and not linkable
+         - the plain save is replaced by the explicit "Create a separate contact"
+         - linking uses the existing contact
+         - confirming creates a separate new contact
+         - every pre-existing contact byte-identical (fields, status, updated_at, ctid): no merge
+    7  Concurrent browser submissions (two signed-in sessions, two rounds): both forms open; both submit at once;
+       exactly one attribution and one new contact (no orphan); each session shows success or a clear conflict
+       message; exactly one reports creating.
+    8  Existing attribution:
+         - linked request shows the contact, no Add contact
+         - a stale open form submitted after another person linked -> "already linked, so no contact was added"
+           plus the current link; no contact created
+    9  Invalid data:
+         - Core phone "call after 5pm" prefilled as given -> phone error (aria-invalid + aria-describedby text)
+         - values kept
+         - empty name + no phone / email -> name error and the "phone or email required" alert
+         - nothing written
+    10 Core integrity: byte-level fingerprints (ctid + row) of transportation_requests, passengers, trips,
+       trip_assignments / events / exceptions / notes, billing_invoices / lines / invoice_trips / payments /
+       counters are unchanged across the whole run. No opportunity, consent, task or quote. Exactly 9 contacts
+       created through the UI, each linked to exactly one request. One provenance audit per created contact, holding
+       only request_id.
+    A11y axe on five states; keyboard walkthrough; pending-state observation (section 4).
+    VIS screenshots at 1440 / 1024 / 768 for six states; no horizontal overflow in any of them.
+
+  RESULTS — final runs:
+    run 12  112 / 112 PASS, 0 FAIL, 0 retries  (freshly reset stack)
+    run 13  112 / 112 PASS, 0 FAIL, 0 retries  (consecutive; screenshots in the repository come from this run)
+    Every run, including the failed ones below, ended with the three CLEANUP checks passing.
+
+  RUN HISTORY (all runs, reported as they happened):
+    run 1   107 PASS / 1 FAIL  Suite timing bug. After "Create a separate contact" the wait helper saw the duplicate
+                               box still on screen and returned early. Fixed by waiting for that submission's own end
+                               state. Later checks in the same run confirmed the contact was created and linked.
+    run 2   97 / 2; run 3  54 / 5; run 4  73 / 3
+                               The app server was killed mid-run (exit 144); not a product failure. See section 6.
+    run 5   109 / 109          First clean run (app served via a programmatic Next server; section 6).
+    run 6   108 / 1            Local gateway 502 on plus_get_request_attribution. The panel showed its released
+                               "couldn't be loaded" state. A reload-and-record retry was added (NOTE — RETRY lines).
+    run 7   109 / 109          3 retries recorded.
+    run 8   108 / 1            Local gateway 502 on plus_request_contact_enabled (the offer check fails closed, so
+                               Add contact was hidden). The stale-form check therefore never submitted, yet the
+                               "no contact created" check passed. Fixed: openForm retries, and scenarios 7 / 8 now
+                               ASSERT that their forms actually opened, so this cannot pass silently again.
+    run 9   111 / 1            Race round 2: the database result was correct (one attribution, one contact, no
+                               orphan), but the losing session's page did not reach an end state. A gateway 502 on
+                               request_events (the Request page's own activity read, during the post-save refresh)
+                               was logged at that moment. Kept as a FAIL; the suite now prints what the page showed.
+    run 10  112 / 112 (1 retry)   run 11  112 / 112 (1 retry)
+    run 12  112 / 112 (0 retries) run 13  112 / 112 (0 retries)    after the database reset in section 5
+
+======================================================================================================================
+4. ACCESSIBILITY (handoff section 3) — findings in the visual-review report, section 4
+======================================================================================================================
+  axe-core 4.10.2 (pinned), scoped to the Growth panel and run on the whole page:
+    unlinked Growth panel      0 violations (panel and page)
+    Add contact form           0 violations
+    validation errors          0 violations
+    duplicate warning          0 violations
+    successful linked state    0 violations
+  Keyboard only (recorded every run, identical in runs 5–13):
+    - Add contact is focusable; Enter opens the form; focus moves to Name.
+    - Tab order: Phone, Email, Contact type, Preferred channel, Owner, Do not contact, Add and link contact,
+      Cancel. Shift+Tab goes back.
+    - Enter on Cancel closes the form. Enter in a field submits the form.
+    - Pending: the submit button becomes disabled with aria-busy="true" (observed through a MutationObserver
+      during a keyboard submission).
+    - Focus after Cancel, after a validation error and after success lands on <body> (findings A1–A3).
+  Screen-reader announcements (structural checks; no screen reader was driven):
+    - Server errors and the duplicate explanation use role="alert". The "phone or email required" hint becomes
+      role="alert" when it is the error.
+    - Field errors: aria-invalid plus aria-describedby pointing at the message.
+    - Success notice: role="status".
+    - All of these regions are inserted with their content rather than present beforehand (finding A4).
+
+======================================================================================================================
+5. SQL AND SECURITY SUITES (handoff section 5)
+======================================================================================================================
+  Rollback-only suites, run on the isolated DB (database counts identical before and after):
+    plus_create_contact_for_request_tests          43 / 43     (re-run on the fresh stack: 43 / 43)
+    plus_create_contact_for_request_concurrency    9 / 9       (CONC-1..8 + CONC-INV: deadlocks 0, orphaned contacts 0)
+    privilege_contract_tests                       violations = 0 of 29
+    plus_entitlement 150/150; plus_entitlement_versioned 17/17; plus_opportunities 75/75; plus_tasks 58/58;
+    plus_growth_agent 40/40; plus_request_attributions 73/73; plus_conversion_rebooking 44/44;
+    plus_booking_service_type 27/27; plus_booking_passenger_handoff 15/15; plus_quotes 83/83;
+    plus_quotes_directory 34/34; plus_quotes_lifecycle 41/41; plus_communication_consents 78/78;
+    plus_inquiries 65/65; function_privilege 7 PASS; security_definer_exposure 20 PASS;
+    client_privilege_surface 21 PASS; privilege_baseline_behavior 30 PASS; billing_tests 67/67
+  KNOWN BASELINE FAILURES (pre-existing; explicitly NOT new; identical before and after 02C):
+    plus_access_helpers_tests       169 / 170 — P6  "no Core function references the Plus helpers or organization_modules"
+    plus_member_grants_tests         75 / 76  — C1  "no Core function references a Plus helper, Plus table or organization_modules"
+    plus_contacts_activities_tests   84 / 85  — C2  "no Core function references plus_contacts / plus_activities / Plus helpers"
+  Attribution verified by running each test's own catalog query. ALL THREE flag exactly ONE function,
+  public.billing_create_invoice_draft. It calls public.plus_can_read(p_organization_id) at line 313 of
+  supabase/migrations/20261027110000_core_billing_rpcs.sql (commit be6844e, NP-BILL-P1: the optional source-quote
+  check, "R3"). That file is unchanged on this branch versus origin/main. Neither Stage A function
+  (platform_set_ / platform_get_plus_request_contact_enablement) matches any of the three patterns. PR #44's fix was
+  NOT copied. An independent proposal for main is in the release-readiness report.
+
+  State-dependent suites (these COMMIT fixtures and expect a freshly reset database):
+    The first run of request_mutation_privilege, request_decision_workflow, rls_adversarial and
+    platform_admin_foundation hit leftover rows (duplicate-key fixture errors), reported 24 FAIL lines, and changed
+    the shared database (requests 11 -> 12; audit_events 6 -> 0). Not attributable to 02C: they collided with
+    fixtures from earlier runs.
+    Re-run each on its own fresh reset (supabase db reset --local in ~/NemrynS1Iso, then the stack's own Kong
+    restarted, as tests/e2e/plus-quotes/run.mjs does):
+      platform_admin_foundation_tests   58 PASS, 0 FAIL, 0 ERROR   (EX-1 = 16)
+      request_mutation_privilege_tests  23 PASS, 0 FAIL, 0 ERROR
+      request_decision_workflow_tests   60 PASS, 0 FAIL, 0 ERROR
+      rls_adversarial_tests             33 PASS, 0 FAIL, 0 ERROR
+
+  Application checks: tsc --noEmit 0 errors. ESLint 0 errors and the same 13 pre-existing warnings. The new suite is
+  lint-clean (an early draft named a helper `use`, which tripped react-hooks/rules-of-hooks; renamed `actAs`).
+  npm test 964 / 964. npm run test:release 28 / 28. next build succeeded.
+
+======================================================================================================================
+6. FAILURES AND ENVIRONMENT ISSUES (new vs existing)
+======================================================================================================================
+  NEW product failures found in 02C: NONE.
+  Existing failures: P6 / C1 / C2 only (section 5).
+  Environment issues (not product defects; all handled without touching another workstream's setup):
+    E1 Another local project (/Users/datamatics/Projects/zenith-homecare, unrelated to Nemryn; its own database
+       container) repeatedly started `next start -p 3100` / `-p 3101`. While it ran, every `next start` process on
+       the machine, ours included, was killed with exit 144 (also on port 3120). The zenith-homecare scripts contain no
+       kill command; the trigger was not identified. Handled without touching that workstream:
+         - the same Nemryn build was served through a tiny programmatic Next server from the session scratchpad
+           (/private/tmp/claude-501/-Users-datamatics-Nemryn/693d547e-69bf-4a42-be10-73d282c833f2/scratchpad/02c/serve-iso.cjs)
+           on :3120
+         - the suite gained a "this is still Nemryn" guard at start and end
+       NEXT_PUBLIC_APP_URL (baked as :3100) is used only for recovery links and public-form origins, so the port
+       change does not affect this flow.
+    E2 The isolated stack's Kong gateway intermittently answers 502 ("upstream prematurely closed connection") to
+       PostgREST, across unrelated endpoints (request_events, facilities, organizations, staff invites,
+       service offerings). Visible as retries in runs 6–11. None occurred in runs 12–13 after the reset.
+       The stack's configuration was not changed.
+
+======================================================================================================================
+7. SHARED TEST ENVIRONMENT CLEANUP (handoff section 6)
+======================================================================================================================
+  - Every e2e run removed its own fixtures and verified all 16 watched tables back at their starting counts.
+    Enablement table = 0 after every run.
+  - Because the state-dependent suites had altered the shared database, the stack was reset to the clean seed.
+    Before resetting: no other Nemryn workstream connected, migrations byte-identical.
+  - Final state: head 20261102100000 / 99 migrations, plus_request_contact_enablements 0, organization_modules 0,
+    membership_module_grants 0, transportation_requests 2 (seed), plus_contacts 0, attributions 0, audit_events 0,
+    no "RC02C" rows.
+  - NOTE: the stack began this session at 11 requests / 6 audit rows. Those were leftovers from committing SQL suites
+    run at 10:05 today, right after an earlier reset, and are all fictional. The canonical fresh seed (2 / 0) replaces
+    them. The e2e suite was changed to create its own Org B request, so it no longer depends on such leftovers.
+  - The app servers were stopped; nothing listens on :3100 / :3120 from this work. Browser profiles and run logs are
+    outside the repository, under the scratchpad.
+  - ~/NemrynS1Iso/supabase/migrations still contains the 02A migration (as recorded in 02A). Remove it and reset before
+    any FIN rehearsal on that stack.

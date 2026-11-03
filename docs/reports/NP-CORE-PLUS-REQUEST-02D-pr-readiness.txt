@@ -1,0 +1,382 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02D — FINAL VISUAL HANDOFF & PR READINESS
+Date: 2026-11-03
+Authority: NP-CORE-PLUS-REQUEST-02D handoff (02C-R1 accepted for PR readiness preparation; evidence preparation and
+read-only Git inspection only).
+Nothing was staged, committed, pushed, opened as a PR, merged or deployed. There was no production access, no
+migration and no database change. PR #44 and PR #46 were not touched.
+Companions:
+  - NP-CORE-PLUS-REQUEST-02D-manual-accessibility-checklist.txt
+  - the screenshot bundle (section 4)
+
+======================================================================================================================
+1. RECOMMENDATION
+======================================================================================================================
+  OPEN A PR: GO, as a DRAFT pull request, once you authorize the commit and push (B1).
+    - The change set is complete, contained and clean:
+        * no secrets, no real personal data, no production connection
+        * no unrelated change
+        * no FIN file
+    - All checks pass except the three documented pre-existing billing failures, which are not caused by this branch.
+
+  MERGE / MIGRATE / DEPLOY: NO-GO for now. These need, in order:
+    a. Your decision on ordering relative to FIN-P1 / P1G, PR #44 (B3, section 7).
+    b. Your decision on P6 / C1 / C2 (B4, section 6). It does not block the PR itself.
+    c. The Safari VoiceOver walkthrough, run by you or explicitly accepted as NOT RUN (section 5).
+    d. The owner-run, read-only production preflight (section 7, step S3).
+    e. A separately authorized production migration window, combined with the merge (B2).
+  The feature ships dark: no organization is enabled anywhere, and real tenants cannot be enabled (CHECK constraint;
+  ZD-299).
+
+======================================================================================================================
+2. WORKTREE VERIFICATION (read-only; all PASS)
+======================================================================================================================
+  Worktree     /Users/datamatics/Nemryn-core-plus-request
+  Branch       np-core-plus-request-01
+  HEAD         85f2042 (= origin/main 85f204292df1); no commits on the branch
+  Stages       A (database), B (UI), C (integrated QA) and C-R1 (A1–A4, SP-1 / SP-2): all present, uncommitted
+  Migration    supabase/migrations/20261102100000_plus_create_contact_for_request.sql
+               md5 581b95b3f672bb722cba629fc1a414b6, unchanged since 02A. It is the only new migration. It sorts after
+               main's head 20261028100000. FIN's 20261029* files are not on this branch.
+  PR #44       np-fin-p1-ledger, OPEN, head 44e66cde4cc2: unchanged. The FIN worktree /Users/datamatics/Nemryn has only
+               its own pre-existing register edit (not touched).
+  PR #46       np-driver-ux-02-navigation, OPEN, head 32beb5a50a4e: unchanged; worktree clean.
+  Other trees  Nemryn-nc-intake-airport and NemrynDemoMain: not touched.
+  Production   No linked Supabase project (no supabase/.temp/project-ref). No .env file other than the committed
+               .env.example, which is unchanged and holds names only. No Supabase, database or Vercel variable is set
+               in the shell.
+  git diff --check: clean (no whitespace errors).
+
+======================================================================================================================
+3. FINAL DIFF AUDIT
+======================================================================================================================
+  15 modified files (+761 / −31). Untracked: 22 non-image files and 89 PNGs.
+
+  A. Application source (10 files)
+     MOD src/app/operations/growth/attribution/actions.ts       server action for create-and-link; logs error codes
+                                                                only
+     MOD src/app/operations/requests/[requestId]/page.tsx       passes enablement and prefill to the Growth panel
+     MOD src/components/growth/LinkedRequestsPanel.tsx          1 line: empty-state copy follows the 02B rename
+                                                                "Track in Plus" → "Link existing contact"
+     NEW src/components/growth/RequestAddContactForm.tsx        188 lines; the form (A2 / A4, SP-1 / SP-2)
+     MOD src/components/growth/RequestGrowthControls.tsx        Add contact entry, A1 / A3 focus, status region
+     MOD src/components/growth/RequestGrowthPanel.tsx           contact link id (A3 target), add-contact wiring
+     MOD src/lib/plus/attribution-core.ts                       validation, normalisation, contactLinkId
+     MOD src/lib/plus/attribution-core.test.mjs                 unit tests (965 / 965 overall)
+     MOD src/lib/plus/attribution.ts                            isRequestContactEnabled (fails closed), RPC call
+     MOD src/lib/supabase/database.types.ts                     +97 lines for the new RPCs and table (generated)
+  B. Database migration (1 file)
+     NEW supabase/migrations/20261102100000_plus_create_contact_for_request.sql   268 lines
+  C. SQL and concurrency tests (4 files)
+     NEW supabase/tests/plus_create_contact_for_request_tests.sql                 43 checks
+     NEW supabase/tests/plus_create_contact_for_request_concurrency_test.sh       9 checks; refuses any container
+                                                                                  other than the isolated
+                                                                                  NemrynS1Iso (repository precedent)
+     MOD supabase/tests/privilege_contract_tests.sql                              new table and functions
+     MOD supabase/tests/platform_admin_foundation_tests.sql                       EX-1 inventory 14 → 16
+  D. Browser E2E (3 files)
+     NEW tests/e2e/request-contact/request-contact.e2e.mjs                        123 checks
+     NEW tests/e2e/request-contact/README.md
+     MOD package.json                                                             + "test:e2e:request-contact" only
+  E. Product, security and decision documentation (3 files)
+     MOD docs/product/decision-register.md     ZD-294 .. ZD-301. Main ends at ZD-263; ZD-264 .. 293 are reserved by
+                                               FIN.
+     MOD docs/product/plus-product-spec.md     §7.4
+     MOD docs/security/plus-access-model.md    §4
+  F. Reports (16 files, all docs/reports/NP-CORE-PLUS-REQUEST-*)
+     01-design-review, 02-guard-and-ordering, 02A × 3, 02B × 3, 02C × 4 (incl. release-readiness), 02C-R1 × 3,
+     02D × 2 (this report and the checklist).
+     02D also added a 3-line addendum to the 02C-R1 visual review header, recording the 36-file folder.
+  G. Screenshots (89 PNGs, 15.2 MB total)
+     np-core-plus-request-02c-r1/   36 files, 7.0 MB (18 panel crops 0.9 MB). FINAL, complete six-state set.
+                                    02D added the 12 unlinked / read-only captures from the same run R1-b, byte for
+                                    byte.
+     np-core-plus-request-02c/      36 files, 7.1 MB. Superseded by R1 (before-and-after evidence only).
+     np-core-plus-request-02b/      17 files, 1.0 MB. Superseded.
+     Largest single file: 496 KB (04-duplicates-1440-page.png). There is no file over 1 MB.
+  H. Temporary artifacts: none in the worktree.
+     - The suite's run output stays in the session scratchpad.
+     - The 02D bundle is outside the repository (section 4).
+     - The tracked .tmp-qa/ folder (14 files from main) is unchanged.
+     - The FIN worktree's untracked .tmp-qa scripts belong to that tree and are not part of this branch.
+
+  Checks:
+    Secrets            none
+                         - patterns: JWTs, service-role keys, connection strings, private keys, tokens, quoted
+                           passwords
+                         - the only password-like value is the existing fictional local seed password in
+                           tests/e2e/plus-quotes/_config.mjs (main, not changed here)
+    Personal data      none
+                         - all 29 emails are @example.test, plus one @harmonytransport.test
+                         - phone numbers are 555 numbers; names are "RC02C … Fictional"
+                         - screenshots show only "Fictional Org A" and fictional fixtures
+                         - "Zenward" appears only as the product brand in existing register text, and in ZD-299
+                           stating that Zenward Mobility is not enabled
+    Production refs    none in code
+                         - release-config.json's public project ref is untouched
+                         - the reports name local worktree paths, as 104 reports on main already do
+                         - minor: 02C-test-results §6 E1 names another local project (zenith-homecare) as the cause
+                           of a port conflict; you may redact it before committing
+    Unrelated changes  none. The LinkedRequestsPanel line is the consequence of the 02B rename.
+    Duplicates         none in code. Three screenshot generations exist (02b / 02c / 02c-r1); only the last is final.
+    Large binaries     the screenshots (section G); recommendation below
+
+======================================================================================================================
+4. SCREENSHOT HANDOFF (fictional captures already produced; nothing regenerated, no UI change)
+======================================================================================================================
+  Folder: /Users/datamatics/Nemryn-core-plus-request-02d-handoff/np-core-plus-request-02d-screenshots/
+  ZIP:    /Users/datamatics/Nemryn-core-plus-request-02d-handoff/np-core-plus-request-02d-screenshots.zip
+          7,087,123 bytes; 50 entries
+          SHA-256 86810a3a10b358be7ddd2a94138b46f310252e7613f96e240dca52c4fef5bc02
+  It sits OUTSIDE the repository, so it can never be staged by accident.
+  Source: browser run R1-b (123 / 123, 0 retries); copies, byte-identical.
+  Contents:
+    index.html      all six states side by side at 1440 / 1024 / 768; each caption links to the full page
+    README.txt      what each state shows and what to look for
+    <width>/panel/  Growth panel crops: 01-unlinked-request, 02-add-contact-form, 03-validation-error,
+                    04-duplicate-warning, 05-linked-contact-success, 06-read-only-view
+    <width>/page/   the complete Request Details page for the same states
+    findings.json   the run's measured values
+    SHA256SUMS.txt  checksums
+  Panel heights (px, 1:1):
+                    1440    1024    768
+      unlinked       195     195    195
+      form           956     713    713
+      validation     995     753    753
+      duplicates    1185     846    846
+      success        427     363    363
+      read-only      147     147    147
+
+======================================================================================================================
+5. ACCESSIBILITY
+======================================================================================================================
+  A1–A4 are preserved exactly as accepted in 02C-R1. 02D changed no source file.
+  Automated status: 0 axe violations in five states; focus and status-region behaviour asserted (123 / 123, twice).
+  Safari VoiceOver: NOT RUN.
+    - The manual checklist is NP-CORE-PLUS-REQUEST-02D-manual-accessibility-checklist.txt: 12 checks covering
+      Cancel, field and phone-or-email errors, success focus, pending and success announcements, duplicates and the
+      read-only view, about 10–15 minutes.
+    - It needs a prepared isolated session (the suite leaves none behind). If you authorize it, Claude can prepare and
+      afterward tear down that session; the checklist's step 0 has the details.
+
+======================================================================================================================
+6. PRE-EXISTING SECURITY-TEST FAILURES (P6 / C1 / C2) AND A SEPARATE RECOMMENDATION
+======================================================================================================================
+  The failing checks (each ID is local to its file):
+    supabase/tests/plus_access_helpers_tests.sql       P6 (line 114)   169 / 170
+      "no Core function references the Plus helpers or organization_modules"
+    supabase/tests/plus_member_grants_tests.sql        C1 (line 397)    75 / 76
+      "no Core function references a Plus helper, Plus table or organization_modules"
+    supabase/tests/plus_contacts_activities_tests.sql  C2 (line 498)    84 / 85
+      "no Core function references plus_contacts / plus_activities / Plus helpers"
+
+  Pre-existing on main, not caused by this branch:
+    - billing_create_invoice_draft comes from migration 20261027110000_core_billing_rpcs.sql (NP-BILL-P1, be6844e,
+      on main). It is below the reported production head 20261028100000, which has not been re-verified.
+    - Line 313 calls public.plus_can_read(p_organization_id) to guard the OPTIONAL p_source_quote_id.
+    - The function's Plus references are exactly:
+        * plus_can_read (1)
+        * plus_quotes (2)
+        * plus_request_attributions (1)
+    - Only plus_can_read matches the three checks' patterns.
+    - 02C ran each check's own catalog query. Each one flags exactly ONE function, billing_create_invoice_draft, and
+      neither function this branch adds matches any of the three patterns. This branch changes none of these test
+      files and no billing object.
+
+  Recommendation: R-M1, a narrow documented exception, as its own change. Not implemented here.
+    Where: a new branch from origin/main (e.g. np-core-boundary-billing-exception), as its own small PR. It is not
+           part of this feature PR and not derived from the FIN branch. PR #44 was not consulted or copied.
+    What:
+      1. Decision-register entry: "Core billing may read Plus entitlement (plus_can_read) and the source quote
+         ONLY to validate an optional source quote when drafting an invoice. No other Core function may reference
+         Plus."
+         - The number must avoid ZD-264..293 (FIN) and ZD-294..301 (this feature): ZD-302 or later, whichever PR
+           lands first takes it.
+      2. In each of the three checks, exclude billing_create_invoice_draft BY NAME, with a comment citing that entry.
+         Every other Core function stays under the rule.
+      3. Add one companion check, so the exception cannot widen silently. billing_create_invoice_draft must:
+         - reference plus_can_read and no other Plus helper: no plus_can_write, _require_plus_*,
+           _plus_member_access, organization_modules or membership_module_grants
+         - reference no Plus table other than plus_quotes and plus_request_attributions
+    What it does NOT do: change billing_create_invoice_draft, its grants or behaviour, or any migration. Tests and
+    documentation only.
+    Verification: on a fresh isolated reset, the three suites go to 170 / 170, 76 / 76 and 85 / 85; the companion check
+    passes; billing_tests is unchanged.
+    Coordination with PR #44 (frozen):
+      - It has its own change in this area (02A §2 C5).
+      - If PR #44 merges first and its version already resolves these checks, R-M1 becomes unnecessary; drop it.
+      - If R-M1 merges first, PR #44's author reconciles at their merge.
+      - Either way, no change to PR #44 now.
+    Not recommended:
+      - M2: move the check into a _plus_ helper. That hides the dependency.
+      - M3: remove the entitlement check. That changes released billing behaviour.
+  Whatever you decide, the three failures stay listed as known exceptions in every report until fixed.
+
+======================================================================================================================
+7. RELEASE PLAN (documentation only; every step needs its own authorization; none executed)
+======================================================================================================================
+  S0  Owner review: this report, the screenshot bundle and VoiceOver (run or accept NOT RUN). Decide B3 (order vs
+      FIN) and B4 (R-M1 now, later, or wait for PR #44).
+
+  S1  Future PR preparation (needs authorization B1)
+      - Confirm the push identity first: gh auth status AND the osxkeychain git credential must both be the nemryn
+        account.
+      - Stage exactly the manifest in section 8. Run `git diff --cached --stat` and compare it with the manifest.
+      - Commit as the four suggested commits. Push np-core-plus-request-01 and open a DRAFT PR into main.
+      - Do not rebase onto, merge with, or reference PR #44 / PR #46 branches.
+
+  S2  CI and PR checks
+      release-gate-tests
+          Unit tests of the release gate. Expected to pass. Same as `npm run test:release`: 28 / 28 locally.
+      release-db-compat (nemryn/release-db-compat)
+          Expected UNVERIFIABLE, or BLOCKED for a migration not yet in production. Report-only. It is NOT production
+          evidence: CI has no Supabase token.
+      Vercel preview (previewPolicy "build")
+          - A preview builds.
+          - If the preview points at a database without 20261102100000, isRequestContactEnabled fails closed: Add
+            contact is hidden and the released Growth panel is unchanged.
+          - Do not perform writes from a preview.
+          - Verify the build through gh commit statuses (Vercel logs are not reachable from this machine).
+      Local re-verification on the exact PR head (isolated stack, fresh reset):
+          tsc, eslint, npm test, test:release, the Stage A SQL and concurrency suites, privilege_contract, and
+          `npm run test:e2e:request-contact`. Expect 123 / 123, with P6 / C1 / C2 as the only failures.
+
+  S3  Read-only production migration preflight (owner-run)
+      - Check the CLI account first: `supabase projects list` must show the Nemryn project (wyocbivzgrbekuyqdfts).
+        A 403 means the wrong account.
+      - `supabase migration list --linked`:
+          * the production head must be 20261028100000, or a reviewed FIN state if FIN shipped first
+          * 20261102100000 must be absent
+          * there must be no unexpected remote-only migration
+      - Read-only catalog checks:
+          * plus_request_contact_enablements does not exist
+          * none of the new function names exist
+          * privilege_contract_tests.sql baseline: run only after confirming it contains no writes
+      - Record the results in a preflight report. Stop on any mismatch.
+
+  S4  Database migration authorization
+      - Your explicit written authorization, naming exactly one migration: 20261102100000.
+      - Confirm a recent backup exists, per the standard process. Backups and restores are not run by Claude.
+      - Dry run first (`supabase db push --dry-run`): it must list only 20261102100000. If FIN's 20261029* files
+        appear (FIN not shipped), STOP. Under B3 they must be re-timestamped at FIN resume, never pushed here.
+      - Apply in the same release window as the merge, immediately before it. Then the production build gate
+        (db-compat-core) sees every repository migration as applied.
+
+  S5  Production build and deployment coordination
+      - Merge the PR (nemryn account) only after S4 is recorded.
+      - The Vercel production build runs the ignored-build gate. It must print VERCEL_BUILD_DECISION=BUILD. A SKIP
+        means a migration mismatch: stop and investigate. Never bypass it.
+      - Confirm the deployment from gh commit statuses and the service worker build id.
+      - Rollback:
+          * application: a Vercel rollback to the previous deployment is safe. The old app never calls the new
+            functions.
+          * database: forward-only. A follow-up migration can revoke EXECUTE on plus_create_contact_for_request.
+          * With no enablement rows, the feature is inert anyway.
+
+  S6  Post-release privilege checks (read-only)
+      - privilege_contract_tests: 0 violations, including the new table and functions. anon has no EXECUTE; the
+        platform_* pair is authenticated-only with the Platform Admin check inside.
+      - The new definer functions pin search_path (EX-2). platform_admin_foundation EX-1 count: 16, or 18 if FIN is
+        already in.
+      - Smoke: as any signed-in tenant user, Request Details shows no "Add contact" (nothing is enabled).
+      - Any call that exercises the refusal path (ZW004) as a pilot identity needs separate approval.
+
+  S7  Confirm the activation table is empty
+      - `select count(*) from public.plus_request_contact_enablements` = 0, immediately after release and again at
+        the end of the window. Record it in the release report.
+      - Real tenants, including Zenward Mobility, stay disabled. The table CHECK allows only data_class 'synthetic',
+        and PD-10 / PD-11 are open (ZD-299).
+      - Enabling the synthetic "Nemryn Pilot Simulation" org is a separate, later approval. It is not part of this
+        release.
+
+======================================================================================================================
+8. EXACT PROPOSED GIT STAGING MANIFEST (NOT executed; for use only after authorization)
+======================================================================================================================
+  73 paths: 37 text files and 36 PNGs. Run from /Users/datamatics/Nemryn-core-plus-request.
+
+  Commit 1 — feat(db): atomic create-and-link of a Growth contact from a Core request (default off)
+    git add -- \
+      supabase/migrations/20261102100000_plus_create_contact_for_request.sql \
+      supabase/tests/plus_create_contact_for_request_tests.sql \
+      supabase/tests/plus_create_contact_for_request_concurrency_test.sh \
+      supabase/tests/privilege_contract_tests.sql \
+      supabase/tests/platform_admin_foundation_tests.sql \
+      docs/product/decision-register.md \
+      docs/product/plus-product-spec.md \
+      docs/security/plus-access-model.md
+
+  Commit 2 — feat(growth): Add contact from Request Details
+    git add -- \
+      src/lib/supabase/database.types.ts \
+      src/lib/plus/attribution-core.ts \
+      src/lib/plus/attribution-core.test.mjs \
+      src/lib/plus/attribution.ts \
+      src/app/operations/growth/attribution/actions.ts \
+      'src/app/operations/requests/[requestId]/page.tsx' \
+      src/components/growth/RequestAddContactForm.tsx \
+      src/components/growth/RequestGrowthControls.tsx \
+      src/components/growth/RequestGrowthPanel.tsx \
+      src/components/growth/LinkedRequestsPanel.tsx
+
+  Commit 3 — test(e2e): isolated request-contact browser suite
+    git add -- \
+      tests/e2e/request-contact/request-contact.e2e.mjs \
+      tests/e2e/request-contact/README.md \
+      package.json
+
+  Commit 4 — docs(reports): NP-CORE-PLUS-REQUEST evidence and final R1 screenshots
+    git add -- \
+      docs/reports/NP-CORE-PLUS-REQUEST-01-design-review.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02-guard-and-ordering.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02A-implementation.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02A-release-dependencies.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02A-test-results.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02B-implementation.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02B-test-results.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02B-visual-review.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02C-test-results.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02C-visual-review.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02C-release-readiness.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02C-R1-implementation.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02C-R1-test-results.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02C-R1-visual-review.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02D-pr-readiness.txt \
+      docs/reports/NP-CORE-PLUS-REQUEST-02D-manual-accessibility-checklist.txt \
+      docs/design/concept-b/reviews/np-core-plus-request-02c-r1/
+
+  Expected `git diff --cached --stat`: 73 files. 15 are modified and 58 new; the new files are 22 text files and 36
+  PNGs. A single commit with the same 73 paths is equally acceptable.
+
+  Deliberately EXCLUDED (stay untracked and in place; do not delete or git clean):
+    docs/design/concept-b/reviews/np-core-plus-request-02b/   17 PNGs, 1.0 MB   superseded
+    docs/design/concept-b/reviews/np-core-plus-request-02c/   36 PNGs, 7.1 MB   superseded (before-and-after only)
+    The 02B and 02C reports name these folders, which would remain local evidence only.
+    Options for you:
+      - include them (+8.1 MB; main already keeps iteration folders such as s7b / s7c / s7d)
+      - lighter: commit only the 18 R1 panel crops (0.9 MB) instead of the full 02c-r1 folder (7.0 MB)
+
+  Never stage: anything outside this manifest, any .env file, the FIN worktree, the handoff folder (it is outside the
+  repository), or the scratchpad.
+
+======================================================================================================================
+9. KNOWN MERGE INTERACTIONS (unchanged from 02A §2; mechanical; resolved by whichever merges second)
+======================================================================================================================
+  PR #44 overlaps this branch in exactly four files:
+    - platform_admin_foundation_tests.sql: EX-1 becomes 18, keeping both comments
+    - privilege_contract_tests.sql: keep both sets
+    - decision-register.md: keep ZD-264..293 and ZD-294..301 in numeric order
+    - database.types.ts: regenerate
+  Migration ordering: if this feature ships first, FIN re-timestamps its 20261029* files at resume (approved R3).
+  PR #46 overlaps in no file.
+
+======================================================================================================================
+10. STATE LEFT BEHIND BY 02D
+======================================================================================================================
+  - Nothing staged, committed or pushed. No source, test, migration or UI file changed.
+  - In the worktree, 02D only:
+      * added the two 02D reports
+      * added 12 existing R1-b PNGs to np-core-plus-request-02c-r1/
+      * added a 3-line addendum to the 02C-R1 visual review
+  - The handoff folder and ZIP were created at /Users/datamatics/Nemryn-core-plus-request-02d-handoff/, outside every
+    repository.
+  - The isolated stack was not used or reset in 02D. It remains at the clean seed from R1: 0 enablements, 0 RC02C rows.
+  - PR #44, PR #46, the FIN worktree and every other worktree and untracked file were preserved.

@@ -1,0 +1,158 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02B — ADD CONTACT FROM CORE REQUEST: UI IMPLEMENTATION
+Date: 2026-11-02
+Authority: NP-CORE-PLUS-REQUEST-02B handoff (Stage A accepted; the three pre-existing boundary failures are documented
+exceptions). Stage B: implementation and local testing only.
+Worktree / branch: /Users/datamatics/Nemryn-core-plus-request on np-core-plus-request-01, based on origin/main
+85f2042. Uncommitted.
+Status: Stage B complete locally. STOP for owner review. Nothing has been committed, pushed, merged or deployed. No
+production access. No real tenant activated.
+Companion reports: NP-CORE-PLUS-REQUEST-02B-test-results.txt, NP-CORE-PLUS-REQUEST-02B-visual-review.txt.
+
+======================================================================================================================
+1. PRE-WORK VERIFICATION (handoff section 1; all PASS)
+======================================================================================================================
+  - Worktree and branch: np-core-plus-request-01 at 85f2042. All Stage A files are present, and the migration md5 is
+    unchanged (581b95b3…).
+  - Isolated database supabase_db_NemrynS1Iso: head 20261102100000, 99 migrations, enablement rows 0. Its migration
+    file is byte-identical to the worktree's.
+  - No production credentials:
+      * no SUPABASE_* / DATABASE_* / PG* / VERCEL* variables in the shell
+      * the isolated stack was never linked (no supabase/.temp/project-ref)
+      * the app was served only with ~/NemrynS1Iso/.env.isolated.local. Before building, the script refused to
+        continue unless NEXT_PUBLIC_SUPABASE_URL pointed at the local isolated API (127.0.0.1:54361).
+  - FIN tree /Users/datamatics/Nemryn: np-fin-p1-ledger at 44e66cd, with only its pre-existing uncommitted register
+    edit. PR #44 is OPEN at 44e66cde4cc2.
+  - PR #46 (np-driver-ux-02-navigation, 32beb5a) and its worktree /Users/datamatics/NemrynDriverUx02 are clean and
+    untouched.
+
+======================================================================================================================
+2. CHANGED FILES (Stage B only; Stage A files unchanged)
+======================================================================================================================
+  MOD  src/lib/supabase/database.types.ts           +97 / −0. Regenerated from the isolated 99-migration database
+                                                    (`supabase gen types typescript --local`). Purely additive: the
+                                                    enablement table, 4 functions and 2 composite types. No existing
+                                                    type was removed or changed.
+  MOD  src/lib/plus/attribution-core.ts             +88. Pure, still import-free:
+                                                      - REQUESTER_NOT_PASSENGER_NOTICE, ADD_CONTACT_NOTICE
+                                                      - contactKindForRelationship (ZD-297)
+                                                      - buildRequesterPrefill (requester facts only)
+                                                      - canOfferAddContact (ZD-300)
+                                                      - requestContactOutcomeMessage / requestContactErrorMessage
+  MOD  src/lib/plus/attribution.ts                  +12. isRequestContactEnabled(): reads plus_request_contact_enabled
+                                                    and fails closed (an error reads as disabled).
+  MOD  src/app/operations/growth/attribution/actions.ts   +96. createContactForRequestAction and
+                                                    RequestContactFormState; one comment relabelled.
+  NEW  src/components/growth/RequestAddContactForm.tsx    The inline form: requester notice, fields, duplicates list,
+                                                    confirm, Cancel.
+  MOD  src/components/growth/RequestGrowthControls.tsx    "Add contact" (primary) + "Link existing contact" (secondary,
+                                                    formerly "Track in Plus"). The add-contact state is held here so
+                                                    the outcome notice survives the server refresh.
+  MOD  src/components/growth/RequestGrowthPanel.tsx       Takes `requester` (RequesterFacts). Offers Add contact only
+                                                    under ZD-300. Loads owner choices only when offering it. Adds
+                                                    "Open in Plus" on the linked contact.
+  MOD  src/app/operations/requests/[requestId]/page.tsx   Passes the four requester facts only
+                                                    (name, phone, email, relationship) to the Growth panel.
+  MOD  src/components/growth/LinkedRequestsPanel.tsx      Empty-state copy: "Track in Plus" → "Link existing contact".
+  MOD  src/lib/plus/attribution-core.test.mjs       +7 tests (section 6 of the test results).
+  MOD  docs/product/plus-product-spec.md §7.4       The label, the amended "Nothing is created" rule (struck through,
+                                                    with a pointer to ZD-295), and a new 02B implementation note.
+  MOD  docs/security/plus-access-model.md §4        A 02A / 02B implementation-status note. The "Plus → Core read:
+                                                    never requester phone / email" rule is explicitly unchanged.
+  NEW  docs/design/concept-b/reviews/np-core-plus-request-02b/*.png   17 screenshots, fictional data only.
+  NEW  docs/reports/NP-CORE-PLUS-REQUEST-02B-{implementation,test-results,visual-review}.txt
+  Local only, not tracked: node_modules (from `npm ci` with the lockfile byte-identical to main's) and .next
+  (the build). Both are gitignored.
+
+  Not changed: any migration, any RPC, any Core component outside the Growth panel call site, billing, FIN, PR #44,
+  PR #46.
+
+======================================================================================================================
+3. AUTHORIZATION BEHAVIOUR
+======================================================================================================================
+  Who sees the Growth panel at all: unchanged (canOpenGrowth). Nobody else gets a placeholder or Growth data.
+
+  "Add contact" is rendered only when ALL of these hold (RequestGrowthPanel → canOfferAddContact):
+    - the Request has no attribution
+    - canWriteGrowth: Plus effective state write AND capability write (an Organization Admin, or a Dispatcher with a
+      write grant)
+    - plus_request_contact_enabled(org) is true (the synthetic-only allowlist). It fails closed.
+
+  When the organization is disabled: only "Link existing contact" is shown, with no notice (ZD-300).
+  Read-only Plus, or a read grant: the panel without controls (unchanged).
+
+  The UI is not the control. createContactForRequestAction re-checks:
+    - requirePlusAccess
+    - the form's organization against the session organization (WRONG_ORGANIZATION)
+    - canWriteGrowth
+  It then makes ONE call to plus_create_contact_for_request, which re-checks Plus write, the Core request-read role,
+  the activation gate (ZW004 request_contact_not_enabled), tenancy, validation and duplicates (Stage A tests).
+  The organization id sent to the database is the session's (g.context.organizationId), never the form's.
+
+  Error handling (requestContactErrorMessage):
+    ZW004 request_contact_not_enabled → "isn't available for this organization… You can still link an existing
+                                        contact." (no reason or classification is disclosed)
+    ZW004 already_attributed          → "linked … by someone else just now … Reload"
+    ZW001 / ZW002 / ZW006 / unknown   → plain, non-disclosing messages
+  Logging: console.error("[plus] request contact create failed", <code>) only. A unit test asserts that no submitted
+  value can reach a log line.
+
+======================================================================================================================
+4. FORM BEHAVIOUR
+======================================================================================================================
+  - The form opens inline inside the Growth panel, with no new page; the Request page stays in place. Focus starts
+    on Name.
+  - Prefill (buildRequesterPrefill) comes from requester_name, requester_phone and requester_email (when present),
+    and the relationship mapped to a contact type:
+      self → individual; family / caregiver → family_caregiver; facility_coordinator → facility_staff; other → other.
+    Values are trimmed but never reformatted. A Core phone that breaks the contact rules (e.g. "call after 5pm") is
+    shown as entered, and validation then asks staff to correct it.
+  - Every field is editable. The label "Requester — the person who contacted you. This is not necessarily the
+    passenger." is always shown.
+  - No passenger field is passed, read or prefilled. RequesterFacts has no passenger property; a unit test and the
+    browser checks confirm this.
+  - Fields and rules match Growth → Contacts → New (validateContactForm):
+      * Name, Phone, Email ("A phone number or an email address is required.")
+      * Contact type
+      * Preferred channel (phone by default, email when there is no phone)
+      * Owner (optional; plus_list_contact_owner_options)
+      * Do not contact (unticked)
+    The optional job title is omitted, and the RPC passes NULL for it.
+  - No consent fields. ADD_CONTACT_NOTICE states that no opportunity or communication consent is created. The
+    database writes no consent row (Stage A C1).
+  - Duplicates:
+      * outcome possible_duplicates → the matches from the released plus_find_contact_matches (name, archived flag,
+        "Same email and name", etc.). Nothing is written.
+      * An ACTIVE match offers "Link this contact", which uses the released linkRequestAction / plus_link_request.
+      * ARCHIVED matches are shown as "(archived — can't be linked)" with no button.
+      * "Create a separate contact" resubmits with confirmDuplicate=true. Nothing is ever merged.
+  - Pending state: every field and button is disabled while a submission is pending, and the submit button shows a
+    spinner. Correctness under double clicks rests on the database transaction (Stage A CONC-1 / CONC-2; browser V6).
+  - Refused submissions keep the typed values (echoed and re-mounted), and field errors carry aria-invalid plus the
+    message.
+  - Success:
+      * the form closes
+      * revalidatePath refreshes the Request page and the Growth layout
+      * the panel shows the linked contact with "Open in Plus" (/operations/growth/contacts/<id>) and "Correct link"
+      * the notice "Contact added and linked in Growth. The request itself is unchanged." survives the refresh
+      * already_linked shows its own notice and the current link
+
+======================================================================================================================
+5. REMAINING STAGE C REQUIREMENTS
+======================================================================================================================
+  C-1  A committed, repeatable browser E2E suite for this flow in tests/e2e (e.g. tests/e2e/request-contact/). It
+       should be isolation-guarded like plus-quotes/_config.mjs and run by an npm script. The 02B browser checks were
+       a one-off scratch script (52 checks) and are NOT in the repository.
+  C-2  E2E coverage the 02B scratch run did not include:
+         - a Dispatcher with a WRITE grant using Add contact
+         - an organization with no Plus (panel absent)
+         - concurrent browser submissions from two sessions (covered at the database level only)
+         - the already_linked notice in the browser
+         - "Create a separate contact" end to end
+         - keyboard-only operation
+         - an axe accessibility scan (injectAxe exists in tests/shared/cdp.mjs)
+  C-3  Decide whether to add the `local-plus-demo` fixture's request-contact enablement as an option. It currently
+       has to be enabled through the Platform Admin RPC. Enablement stays test-only and synthetic.
+  C-4  The pre-existing boundary-test exceptions (P6 / C1 / C2) remain until main or FIN fixes them.
+  C-5  Release planning (separate authorization): see NP-CORE-PLUS-REQUEST-02A-release-dependencies.txt. Production
+       must have migration 20261102100000 applied in the same window as the merge, or the deploy gate blocks
+       production builds.

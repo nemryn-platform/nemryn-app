@@ -1,0 +1,233 @@
+NEMRYN — NP-CORE-PLUS-REQUEST-02A — DATABASE FOUNDATION: IMPLEMENTATION
+Date: 2026-11-02
+Authority: NP-CORE-PLUS-REQUEST-02A handoff (R1–R4 approved; Stage A and isolated testing only).
+Branch: np-core-plus-request-01, in a separate worktree at /Users/datamatics/Nemryn-core-plus-request. Created from
+origin/main 85f2042, which was fetched and verified today; that is also the production migration head
+20261028100000.
+Status: Stage A complete on the isolated stack. STOP for owner review before Stage B. Nothing has been committed,
+pushed, merged or deployed. No production access. No real tenant enabled.
+Companion reports:
+  - NP-CORE-PLUS-REQUEST-02A-test-results.txt
+  - NP-CORE-PLUS-REQUEST-02A-release-dependencies.txt
+
+======================================================================================================================
+1. FILES (all uncommitted in the feature worktree)
+======================================================================================================================
+  NEW  supabase/migrations/20261102100000_plus_create_contact_for_request.sql        268 lines, md5 581b95b3…
+  NEW  supabase/tests/plus_create_contact_for_request_tests.sql                       43 rollback-only SQL tests
+  NEW  supabase/tests/plus_create_contact_for_request_concurrency_test.sh             8 scenarios + invariants;
+                                                                                      isolation-guarded
+  MOD  supabase/tests/privilege_contract_tests.sql      +1 class-A table, +4 functions (EXECUTE: authenticated)
+  MOD  supabase/tests/platform_admin_foundation_tests.sql   EX-1 inventory 14 -> 16 (two new platform_* functions)
+  MOD  docs/product/decision-register.md                ZD-294 .. ZD-301 + numbering note (appended after ZD-263)
+  COPY docs/reports/NP-CORE-PLUS-REQUEST-01-design-review.txt and -02-guard-and-ordering.txt
+       The migration cites these files. They are copied from the FIN tree, where they remain untracked and unchanged.
+  NEW  docs/reports/NP-CORE-PLUS-REQUEST-02A-{implementation,test-results,release-dependencies}.txt
+
+  Not changed:
+    - No application code, UI or server action. No database.types.ts regeneration (that is Stage B).
+    - No existing migration, released function, table, policy or grant.
+    - No FIN migration or timestamp. PR #44 and the np-fin-p1-ledger worktree are untouched: HEAD 44e66cd, with only
+      its pre-existing uncommitted register edit.
+
+======================================================================================================================
+2. THE MIGRATION — NEW OBJECTS
+======================================================================================================================
+  2.1 table public.plus_request_contact_enablements    (activation guard; ZD-299)
+      Columns:
+        organization_id uuid    PK, FK organizations(id)
+        data_class      text    NOT NULL   CHECK (data_class = 'synthetic')      -- 'live' cannot be stored
+        reason          text    NOT NULL   CHECK (trimmed, 1..500)
+        enabled_by      uuid    NOT NULL   FK auth.users(id)
+        enabled_at      timestamptz NOT NULL default now()
+      - Class A: RLS enabled, no policy, all privileges revoked from PUBLIC, anon, authenticated and service_role.
+      - NO ROW = DISABLED. The migration inserts nothing.
+
+  2.2 type public.plus_request_contact_enablement_result (organization_id, enabled, data_class, changed)
+      type public.plus_request_contact_result (outcome, request_id, contact_id, opportunity_id, possible_duplicates,
+                                               updated_at)
+        outcome ∈ linked | possible_duplicates (nothing written) | already_linked (nothing written)
+
+  2.3 platform_set_plus_request_contact_enablement(p_organization_id uuid, p_enabled boolean, p_data_class text,
+      p_reason text)
+      - Callable only via _require_platform_admin: ZW001 without a uid, ZW002 for everyone else, including the
+        organization's own Admin.
+      - Validation (ZW006 otherwise):
+          * enabling requires p_data_class = 'synthetic'
+          * disabling accepts NULL or 'synthetic'
+          * a reason of 1–500 characters is required both ways
+      - An unknown organization returns ZW002.
+      - Locks the organization row FOR NO KEY UPDATE, which serializes toggles without blocking foreign-key checks.
+      - Enable inserts the row; disable deletes it. A disable waits for any in-flight creation holding FOR SHARE.
+      - If nothing changes it returns changed=false and writes nothing.
+      - Audit: platform_plus_request_contact_enablement_changed, with before/after {enabled, data_class} and the
+        reason.
+
+  2.4 platform_get_plus_request_contact_enablement(p_organization_id uuid)
+      Platform Admin only. Returns enabled, data_class, enabled_at, enabled_by display name and reason.
+
+  2.5 plus_request_contact_enabled(p_organization_id uuid) → boolean
+      - Never raises.
+      - Returns plus_can_read(org) AND whether the row exists, so it is false for every non-Plus caller (no oracle).
+      - Display only; it is not the authorization control.
+
+  2.6 plus_create_contact_for_request(p_organization_id, p_request_id, p_display_name, p_phone, p_email,
+      p_contact_kind, p_preferred_channel, p_do_not_contact, p_owner_membership_id, p_confirm_possible_duplicate)
+      One transaction, in this order:
+        1. _require_plus_write(org): ZW001 / ZW002, exactly as released.
+        2. _plus_require_core_request_read(org): ZW002.
+        3. ACTIVATION GATE: SELECT … FOR SHARE on the enablement row. No row → ZW004 'request_contact_not_enabled'.
+           This runs after authorization (only authorized writers learn the state) and before any existence or
+           duplicate check (no oracle).
+        4. Request existence, by id and organization only. Unknown, foreign or NULL → ZW002.
+        5. Existing attribution → outcome 'already_linked' with its ids. Nothing written.
+        6. plus_create_contact(…, job_title NULL, …), UNCHANGED:
+             - validation → ZW006
+             - possible duplicates without confirmation → outcome 'possible_duplicates', NOTHING written
+             - owner eligibility checked
+             - audit plus_contact_created written
+        7. plus_link_request(org, request, new_contact, NULL), UNCHANGED:
+             - writes the request_linked activity and the plus_request_linked audit row
+             - a concurrent attribution makes it raise ZW004 already_attributed, which rolls back the contact from
+               step 6
+        8. Audit plus_contact_created_from_request: entity plus_contact, after_data = {"request_id": …} only.
+        9. Returns outcome 'linked'.
+      What it never does:
+        - It never reads requester_* or passenger columns; this is verified statically by test S5.
+        - It never creates an opportunity, task, quote or consent row, never sets do_not_contact itself, and never
+          changes a Core Request, Passenger, Trip, recurring arrangement, acquisition snapshot or billing row.
+
+  2.7 Grants
+      - Every new function: REVOKE ALL FROM PUBLIC, anon; GRANT EXECUTE TO authenticated.
+      - service_role has no EXECUTE, per the database's default-deny privileges.
+      - The privilege contract passes with 0 violations.
+
+======================================================================================================================
+3. PERMISSION MATRIX (verified by SQL tests; database-enforced)
+======================================================================================================================
+  plus_create_contact_for_request, with the organization ENABLED unless noted:
+    Org Admin, Plus write (active / trial)                → linked / possible_duplicates / already_linked   [A1, A5]
+    Dispatcher + active WRITE grant                       → linked                                         [A6]
+    Dispatcher + READ grant                               → ZW001                                          [A7]
+    Dispatcher, no grant                                  → ZW002                                          [A7]
+    Org Admin, Plus read_only (expired)                   → ZW001                                          [A8]
+    Grant holder, Plus read_only                          → ZW002                                          [A8]
+    Plus locked / no Plus                                 → ZW002                                          [A8]
+    Organization suspended (status inactive)              → ZW002                                          [A8]
+    Driver / inactive dispatcher / non-member             → ZW002                                          [A9]
+    Platform Admin without membership                     → ZW002                                          [A9]
+    No uid → ZW001; anon → 42501                                                                           [A9]
+    Foreign Admin on this org / this org's Admin on a foreign org / foreign request id → ZW002            [X1]
+    Foreign owner handle                                  → ZW006                                          [X1]
+    ANY authorized writer while the organization is NOT enabled → ZW004 request_contact_not_enabled       [G1, G2, X3,
+                                                                                                           DIS1]
+  platform_set / platform_get:
+    Platform Admin → allowed. Org Admin (own or foreign org), dispatcher, non-member → ZW002. No uid → ZW001.
+    anon → 42501.                                                                                          [G3, DIS1]
+  plus_request_contact_enabled:
+    Plus reader of an enabled org → true. Everyone else, including the Platform Admin and the foreign Admin → false.
+    anon → 42501.                                                                                          [G6]
+  Direct table access to plus_request_contact_enablements:
+    → 42501 for Org Admin, Platform Admin and anon. Only the SECURITY DEFINER functions touch it.          [S1, S2]
+
+======================================================================================================================
+4. SAFEGUARD CHECKS REQUESTED BY THE HANDOFF
+======================================================================================================================
+  - Disablement cannot be bypassed through direct RPC invocation.
+      * The gate lives inside the function; G1, G2, X3 and DIS1 call the RPC directly as `authenticated`, which is
+        exactly what PostgREST does, and get ZW004 with nothing written.
+      * The table cannot be written by any client role (S2), and 'live' is refused even for an owner INSERT (S6).
+      * Mutation test: removing the gate from the function makes 8 tests fail (G1, G2, A1, A3, A5, X3, DIS1, DIS2).
+  - Only authorized Platform Admins manage the allowlist: G3, G4, DIS1.
+  - The function never reads Core requester personal-data fields:
+      * Static check S5: the function source contains none of requester_name/phone/email/relationship/user_id,
+        passenger_id, requested_passenger_name or public.passengers.
+      * Behavioural checks N1 and N2: the stored values are the staff-submitted ones, not the Request's.
+  - No silent broadening of existing Growth functions:
+      * plus_create_contact and plus_link_request keep their signatures, bodies and grants (S7).
+      * The released plus_contacts / plus_request_attributions / plus_communication_consents / plus_inquiries
+        regression suites pass unchanged.
+      * The new function adds a gate on top of the released checks and removes none.
+      * The tenant helper reveals one boolean to existing Plus readers only.
+
+======================================================================================================================
+5. DESIGN DEVIATIONS FROM -01 / -02 (none of substance)
+======================================================================================================================
+  - The tenant helper is named plus_request_contact_enabled. -02 used this name, and it is unchanged.
+  - The platform function locks the organization FOR NO KEY UPDATE, not FOR UPDATE as the inquiry allowlist does.
+    The reason is in the migration header:
+      * FOR UPDATE blocks every foreign-key check on the organization during a toggle.
+      * It also opens a narrow lock-order deadlock window.
+    A negative control with FOR UPDATE did NOT reproduce a deadlock under the scripted timing, because the window is
+    microseconds wide. The choice rests on the conflict analysis, not on a reproduced failure.
+  - When disabling, p_data_class may be NULL or 'synthetic'. -02 did not specify this case.
+
+======================================================================================================================
+6. REMAINING ISSUES / OPEN ITEMS
+======================================================================================================================
+  I1  Pre-existing on origin/main, not caused by this work:
+        - plus_access_helpers P6, plus_member_grants C1 and plus_contacts_activities C2 fail on a fresh reset.
+        - Cause: NP-BILL-P1's billing_create_invoice_draft calls plus_can_read, and these boundary tests have no
+          exception for it.
+        - The parked FIN branch already contains the fix (NP-FIN-P1 FU-2). It was deliberately NOT duplicated here, to
+          avoid a conflict with PR #44.
+      Owner choice: fix on main separately, or let FIN carry it.
+  I2  The guard covers this feature's path only. The released Growth → Contacts form and plus_link_request remain
+      ungated (released behaviour; ZD-299 scope, -02 O1). Test DIS3 documents this.
+  I3  Stage B is still to do:
+        - regenerate database.types.ts
+        - server action, UI, and the product-spec §7.4 / access-model §4 doc amendments
+      Stage C (browser E2E) still needs a test-only enablement of the isolated fixture organization, through the
+      Platform Admin RPC.
+  I4  The isolated stack was reset several times. The Plus demo fixture state (local-plus-demo.mjs) needs `enable`
+      before any demo or E2E.
+  I5  The two existing concurrency scripts hard-code supabase_db_ZenWard. They were run as retargeted copies from the
+      scratchpad; the originals are unchanged.
+
+======================================================================================================================
+7. ENVIRONMENT SAFETY VERIFICATION (handoff section 1; all PASS, no stop condition hit)
+======================================================================================================================
+  - origin/main fetched: 85f2042 (git ls-remote refs/heads/main = 85f204292df1…). The worktree branch was created
+    from it.
+  - The FIN worktree was never switched: /Users/datamatics/Nemryn is still on np-fin-p1-ledger at 44e66cd. Its
+    uncommitted register edit (ZD-292 / ZD-293), K-reports, backups and untracked files were not touched. Nothing was
+    cleaned, stashed or checked out there.
+  - PR #44: OPEN, head np-fin-p1-ledger at 44e66cde4cc2…, last updated 2026-10-30T11:18Z, before this work (read-only
+    `gh pr view` / `git ls-remote`).
+  - Isolated DB identity: the container supabase_db_NemrynS1Iso carries the label com.supabase.cli.project=NemrynS1Iso
+    and is running; database postgres on a local address; fictional seed organizations present.
+  - Migration baseline before the change: head 20261028100000, 98 migrations. The file set and contents are
+    byte-identical to origin/main (cmp of every file), and no FIN migration is present.
+  - No production connection or credentials:
+      * no SUPABASE_* / DATABASE_* / PG* / VERCEL* environment variables in the shell
+      * the isolated stack was never linked (no supabase/.temp/project-ref)
+      * no Supabase CLI access-token file
+      * the worktree has only .env.example
+      * the new tests use only `docker exec` into the guarded local container, with no URL or connection string
+  - No existing Core or Plus contract changed: S7 plus the unchanged regression suites. Tenant isolation, privilege
+    and atomicity tests all pass. No orphan was found. The synthetic-only restriction cannot be bypassed (S2, S6, G4).
+
+======================================================================================================================
+8. RECOMMENDATION FOR STAGE B
+======================================================================================================================
+  Proceed with Stage B as designed in -01 §3.2–3.3 and -02 C3, on this branch, after owner review of Stage A:
+    1. Regenerate src/lib/supabase/database.types.ts from the isolated stack. Only the four new functions and two
+       types should appear.
+    2. Server actions in src/app/operations/growth/attribution/actions.ts:
+         - createContactForRequestAction: the existing guard() plus validateContactForm; maps
+           linked / possible_duplicates / already_linked and ZW004 request_contact_not_enabled; logs error codes only.
+         - A read of plus_request_contact_enabled for display.
+         - Matches for possible_duplicates via the released plus_find_contact_matches.
+    3. UI in RequestGrowthPanel / RequestGrowthControls:
+         - "Add contact" only when unlinked + canWriteGrowth + enabled. "Track in Plus" relabelled "Link existing
+           contact".
+         - Inline form prefilled from requester props, all fields editable, with the ZD-297 kind mapping.
+         - A requester-not-passenger label; DNC unticked; no consent fields.
+         - Duplicate list with "Link this contact" or "Create new contact anyway".
+         - "Open in Plus".
+    4. Unit tests for the mapping, the prefill builder (the passenger name is never used) and outcome messages.
+    5. Doc amendments: plus-product-spec §7.4 (ZD-295) and plus-access-model §4 note (ZD-296).
+    6. Then Stage C on the isolated stack:
+         - test-only enablement of the fixture organization via the Platform Admin RPC
+         - browser E2E at 1440 / 1024 / 768
+  Before or alongside Stage B, decide issue I1 (the pre-existing boundary-test failures on main).
