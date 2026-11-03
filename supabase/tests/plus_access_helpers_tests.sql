@@ -117,7 +117,23 @@ begin
       -- plus_*_member_access RPCs) and the platform entitlement RPCs are allowed; every other function is Core.
       and p.proname !~ '^(plus_|_plus_|_require_plus_)'
       and p.proname not in ('platform_set_organization_module', 'platform_extend_plus_trial', 'platform_get_organization_module')
+      -- ZD-302: the ONE documented exception -- Core billing's optional source-quote check (NP-BILL-P1 R3), exempted
+      -- by exact signature (a missing function exempts nothing) and pinned by P6b below
+      and p.oid is distinct from to_regprocedure('public.billing_create_invoice_draft(uuid,uuid[],text,uuid,text,uuid,text)')
       and (p.prosrc ~ 'plus_can_(read|write)|_require_plus_|organization_modules|_plus_entitlement_state')));
+  -- ZD-302: the exception cannot widen silently. The draft function's Plus references are EXACTLY plus_can_read (the
+  -- optional quote gate), plus_quotes and plus_request_attributions -- no other Plus helper, Plus table, entitlement
+  -- object or Growth membership-grant object. Core independence is behavioural: billing_tests F8 / F9.
+  perform pg_temp.t('P6b Core billing''s Plus exception is pinned: billing_create_invoice_draft references only plus_can_read, plus_quotes, plus_request_attributions',
+    (select coalesce(array_agg(distinct m[1] order by m[1]), '{}')
+       from pg_proc p, regexp_matches(p.prosrc,
+         '(_?plus_[a-z0-9_]+|_require_plus_[a-z0-9_]*|organization_modules|membership_module_grants|_plus_member_access|_plus_entitlement_state)', 'g') m
+      where p.oid = to_regprocedure('public.billing_create_invoice_draft(uuid,uuid[],text,uuid,text,uuid,text)'))
+      = array['plus_can_read', 'plus_quotes', 'plus_request_attributions'],
+    (select coalesce(string_agg(distinct m[1], ', ' order by m[1]), 'function missing')
+       from pg_proc p, regexp_matches(p.prosrc,
+         '(_?plus_[a-z0-9_]+|_require_plus_[a-z0-9_]*|organization_modules|membership_module_grants|_plus_member_access|_plus_entitlement_state)', 'g') m
+      where p.oid = to_regprocedure('public.billing_create_invoice_draft(uuid,uuid[],text,uuid,text,uuid,text)')));
 
   -- ------------------------------------------------------------------ Org A Admin across every effective state
   foreach v_state in array array['none', 'trial', 'active', 'active_ending', 'trial_elapsed', 'active_elapsed',
