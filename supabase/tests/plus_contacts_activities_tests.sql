@@ -499,6 +499,9 @@ begin
     not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
       and p.proname !~ '^(plus_|_plus_|_require_plus_)'
       and p.proname not in ('platform_set_organization_module', 'platform_extend_plus_trial', 'platform_get_organization_module')
+      -- ZD-302: the one documented exception (Core billing's optional source-quote check), by exact signature; its
+      -- references are pinned by plus_access_helpers_tests P6b
+      and p.oid is distinct from to_regprocedure('public.billing_create_invoice_draft(uuid,uuid[],text,uuid,text,uuid,text)')
       and p.prosrc ~ 'plus_contacts|plus_activities|plus_can_(read|write)|_require_plus_|_plus_member_access'));
   perform pg_temp.t('C3 no Core RLS policy references Plus objects',
     not exists (select 1 from pg_policy where polrelid::regclass::text !~ '^(public\.)?plus_'

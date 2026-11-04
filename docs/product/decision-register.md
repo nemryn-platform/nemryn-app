@@ -3412,6 +3412,28 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A decision to add airport transportation to Plus opportunities
 
+> **Numbering note (NP-CORE-PLUS-REQUEST-02G):** ZD-264 to ZD-293 are recorded on the unmerged NP-BILL / FIN-P1 / P1G branches (PR #44), and ZD-294 to ZD-301 on the unmerged NP-CORE-PLUS-REQUEST branch (PR #47). ZD-302 continues after them, so no number is reused when the branches merge.
+
+### ZD-302 — Core billing's optional source-quote check is the one documented Core → Plus read
+
+- **Date:** 2026-11-03
+- **Category:** Security
+- **Decision:**
+  - The rule "Core never reads or writes Plus" (plus-access-model §4) has exactly ONE documented exception: `billing_create_invoice_draft` (NP-BILL-P1, migration `20261027110000`).
+  - It may read Plus only to validate an optional source quote: `plus_can_read` (the gate), `plus_quotes` and `plus_request_attributions`, all inside `if p_source_quote_id is not null`.
+  - It never writes Plus, never requires Plus, and refuses the quote when the caller cannot read Plus (ZW002 `quote_unavailable`). A plain draft, and an invoice that already carries a snapshotted quote, keep working without Plus (`billing_tests` F8 / F9).
+  - The Core-isolation checks (`plus_access_helpers_tests` P6, `plus_member_grants_tests` C1, `plus_contacts_activities_tests` C2) exempt this one function by exact signature. A pinning check (`plus_access_helpers_tests` P6b) fails if it references anything else from Plus: another helper or table, the entitlement objects, or Growth membership-grant objects.
+  - Every other Core function remains under the rule. No function, migration or behaviour changes.
+- **Reason:**
+  - The dependency was approved with NP-BILL-P1 ("Plus is optional input only", `docs/reports/NP-BILL-P1-contract-and-decisions.txt` §2, R3).
+  - The access model and the three checks were not updated at the time, so those checks failed on main.
+  - Recording the exception, and pinning it, restores an enforced boundary without changing released billing.
+- **Status:** CONFIRMED — OWNER-DIRECTED (NP-CORE-PLUS-REQUEST-02F review / 02G direction, 2026-11-03)
+- **Affected Product Areas:** `docs/security/plus-access-model.md` §4, `supabase/tests/plus_access_helpers_tests.sql`, `supabase/tests/plus_member_grants_tests.sql`, `supabase/tests/plus_contacts_activities_tests.sql`
+- **Dependencies:** NP-BILL-P1 (R3)
+- **Owner:** Security
+- **Review Trigger:** Any other Core function that needs Plus data, or a change to `billing_create_invoice_draft`'s quote import
+
 No decisions have been REJECTED as of this update. ZD-206 has been AMENDED by ZD-210 (Growth entry also admits Dispatchers holding an active named Plus grant). ZD-054 has been AMENDED by ZD-204 (explicit Request acceptance). ZD-134 and ZD-144 have been AMENDED by ZD-205 (Operations header: Search and Dispatch Settings omitted, Export Day Sheet implemented). ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)
