@@ -10,6 +10,7 @@ import { DriverTripCard } from "@/components/driver/DriverTripCard";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import {
+  ADDRESS_MISSING_MESSAGE,
   driverTripStateLabel,
   formatTripTime,
   operationalDayLabel,
@@ -36,8 +37,8 @@ function toPresentedTrip(trip: RawActiveTrip): PresentedTrip | null {
     scheduledPickupAt: trip.scheduled_pickup_at,
     appointmentAt: trip.appointment_at,
     passengerDisplayName: trip.passenger_display_name ?? "Passenger",
-    pickupDescription: trip.pickup_description ?? "Pickup location not available",
-    destinationDescription: trip.destination_description ?? "Destination not available",
+    pickupDescription: trip.pickup_description ?? ADDRESS_MISSING_MESSAGE,
+    destinationDescription: trip.destination_description ?? ADDRESS_MISSING_MESSAGE,
     state: trip.state ?? "scheduled",
   };
 }

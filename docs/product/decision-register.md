@@ -1546,6 +1546,7 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Dependencies:** None
 - **Owner:** Product / Engineering
 - **Review Trigger:** A genuine future need for a different provider (e.g. an organization-specific preference) — revisit deliberately then, not reflexively.
+- **Amendment (2026-11-01, owner decision D0, NP-DRIVER-UX-02):** the URL changes from a map SEARCH to explicit DRIVING DIRECTIONS: `https://www.google.com/maps/dir/?api=1&destination=<encoded stop>&travelmode=driving`. Still no SDK, no API key and no dependency; no origin is sent (the device uses its own location). The destination is the CURRENT stop (pickup until Passenger Onboard, then drop-off), sent exactly as recorded and trimmed, with no prefix or suffix added. A missing or blank stop builds no link: the Driver sees "Address missing — contact dispatch." Navigate never changes Trip state. Facility coordinates, Apple Maps and a combined navigate-and-start action remain deferred. The iOS / Android app handoff is UNVERIFIED until tested on physical devices. Covered by `src/lib/driver/maps.test.mjs`.
 
 ### ZD-127 — Call Passenger is scoped to the pickup leg only
 
